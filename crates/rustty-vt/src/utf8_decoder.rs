@@ -34,14 +34,30 @@ const CHAR_CLASSES: [u8; 256] = [
   10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8,
 ];
 
+// PERF(port): pad table so the u8 index is provably in-bounds; Zig
+// ReleaseFast has no check here (UTF8Decoder.zig:68). Entries 0..108 are the
+// reference `transitions` table verbatim (the grid below); entries 108..=255
+// are unreachable filler set to 12 (REJECT — the reference's own fail-safe
+// value). Reachable states are {0,24,36,48,60,72,84,96} and char_class <= 11,
+// so the max reachable index is exactly 107; the pad only exists so LLVM can
+// elide the per-byte bounds check on the u8-derived index.
 #[rustfmt::skip]
-const TRANSITIONS: [u8; 108] = [
-   0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
-  12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
-  12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
-  12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
-  12,36,12,12,12,12,12,12,12,12,12,12,
-];
+const TRANSITIONS: [u8; 256] = {
+    let reference: [u8; 108] = [
+       0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
+      12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
+      12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
+      12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
+      12,36,12,12,12,12,12,12,12,12,12,12,
+    ];
+    let mut table = [12u8; 256];
+    let mut i = 0;
+    while i < reference.len() {
+        table[i] = reference[i];
+        i += 1;
+    }
+    table
+};
 // zig fmt: on
 
 // DFA states
@@ -98,7 +114,12 @@ impl UTF8Decoder {
             self.accumulator = ((0xFF_u32 >> char_class) & (byte as u32)) & 0x1F_FFFF;
         }
 
-        self.state = TRANSITIONS[(self.state + char_class) as usize];
+        // PERF(port): index as usize + usize (both zext from u8, <= 255) so the
+        // add cannot overflow and constant-folds even with overflow-checks=true;
+        // together with the 256-entry pad this makes the access provably
+        // in-bounds — matching Zig's checkless `transitions[self.state +
+        // char_class]` (UTF8Decoder.zig:68, ReleaseFast).
+        self.state = TRANSITIONS[self.state as usize + char_class as usize];
 
         if self.state == ACCEPT_STATE {
             // Emit the fully decoded codepoint.
@@ -124,6 +145,26 @@ impl UTF8Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // PERF(port): guards the 256-entry pad of TRANSITIONS — entries 0..108 must
+    // stay byte-identical to the reference `transitions` table (UTF8Decoder.zig:28),
+    // and every pad entry must be the fail-safe REJECT value.
+    #[test]
+    fn transitions_table_matches_reference_with_reject_padding() {
+        // The reference table, embedded verbatim (108 entries).
+        #[rustfmt::skip]
+        const REFERENCE: [u8; 108] = [
+           0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
+          12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
+          12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
+          12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
+          12,36,12,12,12,12,12,12,12,12,12,12,
+        ];
+        assert_eq!(&TRANSITIONS[..108], &REFERENCE[..]);
+        for (i, &entry) in TRANSITIONS[108..].iter().enumerate() {
+            assert_eq!(entry, REJECT_STATE, "pad entry {} is not REJECT", 108 + i);
+        }
+    }
 
     #[test]
     fn ascii() {
