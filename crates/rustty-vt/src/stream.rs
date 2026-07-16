@@ -1024,10 +1024,13 @@ impl<'a, H: Handler> Stream<'a, H> {
             match action {
                 parser::Action::Print(p) => self.print(p),
                 parser::Action::Execute(code) => self.execute(code),
-                parser::Action::CsiDispatch(csi_action) => self.csi_dispatch(csi_action),
-                parser::Action::EscDispatch(esc) => self.esc_dispatch(esc),
-                parser::Action::OscDispatch(cmd) => self.osc_dispatch(cmd),
-                parser::Action::DcsHook(dcs) => self.handler.dcs_hook(dcs),
+                // PERF(port): `*` unboxes the pointer-sized Action payloads
+                // (see the Action PERF note); the by-value handler signatures
+                // are unchanged.
+                parser::Action::CsiDispatch(csi_action) => self.csi_dispatch(*csi_action),
+                parser::Action::EscDispatch(esc) => self.esc_dispatch(*esc),
+                parser::Action::OscDispatch(cmd) => self.osc_dispatch(*cmd),
+                parser::Action::DcsHook(dcs) => self.handler.dcs_hook(*dcs),
                 parser::Action::DcsPut(code) => self.handler.dcs_put(code),
                 parser::Action::DcsUnhook => self.handler.dcs_unhook(),
                 parser::Action::ApcStart => self.handler.apc_start(),
@@ -1050,7 +1053,7 @@ impl<'a, H: Handler> Stream<'a, H> {
         // if (c > 0x7F) { ... self.escDispatch(.{ .intermediates = &.{}, .final = c - 0x40 }); return; }
         if c > 0x7F {
             self.esc_dispatch(parser::ESC {
-                intermediates: Vec::new(),
+                intermediates: parser::InlineVec::new(),
                 final_: c - 0x40,
             });
             return;

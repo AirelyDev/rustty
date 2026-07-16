@@ -1693,23 +1693,29 @@ mod tests {
     #[test]
     fn encode_csi_and_esc() {
         let csi = rustty_vt::parser::CSI {
-            intermediates: vec![b'?'],
-            params: vec![1, 49],
+            intermediates: rustty_vt::parser::InlineVec::from_slice(b"?"),
+            params: rustty_vt::parser::InlineVec::from_slice(&[1, 49]),
             params_sep: rustty_vt::parser::SepList::init_empty(),
             final_: b'h',
         };
         // "{c} " per intermediate, "{d}" params `;`-joined, trailing space, final.
-        assert_eq!(desc(&Action::CsiDispatch(csi)), "? 1;49 h");
+        assert_eq!(desc(&Action::CsiDispatch(Box::new(csi))), "? 1;49 h");
 
-        let esc = rustty_vt::parser::ESC { intermediates: vec![b'('], final_: b'B' };
-        assert_eq!(desc(&Action::EscDispatch(esc)), "( B");
+        let esc = rustty_vt::parser::ESC {
+            intermediates: rustty_vt::parser::InlineVec::from_slice(b"("),
+            final_: b'B',
+        };
+        assert_eq!(desc(&Action::EscDispatch(Box::new(esc))), "( B");
     }
 
     #[test]
     fn osc_tag_prefix_in_description() {
         let osc = C::ChangeWindowTitle(b"hi".to_vec());
         // encodeOSC writes "{tag} " then the metadata is separate.
-        assert_eq!(desc(&Action::OscDispatch(osc)), "change_window_title ");
+        assert_eq!(
+            desc(&Action::OscDispatch(Box::new(osc))),
+            "change_window_title "
+        );
     }
 
     #[test]

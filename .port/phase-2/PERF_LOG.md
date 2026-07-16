@@ -103,3 +103,76 @@ Cargo.toml comment documents the measurement so nobody "helpfully" re-adds LTO.
   comment-coverage delta vs merge-base = 0; acyclic gate green.
 - Raw data: `~/.claude/jobs/22556231/tmp/perfrun/*.jsonl` (17 sweeps + 4
   experiments + 2 ship confirmations), copied to `.port/phase-2/perf-v2/`.
+
+# Round 2
+
+## r2-action-arrayvec (fix-action-arrayvec-box) — terminal-parser
+
+Target: terminal-parser +22.7% residual (PERF_FIX_PLAN t3-action-arrayvec).
+Files: `crates/rustty-vt/src/parser.rs`, `crates/rustty-vt/src/stream.rs`,
+`crates/rustty-inspector/src/widgets/termio.rs` (test literals only).
+
+Diagnosis (SHIP-RF xctrace instruction histogram of the parse_all loop, 323
+samples): ~53% of the loop was drop machinery + forced array materialization —
+26.9% discriminant re-loads + out-of-line `drop_in_place::<Action>` dispatch
+per non-None element (incl. `Action::Print` on every plain byte), 24.5%
+`[Option<Action>;3]` stack materialization (3x64B elements). LLVM cannot
+SROA/DCE the discarded per-byte array because the droppy
+`OscDispatch(osc::Command)` variant forces a `drop_in_place` pointer escape of
+the whole alloca. A further 20.5% residual (post-fix profile) was a redundant
+per-byte reload of `self.state` across the `&mut self` `do_action` call.
+
+Fix — three coupled pieces, one commit:
+
+1. `InlineVec<T: Copy, const N: usize>` (Copy, `{buf:[T;N], len:u8}`) replaces
+   the `Vec<u8>`/`Vec<u16>` CSI/ESC/DCS payloads; capacities are the
+   reference's own hard invariants (MAX_INTERMEDIATE=4 / MAX_PARAMS=24 fixed
+   arrays, Parser.zig:80-84), `from_buf` is a branch-free whole-array copy
+   mirroring the reference's prefix slices (Parser.zig:377-384). Prefix-only
+   PartialEq/Debug — observable contents identical to the old Vec payloads.
+2. Boxed dispatch variants (THE decisive piece): `CsiDispatch(Box<CSI>)`,
+   `EscDispatch(Box<ESC>)`, `OscDispatch(Box<osc::Command>)`,
+   `DcsHook(Box<DCS>)` — `Action` is 16B, the per-byte array 48B, and LLVM
+   fully SROAs the discarded return into registers (disassembly-verified: zero
+   per-byte stack traffic; dealloc/drop outlined on cold dispatch paths only).
+   Allocator traffic per escape sequence goes DOWN vs SHIP (1 box vs 2
+   `to_vec` allocs for CSI/DCS, 1 vs 1 for ESC; OSC exit +1 box, rare).
+3. state-hoist in `Parser::next` (`let state = self.state;` for the table
+   index + exit/entry compares) — removes the 20.5% store->load round-trip;
+   nothing writes `self.state` before the deferred assignment, so the reshape
+   is observationally identical (Zig proves the no-write whole-program).
+
+Negative results (measured, kept for the record):
+
+- Naive by-value `InlineVec` payloads REGRESS +25-60%: any droppy variant
+  (OscDispatch) still forces full materialization of the then-192-216B array
+  per byte, and the by-value layout degenerates into unaligned overlapping
+  store shuffles. Boxing is what unlocks the DCE, not the inline storage.
+- by-value + `repr(align(8))`: worse still (align(8) is kept on the boxed
+  structs where it is harmless and matches the reference union's alignment).
+- Ceiling: severing the OscDispatch construction entirely (drop-free Action)
+  gives 0.14s wall (2.3x faster than Zig) — not shippable (Command owns
+  unbounded Vec payloads, locked decision), but bounds the design space.
+
+Measured (NON-OFFICIAL, machine shared, interleaved pairs x7):
+terminal-parser/utf8 SHIP 0.32s -> fix 0.20s stable (Zig-equiv ~0.26);
+terminal-stream canary flat (0.44-0.46 vs 0.45-0.47); osc-parser 0.05 -> 0.04
+(that bench does not route through Action; delta likely the concurrent osc
+reshape lane present in both builds). Official N=7 median sweep per protocol
+still owed once the machine-quiet gate fires — expect terminal-parser ~200ms
+vs Zig 262.9 (WIN ~-23%).
+
+Parity: observable contents of every Action identical (InlineVec observes only
+the len-bounded prefix; Box is representation only); no test assertion changed
+(type-level adaptation at 6 sites: 3 `as_ref` bindings, 1 `(**cmd).clone()`,
+3 `Box::new` in inspector test constructors). No unsafe added. Full workspace
+suite at commit time: 3796 passed / 0 failed.
+
+Open item: t3-osc-command-move — the OSC exit arm still deep-clones the
+Command into the box (`Action::OscDispatch(Box::new(cmd.clone()))`,
+parser.rs); a move-out seam on `osc::Parser::end` would drop the clone. Only
+matters for OSC-heavy streams, NOT the osc-parser bench (it drives
+`osc::Parser` directly).
+
+Verified binary: `.perf-bins/rustty-bench-r2-action-arrayvec` (untracked
+stash, RF profile).

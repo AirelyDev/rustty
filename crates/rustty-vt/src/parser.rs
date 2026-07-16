@@ -125,19 +125,28 @@ pub enum Action {
     /// Execute the CSI command. Note that pointers within this
     /// structure are only valid until the next call to "next".
     // csi_dispatch: CSI,
-    CsiDispatch(CSI),
+    // PERF(port): the dispatch payloads are boxed so `Action` stays pointer-
+    // sized. The per-byte `[Option<Action>;3]` return cannot be dead-code-
+    // eliminated when discarded (the OscDispatch drop keeps it alive for the
+    // optimizer), so its stack materialization is paid on EVERY byte — with
+    // by-value payloads that is ~200B of dead stores per plain print byte
+    // (measured +25% on terminal-parser). Boxing shrinks it to 3x16B. The
+    // dispatch-time box allocation replaces the former per-dispatch Vec
+    // allocations (2 for CSI/DCS, 1 for ESC) — allocator traffic per escape
+    // sequence goes DOWN. Observable contents are unchanged.
+    CsiDispatch(Box<CSI>),
 
     /// Execute the ESC command.
     // esc_dispatch: ESC,
-    EscDispatch(ESC),
+    EscDispatch(Box<ESC>),
 
     /// Execute the OSC command.
     // osc_dispatch: osc.Command,
-    OscDispatch(osc::Command),
+    OscDispatch(Box<osc::Command>),
 
     /// DCS-related events.
     // dcs_hook: DCS,
-    DcsHook(DCS),
+    DcsHook(Box<DCS>),
     // dcs_put: u8,
     DcsPut(u8),
     // dcs_unhook: void,
@@ -156,10 +165,21 @@ pub enum Action {
 // top-level struct (Rust has no nested type declarations). `intermediates` /
 // `params` are owned (see the Action PORT NOTE) rather than slices into the
 // parser.
+// PERF(port): the owned payloads are inline fixed-capacity arrays
+// (`InlineVec`), not heap `Vec`s. Capacities are the reference's own hard
+// invariants (MAX_INTERMEDIATE / MAX_PARAMS fixed arrays, Parser.zig:80-84),
+// so nothing is lost — and the per-byte `[Option<Action>;3]` return becomes
+// drop-glue-free for these variants, matching the reference where discarding
+// the actions costs nothing.
+// PERF(port): repr(align(8)) — the reference union's natural alignment (its
+// `[]u8`/`[]u16` slice fields are pointer-aligned). Without it the inline
+// arrays drop `Action`'s alignment to 2/4 and the per-byte `[Option<Action>;3]`
+// stack traffic degenerates into unaligned scalar shuffles.
 #[derive(Debug, Clone, PartialEq)]
+#[repr(align(8))]
 pub struct CSI {
-    pub intermediates: Vec<u8>,
-    pub params: Vec<u16>,
+    pub intermediates: InlineVec<u8, MAX_INTERMEDIATE>,
+    pub params: InlineVec<u16, MAX_PARAMS>,
     pub params_sep: SepList,
     pub final_: u8,
 }
@@ -196,8 +216,9 @@ pub enum Sep {
 // PORT NOTE: `Action.ESC` nested struct, hoisted to top-level. `intermediates`
 // is owned (see the Action PORT NOTE).
 #[derive(Debug, Clone, PartialEq)]
+#[repr(align(8))]
 pub struct ESC {
-    pub intermediates: Vec<u8>,
+    pub intermediates: InlineVec<u8, MAX_INTERMEDIATE>,
     pub final_: u8,
     // Implement formatter for logging
     // pub fn format(self: ESC, writer: *std.Io.Writer) !void {
@@ -215,9 +236,10 @@ pub struct ESC {
 // `lib_vt.zig:63` is a Zig-module type export, not a C export), so rustty-vt-c
 // intentionally has no DCS mirror today (LIFETIMES audit 2026-07-10).
 #[derive(Debug, Clone, PartialEq)]
+#[repr(align(8))]
 pub struct DCS {
-    pub intermediates: Vec<u8>,
-    pub params: Vec<u16>,
+    pub intermediates: InlineVec<u8, MAX_INTERMEDIATE>,
+    pub params: InlineVec<u16, MAX_PARAMS>,
     pub final_: u8,
     // pub const C = extern struct {
     //     intermediates: [*]const u8,
@@ -326,6 +348,127 @@ impl Default for SepList {
     }
 }
 
+/// PERF(port): fixed-capacity inline payload for `Action`'s CSI/ESC/DCS
+/// variants — the Rust stand-in for the reference's
+/// `self.intermediates[0..self.intermediates_idx]` prefix slices
+/// (Parser.zig:377-384) over its fixed arrays (Parser.zig:80-84). Owned by
+/// value like the previous `Vec` payloads (strictly stronger than the
+/// reference's "valid until the next call to next" contract) but with no heap
+/// allocation and, crucially, no drop glue: discarding the per-byte
+/// `[Option<Action>;3]` return is free, as in the reference. The `buf` tail
+/// beyond `len` is unspecified (it mirrors whatever was in the parser's
+/// buffers, exactly like the reference's undefined array tails); every
+/// observation goes through the `len`-bounded prefix slice.
+#[derive(Clone, Copy)]
+pub struct InlineVec<T: Copy, const N: usize> {
+    buf: [T; N],
+    len: u8,
+}
+
+impl<T: Copy, const N: usize> InlineVec<T, N> {
+    /// Construct directly from the parser's backing array + tracked index —
+    /// a branch-free whole-array copy (the moral equivalent of the
+    /// reference's ptr+len slice over the same storage).
+    #[inline(always)]
+    pub fn from_buf(buf: [T; N], len: u8) -> Self {
+        debug_assert!((len as usize) <= N);
+        InlineVec { buf, len }
+    }
+
+    /// Construct from a slice (external callers / tests).
+    #[inline]
+    pub fn from_slice(s: &[T]) -> Self
+    where
+        T: Default,
+    {
+        assert!(s.len() <= N);
+        let mut buf = [T::default(); N];
+        buf[..s.len()].copy_from_slice(s);
+        InlineVec {
+            buf,
+            len: s.len() as u8,
+        }
+    }
+
+    /// The `len`-bounded prefix — the only observable content.
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[T] {
+        &self.buf[..self.len as usize]
+    }
+}
+
+impl<T: Copy + Default, const N: usize> InlineVec<T, N> {
+    /// Empty payload (the reference's `""` / `&.{}` defaults).
+    #[inline]
+    pub fn new() -> Self {
+        InlineVec {
+            buf: [T::default(); N],
+            len: 0,
+        }
+    }
+}
+
+impl<T: Copy + Default, const N: usize> Default for InlineVec<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Copy, const N: usize> core::ops::Deref for InlineVec<T, N> {
+    type Target = [T];
+    #[inline(always)]
+    fn deref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+/// Equality / Debug observe ONLY the prefix slice (identical to the previous
+/// `Vec` payload's derived impls).
+impl<T: Copy + PartialEq, const N: usize> PartialEq for InlineVec<T, N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+impl<T: Copy + Eq, const N: usize> Eq for InlineVec<T, N> {}
+
+/// Slice-comparison conveniences so existing assertions comparing payloads
+/// against `&[T]` slices keep compiling verbatim.
+impl<T: Copy + PartialEq, const N: usize> PartialEq<&[T]> for InlineVec<T, N> {
+    fn eq(&self, other: &&[T]) -> bool {
+        self.as_slice() == *other
+    }
+}
+impl<T: Copy + PartialEq, const N: usize> PartialEq<InlineVec<T, N>> for &[T] {
+    fn eq(&self, other: &InlineVec<T, N>) -> bool {
+        *self == other.as_slice()
+    }
+}
+impl<T: Copy + PartialEq, const N: usize> PartialEq<[T]> for InlineVec<T, N> {
+    fn eq(&self, other: &[T]) -> bool {
+        self.as_slice() == other
+    }
+}
+impl<T: Copy + PartialEq, const N: usize, const M: usize> PartialEq<[T; M]> for InlineVec<T, N> {
+    fn eq(&self, other: &[T; M]) -> bool {
+        self.as_slice() == &other[..]
+    }
+}
+
+impl<T: Copy + core::fmt::Debug, const N: usize> core::fmt::Debug for InlineVec<T, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.as_slice().fmt(f)
+    }
+}
+
+impl<'s, T: Copy, const N: usize> IntoIterator for &'s InlineVec<T, N> {
+    type Item = &'s T;
+    type IntoIter = core::slice::Iter<'s, T>;
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
 /// Maximum number of intermediate characters during parsing. This is
 /// 4 because we also use the intermediates array for UTF8 decoding which
 /// can be at most 4 bytes.
@@ -409,7 +552,16 @@ impl<'a> Parser<'a> {
     // ReleaseFast; #[inline] restores cross-crate inlinability without LTO.
     #[inline]
     pub fn next(&mut self, c: u8) -> [Option<Action>; 3] {
-        let effect = table[c as usize][self.state as usize];
+        // PERF(port): `self.state` hoisted into a local. Nothing below writes
+        // `self.state` until the deferred assignment (the arms only touch the
+        // osc parser / intermediates / params), so every read is the same
+        // value — but through `&mut self` calls (`do_action`) LLVM cannot
+        // prove that and re-loads it per read, putting a store->load
+        // round-trip on the per-byte critical path (the table index depends
+        // on it). The reference reads `self.state` directly; Zig proves the
+        // no-write whole-program. Observationally identical.
+        let state = self.state;
+        let effect = table[c as usize][state as usize];
 
         // log.info("next: {x}", .{c});
 
@@ -438,16 +590,16 @@ impl<'a> Parser<'a> {
         // 3. entry action to new state
 
         // Exit depends on current state
-        let exit: Option<Action> = if self.state == next_state {
+        let exit: Option<Action> = if state == next_state {
             None
         } else {
-            match self.state {
+            match state {
                 // .osc_string => if (self.osc_parser.end(c)) |cmd|
                 //     Action{ .osc_dispatch = cmd.* } else null,
                 State::OscString => self
                     .osc_parser
                     .end(Some(c))
-                    .map(|cmd| Action::OscDispatch(cmd.clone())),
+                    .map(|cmd| Action::OscDispatch(Box::new(cmd.clone()))),
                 // .dcs_passthrough => Action{ .dcs_unhook = {} },
                 State::DcsPassthrough => Some(Action::DcsUnhook),
                 // .sos_pm_apc_string => Action{ .apc_end = {} },
@@ -461,7 +613,7 @@ impl<'a> Parser<'a> {
         let transition = self.do_action(action, c);
 
         // Entry depends on new state
-        let entry: Option<Action> = if self.state == next_state {
+        let entry: Option<Action> = if state == next_state {
             None
         } else {
             match next_state {
@@ -495,12 +647,14 @@ impl<'a> Parser<'a> {
                         // PORT NOTE: the reference returns slices into `self`'s
                         // buffers; the owned payload copies the tracked
                         // prefixes (see the Action PORT NOTE).
-                        Some(Action::DcsHook(DCS {
-                            intermediates: self.intermediates[0..self.intermediates_idx as usize]
-                                .to_vec(),
-                            params: self.params[0..self.params_idx as usize].to_vec(),
+                        Some(Action::DcsHook(Box::new(DCS {
+                            intermediates: InlineVec::from_buf(
+                                self.intermediates,
+                                self.intermediates_idx,
+                            ),
+                            params: InlineVec::from_buf(self.params, self.params_idx),
                             final_: c,
-                        }))
+                        })))
                     }
                 }
                 // .sos_pm_apc_string => Action{ .apc_start = {} },
@@ -626,12 +780,12 @@ impl<'a> Parser<'a> {
                 // PORT NOTE: the reference slices into `self`'s buffers here
                 // ("only valid until the next call to next"); the owned payload
                 // copies the tracked prefixes (see the Action PORT NOTE).
-                let result = Action::CsiDispatch(CSI {
-                    intermediates: self.intermediates[0..self.intermediates_idx as usize].to_vec(),
-                    params: self.params[0..self.params_idx as usize].to_vec(),
+                let result = Action::CsiDispatch(Box::new(CSI {
+                    intermediates: InlineVec::from_buf(self.intermediates, self.intermediates_idx),
+                    params: InlineVec::from_buf(self.params, self.params_idx),
                     params_sep: self.params_sep,
                     final_: c,
-                });
+                }));
 
                 // We only allow colon or mixed separators for the 'm' command.
                 if c != b'm' && self.params_sep.count() > 0 {
@@ -651,10 +805,10 @@ impl<'a> Parser<'a> {
             //     .intermediates = self.intermediates[0..self.intermediates_idx],
             //     .final = c,
             // } },
-            TransitionAction::EscDispatch => Some(Action::EscDispatch(ESC {
-                intermediates: self.intermediates[0..self.intermediates_idx as usize].to_vec(),
+            TransitionAction::EscDispatch => Some(Action::EscDispatch(Box::new(ESC {
+                intermediates: InlineVec::from_buf(self.intermediates, self.intermediates_idx),
                 final_: c,
-            })),
+            }))),
             // .put => Action{ .dcs_put = c },
             TransitionAction::Put => Some(Action::DcsPut(c)),
             // .apc_put => Action{ .apc_put = c },
@@ -1191,7 +1345,7 @@ mod tests {
             assert!(a[2].is_none());
 
             let cmd = match a[0].as_ref().unwrap() {
-                Action::OscDispatch(cmd) => cmd,
+                Action::OscDispatch(cmd) => cmd.as_ref(),
                 _ => unreachable!(),
             };
             assert!(matches!(cmd, osc::Command::ChangeWindowTitle(_)));
@@ -1221,7 +1375,7 @@ mod tests {
             // before calling `next('\\')`; we mirror that ordering by extracting
             // the cloned command from `a` first, then advancing the parser.
             let cmd = match a[0].as_ref() {
-                Some(Action::OscDispatch(cmd)) => cmd.clone(),
+                Some(Action::OscDispatch(cmd)) => (**cmd).clone(),
                 _ => panic!("expected osc_dispatch"),
             };
             assert!(a[1].is_none());
@@ -1264,7 +1418,7 @@ mod tests {
             assert!(a[2].is_none());
 
             let cmd = match a[0].as_ref().unwrap() {
-                Action::OscDispatch(cmd) => cmd,
+                Action::OscDispatch(cmd) => cmd.as_ref(),
                 _ => unreachable!(),
             };
             assert!(matches!(cmd, osc::Command::ColorOperation { .. }));
@@ -1321,7 +1475,7 @@ mod tests {
             assert!(a[2].is_none());
 
             let cmd = match a[0].as_ref().unwrap() {
-                Action::OscDispatch(cmd) => cmd,
+                Action::OscDispatch(cmd) => cmd.as_ref(),
                 _ => unreachable!(),
             };
             assert!(matches!(cmd, osc::Command::ColorOperation { .. }));
