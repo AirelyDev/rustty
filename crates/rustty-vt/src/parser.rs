@@ -367,28 +367,6 @@ pub struct Parser<'a> {
     pub osc_parser: osc::Parser<'a>,
 }
 
-// PORT NOTE: internal record of which transition/exit/entry action to emit.
-// Because the user-facing `Action` borrows the parser's buffers, `next` first
-// performs every mutation (capturing only owned data here), then materializes
-// the borrowing `Action` values from the now-stable buffers. This staging adds
-// no reference logic — it is purely the Rust borrow-discipline mirror of the
-// reference's `defer self.state = next_state` followed by slice-returning
-// switch arms.
-enum Staged {
-    None,
-    Print(u32),
-    Execute(u8),
-    CsiDispatch(u8),
-    EscDispatch(u8),
-    OscDispatch(osc::Command),
-    DcsHook(u8),
-    DcsPut(u8),
-    DcsUnhook,
-    ApcStart,
-    ApcPut(u8),
-    ApcEnd,
-}
-
 impl<'a> Parser<'a> {
     // pub fn init() Parser {
     pub fn init() -> Parser<'a> {
@@ -440,13 +418,18 @@ impl<'a> Parser<'a> {
 
         // After generating the actions, we set our next state.
         // defer self.state = next_state;
-        // PORT NOTE: Zig's `defer` runs after the return expression is
-        // evaluated. Because the returned `Action`s borrow `self`'s buffers, we
-        // cannot hold those borrows across the `self.state` write. We instead
-        // stage every action (performing all buffer/osc mutations now), set the
-        // state, and then re-derive the borrowing `Action`s. The observable
-        // order of side effects is identical.
-        let cur_state = self.state;
+        // PORT NOTE (reshape): restore reference arm structure (Parser.zig:267-310).
+        // Zig's `defer` runs after the return expression is evaluated; here the
+        // three actions are computed into locals first and the deferred
+        // `self.state` write happens just before the return. The `Action`
+        // payloads are owned `Vec`s (see the Action PORT NOTE), so no borrow of
+        // `self`'s buffers is held across the state write — each dispatch arm
+        // builds its final `Action` in place, exactly like the reference.
+        // PERF(port): the intermediates/params prefix slices are materialized
+        // ONLY inside the CsiDispatch/EscDispatch/DcsHook arms (as at
+        // Parser.zig:377-384/:398-403/:299-306), not unconditionally per byte —
+        // the Ground->Ground print path carries no slice bounds checks, no
+        // SepList copy, and no staged-value round-trips.
 
         // When going from one state to another, the actions take place in this order:
         //
@@ -455,22 +438,22 @@ impl<'a> Parser<'a> {
         // 3. entry action to new state
 
         // Exit depends on current state
-        let exit: Staged = if cur_state == next_state {
-            Staged::None
+        let exit: Option<Action> = if self.state == next_state {
+            None
         } else {
-            match cur_state {
+            match self.state {
                 // .osc_string => if (self.osc_parser.end(c)) |cmd|
                 //     Action{ .osc_dispatch = cmd.* } else null,
-                State::OscString => match self.osc_parser.end(Some(c)) {
-                    Some(cmd) => Staged::OscDispatch(cmd.clone()),
-                    None => Staged::None,
-                },
+                State::OscString => self
+                    .osc_parser
+                    .end(Some(c))
+                    .map(|cmd| Action::OscDispatch(cmd.clone())),
                 // .dcs_passthrough => Action{ .dcs_unhook = {} },
-                State::DcsPassthrough => Staged::DcsUnhook,
+                State::DcsPassthrough => Some(Action::DcsUnhook),
                 // .sos_pm_apc_string => Action{ .apc_end = {} },
-                State::SosPmApcString => Staged::ApcEnd,
+                State::SosPmApcString => Some(Action::ApcEnd),
                 // else => null,
-                _ => Staged::None,
+                _ => None,
             }
         };
 
@@ -478,99 +461,60 @@ impl<'a> Parser<'a> {
         let transition = self.do_action(action, c);
 
         // Entry depends on new state
-        let entry: Staged = if cur_state == next_state {
-            Staged::None
+        let entry: Option<Action> = if self.state == next_state {
+            None
         } else {
             match next_state {
                 // .escape, .dcs_entry, .csi_entry => clear: { self.clear(); break :clear null; },
                 State::Escape | State::DcsEntry | State::CsiEntry => {
                     self.clear();
-                    Staged::None
+                    None
                 }
                 // .osc_string => osc_string: { self.osc_parser.reset(); break :osc_string null; },
                 State::OscString => {
                     self.osc_parser.reset();
-                    Staged::None
+                    None
                 }
                 // .dcs_passthrough => dcs_hook: { ... },
                 State::DcsPassthrough => {
                     // Ignore too many parameters
                     if self.params_idx as usize >= MAX_PARAMS {
                         // break :dcs_hook null;
-                        Staged::None
+                        None
                     } else {
                         // Finalize parameters
                         if self.param_acc_idx > 0 {
                             self.params[self.params_idx as usize] = self.param_acc;
                             self.params_idx += 1;
                         }
-                        // break :dcs_hook .{ .dcs_hook = .{ ... .final = c } };
-                        Staged::DcsHook(c)
+                        // break :dcs_hook .{ .dcs_hook = .{
+                        //     .intermediates = self.intermediates[0..self.intermediates_idx],
+                        //     .params = self.params[0..self.params_idx],
+                        //     .final = c,
+                        // } };
+                        // PORT NOTE: the reference returns slices into `self`'s
+                        // buffers; the owned payload copies the tracked
+                        // prefixes (see the Action PORT NOTE).
+                        Some(Action::DcsHook(DCS {
+                            intermediates: self.intermediates[0..self.intermediates_idx as usize]
+                                .to_vec(),
+                            params: self.params[0..self.params_idx as usize].to_vec(),
+                            final_: c,
+                        }))
                     }
                 }
                 // .sos_pm_apc_string => Action{ .apc_start = {} },
-                State::SosPmApcString => Staged::ApcStart,
+                State::SosPmApcString => Some(Action::ApcStart),
                 // else => null,
-                _ => Staged::None,
+                _ => None,
             }
         };
 
-        // Apply the deferred state transition now that all mutations are done.
+        // Apply the deferred state transition now that all actions are built
+        // (the Zig `defer` above).
         self.state = next_state;
 
-        // Materialize the actions from the stable buffers. The reference
-        // returns slices into `self.intermediates`/`self.params` ("only valid
-        // until the next call to next"); we copy the tracked prefix into owned
-        // `Vec`s (see the Action PORT NOTE).
-        let intermediates = &self.intermediates[0..self.intermediates_idx as usize];
-        let params = &self.params[0..self.params_idx as usize];
-        let params_sep = self.params_sep;
-
-        [
-            Self::stage_to_action(exit, intermediates, params, params_sep),
-            Self::stage_to_action(transition, intermediates, params, params_sep),
-            Self::stage_to_action(entry, intermediates, params, params_sep),
-        ]
-    }
-
-    // PORT NOTE: turns a staged action into the user-facing `Action`, copying
-    // the (now-stable) intermediate/param prefixes into owned `Vec`s. The
-    // `final` byte for CSI/ESC/DCS dispatch is captured in the staged variant.
-    // PERF(port): port-only glue with no Zig counterpart — it must never be an
-    // out-of-line call on the per-byte path (Zig builds the Action in-place).
-    #[inline(always)]
-    fn stage_to_action(
-        staged: Staged,
-        intermediates: &[u8],
-        params: &[u16],
-        params_sep: SepList,
-    ) -> Option<Action> {
-        match staged {
-            Staged::None => None,
-            Staged::Print(c) => Some(Action::Print(c)),
-            Staged::Execute(c) => Some(Action::Execute(c)),
-            Staged::CsiDispatch(c) => Some(Action::CsiDispatch(CSI {
-                intermediates: intermediates.to_vec(),
-                params: params.to_vec(),
-                params_sep,
-                final_: c,
-            })),
-            Staged::EscDispatch(c) => Some(Action::EscDispatch(ESC {
-                intermediates: intermediates.to_vec(),
-                final_: c,
-            })),
-            Staged::OscDispatch(cmd) => Some(Action::OscDispatch(cmd)),
-            Staged::DcsHook(c) => Some(Action::DcsHook(DCS {
-                intermediates: intermediates.to_vec(),
-                params: params.to_vec(),
-                final_: c,
-            })),
-            Staged::DcsPut(c) => Some(Action::DcsPut(c)),
-            Staged::DcsUnhook => Some(Action::DcsUnhook),
-            Staged::ApcStart => Some(Action::ApcStart),
-            Staged::ApcPut(c) => Some(Action::ApcPut(c)),
-            Staged::ApcEnd => Some(Action::ApcEnd),
-        }
+        [exit, transition, entry]
     }
 
     // pub inline fn collect(self: *Parser, c: u8) void {
@@ -591,19 +535,23 @@ impl<'a> Parser<'a> {
     // inline fn doAction(self: *Parser, action: TransitionAction, c: u8) ?Action {
     // PERF(port): Zig `inline fn` (Parser.zig:324) — restore mandatory-inline
     // idiom.
+    // PORT NOTE (reshape): restore reference arm structure (Parser.zig:267-310)
+    // — returns `Option<Action>` directly like the reference `?Action`, with
+    // the dispatch arms building their owned payloads in place (the former
+    // staging layer is gone).
     #[inline(always)]
-    fn do_action(&mut self, action: TransitionAction, c: u8) -> Staged {
+    fn do_action(&mut self, action: TransitionAction, c: u8) -> Option<Action> {
         match action {
             // .none, .ignore => null,
-            TransitionAction::None | TransitionAction::Ignore => Staged::None,
+            TransitionAction::None | TransitionAction::Ignore => None,
             // .print => Action{ .print = c },
-            TransitionAction::Print => Staged::Print(c as u32),
+            TransitionAction::Print => Some(Action::Print(c as u32)),
             // .execute => Action{ .execute = c },
-            TransitionAction::Execute => Staged::Execute(c),
+            TransitionAction::Execute => Some(Action::Execute(c)),
             // .collect => collect: { self.collect(c); break :collect null; },
             TransitionAction::Collect => {
                 self.collect(c);
-                Staged::None
+                None
             }
             // .param => param: { ... },
             TransitionAction::Param => {
@@ -613,7 +561,7 @@ impl<'a> Parser<'a> {
                     // Ignore too many parameters
                     if self.params_idx as usize >= MAX_PARAMS {
                         // break :param null;
-                        return Staged::None;
+                        return None;
                     }
 
                     // Set param final value
@@ -627,7 +575,7 @@ impl<'a> Parser<'a> {
                     self.param_acc = 0;
                     self.param_acc_idx = 0;
                     // break :param null;
-                    return Staged::None;
+                    return None;
                 }
 
                 // A numeric value. Add it to our accumulator.
@@ -643,24 +591,24 @@ impl<'a> Parser<'a> {
                 let (acc_idx, overflow) = self.param_acc_idx.overflowing_add(1);
                 self.param_acc_idx = acc_idx;
                 if overflow {
-                    return Staged::None;
+                    return None;
                 }
 
                 // The client is expected to perform no action.
                 // break :param null;
-                Staged::None
+                None
             }
             // .osc_put => osc_put: { osc.Parser.next(&self.osc_parser, c); break :osc_put null; },
             TransitionAction::OscPut => {
                 self.osc_parser.next(c);
-                Staged::None
+                None
             }
             // .csi_dispatch => csi_dispatch: { ... },
             TransitionAction::CsiDispatch => {
                 // Ignore too many parameters
                 if self.params_idx as usize >= MAX_PARAMS {
                     // break :csi_dispatch null;
-                    return Staged::None;
+                    return None;
                 }
 
                 // Finalize parameters if we have one
@@ -669,12 +617,21 @@ impl<'a> Parser<'a> {
                     self.params_idx += 1;
                 }
 
-                // const result: Action = .{ .csi_dispatch = .{ ... .final = c } };
-                // PORT NOTE: the reference builds the full `result` here so it
-                // can both log it and return it. We stash the `final` byte in
-                // the staged variant and build the borrowing CSI in
-                // `stage_to_action`; the separator gate below reads
-                // `self.params_sep` directly.
+                // const result: Action = .{ .csi_dispatch = .{
+                //     .intermediates = self.intermediates[0..self.intermediates_idx],
+                //     .params = self.params[0..self.params_idx],
+                //     .params_sep = self.params_sep,
+                //     .final = c,
+                // } };
+                // PORT NOTE: the reference slices into `self`'s buffers here
+                // ("only valid until the next call to next"); the owned payload
+                // copies the tracked prefixes (see the Action PORT NOTE).
+                let result = Action::CsiDispatch(CSI {
+                    intermediates: self.intermediates[0..self.intermediates_idx as usize].to_vec(),
+                    params: self.params[0..self.params_idx as usize].to_vec(),
+                    params_sep: self.params_sep,
+                    final_: c,
+                });
 
                 // We only allow colon or mixed separators for the 'm' command.
                 if c != b'm' && self.params_sep.count() > 0 {
@@ -684,18 +641,24 @@ impl<'a> Parser<'a> {
                     //     .{result},
                     // );
                     // break :csi_dispatch null;
-                    return Staged::None;
+                    return None;
                 }
 
                 // break :csi_dispatch result;
-                Staged::CsiDispatch(c)
+                Some(result)
             }
-            // .esc_dispatch => Action{ .esc_dispatch = .{ ... .final = c } },
-            TransitionAction::EscDispatch => Staged::EscDispatch(c),
+            // .esc_dispatch => Action{ .esc_dispatch = .{
+            //     .intermediates = self.intermediates[0..self.intermediates_idx],
+            //     .final = c,
+            // } },
+            TransitionAction::EscDispatch => Some(Action::EscDispatch(ESC {
+                intermediates: self.intermediates[0..self.intermediates_idx as usize].to_vec(),
+                final_: c,
+            })),
             // .put => Action{ .dcs_put = c },
-            TransitionAction::Put => Staged::DcsPut(c),
+            TransitionAction::Put => Some(Action::DcsPut(c)),
             // .apc_put => Action{ .apc_put = c },
-            TransitionAction::ApcPut => Staged::ApcPut(c),
+            TransitionAction::ApcPut => Some(Action::ApcPut(c)),
         }
     }
 
