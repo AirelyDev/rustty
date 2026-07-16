@@ -35,7 +35,13 @@ identity-oracle = ["rustty-identity/identity-oracle"]
 # Pulled in solely so `identity-oracle` (above) has a string-identity crate to flip;
 # this crate's own logic reads no identity values today.
 rustty-identity = { workspace = true }
-rustty-vt = { workspace = true }
+# PERF(port): `simd` restores the reference bench binary's build configuration —
+# ghostty-bench is built with `build_options.simd = true` (src/build/Config.zig:34,
+# the default everywhere but wasm), so its terminal-stream bench runs the SIMD
+# `nextSlice` fast path. The ported `Stream::next_slice` SIMD path is live and
+# test-covered in both modes; without this flag the Rust bench binary was running
+# the scalar fallback (a measured ~24% terminal-stream pessimization vs SIMD).
+rustty-vt = { workspace = true, features = ["simd"] }
 rustty-simd = { workspace = true }
 rustty-unicode = { workspace = true }
 # `cli.args.parse` / `cli.args.argsIterator` (the Options parsing + argv iterator).
