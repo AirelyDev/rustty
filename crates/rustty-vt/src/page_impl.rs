@@ -1130,34 +1130,138 @@ impl Page {
                 let src = unsafe { *src_cell };
 
                 if src.has_grapheme() {
-                    // Copy the grapheme codepoints
-                    // When `other` aliases `self`, read through the receiver to
-                    // avoid a stale-tag access to `self` (see method PORT NOTE).
-                    // We snapshot into an owned buffer to release the source
-                    // borrow before the `&mut self` `set_graphemes` call (which
-                    // copies the codepoints anyway).
-                    let cps: Vec<u32> = if same_page {
-                        self.lookup_grapheme(src_cell).unwrap().to_vec()
-                    } else {
-                        unsafe { Page::lookup_grapheme_of(other, src_cell) }
-                            .unwrap()
-                            .to_vec()
-                    };
-
-                    // Safe to use setGraphemes because we cleared all
-                    // managed memory for our destination cell range.
-                    self.set_graphemes(dst_row, dst_cell, &cps).map_err(
-                        |e| match e {
-                            GraphemeError::GraphemeMapOutOfMemory => {
-                                CloneFromError::GraphemeMapOutOfMemory
-                            }
-                            GraphemeError::GraphemeAllocOutOfMemory => {
-                                CloneFromError::GraphemeAllocOutOfMemory
-                            }
-                        },
+                    self.clone_cell_graphemes_from(
+                        other, same_page, dst_row, dst_cell, src_cell,
                     )?;
                 }
-                if src.hyperlink() {
+                if src.hyperlink()
+                    && self.clone_cell_hyperlink_from(
+                        other, same_page, dst_row, dst_cell, src_cell,
+                    )?
+                {
+                    continue;
+                }
+                if src.style_id() != stylepkg::DEFAULT_ID {
+                    unsafe { (*dst_row).set_styled(true) };
+
+                    if same_page {
+                        // If it's the same page we don't have to worry about
+                        // copying the style, we can use the style ID directly.
+                        unsafe {
+                            (*dst_cell).set_style_id(src.style_id());
+                            self.styles.use_id(self_base, (*dst_cell).style_id());
+                        }
+                    } else {
+                        // Slow path: Get the style from the other
+                        // page and add it to this page's style set.
+                        let src_style_id = src.style_id();
+                        let other_style =
+                            unsafe { Page::style_get_of(other, src_style_id) };
+                        let added = unsafe {
+                            self.styles.add_with_id(self_base, other_style, src_style_id)
+                        }
+                        .map_err(|e| match e {
+                            // The style set capacity needs to be increased.
+                            crate::ref_counted_set::AddError::OutOfMemory => {
+                                CloneFromError::StyleSetOutOfMemory
+                            }
+                            // The style set needs to be rehashed.
+                            crate::ref_counted_set::AddError::NeedsRehash => {
+                                CloneFromError::StyleSetNeedsRehash
+                            }
+                        })?;
+                        unsafe { (*dst_cell).set_style_id(added.unwrap_or(src_style_id)) };
+                    }
+                }
+                if KITTY_GRAPHICS && src.codepoint() == KITTY_PLACEHOLDER {
+                    unsafe { (*dst_row).set_kitty_virtual_placeholder(true) };
+                }
+            }
+        }
+
+        // If we are growing columns, then we need to ensure spacer heads
+        // are cleared.
+        if self.size.cols > other_size.cols {
+            let last: *mut Cell = unsafe {
+                (*dst_row)
+                    .cells()
+                    .ptr(self_base)
+                    .add(other_size.cols as usize - 1)
+            };
+            if unsafe { (*last).wide() } == Wide::SpacerHead {
+                unsafe { (*last).set_wide(Wide::Narrow) };
+            }
+        }
+
+        Ok(())
+    }
+
+    // PERF(port): the grapheme/hyperlink arms of the managed-copy loop in
+    // `clone_partial_row_from_inner` are outlined into these `#[cold]`
+    // per-cell helpers (the reference has them inline in the `for` body,
+    // page.zig:911-984). Behavior is byte-identical — same calls in the same
+    // order with the same error mapping — but keeping the (rare) arms out of
+    // line relieves register pressure in the per-cell loop: inline, their
+    // fully-inlined probe loops and `Vec` alloc/dealloc paths force LLVM to
+    // spill the loop bound, cell-base pointers, and reset-mask constants to
+    // the stack and rematerialize them every iteration (measured 2026-07-16,
+    // xctrace: ~40% of the loop's self-time vs the Zig build's hoisted
+    // registers; PERF_LOG.md round 3).
+    /// The grapheme arm of `clone_partial_row_from_inner`'s managed-copy
+    /// loop (one cell).
+    #[cold]
+    #[inline(never)]
+    fn clone_cell_graphemes_from(
+        &mut self,
+        other: *const Page,
+        same_page: bool,
+        dst_row: *mut Row,
+        dst_cell: *mut Cell,
+        src_cell: *const Cell,
+    ) -> Result<(), CloneFromError> {
+        // Copy the grapheme codepoints
+        // When `other` aliases `self`, read through the receiver to
+        // avoid a stale-tag access to `self` (see method PORT NOTE).
+        // We snapshot into an owned buffer to release the source
+        // borrow before the `&mut self` `set_graphemes` call (which
+        // copies the codepoints anyway).
+        let cps: Vec<u32> = if same_page {
+            self.lookup_grapheme(src_cell).unwrap().to_vec()
+        } else {
+            unsafe { Page::lookup_grapheme_of(other, src_cell) }
+                .unwrap()
+                .to_vec()
+        };
+
+        // Safe to use setGraphemes because we cleared all
+        // managed memory for our destination cell range.
+        self.set_graphemes(dst_row, dst_cell, &cps).map_err(
+            |e| match e {
+                GraphemeError::GraphemeMapOutOfMemory => {
+                    CloneFromError::GraphemeMapOutOfMemory
+                }
+                GraphemeError::GraphemeAllocOutOfMemory => {
+                    CloneFromError::GraphemeAllocOutOfMemory
+                }
+            },
+        )
+    }
+
+    /// The hyperlink arm of `clone_partial_row_from_inner`'s managed-copy
+    /// loop (one cell). Returns `true` when the same-page fast path was
+    /// taken (the caller `continue`s, preserving the existing control flow).
+    #[cold]
+    #[inline(never)]
+    fn clone_cell_hyperlink_from(
+        &mut self,
+        other: *const Page,
+        same_page: bool,
+        dst_row: *mut Row,
+        dst_cell: *mut Cell,
+        src_cell: *const Cell,
+    ) -> Result<bool, CloneFromError> {
+        let self_base = self.memory_ptr();
+        {
                     let id = if same_page {
                         self.lookup_hyperlink(src_cell).unwrap()
                     } else {
@@ -1170,7 +1274,7 @@ impl Page {
                         self.set_hyperlink(dst_row, dst_cell, id).map_err(|_| {
                             CloneFromError::HyperlinkMapOutOfMemory
                         })?;
-                        continue;
+                        return Ok(true);
                     }
 
                     // Slow-path: get the hyperlink from the other page,
@@ -1236,60 +1340,8 @@ impl Page {
 
                     self.set_hyperlink(dst_row, dst_cell, dst_id)
                         .map_err(|_| CloneFromError::HyperlinkMapOutOfMemory)?;
-                }
-                if src.style_id() != stylepkg::DEFAULT_ID {
-                    unsafe { (*dst_row).set_styled(true) };
-
-                    if same_page {
-                        // If it's the same page we don't have to worry about
-                        // copying the style, we can use the style ID directly.
-                        unsafe {
-                            (*dst_cell).set_style_id(src.style_id());
-                            self.styles.use_id(self_base, (*dst_cell).style_id());
-                        }
-                    } else {
-                        // Slow path: Get the style from the other
-                        // page and add it to this page's style set.
-                        let src_style_id = src.style_id();
-                        let other_style =
-                            unsafe { Page::style_get_of(other, src_style_id) };
-                        let added = unsafe {
-                            self.styles.add_with_id(self_base, other_style, src_style_id)
-                        }
-                        .map_err(|e| match e {
-                            // The style set capacity needs to be increased.
-                            crate::ref_counted_set::AddError::OutOfMemory => {
-                                CloneFromError::StyleSetOutOfMemory
-                            }
-                            // The style set needs to be rehashed.
-                            crate::ref_counted_set::AddError::NeedsRehash => {
-                                CloneFromError::StyleSetNeedsRehash
-                            }
-                        })?;
-                        unsafe { (*dst_cell).set_style_id(added.unwrap_or(src_style_id)) };
-                    }
-                }
-                if KITTY_GRAPHICS && src.codepoint() == KITTY_PLACEHOLDER {
-                    unsafe { (*dst_row).set_kitty_virtual_placeholder(true) };
-                }
-            }
         }
-
-        // If we are growing columns, then we need to ensure spacer heads
-        // are cleared.
-        if self.size.cols > other_size.cols {
-            let last: *mut Cell = unsafe {
-                (*dst_row)
-                    .cells()
-                    .ptr(self_base)
-                    .add(other_size.cols as usize - 1)
-            };
-            if unsafe { (*last).wide() } == Wide::SpacerHead {
-                unsafe { (*last).set_wide(Wide::Narrow) };
-            }
-        }
-
-        Ok(())
+        Ok(false)
     }
 
     /// Get a single row. y must be valid.

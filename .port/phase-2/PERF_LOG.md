@@ -176,3 +176,66 @@ matters for OSC-heavy streams, NOT the osc-parser bench (it drives
 
 Verified binary: `.perf-bins/rustty-bench-r2-action-arrayvec` (untracked
 stash, RF profile).
+
+# Round 3
+
+## r3-clone-outline — screen-clone.clone (+10.5% residual)
+
+Target: screen-clone.clone zig 51.3 vs rust 56.7 official (post-r2).
+File: `crates/rustty-vt/src/page_impl.rs` (only).
+
+Diagnosis (xctrace Time Profiler, --all-processes, 12 s windows over external
+250-run loops of BOTH binaries, per-symbol self-time diff):
+
+- `RefCountedSet::add_with_id` (style set): rust 5007 ms vs zig 4987 ms of
+  ~equal sample windows — a WASH. The r2 packed `Style::eql` closed this lane;
+  no remaining rust-only cost in the set itself.
+- `clone_partial_row_from`: rust 3982 ms (33.8%) vs zig 3342 ms (28.9%) —
+  the ENTIRE remaining gap lives in the managed-copy per-cell loop body.
+- Instruction histogram (leaf-PC within the function) of the rust loop vs zig:
+  rust burned ~40% of the loop's self-time on artifacts zig does not have:
+  a per-iteration loop-bound spill/reload round trip (`str/ldr [sp,#0x60]`,
+  464+988 ms), per-iteration `mov+movk+movk` rematerialization of the
+  `copy_with_managed_reset` mask constants and the kitty-placeholder
+  constant `0x43bbb8` (zig hoists both into callee-saved x20/x28), and extra
+  register-restore shuffling at the loop tail. Root cause: the grapheme and
+  hyperlink arms — including `cps.to_vec()`'s `__rust_alloc`/dealloc paths
+  and three fully-inlined hash-probe loops — were inlined into the loop,
+  and their live ranges push the loop invariants off the register file.
+
+Fix: outline the two rare arms into `#[cold] #[inline(never)]` per-cell
+helpers `clone_cell_graphemes_from` / `clone_cell_hyperlink_from` (bodies
+moved verbatim; the hyperlink helper returns `bool` = "same-page fast path
+taken" so the caller's existing `continue` control flow is preserved
+exactly). The hot style arm stays inline. Observable behavior byte-identical:
+same calls, same order, same error mapping; no test touched; no new unsafe.
+
+Measured (NON-OFFICIAL, interleaved 20-run loops x7, same session):
+zig 51.8 / r2-SHIP 57.6 / r3 54.4 ms — recovers ~3.2 of the 5.4 ms gap.
+Canaries flat: terminal-stream 458→460 ms (noise), screen-clone.render
+21.2→20.9 ms (noise). rustty-vt suite green (2063 passed / 0 failed);
+`cargo fmt --check` and clippy clean.
+
+Negative result (measured, reverted): restructuring
+`copy_with_managed_reset` to csel-between-results (hoping for two
+logical-immediate `and`s) was neutral-to-slightly-worse (54.4→54.9); LLVM
+re-fuses the masks and the constants still die across the hot
+`bl add_with_id` (caller-saved), so they rematerialize either way.
+
+Remaining ~2.6 ms (+5%): per-cell rematerialization of the two constant
+pairs + `ldp/ldr` base reloads after the hot `add_with_id` return (constants
+live in caller-saved regs; all 10 callee-saved regs are occupied), plus the
+Rust-ABI 24-byte by-value `Style` marshal to the stack per call (Zig passes
+big parameters by const reference). Both are ABI/regalloc-locked without
+changing the reference's `addWithId(value: T)` by-value surface — recorded
+as the parity-locked floor for this bench.
+
+PARITY FLAG (pre-existing, NOT touched by this fix): the same-page hyperlink
+fast path does `continue` (page_impl.rs), skipping the style and kitty
+checks for that cell; the reference's `break :hyperlink` (page.zig:926) only
+exits the labeled block and still runs both. A same-page partial clone of a
+cell with BOTH hyperlink and style would drop the style copy/refcount.
+Needs its own R1-parity fix + test outside the perf round.
+
+Verified binary: `.perf-bins/rustty-bench-r3-clone-outline-RF` (untracked
+stash, RF profile). Working-tree change left UNCOMMITTED for round-3 review.
