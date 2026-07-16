@@ -297,7 +297,7 @@ fn run_iterator() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -329,7 +329,7 @@ fn run_iterator() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -361,7 +361,7 @@ fn run_iterator() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -393,7 +393,7 @@ fn run_iterator() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -468,7 +468,7 @@ fn run_iterator_empty_cells_with_background_set() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -512,7 +512,7 @@ fn shape() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -554,7 +554,7 @@ fn shape_nerd_fonts() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -592,7 +592,7 @@ fn shape_inconsolata_ligs() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -626,7 +626,7 @@ fn shape_inconsolata_ligs() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -668,7 +668,7 @@ fn shape_monaspace_ligs() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -711,7 +711,7 @@ fn shape_left_replaced_lig_in_last_run() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -754,7 +754,7 @@ fn shape_left_replaced_lig_in_early_run() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -794,7 +794,7 @@ fn shape_u_3c9_with_jb_mono() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -838,7 +838,7 @@ fn shape_emoji_width() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -896,7 +896,7 @@ fn shape_emoji_width_long() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[1].cells.as_slice(),
+            cells: state.row_data[1].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -938,7 +938,7 @@ fn shape_variation_selector_vs15() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -980,7 +980,7 @@ fn shape_variation_selector_vs16() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1020,7 +1020,7 @@ fn shape_with_empty_cells_in_between() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1068,7 +1068,7 @@ fn shape_combining_characters() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1122,7 +1122,7 @@ fn shape_devanagari_string() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1189,7 +1189,7 @@ fn shape_tai_tham_vowels_position_differs_from_advance() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1253,7 +1253,7 @@ fn shape_tai_tham_letters_position_y_differs_from_advance() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1316,7 +1316,7 @@ fn shape_javanese_ligatures() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1382,7 +1382,7 @@ fn shape_chakma_vowel_sign_with_ligature() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1456,7 +1456,7 @@ fn shape_bengali_ligatures_with_out_of_order_vowels() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1513,7 +1513,7 @@ fn shape_box_glyphs() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
@@ -1558,7 +1558,7 @@ fn shape_selection_boundary() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: Some([0, (cols - 1) as u16]),
                 cursor_x: None,
             })
@@ -1578,7 +1578,7 @@ fn shape_selection_boundary() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: Some([2, (cols - 1) as u16]),
                 cursor_x: None,
             })
@@ -1598,7 +1598,7 @@ fn shape_selection_boundary() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: Some([0, 3]),
                 cursor_x: None,
             })
@@ -1618,7 +1618,7 @@ fn shape_selection_boundary() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: Some([1, 3]),
                 cursor_x: None,
             })
@@ -1638,7 +1638,7 @@ fn shape_selection_boundary() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: Some([1, 1]),
                 cursor_x: None,
             })
@@ -1678,7 +1678,7 @@ fn shape_cursor_boundary() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -1699,7 +1699,7 @@ fn shape_cursor_boundary() {
             let mut it = unsafe {
                 (*shaper).run_iterator(shape::RunOptions {
                     grid,
-                    cells: state.row_data[0].cells.as_slice(),
+                    cells: state.row_data[0].cells.slice(),
                     selection: None,
                     cursor_x: Some(0),
                 })
@@ -1718,7 +1718,7 @@ fn shape_cursor_boundary() {
             let mut it = unsafe {
                 (*shaper).run_iterator(shape::RunOptions {
                     grid,
-                    cells: state.row_data[0].cells.as_slice(),
+                    cells: state.row_data[0].cells.slice(),
                     selection: None,
                     cursor_x: None,
                 })
@@ -1740,7 +1740,7 @@ fn shape_cursor_boundary() {
             let mut it = unsafe {
                 (*shaper).run_iterator(shape::RunOptions {
                     grid,
-                    cells: state.row_data[0].cells.as_slice(),
+                    cells: state.row_data[0].cells.slice(),
                     selection: None,
                     cursor_x: Some(1),
                 })
@@ -1759,7 +1759,7 @@ fn shape_cursor_boundary() {
             let mut it = unsafe {
                 (*shaper).run_iterator(shape::RunOptions {
                     grid,
-                    cells: state.row_data[0].cells.as_slice(),
+                    cells: state.row_data[0].cells.slice(),
                     selection: None,
                     cursor_x: None,
                 })
@@ -1780,7 +1780,7 @@ fn shape_cursor_boundary() {
             let mut it = unsafe {
                 (*shaper).run_iterator(shape::RunOptions {
                     grid,
-                    cells: state.row_data[0].cells.as_slice(),
+                    cells: state.row_data[0].cells.slice(),
                     selection: None,
                     cursor_x: Some(9),
                 })
@@ -1799,7 +1799,7 @@ fn shape_cursor_boundary() {
             let mut it = unsafe {
                 (*shaper).run_iterator(shape::RunOptions {
                     grid,
-                    cells: state.row_data[0].cells.as_slice(),
+                    cells: state.row_data[0].cells.slice(),
                     selection: None,
                     cursor_x: None,
                 })
@@ -1840,7 +1840,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -1860,7 +1860,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: Some(0),
             })
@@ -1878,7 +1878,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -1896,7 +1896,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: Some(1),
             })
@@ -1914,7 +1914,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -1954,7 +1954,7 @@ fn shape_cell_attribute_change() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -1989,7 +1989,7 @@ fn shape_cell_attribute_change() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -2027,7 +2027,7 @@ fn shape_cell_attribute_change() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -2065,7 +2065,7 @@ fn shape_cell_attribute_change() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -2101,7 +2101,7 @@ fn shape_cell_attribute_change() {
         let mut it = unsafe {
             (*shaper).run_iterator(shape::RunOptions {
                 grid,
-                cells: state.row_data[0].cells.as_slice(),
+                cells: state.row_data[0].cells.slice(),
                 selection: None,
                 cursor_x: None,
             })
@@ -2151,7 +2151,7 @@ fn shape_high_plane_sprite_font_codepoint() {
     let mut it = unsafe {
         (*shaper).run_iterator(shape::RunOptions {
             grid,
-            cells: state.row_data[0].cells.as_slice(),
+            cells: state.row_data[0].cells.slice(),
             selection: None,
             cursor_x: None,
         })
