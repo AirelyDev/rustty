@@ -1,7 +1,7 @@
 # Hebrew translations for io.airely.rustty.
 # Copyright (C) 2026 "Mitchell Hashimoto, Rustty contributors"
 # This file is distributed under the same license as the io.airely.rustty package.
-# Sl (Shahaf Levi), Sl's Repository Ltd <rustty@slsrepo.com>, 2026.
+# Sl (Shahaf Levi), Sl's Repository Ltd <gael@airely.io>, 2026.
 # CraziestOwl <craziestowl@proton.me>, 2025.
 #
 #, fuzzy
@@ -12,7 +12,7 @@ msgstr ""
 "POT-Creation-Date: 2026-03-25 16:24-0700\n"
 "PO-Revision-Date: 2026-02-18 18:14+0300\n"
 "Last-Translator: Sl (Shahaf Levi), Sl's Repository Ltd "
-"<rustty@slsrepo.com>\n"
+"<gael@airely.io>\n"
 "Language-Team: Hebrew <he_IL@lists.sourceforge.net>\n"
 "Language: he\n"
 "MIME-Version: 1.0\n"
