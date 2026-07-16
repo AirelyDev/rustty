@@ -720,307 +720,10 @@ impl Terminal {
         if c > 255
             && self.modes.get(modespkg::Mode::GraphemeCluster)
             && unsafe { (*active).cursor.x } > 0
+            && self.print_inner_grapheme(c, right_limit)?
         {
-            'grapheme: {
-                // We need the previous cell to determine if we're at a grapheme
-                // break or not. If we are NOT, then we are still combining the
-                // same grapheme, and will be appending to prev.cell. Otherwise, we are
-                // in a new cell.
-                // const Prev = struct { cell: *Cell, left: size.CellCountInt };
-                let left: size::CellCountInt = {
-                    // If we have wraparound, then we use the prev col unless
-                    // there's a pending wrap, in which case we use the current.
-                    if self.modes.get(modespkg::Mode::Wraparound) {
-                        u8::from(!unsafe { (*active).cursor.pending_wrap }) as size::CellCountInt
-                    } else if unsafe { (*active).cursor.x } != right_limit - 1 {
-                        // If we do not have wraparound, the logic is trickier. If
-                        // we're not on the last column, then we just use the previous
-                        // column. Otherwise, we need to check if there is text to
-                        // figure out if we're attaching to the prev or current.
-                        1
-                    } else {
-                        u8::from(unsafe { (*(*active).cursor.page_cell).codepoint() } == 0)
-                            as size::CellCountInt
-                    }
-                };
-
-                // If the previous cell is a wide spacer tail, then we actually
-                // want to use the cell before that because that has the actual
-                // content.
-                let immediate = self.active_mut().cursor_cell_left(left);
-                let (mut prev_cell, prev_left): (*mut pagepkg::Cell, size::CellCountInt) =
-                    match unsafe { (*immediate).wide() } {
-                        pagepkg::Wide::SpacerTail => {
-                            (self.active_mut().cursor_cell_left(left + 1), left + 1)
-                        }
-                        _ => (immediate, left),
-                    };
-
-                // If our cell has no content, then this is a new cell and
-                // necessarily a grapheme break.
-                if unsafe { (*prev_cell).codepoint() } == 0 {
-                    break 'grapheme;
-                }
-
-                let active: *mut Screen = self.screens.active;
-
-                let mut previous_codepoint: u21 = unsafe { (*prev_cell).content_codepoint() };
-                let grapheme_break = {
-                    let mut state: unicode::grapheme::BreakState =
-                        unicode::grapheme::BreakState::Default;
-                    if unsafe { (*prev_cell).has_grapheme() } {
-                        let page: *mut Page = unsafe {
-                            core::ptr::addr_of_mut!((*(*(*active).cursor.page_pin).node).data)
-                        };
-                        let cps = unsafe { (*page).lookup_grapheme(prev_cell) }.unwrap();
-                        for &cp2 in cps {
-                            // log.debug("cp1={x} cp2={x}", .{ previous_codepoint, cp2 });
-                            // assert(!unicode.graphemeBreak(previous_codepoint, cp2, &state));
-                            //
-                            // DG4 (PORT_RULES.md "DG2/DG4"): `assert` here is
-                            // `quirks.inlineAssert` -> `debug_assert!`. The call
-                            // MUTATES `state` (the reference's `inline fn` argument
-                            // is evaluated in every build mode), so it must run
-                            // UNCONDITIONALLY outside the macro — `debug_assert!`
-                            // would drop the side effect in unchecked builds.
-                            let brk = unicode::graphemeBreak(previous_codepoint, cp2, &mut state);
-                            debug_assert!(!brk);
-                            previous_codepoint = cp2;
-                        }
-                    }
-
-                    // log.debug("cp1={x} cp2={x} end", .{ previous_codepoint, c });
-                    unicode::graphemeBreak(previous_codepoint, c, &mut state)
-                };
-
-                // If we can NOT break, this means that "c" is part of a grapheme
-                // with the previous char.
-                if !grapheme_break {
-                    // enum { no_change, wide, narrow }
-                    enum DesiredWide {
-                        NoChange,
-                        Wide,
-                        Narrow,
-                    }
-                    let mut desired_wide: DesiredWide = DesiredWide::NoChange;
-
-                    // If this is an emoji variation selector then we need to modify
-                    // the cell width accordingly. VS16 makes the character wide and
-                    // VS15 makes it narrow.
-                    if c == 0xFE0F || c == 0xFE0E {
-                        let prev_props = unicode::table().get(previous_codepoint);
-                        // Check if it is a valid variation sequence in
-                        // emoji-variation-sequences.txt, and if not, ignore the char.
-                        if !prev_props.emoji_vs_base {
-                            return Ok(());
-                        }
-
-                        match c {
-                            0xFE0F => desired_wide = DesiredWide::Wide,
-                            0xFE0E => desired_wide = DesiredWide::Narrow,
-                            _ => unreachable!(),
-                        }
-                    } else if !unicode::table().get(c).width_zero_in_grapheme {
-                        // If we have a code point that contributes to the width of a
-                        // grapheme, it necessarily means that we're at least at width
-                        // 2, since the first code point must be at least width 1 to
-                        // start. (Note that Prepend code points could effectively mean
-                        // the first code point should be width 0, but we don't handle
-                        // that yet.)
-                        desired_wide = DesiredWide::Wide;
-                    }
-
-                    match desired_wide {
-                        DesiredWide::Wide => 'wide: {
-                            if unsafe { (*prev_cell).wide() } == pagepkg::Wide::Wide {
-                                break 'wide;
-                            }
-
-                            // Move our cursor back to the previous. We'll move
-                            // the cursor within this block to the proper location.
-                            self.active_mut().cursor_left(prev_left);
-
-                            let active: *mut Screen = self.screens.active;
-
-                            // If we don't have space for the wide char, we need to
-                            // insert spacers and wrap. We need special handling if the
-                            // previous cell has grapheme data.
-                            if unsafe { (*active).cursor.x } == right_limit - 1 {
-                                if !self.modes.get(modespkg::Mode::Wraparound) {
-                                    return Ok(());
-                                }
-
-                                // This path can write a spacer_head before printWrap
-                                // which can trigger integrity violations so mark
-                                // the wrap first to keep the intermediary state valid
-                                // if we're wrapping.
-                                let row_wrap = right_limit == self.cols;
-                                if row_wrap {
-                                    unsafe { (*(*active).cursor.page_row).set_wrap(true) };
-                                }
-
-                                let prev_cp = unsafe { (*prev_cell).content_codepoint() };
-                                if unsafe { (*prev_cell).has_grapheme() } {
-                                    // This is like printCell but without clearing the
-                                    // grapheme data from the cell, so we can move it
-                                    // later.
-                                    unsafe {
-                                        (*prev_cell).set_wide(if row_wrap {
-                                            pagepkg::Wide::SpacerHead
-                                        } else {
-                                            pagepkg::Wide::Narrow
-                                        })
-                                    };
-                                    unsafe { (*prev_cell).set_content_codepoint(0) };
-
-                                    self.print_wrap()?;
-                                    self.print_cell(prev_cp, pagepkg::Wide::Wide);
-
-                                    let active: *mut Screen = self.screens.active;
-                                    let new_pin = unsafe { *(*active).cursor.page_pin };
-                                    let new_rac = new_pin.row_and_cell();
-
-                                    'transfer_graphemes: {
-                                        let mut old_pin = match new_pin.up(1) {
-                                            Some(p) => p,
-                                            None => break 'transfer_graphemes,
-                                        };
-                                        old_pin.x = right_limit - 1;
-                                        let old_rac = old_pin.row_and_cell();
-
-                                        if std::ptr::eq(new_pin.node, old_pin.node) {
-                                            let page: *mut Page = unsafe {
-                                                core::ptr::addr_of_mut!((*new_pin.node).data)
-                                            };
-                                            unsafe {
-                                                (*page).move_grapheme(prev_cell, new_rac.cell)
-                                            };
-                                            unsafe {
-                                                (*prev_cell)
-                                                    .set_content_tag(pagepkg::ContentTag::Codepoint)
-                                            };
-                                            unsafe {
-                                                (*new_rac.cell).set_content_tag(
-                                                    pagepkg::ContentTag::CodepointGrapheme,
-                                                )
-                                            };
-                                            unsafe { (*new_rac.row).set_grapheme(true) };
-                                        } else {
-                                            let old_page: *mut Page = unsafe {
-                                                core::ptr::addr_of_mut!((*old_pin.node).data)
-                                            };
-                                            let cps = unsafe {
-                                                (*old_page).lookup_grapheme(old_rac.cell)
-                                            }
-                                            .unwrap();
-                                            // PORT NOTE: `appendGrapheme` mutates the
-                                            // page; collect the codepoints first so we
-                                            // don't alias the borrow across the call.
-                                            let cps: Vec<u21> = cps.to_vec();
-                                            for cp in cps {
-                                                self.active_mut()
-                                                    .append_grapheme(new_rac.cell, cp)
-                                                    .map_err(|_| OutOfMemory)?;
-                                            }
-                                            let old_page: *mut Page = unsafe {
-                                                core::ptr::addr_of_mut!((*old_pin.node).data)
-                                            };
-                                            unsafe { (*old_page).clear_grapheme(old_rac.cell) };
-                                        }
-
-                                        let old_page: *mut Page = unsafe {
-                                            core::ptr::addr_of_mut!((*old_pin.node).data)
-                                        };
-                                        unsafe {
-                                            (*old_page).update_row_grapheme_flag(old_rac.row)
-                                        };
-                                    }
-
-                                    // Point prev.cell to our new previous cell that
-                                    // we'll be appending graphemes to
-                                    prev_cell = new_rac.cell;
-                                } else {
-                                    self.print_cell(
-                                        0,
-                                        if row_wrap {
-                                            pagepkg::Wide::SpacerHead
-                                        } else {
-                                            pagepkg::Wide::Narrow
-                                        },
-                                    );
-                                    self.print_wrap()?;
-                                    self.print_cell(prev_cp, pagepkg::Wide::Wide);
-
-                                    // Point prev.cell to our new previous cell that
-                                    // we'll be appending graphemes to
-                                    prev_cell = unsafe { (*self.screens.active).cursor.page_cell };
-                                }
-                            } else {
-                                unsafe { (*prev_cell).set_wide(pagepkg::Wide::Wide) };
-                            }
-
-                            // Write our spacer, since prev.cell is now wide
-                            self.active_mut().cursor_right(1);
-                            self.print_cell(0, pagepkg::Wide::SpacerTail);
-
-                            // Move the cursor again so we're beyond our spacer
-                            let active: *mut Screen = self.screens.active;
-                            if unsafe { (*active).cursor.x } == right_limit - 1 {
-                                unsafe { (*active).cursor.pending_wrap = true };
-                            } else {
-                                self.active_mut().cursor_right(1);
-                            }
-                        }
-
-                        DesiredWide::Narrow => 'narrow: {
-                            // Prev cell is no longer wide
-                            if unsafe { (*prev_cell).wide() } != pagepkg::Wide::Wide {
-                                break 'narrow;
-                            }
-                            unsafe { (*prev_cell).set_wide(pagepkg::Wide::Narrow) };
-
-                            // Remove the wide spacer tail
-                            let cell = self.active_mut().cursor_cell_left(prev_left - 1);
-                            unsafe { (*cell).set_wide(pagepkg::Wide::Narrow) };
-
-                            // Back track the cursor so that we don't end up with
-                            // an extra space after the character. Since xterm is
-                            // not VS aware, it cannot be used as a reference for
-                            // this behavior; but it does follow the principle of
-                            // least surprise, and also matches the behavior that
-                            // can be observed in Kitty, which is one of the only
-                            // other VS aware terminals.
-                            let active: *mut Screen = self.screens.active;
-                            if unsafe { (*active).cursor.x } == right_limit - 1 {
-                                // If we're already at the right edge, we stay
-                                // here and set the pending wrap to false since
-                                // when we pend a wrap, we only move our cursor once
-                                // even for wide chars (tests verify).
-                                unsafe { (*active).cursor.pending_wrap = false };
-                            } else {
-                                // Otherwise, move back.
-                                self.active_mut().cursor_left(1);
-                            }
-
-                            #[allow(clippy::needless_return)]
-                            {
-                                break 'narrow;
-                            }
-                        }
-
-                        DesiredWide::NoChange => {}
-                    }
-
-                    // log.debug("c={X} grapheme attach to left={} primary_cp={X}", ...);
-                    self.active_mut().cursor_mark_dirty();
-                    self.active_mut()
-                        .append_grapheme(prev_cell, c)
-                        .map_err(|_| OutOfMemory)?;
-                    return Ok(());
-                }
-            }
+            return Ok(());
         }
-
         let active: *mut Screen = self.screens.active;
 
         // Determine the width of this character so we can handle
@@ -1041,65 +744,8 @@ impl Terminal {
 
         // Attach zero-width characters to our cell as grapheme data.
         if width == 0 {
-            // If we have grapheme clustering enabled, we don't blindly attach
-            // any zero width character to our cells and we instead just ignore
-            // it.
-            if self.modes.get(modespkg::Mode::GraphemeCluster) {
-                return Ok(());
-            }
-
-            // If we have wraparound enabled and a pending wrap, the character
-            // we're attaching to is still under the cursor. Otherwise, it's the
-            // cell to the left.
-            let left: size::CellCountInt = if self.modes.get(modespkg::Mode::Wraparound)
-                && unsafe { (*active).cursor.pending_wrap }
-            {
-                0
-            } else {
-                1
-            };
-
-            // If we're at cell zero and not pending a wrap, then this is malformed
-            // data and we don't print anything or even store this. Zero-width
-            // characters are ALWAYS attached to some other non-zero-width
-            // character at the time of writing.
-            if unsafe { (*active).cursor.x } == 0 && left == 1 {
-                // log.warn("zero-width character with no prior character, ignoring", .{});
-                return Ok(());
-            }
-
-            // Find our previous cell
-            let prev: *mut pagepkg::Cell = {
-                let immediate = self.active_mut().cursor_cell_left(left);
-                if unsafe { (*immediate).wide() } != pagepkg::Wide::SpacerTail {
-                    immediate
-                } else {
-                    self.active_mut().cursor_cell_left(left + 1)
-                }
-            };
-
-            // If our previous cell has no text, just ignore the zero-width character
-            if !unsafe { (*prev).has_text() } {
-                // log.warn("zero-width character with no prior character, ignoring", .{});
-                return Ok(());
-            }
-
-            // If this is a emoji variation selector, prev must be an emoji
-            if c == 0xFE0F || c == 0xFE0E {
-                let prev_props = unicode::table().get(unsafe { (*prev).content_codepoint() });
-                let emoji = prev_props.grapheme_break
-                    == unicode::props::GraphemeBreakNoControl::ExtendedPictographic;
-                if !emoji {
-                    return Ok(());
-                }
-            }
-
-            self.active_mut()
-                .append_grapheme(prev, c)
-                .map_err(|_| OutOfMemory)?;
-            return Ok(());
+            return self.print_inner_zero_width(c);
         }
-
         // We have a printable character, save it
         self.previous_char = Some(c);
 
@@ -1132,46 +778,10 @@ impl Terminal {
             // wide char. The second is guaranteed to be a spacer if
             // we're not at the end of the line.
             2 => {
-                if (right_limit - self.scrolling_region.left) > 1 {
-                    // If we don't have space for the wide char, we need
-                    // to insert spacers and wrap. Then we just print the wide
-                    // char as normal.
-                    if unsafe { (*active).cursor.x } == right_limit - 1 {
-                        // If we don't have wraparound enabled then we don't print
-                        // this character at all and don't move the cursor. This is
-                        // how xterm behaves.
-                        if !self.modes.get(modespkg::Mode::Wraparound) {
-                            return Ok(());
-                        }
-
-                        // We only create a spacer head if we're at the real edge
-                        // of the screen. Otherwise, we clear the space with a narrow.
-                        // This allows soft wrapping to work correctly.
-                        if right_limit == self.cols {
-                            // Special-case: we need to set wrap to true even
-                            // though we call printWrap below because if there is
-                            // a page resize during printCell then it'll fail
-                            // integrity checks.
-                            unsafe { (*(*active).cursor.page_row).set_wrap(true) };
-                            self.print_cell(0, pagepkg::Wide::SpacerHead);
-                        } else {
-                            self.print_cell(0, pagepkg::Wide::Narrow);
-                        }
-                        self.print_wrap()?;
-                    }
-
-                    self.active_mut().cursor_mark_dirty();
-                    self.print_cell(c, pagepkg::Wide::Wide);
-                    self.active_mut().cursor_right(1);
-                    self.print_cell(0, pagepkg::Wide::SpacerTail);
-                } else {
-                    // This is pretty broken, terminals should never be only 1-wide.
-                    // We should prevent this downstream.
-                    self.active_mut().cursor_mark_dirty();
-                    self.print_cell(0, pagepkg::Wide::Narrow);
+                if self.print_inner_wide(c, right_limit)? {
+                    return Ok(());
                 }
             }
-
             _ => unreachable!(),
         }
 
@@ -1187,6 +797,443 @@ impl Terminal {
         // Move the cursor
         self.active_mut().cursor_right(1);
         Ok(())
+    }
+
+    // PERF(port): the three cold blocks of `print` are outlined into
+    // per-codepoint helpers so the hot narrow-print path (the overwhelming
+    // majority of printed cells) does not carry their register pressure —
+    // without this the fully-inlined slow arms force a 0xc0-byte frame with
+    // 6 callee-saved pairs saved/restored on EVERY printed character
+    // (instruction-level profile: >50% of `print` self-time). Bodies moved
+    // VERBATIM from `print_inner` (same calls, same order, same error
+    // mapping); only the block-exit control flow is encoded in the return
+    // value. Same reshape precedent as r3-clone (PERF_LOG round 3).
+
+    /// The grapheme clustering path of `print` (reference Terminal.zig:342-...,
+    /// the `grapheme:` labeled block). Returns Ok(true) if `c` was consumed
+    /// (attached to the previous cell / handled), Ok(false) if the normal
+    /// print path must continue (the reference's `break :grapheme`).
+    #[cold]
+    #[inline(never)]
+    fn print_inner_grapheme(
+        &mut self,
+        c: u32,
+        right_limit: size::CellCountInt,
+    ) -> Result<bool, OutOfMemory> {
+        let active: *mut Screen = self.screens.active;
+        'grapheme: {
+            // We need the previous cell to determine if we're at a grapheme
+            // break or not. If we are NOT, then we are still combining the
+            // same grapheme, and will be appending to prev.cell. Otherwise, we are
+            // in a new cell.
+            // const Prev = struct { cell: *Cell, left: size.CellCountInt };
+            let left: size::CellCountInt = {
+                // If we have wraparound, then we use the prev col unless
+                // there's a pending wrap, in which case we use the current.
+                if self.modes.get(modespkg::Mode::Wraparound) {
+                    u8::from(!unsafe { (*active).cursor.pending_wrap }) as size::CellCountInt
+                } else if unsafe { (*active).cursor.x } != right_limit - 1 {
+                    // If we do not have wraparound, the logic is trickier. If
+                    // we're not on the last column, then we just use the previous
+                    // column. Otherwise, we need to check if there is text to
+                    // figure out if we're attaching to the prev or current.
+                    1
+                } else {
+                    u8::from(unsafe { (*(*active).cursor.page_cell).codepoint() } == 0)
+                        as size::CellCountInt
+                }
+            };
+
+            // If the previous cell is a wide spacer tail, then we actually
+            // want to use the cell before that because that has the actual
+            // content.
+            let immediate = self.active_mut().cursor_cell_left(left);
+            let (mut prev_cell, prev_left): (*mut pagepkg::Cell, size::CellCountInt) =
+                match unsafe { (*immediate).wide() } {
+                    pagepkg::Wide::SpacerTail => {
+                        (self.active_mut().cursor_cell_left(left + 1), left + 1)
+                    }
+                    _ => (immediate, left),
+                };
+
+            // If our cell has no content, then this is a new cell and
+            // necessarily a grapheme break.
+            if unsafe { (*prev_cell).codepoint() } == 0 {
+                break 'grapheme;
+            }
+
+            let active: *mut Screen = self.screens.active;
+
+            let mut previous_codepoint: u21 = unsafe { (*prev_cell).content_codepoint() };
+            let grapheme_break = {
+                let mut state: unicode::grapheme::BreakState =
+                    unicode::grapheme::BreakState::Default;
+                if unsafe { (*prev_cell).has_grapheme() } {
+                    let page: *mut Page = unsafe {
+                        core::ptr::addr_of_mut!((*(*(*active).cursor.page_pin).node).data)
+                    };
+                    let cps = unsafe { (*page).lookup_grapheme(prev_cell) }.unwrap();
+                    for &cp2 in cps {
+                        // log.debug("cp1={x} cp2={x}", .{ previous_codepoint, cp2 });
+                        // assert(!unicode.graphemeBreak(previous_codepoint, cp2, &state));
+                        //
+                        // DG4 (PORT_RULES.md "DG2/DG4"): `assert` here is
+                        // `quirks.inlineAssert` -> `debug_assert!`. The call
+                        // MUTATES `state` (the reference's `inline fn` argument
+                        // is evaluated in every build mode), so it must run
+                        // UNCONDITIONALLY outside the macro — `debug_assert!`
+                        // would drop the side effect in unchecked builds.
+                        let brk = unicode::graphemeBreak(previous_codepoint, cp2, &mut state);
+                        debug_assert!(!brk);
+                        previous_codepoint = cp2;
+                    }
+                }
+
+                // log.debug("cp1={x} cp2={x} end", .{ previous_codepoint, c });
+                unicode::graphemeBreak(previous_codepoint, c, &mut state)
+            };
+
+            // If we can NOT break, this means that "c" is part of a grapheme
+            // with the previous char.
+            if !grapheme_break {
+                // enum { no_change, wide, narrow }
+                enum DesiredWide {
+                    NoChange,
+                    Wide,
+                    Narrow,
+                }
+                let mut desired_wide: DesiredWide = DesiredWide::NoChange;
+
+                // If this is an emoji variation selector then we need to modify
+                // the cell width accordingly. VS16 makes the character wide and
+                // VS15 makes it narrow.
+                if c == 0xFE0F || c == 0xFE0E {
+                    let prev_props = unicode::table().get(previous_codepoint);
+                    // Check if it is a valid variation sequence in
+                    // emoji-variation-sequences.txt, and if not, ignore the char.
+                    if !prev_props.emoji_vs_base {
+                        return Ok(true);
+                    }
+
+                    match c {
+                        0xFE0F => desired_wide = DesiredWide::Wide,
+                        0xFE0E => desired_wide = DesiredWide::Narrow,
+                        _ => unreachable!(),
+                    }
+                } else if !unicode::table().get(c).width_zero_in_grapheme {
+                    // If we have a code point that contributes to the width of a
+                    // grapheme, it necessarily means that we're at least at width
+                    // 2, since the first code point must be at least width 1 to
+                    // start. (Note that Prepend code points could effectively mean
+                    // the first code point should be width 0, but we don't handle
+                    // that yet.)
+                    desired_wide = DesiredWide::Wide;
+                }
+
+                match desired_wide {
+                    DesiredWide::Wide => 'wide: {
+                        if unsafe { (*prev_cell).wide() } == pagepkg::Wide::Wide {
+                            break 'wide;
+                        }
+
+                        // Move our cursor back to the previous. We'll move
+                        // the cursor within this block to the proper location.
+                        self.active_mut().cursor_left(prev_left);
+
+                        let active: *mut Screen = self.screens.active;
+
+                        // If we don't have space for the wide char, we need to
+                        // insert spacers and wrap. We need special handling if the
+                        // previous cell has grapheme data.
+                        if unsafe { (*active).cursor.x } == right_limit - 1 {
+                            if !self.modes.get(modespkg::Mode::Wraparound) {
+                                return Ok(true);
+                            }
+
+                            // This path can write a spacer_head before printWrap
+                            // which can trigger integrity violations so mark
+                            // the wrap first to keep the intermediary state valid
+                            // if we're wrapping.
+                            let row_wrap = right_limit == self.cols;
+                            if row_wrap {
+                                unsafe { (*(*active).cursor.page_row).set_wrap(true) };
+                            }
+
+                            let prev_cp = unsafe { (*prev_cell).content_codepoint() };
+                            if unsafe { (*prev_cell).has_grapheme() } {
+                                // This is like printCell but without clearing the
+                                // grapheme data from the cell, so we can move it
+                                // later.
+                                unsafe {
+                                    (*prev_cell).set_wide(if row_wrap {
+                                        pagepkg::Wide::SpacerHead
+                                    } else {
+                                        pagepkg::Wide::Narrow
+                                    })
+                                };
+                                unsafe { (*prev_cell).set_content_codepoint(0) };
+
+                                self.print_wrap()?;
+                                self.print_cell(prev_cp, pagepkg::Wide::Wide);
+
+                                let active: *mut Screen = self.screens.active;
+                                let new_pin = unsafe { *(*active).cursor.page_pin };
+                                let new_rac = new_pin.row_and_cell();
+
+                                'transfer_graphemes: {
+                                    let mut old_pin = match new_pin.up(1) {
+                                        Some(p) => p,
+                                        None => break 'transfer_graphemes,
+                                    };
+                                    old_pin.x = right_limit - 1;
+                                    let old_rac = old_pin.row_and_cell();
+
+                                    if std::ptr::eq(new_pin.node, old_pin.node) {
+                                        let page: *mut Page = unsafe {
+                                            core::ptr::addr_of_mut!((*new_pin.node).data)
+                                        };
+                                        unsafe { (*page).move_grapheme(prev_cell, new_rac.cell) };
+                                        unsafe {
+                                            (*prev_cell)
+                                                .set_content_tag(pagepkg::ContentTag::Codepoint)
+                                        };
+                                        unsafe {
+                                            (*new_rac.cell).set_content_tag(
+                                                pagepkg::ContentTag::CodepointGrapheme,
+                                            )
+                                        };
+                                        unsafe { (*new_rac.row).set_grapheme(true) };
+                                    } else {
+                                        let old_page: *mut Page = unsafe {
+                                            core::ptr::addr_of_mut!((*old_pin.node).data)
+                                        };
+                                        let cps =
+                                            unsafe { (*old_page).lookup_grapheme(old_rac.cell) }
+                                                .unwrap();
+                                        // PORT NOTE: `appendGrapheme` mutates the
+                                        // page; collect the codepoints first so we
+                                        // don't alias the borrow across the call.
+                                        let cps: Vec<u21> = cps.to_vec();
+                                        for cp in cps {
+                                            self.active_mut()
+                                                .append_grapheme(new_rac.cell, cp)
+                                                .map_err(|_| OutOfMemory)?;
+                                        }
+                                        let old_page: *mut Page = unsafe {
+                                            core::ptr::addr_of_mut!((*old_pin.node).data)
+                                        };
+                                        unsafe { (*old_page).clear_grapheme(old_rac.cell) };
+                                    }
+
+                                    let old_page: *mut Page =
+                                        unsafe { core::ptr::addr_of_mut!((*old_pin.node).data) };
+                                    unsafe { (*old_page).update_row_grapheme_flag(old_rac.row) };
+                                }
+
+                                // Point prev.cell to our new previous cell that
+                                // we'll be appending graphemes to
+                                prev_cell = new_rac.cell;
+                            } else {
+                                self.print_cell(
+                                    0,
+                                    if row_wrap {
+                                        pagepkg::Wide::SpacerHead
+                                    } else {
+                                        pagepkg::Wide::Narrow
+                                    },
+                                );
+                                self.print_wrap()?;
+                                self.print_cell(prev_cp, pagepkg::Wide::Wide);
+
+                                // Point prev.cell to our new previous cell that
+                                // we'll be appending graphemes to
+                                prev_cell = unsafe { (*self.screens.active).cursor.page_cell };
+                            }
+                        } else {
+                            unsafe { (*prev_cell).set_wide(pagepkg::Wide::Wide) };
+                        }
+
+                        // Write our spacer, since prev.cell is now wide
+                        self.active_mut().cursor_right(1);
+                        self.print_cell(0, pagepkg::Wide::SpacerTail);
+
+                        // Move the cursor again so we're beyond our spacer
+                        let active: *mut Screen = self.screens.active;
+                        if unsafe { (*active).cursor.x } == right_limit - 1 {
+                            unsafe { (*active).cursor.pending_wrap = true };
+                        } else {
+                            self.active_mut().cursor_right(1);
+                        }
+                    }
+
+                    DesiredWide::Narrow => 'narrow: {
+                        // Prev cell is no longer wide
+                        if unsafe { (*prev_cell).wide() } != pagepkg::Wide::Wide {
+                            break 'narrow;
+                        }
+                        unsafe { (*prev_cell).set_wide(pagepkg::Wide::Narrow) };
+
+                        // Remove the wide spacer tail
+                        let cell = self.active_mut().cursor_cell_left(prev_left - 1);
+                        unsafe { (*cell).set_wide(pagepkg::Wide::Narrow) };
+
+                        // Back track the cursor so that we don't end up with
+                        // an extra space after the character. Since xterm is
+                        // not VS aware, it cannot be used as a reference for
+                        // this behavior; but it does follow the principle of
+                        // least surprise, and also matches the behavior that
+                        // can be observed in Kitty, which is one of the only
+                        // other VS aware terminals.
+                        let active: *mut Screen = self.screens.active;
+                        if unsafe { (*active).cursor.x } == right_limit - 1 {
+                            // If we're already at the right edge, we stay
+                            // here and set the pending wrap to false since
+                            // when we pend a wrap, we only move our cursor once
+                            // even for wide chars (tests verify).
+                            unsafe { (*active).cursor.pending_wrap = false };
+                        } else {
+                            // Otherwise, move back.
+                            self.active_mut().cursor_left(1);
+                        }
+
+                        #[allow(clippy::needless_return)]
+                        {
+                            break 'narrow;
+                        }
+                    }
+
+                    DesiredWide::NoChange => {}
+                }
+
+                // log.debug("c={X} grapheme attach to left={} primary_cp={X}", ...);
+                self.active_mut().cursor_mark_dirty();
+                self.active_mut()
+                    .append_grapheme(prev_cell, c)
+                    .map_err(|_| OutOfMemory)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The zero-width attach path of `print` (reference Terminal.zig `if
+    /// (width == 0)` block). Every exit consumes the codepoint.
+    #[cold]
+    #[inline(never)]
+    fn print_inner_zero_width(&mut self, c: u32) -> Result<(), OutOfMemory> {
+        let active: *mut Screen = self.screens.active;
+
+        // If we have grapheme clustering enabled, we don't blindly attach
+        // any zero width character to our cells and we instead just ignore
+        // it.
+        if self.modes.get(modespkg::Mode::GraphemeCluster) {
+            return Ok(());
+        }
+
+        // If we have wraparound enabled and a pending wrap, the character
+        // we're attaching to is still under the cursor. Otherwise, it's the
+        // cell to the left.
+        let left: size::CellCountInt = if self.modes.get(modespkg::Mode::Wraparound)
+            && unsafe { (*active).cursor.pending_wrap }
+        {
+            0
+        } else {
+            1
+        };
+
+        // If we're at cell zero and not pending a wrap, then this is malformed
+        // data and we don't print anything or even store this. Zero-width
+        // characters are ALWAYS attached to some other non-zero-width
+        // character at the time of writing.
+        if unsafe { (*active).cursor.x } == 0 && left == 1 {
+            // log.warn("zero-width character with no prior character, ignoring", .{});
+            return Ok(());
+        }
+
+        // Find our previous cell
+        let prev: *mut pagepkg::Cell = {
+            let immediate = self.active_mut().cursor_cell_left(left);
+            if unsafe { (*immediate).wide() } != pagepkg::Wide::SpacerTail {
+                immediate
+            } else {
+                self.active_mut().cursor_cell_left(left + 1)
+            }
+        };
+
+        // If our previous cell has no text, just ignore the zero-width character
+        if !unsafe { (*prev).has_text() } {
+            // log.warn("zero-width character with no prior character, ignoring", .{});
+            return Ok(());
+        }
+
+        // If this is a emoji variation selector, prev must be an emoji
+        if c == 0xFE0F || c == 0xFE0E {
+            let prev_props = unicode::table().get(unsafe { (*prev).content_codepoint() });
+            let emoji = prev_props.grapheme_break
+                == unicode::props::GraphemeBreakNoControl::ExtendedPictographic;
+            if !emoji {
+                return Ok(());
+            }
+        }
+
+        self.active_mut()
+            .append_grapheme(prev, c)
+            .map_err(|_| OutOfMemory)?;
+        Ok(())
+    }
+
+    /// The wide-character arm of `print` (reference Terminal.zig `2 => ...`).
+    /// Returns Ok(true) for the xterm no-wraparound early return, Ok(false)
+    /// to continue to the shared cursor-advance tail.
+    #[cold]
+    #[inline(never)]
+    fn print_inner_wide(
+        &mut self,
+        c: u32,
+        right_limit: size::CellCountInt,
+    ) -> Result<bool, OutOfMemory> {
+        let active: *mut Screen = self.screens.active;
+
+        if (right_limit - self.scrolling_region.left) > 1 {
+            // If we don't have space for the wide char, we need
+            // to insert spacers and wrap. Then we just print the wide
+            // char as normal.
+            if unsafe { (*active).cursor.x } == right_limit - 1 {
+                // If we don't have wraparound enabled then we don't print
+                // this character at all and don't move the cursor. This is
+                // how xterm behaves.
+                if !self.modes.get(modespkg::Mode::Wraparound) {
+                    return Ok(true);
+                }
+
+                // We only create a spacer head if we're at the real edge
+                // of the screen. Otherwise, we clear the space with a narrow.
+                // This allows soft wrapping to work correctly.
+                if right_limit == self.cols {
+                    // Special-case: we need to set wrap to true even
+                    // though we call printWrap below because if there is
+                    // a page resize during printCell then it'll fail
+                    // integrity checks.
+                    unsafe { (*(*active).cursor.page_row).set_wrap(true) };
+                    self.print_cell(0, pagepkg::Wide::SpacerHead);
+                } else {
+                    self.print_cell(0, pagepkg::Wide::Narrow);
+                }
+                self.print_wrap()?;
+            }
+
+            self.active_mut().cursor_mark_dirty();
+            self.print_cell(c, pagepkg::Wide::Wide);
+            self.active_mut().cursor_right(1);
+            self.print_cell(0, pagepkg::Wide::SpacerTail);
+        } else {
+            // This is pretty broken, terminals should never be only 1-wide.
+            // We should prevent this downstream.
+            self.active_mut().cursor_mark_dirty();
+            self.print_cell(0, pagepkg::Wide::Narrow);
+        }
+
+        Ok(false)
     }
 
     fn print_cell(&mut self, unmapped_c: u32, wide: pagepkg::Wide) {
