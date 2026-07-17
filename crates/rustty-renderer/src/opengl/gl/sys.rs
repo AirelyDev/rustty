@@ -78,13 +78,23 @@ pub enum Error {
     Egl(egl::Error),
     /// The EGL implementation lacks an extension this module requires.
     MissingEglExtension(&'static str),
-    /// No `EGL_OPENGL_BIT` config, and no `EGL_KHR_no_config_context` to do
-    /// without one.
+    /// No pbuffer-capable `EGL_OPENGL_BIT` config exists on this display, i.e.
+    /// the EGL implementation offers no desktop-GL pixel format at all.
     NoConfig,
     /// PORTS: `OpenGL.zig:148` `return error.OpenGLOutdated;`.
     OpenGLOutdated { major: u32, minor: u32 },
-    /// `glGetString(GL_VERSION)` was unavailable or unparseable.
+    /// `glGetString(GL_VERSION)` was unavailable or unparseable, i.e. the version
+    /// CHECK itself could not run.
     VersionUnavailable,
+    /// A GL entry point that the loaded context's own version guarantees was not
+    /// resolved by [`gl::load_with`].
+    ///
+    /// Distinct from [`Error::VersionUnavailable`] on purpose: this cannot happen
+    /// on a conformant context at or above the [`MIN_VERSION_MAJOR`].
+    /// [`MIN_VERSION_MINOR`] floor, so it indicates a broken loader/port rather
+    /// than a host that merely lacks 4.3 — which is why the offscreen test FAILS
+    /// on it instead of skipping.
+    MissingGlEntryPoint(&'static str),
     /// A GL call reported an error. PORT NOTE: stands in for
     /// `pkg/opengl/errors.zig`'s `Error` set, which lands with the rest of
     /// `pkg/opengl` in Tasks 2-4.
@@ -97,15 +107,16 @@ impl fmt::Display for Error {
             Self::EglUnavailable(why) => write!(f, "EGL unavailable: {why}"),
             Self::Egl(err) => write!(f, "EGL error: {err}"),
             Self::MissingEglExtension(ext) => write!(f, "missing EGL extension: {ext}"),
-            Self::NoConfig => {
-                f.write_str("no EGL_OPENGL_BIT config and no EGL_KHR_no_config_context extension")
-            }
+            Self::NoConfig => f.write_str("no pbuffer-capable EGL_OPENGL_BIT config"),
             Self::OpenGLOutdated { major, minor } => write!(
                 f,
                 "OpenGL {major}.{minor} is too old; rustty requires OpenGL \
                  {MIN_VERSION_MAJOR}.{MIN_VERSION_MINOR}"
             ),
             Self::VersionUnavailable => f.write_str("could not determine the OpenGL version"),
+            Self::MissingGlEntryPoint(name) => {
+                write!(f, "the GL context did not provide {name}")
+            }
             Self::Gl(code) => write!(f, "OpenGL error {code:#x}"),
         }
     }
@@ -230,45 +241,48 @@ impl OffscreenContext {
         Ok(egl.create_context(display, config, None, &attributes)?)
     }
 
-    /// Picks an `EGL_OPENGL_BIT` config, falling back to `EGL_NO_CONFIG_KHR`.
+    /// Picks a pbuffer-capable `EGL_OPENGL_BIT` config.
     ///
-    /// The fallback is load-bearing, not defensive padding: Mesa's surfaceless
-    /// platform exposes ZERO `EGL_OPENGL_BIT` configs — measured on the L4
-    /// development host under BOTH the virgl and the llvmpipe drivers, so it is a
-    /// property of the surfaceless platform there rather than of one driver. With
-    /// no fallback, config selection would fail before a context was ever
-    /// requested, and the whole module would be unusable on this host: the
-    /// llvmpipe path that actually reaches 4.3 core (see the test's EMPIRICAL
-    /// NOTE) only works BECAUSE of this branch.
+    /// `EGL_SURFACE_TYPE = EGL_PBUFFER_BIT` is REQUIRED here, not decoration, and
+    /// is what the plan names. `eglChooseConfig` DEFAULTS `EGL_SURFACE_TYPE` to
+    /// `EGL_WINDOW_BIT` when it is left out (EGL 1.5 spec, table 3.4), so omitting
+    /// it silently asks for a WINDOW-capable config on a WINDOWLESS platform and
+    /// can only ever match zero configs.
     ///
-    /// `EGL_KHR_no_config_context` lets a context be created with no config,
-    /// which is exactly right here rather than a workaround: an EGLConfig
-    /// describes a surface's pixel format, and this context has no surface. The
-    /// offscreen path renders into an FBO whose format it chooses itself.
+    /// MEASURED on the L4 development host, same surfaceless display (config
+    /// counts from `eglChooseConfig`):
+    ///
+    /// | attribute list | virgl | llvmpipe |
+    /// |---|---|---|
+    /// | `[RENDERABLE_TYPE, OPENGL_BIT]` (implies `WINDOW_BIT`) | 0 | 0 |
+    /// | `[…, SURFACE_TYPE, WINDOW_BIT]` (the implied default, spelled out) | 0 | 0 |
+    /// | `[…, SURFACE_TYPE, PBUFFER_BIT]` (this) | **35** | **105** |
+    ///
+    /// So the surfaceless platform exposes plenty of `EGL_OPENGL_BIT` configs; the
+    /// zero is a property of the QUERY, not of the platform or of a driver. An
+    /// earlier revision of this file concluded the opposite and carried an
+    /// `EGL_NO_CONFIG_KHR` fallback to work around it; that fallback was never
+    /// load-bearing and is gone, along with the hard dependency it baked in on the
+    /// OPTIONAL `EGL_KHR_no_config_context` extension.
+    ///
+    /// PORT NOTE: the config selects the context's pixel format only — the context
+    /// is made current with NO surface ([`Self::init`]), and the offscreen path
+    /// renders into an FBO whose format it chooses itself. A pbuffer is never
+    /// actually created; `PBUFFER_BIT` is simply the surface type that exists on a
+    /// windowless platform.
     fn choose_config(
         egl: &egl::DynamicInstance<egl::EGL1_5>,
         display: egl::Display,
     ) -> Result<egl::Config, Error> {
-        let attributes = [egl::RENDERABLE_TYPE, egl::OPENGL_BIT, egl::NONE];
-        if let Some(config) = egl.choose_first_config(display, &attributes)? {
-            return Ok(config);
-        }
-
-        let display_extensions = egl
-            .query_string(Some(display), egl::EXTENSIONS)
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if !has_extension(&display_extensions, "EGL_KHR_no_config_context") {
-            return Err(Error::NoConfig);
-        }
-
-        log_debug!("no EGL_OPENGL_BIT config; using EGL_NO_CONFIG_KHR");
-        // SAFETY: `EGL_NO_CONFIG_KHR` is defined by EGL_KHR_no_config_context as
-        // `EGL_CAST(EGLConfig, 0)` — i.e. a null EGLConfig — and is accepted by
-        // `eglCreateContext` wherever that extension is present, which was just
-        // checked. `khronos-egl` models `Config` as a newtype over the raw
-        // `EGLConfig` pointer and offers no safe constructor for it.
-        Ok(unsafe { egl::Config::from_ptr(std::ptr::null_mut()) })
+        let attributes = [
+            egl::RENDERABLE_TYPE,
+            egl::OPENGL_BIT,
+            egl::SURFACE_TYPE,
+            egl::PBUFFER_BIT,
+            egl::NONE,
+        ];
+        egl.choose_first_config(display, &attributes)?
+            .ok_or(Error::NoConfig)
     }
 
     /// Resolves an OpenGL entry point, for [`gl::load_with`].
@@ -378,7 +392,7 @@ pub fn prepare_context(
     // driver — the plan's clean-skip rule — so the missing slot is an `Err`
     // here instead. Unreachable on any conformant 4.3 context either way.
     if !gl::DebugMessageCallback::is_loaded() {
-        return Err(Error::VersionUnavailable);
+        return Err(Error::MissingGlEntryPoint("glDebugMessageCallback"));
     }
     // SAFETY: the callback is an `extern "system"` fn with the GLDEBUGPROC
     // signature and a null user_param, which it ignores.
@@ -427,8 +441,11 @@ fn version_is_outdated(major: u32, minor: u32) -> bool {
 /// should delete it and route [`prepare_context`] at the real `opengl::gl::draw::
 /// enable`.
 fn enable(cap: gl::types::GLenum) -> Result<(), Error> {
-    if !gl::Enable::is_loaded() || !gl::GetError::is_loaded() {
-        return Err(Error::VersionUnavailable);
+    if !gl::Enable::is_loaded() {
+        return Err(Error::MissingGlEntryPoint("glEnable"));
+    }
+    if !gl::GetError::is_loaded() {
+        return Err(Error::MissingGlEntryPoint("glGetError"));
     }
     // SAFETY: both entry points were just confirmed loaded; `cap` is a GL
     // capability enum.
@@ -556,7 +573,7 @@ extern "system" fn gl_debug_message_callback(
 #[cfg(test)]
 mod tests {
     use super::{
-        has_extension, load_gl, parse_gl_version, version_is_outdated, OffscreenContext,
+        has_extension, load_gl, parse_gl_version, version_is_outdated, Error, OffscreenContext,
         MIN_VERSION_MAJOR, MIN_VERSION_MINOR,
     };
 
@@ -569,6 +586,10 @@ mod tests {
     /// whose GL ceiling is below 4.3 core is a real and expected configuration
     /// (see the plan's OPEN RISK); it is not a test failure, and it must never be
     /// papered over with a fabricated context.
+    ///
+    /// The skip is deliberately NARROW — absent context, absent version, absent
+    /// 4.3 — and a failure of the ported `prepare_context` behaviour on a context
+    /// EGL already promised is >= 4.3 core FAILS. See the match arms below.
     ///
     /// EMPIRICAL NOTE (measured 2026-07-17 on the L4 development host: aarch64
     /// VM, Mesa 26.0.3, `/dev/dri/renderD128` present and accelerated) — READ
@@ -586,10 +607,12 @@ mod tests {
     /// (Apple, Apple M4 Pro, OpenGL 4.1 Metal - 90.5))`, and `glxinfo -B` puts
     /// `Max core profile version: 0.0` / `Max compat profile version: 2.1`. Every
     /// core-profile request from 3.2 to 4.6 fails `EGL_BAD_MATCH` there, across
-    /// ALL of the surfaceless, GBM-on-`renderD128` and X11 platforms, with AND
-    /// without `EGL_NO_CONFIG_KHR` — GBM and X11 DO expose an `EGL_OPENGL_BIT`
-    /// config and core still fails, so config selection is NOT the constraint.
-    /// virgl exposes no desktop core profile at all. Another EGL platform will
+    /// ALL of the surfaceless, GBM-on-`renderD128` and X11 platforms — including
+    /// over a REAL, pbuffer-capable `EGL_OPENGL_BIT` config (re-measured after
+    /// [`OffscreenContext::choose_config`] was corrected: 35 such configs exist on
+    /// virgl's surfaceless display, and 4.3 core over the first still fails
+    /// `EGL_BAD_MATCH` 0x3009). So config selection is NOT the constraint on
+    /// virgl: it exposes no desktop core profile at all. Another EGL platform will
     /// not lift that ceiling; a different driver is what lifts it.
     #[test]
     fn offscreen_egl_context_reaches_gl43_core() {
@@ -604,17 +627,42 @@ mod tests {
             }
         };
 
+        // The skip licence is NARROW: the brief permits it only when "context
+        // creation or the version check fails". `prepare_context` can fail for
+        // reasons that are NEITHER — and those reasons are exactly the ported
+        // behaviour this task exists to prove (`enable(GL_DEBUG_OUTPUT)`,
+        // `glDebugMessageCallback` registration, `enable(GL_FRAMEBUFFER_SRGB)`).
+        // Skipping on those would let a real regression in the port turn the
+        // suite green via "skipping", disabling the only test in the task that
+        // asserts GL behaviour. So they FAIL loudly instead.
         let (major, minor) = match load_gl(&ctx) {
             Ok(version) => version,
-            Err(err) => {
+            // The version check itself could not run, or ran and found the host
+            // below the floor. Both ARE "the version check failing": a host whose
+            // GL ceiling is under 4.3 core is a real, expected configuration (the
+            // plan's OPEN RISK), not a defect. This — not the assert below — is
+            // the gate that a sub-4.3 host actually trips.
+            Err(err @ (Error::VersionUnavailable | Error::OpenGLOutdated { .. })) => {
                 eprintln!(
-                    "headless GL context unusable ({err}); skipping \
-                     offscreen_egl_context_reaches_gl43_core"
+                    "no headless OpenGL {MIN_VERSION_MAJOR}.{MIN_VERSION_MINOR} core context \
+                     ({err}); skipping offscreen_egl_context_reaches_gl43_core"
                 );
                 return;
             }
+            // `Error::Gl` (a real GL error out of the ported `enable` calls) and
+            // `Error::MissingGlEntryPoint` (an entry point a >= 4.3 core context
+            // guarantees). EGL already promised this context is >= 4.3 core, so
+            // neither is an absent-4.3 host — both mean the port is broken.
+            Err(err) => panic!(
+                "prepare_context failed on a live OpenGL \
+                 {MIN_VERSION_MAJOR}.{MIN_VERSION_MINOR} core context: {err}"
+            ),
         };
 
+        // Belt-and-braces on `load_gl`'s contract rather than the live gate: a
+        // sub-4.3 host returns `Err(OpenGLOutdated)` above and never reaches here.
+        // It exists so that a future refactor which drops the gate out of
+        // `prepare_context` fails this test rather than silently passing it.
         assert!(
             major > MIN_VERSION_MAJOR || (major == MIN_VERSION_MAJOR && minor >= MIN_VERSION_MINOR),
             "load_gl returned {major}.{minor}, below the \
