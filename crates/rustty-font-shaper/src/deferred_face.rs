@@ -45,8 +45,17 @@ pub struct DeferredFace {
     #[cfg(target_os = "macos")]
     pub ct: Option<CoreTextData>,
 
-    /// Non-macOS placeholder (Fontconfig/Windows/WebCanvas payloads are DEFERRED).
-    #[cfg(not(target_os = "macos"))]
+    /// Fontconfig (Linux default `fontconfig_freetype`).
+    // fc: if (backend == .fontconfig_freetype) ?Fontconfig else void = ...,
+    //
+    // PORT NOTE: this is the freetype-active (`not(any(macos, wasm32))`) payload,
+    // mirroring the macOS `ct` shape. `FontconfigData` is the port of the
+    // reference `DeferredFace.Fontconfig` struct (`DeferredFace.zig:38-56`).
+    #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+    pub fc: Option<FontconfigData>,
+
+    /// WebCanvas placeholder (the WebCanvas payload is DEFERRED on wasm).
+    #[cfg(target_arch = "wasm32")]
     pub _deferred: (),
 }
 
@@ -467,26 +476,166 @@ mod coretext_payload {
 //   pub const Wasm = struct { export fn deferred_face_new/free/load ... };
 // ---------------------------------------------------------------------------
 
-// Non-macOS DeferredFace stub methods (payloads DEFERRED); present so higher
-// tiers type-check on Linux until the Fontconfig backend lands.
-#[cfg(not(target_os = "macos"))]
+// ---------------------------------------------------------------------------
+// Fontconfig (Linux default `fontconfig_freetype`) DeferredFace payload.
+//
+// PORT NOTE: this materializes the reference's `fc` payload
+// (`DeferredFace.zig:38-56`) and the `hasCodepoint` fontconfig arm
+// (`:325-347`), which the discovery iterator (`discovery.rs`
+// `DiscoverIterator::next`) constructs. The `familyName`/`name`/`load`
+// (`loadFontconfig`) fontconfig arms are DEFERRED to L3 Task 7 and remain honest
+// `unimplemented!()` leaves (matching Task 1's convention); they are not reached
+// by any current caller (discovery does not name them).
+#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+pub use fontconfig_payload::FontconfigData;
+
+#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod fontconfig_payload {
+    use super::DeferredFace;
+    use crate::face::Variation;
+    use crate::fc;
+    use crate::Presentation;
+
+    /// Fontconfig specific data. This is only present if building with fontconfig.
+    // pub const Fontconfig = struct { ... };  (`DeferredFace.zig:38-56`)
+    pub struct FontconfigData {
+        /// The pattern for this font. This must be the "render prepared" pattern
+        /// (i.e. from `FcFontRenderPrepare`). Owned here; destroyed in `deinit`.
+        // pattern: *fontconfig.Pattern,
+        pub pattern: *mut fc::Pattern,
+
+        /// Charset and Langset are used for quick lookup if a codepoint and
+        /// presentation style are supported. They can be derived from pattern
+        /// but are cached since they're frequently used.
+        // charset: *const fontconfig.CharSet,
+        pub charset: *const fc::CharSet,
+        // langset: *const fontconfig.LangSet,
+        pub langset: *const fc::LangSet,
+
+        /// Variations to apply to this font.
+        // variations: []const font.face.Variation,
+        pub variations: Vec<Variation>,
+    }
+
+    impl FontconfigData {
+        // pub fn deinit(self: *Fontconfig) void { self.pattern.destroy(); self.* = undefined; }
+        pub fn deinit(&mut self) {
+            // SAFETY: `pattern` is the render-prepared pattern this payload owns
+            // (from `FcFontRenderPrepare`); non-null and not yet destroyed.
+            unsafe { (*self.pattern).destroy() };
+            // self.* = undefined; — RAII (the raw handles are consumed by destroy).
+        }
+    }
+
+    impl DeferredFace {
+        // pub fn deinit(self: *DeferredFace) void { ... if (self.fc) |*fc| fc.deinit() ... }
+        pub fn deinit(&mut self) {
+            // .fontconfig_freetype => if (self.fc) |*fc| fc.deinit(),
+            if let Some(fc) = self.fc.as_mut() {
+                fc.deinit();
+            }
+            // self.* = undefined; — RAII (the `Option<FontconfigData>` drops).
+        }
+
+        /// A `DeferredFace` with no payload. Used only where the reference passes
+        /// `undefined` (the `add deferred without loading options` test), where the
+        /// payload is guaranteed never to be accessed.
+        pub fn undefined() -> DeferredFace {
+            DeferredFace { fc: None }
+        }
+
+        /// Returns the name of this face. The memory is always owned by the
+        /// face so it doesn't have to be freed.
+        // PORT NOTE: the fontconfig `familyName`/`name` arms
+        // (`DeferredFace.zig:149-150,179-180`) are DEFERRED to L3 Task 7; no
+        // current caller reaches them via a fontconfig-discovered face.
+        pub fn name<'a>(&self, _buf: &'a mut [u8]) -> Result<&'a [u8], crate::face::FaceError> {
+            unimplemented!("Fontconfig DeferredFace::name is DEFERRED to L3 Task 7")
+        }
+
+        /// Load the deferred font face. This does nothing if the face is loaded.
+        // PORT NOTE: `loadFontconfig` (`DeferredFace.zig:223-238`) is DEFERRED to
+        // L3 Task 7.
+        pub fn load(
+            &mut self,
+            _lib: crate::library::Library,
+            _opts: crate::face::Options,
+        ) -> Result<crate::face::Face, crate::face::FaceError> {
+            unimplemented!("Fontconfig DeferredFace::load is DEFERRED to L3 Task 7")
+        }
+
+        /// Returns true if this face can satisfy the given codepoint and
+        /// presentation. If presentation is null, then it just checks if the
+        /// codepoint is present at all.
+        // pub fn hasCodepoint(self: DeferredFace, cp: u32, p: ?Presentation) bool {
+        //   .fontconfig_freetype => {
+        //       // If we are using fontconfig, use the fontconfig metadata to
+        //       // avoid loading the face.
+        //       if (self.fc) |fc| {
+        //           // Check if char exists
+        //           if (!fc.charset.hasChar(cp)) return false;
+        //           // If we have a presentation, check it matches
+        //           if (p) |desired| {
+        //               const emoji_lang = "und-zsye";
+        //               const actual: Presentation = if (fc.langset.hasLang(emoji_lang)) .emoji else .text;
+        //               return desired == actual;
+        //           }
+        //           return true;
+        //       }
+        //   },
+        pub fn has_codepoint(&self, cp: u32, p: Option<Presentation>) -> bool {
+            if let Some(fc) = self.fc.as_ref() {
+                // Check if char exists
+                // SAFETY: `charset` borrows the pattern-owned char set, valid for
+                // the lifetime of `fc.pattern` (destroyed only in `deinit`).
+                if !unsafe { (*fc.charset).has_char(cp) } {
+                    return false;
+                }
+
+                // If we have a presentation, check it matches
+                if let Some(desired) = p {
+                    let emoji_lang = c"und-zsye";
+                    // SAFETY: `langset` borrows the pattern-owned lang set, valid
+                    // for the lifetime of `fc.pattern`.
+                    let actual = if unsafe { (*fc.langset).has_lang(emoji_lang) } {
+                        Presentation::Emoji
+                    } else {
+                        Presentation::Text
+                    };
+                    return desired == actual;
+                }
+
+                return true;
+            }
+
+            // This is unreachable because discovery mechanisms terminate, and
+            // if we're not using a discovery mechanism, the face MUST be loaded.
+            // unreachable;
+            unreachable!()
+        }
+    }
+}
+
+// WebCanvas (wasm `web_canvas`) DeferredFace stub methods (payload DEFERRED);
+// present so higher tiers type-check on wasm.
+#[cfg(target_arch = "wasm32")]
 impl DeferredFace {
     pub fn undefined() -> DeferredFace {
         DeferredFace { _deferred: () }
     }
     pub fn deinit(&mut self) {}
     pub fn has_codepoint(&self, _cp: u32, _p: Option<crate::Presentation>) -> bool {
-        unimplemented!("Fontconfig DeferredFace is DEFERRED (Linux backend)")
+        unimplemented!("WebCanvas DeferredFace is DEFERRED (wasm backend)")
     }
     pub fn name<'a>(&self, _buf: &'a mut [u8]) -> Result<&'a [u8], crate::face::FaceError> {
-        unimplemented!("Fontconfig DeferredFace is DEFERRED (Linux backend)")
+        unimplemented!("WebCanvas DeferredFace is DEFERRED (wasm backend)")
     }
     pub fn load(
         &mut self,
         _lib: crate::library::Library,
         _opts: crate::face::Options,
     ) -> Result<crate::face::Face, crate::face::FaceError> {
-        unimplemented!("Fontconfig DeferredFace is DEFERRED (Linux backend)")
+        unimplemented!("WebCanvas DeferredFace is DEFERRED (wasm backend)")
     }
 }
 

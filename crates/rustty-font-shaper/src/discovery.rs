@@ -88,27 +88,46 @@ pub use fontconfig_impl::{DiscoverIterator, Error, Fontconfig};
 mod fontconfig_impl {
     use super::Descriptor;
     use crate::collection::Collection;
-    use crate::deferred_face::DeferredFace;
-    use crate::face::FaceError;
+    use crate::deferred_face::{DeferredFace, FontconfigData};
+    use crate::face::{FaceError, Variation};
+    use crate::fc;
     use crate::library::Library;
+    use rustty_util::quirks::inlineAssert as assert;
 
     /// The error set for Fontconfig discovery.
-    // PORT NOTE: the reference errors are the inferred union of `fontconfig.Error`
-    // (`error.FontConfigFailed` from `fontSort`, plus the `pattern.get` failures
-    // threaded through `DiscoverIterator.next`), `Allocator.Error`, and the backend
-    // `Face`/`Collection` errors threaded through `discoverFallback`. Modeled as one
-    // enum with `From` conversions so `?` composes them — the same shape as the
-    // macOS `coretext_impl::Error`, so `SharedGridSet`'s `Discovery(discovery::Error)`
-    // variant and its `From<discovery::Error>` compose identically on both targets.
-    // The FontConfig-specific variants are fleshed out in L3 Task 6.
+    // PORT NOTE: the reference errors are the inferred union of the AD HOC
+    // `error.FontConfigFailed` raised at `discovery.zig:278` (the `fontSort`
+    // non-`.match`), the package-level `fontconfig.Error` propagated from
+    // `fontRenderPrepare`/`pattern.get` in `DiscoverIterator.next`
+    // (`discovery.zig:320-333`), `Allocator.Error`, and the backend `Face`/
+    // `Collection` errors threaded through `discoverFallback`. Modeled as one enum
+    // with `From` conversions so `?` composes them — the same shape as the macOS
+    // `coretext_impl::Error`, so `SharedGridSet`'s `Discovery(discovery::Error)`
+    // variant composes identically on both targets.
+    //
+    // TWO-ERROR-ATOMS (R1): `FontConfigFailed` (capital "C") is the AD HOC
+    // discovery-layer atom from `discovery.zig:278`; `Fc(fc::Error)` wraps the
+    // DISTINCT package-level `fontconfig.Error` (whose failure atom is
+    // `FontconfigFailed`, lowercase "c" — see `fc.rs`'s ERROR-ATOM NOTE). Both are
+    // kept; collapsing them would lose fidelity.
     #[derive(Debug)]
     pub enum Error {
-        /// `error.FontConfigFailed` — the `fontSort` call did not return `.match`.
+        /// `error.FontConfigFailed` — the `fontSort` call did not return `.match`
+        /// (`discovery.zig:278`).
         FontConfigFailed,
+        /// The package-level `fontconfig.Error` propagated from
+        /// `fontRenderPrepare`/`pattern.get`.
+        Fc(fc::Error),
         /// `Allocator.Error`.
         OutOfMemory,
         Face(FaceError),
         Collection(crate::collection::Error),
+    }
+
+    impl From<fc::Error> for Error {
+        fn from(e: fc::Error) -> Self {
+            Error::Fc(e)
+        }
     }
 
     impl From<FaceError> for Error {
@@ -125,20 +144,34 @@ mod fontconfig_impl {
 
     /// The Fontconfig discoverer (Linux default backend).
     // pub const Fontconfig = struct { fc_config: *fontconfig.Config, ... };
-    //
-    // PORT NOTE: the reference's `fc_config: *fontconfig.Config` field lands with
-    // the real discoverer (L3 Task 6/7); the stub is fieldless until then.
-    pub struct Fontconfig;
+    pub struct Fontconfig {
+        /// The loaded Fontconfig configuration (config + scanned system fonts).
+        /// Manually managed (`destroy`d in `deinit`), matching the reference's
+        /// `fc_config: *fontconfig.Config`.
+        // fc_config: *fontconfig.Config,
+        fc_config: *mut fc::Config,
+    }
 
     impl Fontconfig {
-        // pub fn init(lib: Library) Fontconfig
+        // pub fn init(lib: Library) Fontconfig {
+        //     _ = lib;
+        //     // safe to call multiple times and concurrently
+        //     _ = fontconfig.init();
+        //     return .{ .fc_config = fontconfig.initLoadConfigAndFonts() };
+        // }
         pub fn init(_lib: Library) -> Fontconfig {
-            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+            // safe to call multiple times and concurrently
+            let _ = fc::init();
+            Fontconfig {
+                fc_config: fc::init_load_config_and_fonts(),
+            }
         }
 
-        // pub fn deinit(self: *Fontconfig) void
+        // pub fn deinit(self: *Fontconfig) void { self.fc_config.destroy(); }
         pub fn deinit(&mut self) {
-            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+            // SAFETY: `fc_config` is the non-null config from
+            // `init_load_config_and_fonts`, not yet destroyed.
+            unsafe { (*self.fc_config).destroy() };
         }
 
         /// Discover fonts from a descriptor. This returns an iterator that can
@@ -147,39 +180,169 @@ mod fontconfig_impl {
         //
         // PORT NOTE: the reference threads `alloc`; rustty uses the global
         // allocator, so `alloc` is omitted (matching `CoreText::discover`).
-        pub fn discover(&self, _desc: Descriptor) -> Result<DiscoverIterator, Error> {
-            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+        pub fn discover(&self, desc: Descriptor) -> Result<DiscoverIterator, Error> {
+            // Build our pattern that we'll search for
+            // const pat = desc.toFcPattern();
+            // errdefer pat.destroy();
+            let pat = desc.to_fc_pattern();
+
+            // SAFETY: `fc_config` is the non-null loaded config; `pat` is the
+            // freshly created, non-null pattern from `to_fc_pattern` (owned here).
+            let config = unsafe { &mut *self.fc_config };
+            let pat_ref = unsafe { &mut *pat };
+
+            // assert(self.fc_config.substituteWithPat(pat, .pattern));
+            assert(config.substitute_with_pat(pat_ref, fc::MatchKind::Pattern));
+            // pat.defaultSubstitute();
+            pat_ref.default_substitute();
+
+            // Search
+            // const res = self.fc_config.fontSort(pat, false, null);
+            let res = config.font_sort(pat_ref, false, None);
+            // if (res.result != .match) return error.FontConfigFailed;
+            if res.result != fc::Result::Match {
+                // errdefer pat.destroy(); — the search failed, so free the pattern.
+                pat_ref.destroy();
+                return Err(Error::FontConfigFailed);
+            }
+            // errdefer res.fs.destroy();
+
+            // .fonts = res.fs.fonts(),
+            //
+            // PORT NOTE: the reference borrows the fontset's `fonts()` slice; rustty
+            // copies the (raw) pattern pointers into an owned `Vec` so the iterator
+            // need not carry a self-referential borrow of `set`. The pointers remain
+            // valid because `set` is kept alive (and destroyed) by the iterator.
+            // SAFETY: `res.fs` is the non-null font set returned for a `.match`.
+            let fonts = unsafe { (*res.fs).fonts() }.to_vec();
+
+            Ok(DiscoverIterator {
+                config: self.fc_config,
+                pattern: pat,
+                set: res.fs,
+                fonts,
+                variations: desc.variations,
+                i: 0,
+            })
         }
 
-        // pub fn discoverFallback(self, alloc, collection, desc) !DiscoverIterator
+        // pub fn discoverFallback(self, alloc, collection, desc) !DiscoverIterator {
+        //     _ = collection;
+        //     return try self.discover(alloc, desc);
+        // }
         pub fn discover_fallback(
             &self,
             _collection: *mut Collection,
-            _desc: Descriptor,
+            desc: Descriptor,
         ) -> Result<DiscoverIterator, Error> {
-            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+            self.discover(desc)
         }
     }
 
     /// The Fontconfig discovery iterator.
     // pub const DiscoverIterator = struct { config, pattern, set, fonts, variations, i };
-    //
-    // PORT NOTE: the reference's fields are all `*fontconfig.*` handles; they land
-    // with the real discoverer (L3 Task 6/7).
-    pub struct DiscoverIterator;
+    pub struct DiscoverIterator {
+        // config: *fontconfig.Config,
+        config: *mut fc::Config,
+        // pattern: *fontconfig.Pattern,
+        pattern: *mut fc::Pattern,
+        // set: *fontconfig.FontSet,
+        set: *mut fc::FontSet,
+        // fonts: []*fontconfig.Pattern,
+        fonts: Vec<*mut fc::Pattern>,
+        // variations: []const Variation,
+        variations: Vec<Variation>,
+        // i: usize,
+        i: usize,
+    }
 
     impl DiscoverIterator {
-        // pub fn deinit(self: *DiscoverIterator) void
+        // pub fn deinit(self: *DiscoverIterator) void {
+        //     self.set.destroy();
+        //     self.pattern.destroy();
+        //     self.* = undefined;
+        // }
         pub fn deinit(&mut self) {
-            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+            // SAFETY: `set`/`pattern` are the non-null handles this iterator owns
+            // (from `discover`), not yet destroyed.
+            unsafe {
+                (*self.set).destroy();
+                (*self.pattern).destroy();
+            }
+            // self.* = undefined; — the `Vec` fields drop; the raw handles above
+            // are consumed by `destroy`.
         }
 
-        // pub fn next(self: *DiscoverIterator) fontconfig.Error!?DeferredFace
+        // pub fn next(self: *DiscoverIterator) fontconfig.Error!?DeferredFace {
         // (Named `next` to match the reference iterator; not `Iterator::next`,
         // whose signature — no `Result`, no external `deinit` — doesn't fit.)
         #[allow(clippy::should_implement_trait)]
         pub fn next(&mut self) -> Result<Option<DeferredFace>, Error> {
-            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+            // if (self.i >= self.fonts.len) return null;
+            if self.i >= self.fonts.len() {
+                return Ok(None);
+            }
+
+            // Get the copied pattern from our fontset that has the
+            // attributes configured for rendering.
+            // const font_pattern = try self.config.fontRenderPrepare(
+            //     self.pattern,
+            //     self.fonts[self.i],
+            // );
+            // errdefer font_pattern.destroy();
+            //
+            // SAFETY: `config`/`pattern` are the iterator's non-null handles;
+            // `fonts[self.i]` is a non-null pattern owned by `set` (alive here).
+            let config = unsafe { &mut *self.config };
+            let pattern = unsafe { &*self.pattern };
+            let font = unsafe { &*self.fonts[self.i] };
+            let font_pattern = config.font_render_prepare(pattern, font)?;
+
+            // return DeferredFace{ .fc = .{
+            //     .pattern = font_pattern,
+            //     .charset = (try font_pattern.get(.charset, 0)).char_set,
+            //     .langset = (try font_pattern.get(.lang, 0)).lang_set,
+            //     .variations = self.variations,
+            // } };
+            //
+            // The two `get`s propagate `fontconfig.Error` exactly as the reference's
+            // `try`; on any such error the render-prepared pattern must be destroyed
+            // (the reference's `errdefer font_pattern.destroy()`).
+            let got: Result<(*const fc::CharSet, *const fc::LangSet), Error> = {
+                // SAFETY: `font_pattern` is the non-null render-prepared pattern.
+                let fp = unsafe { &*font_pattern };
+                match (
+                    fp.get(fc::Property::Charset, 0),
+                    fp.get(fc::Property::Lang, 0),
+                ) {
+                    (Ok(fc::Value::CharSet(cs)), Ok(fc::Value::LangSet(ls))) => Ok((cs, ls)),
+                    (Err(e), _) | (_, Err(e)) => Err(Error::Fc(e)),
+                    // A render-prepared pattern's `charset`/`lang` are always of
+                    // the expected type; a mismatch is a fontconfig invariant break.
+                    _ => Err(Error::Fc(fc::Error::FontconfigTypeMismatch)),
+                }
+            };
+            let (charset, langset) = match got {
+                Ok(v) => v,
+                Err(e) => {
+                    // SAFETY: `font_pattern` is owned here and not yet handed off.
+                    unsafe { (*font_pattern).destroy() };
+                    return Err(e);
+                }
+            };
+
+            // Increment after we return
+            // defer self.i += 1;
+            self.i += 1;
+
+            Ok(Some(DeferredFace {
+                fc: Some(FontconfigData {
+                    pattern: font_pattern,
+                    charset,
+                    langset,
+                    variations: self.variations.clone(),
+                }),
+            }))
         }
     }
 }
@@ -1980,45 +2143,86 @@ mod tests {
     }
 
     // test "fontconfig" {
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
     #[test]
     fn fontconfig() {
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
         //
-        // PORT NOTE: on the macOS/coretext gate this test always skips (its body
-        // exercises the Fontconfig discoverer, which is DEFERRED). The full body
-        // lands with the Fontconfig backend. The `!= fontconfig_freetype` skip is
-        // expressed as an inverted `== fontconfig_freetype` guard (clippy-clean).
-        if crate::options::BACKEND == crate::Backend::FontconfigFreetype {
-            // var lib = try Library.init(alloc); defer lib.deinit();
-            // var fc = Fontconfig.init(lib); defer fc.deinit();
-            // var it = try fc.discover(alloc, .{ .family = "monospace", .size = 12 });
-            // defer it.deinit();
-            // (body DEFERRED with the Fontconfig backend)
+        // PORT NOTE: the reference's `!= fontconfig_freetype` early-return skip is
+        // expressed as an inverted `== fontconfig_freetype` guard (clippy-clean). On
+        // the freetype-active backend class the body discovers a real system font.
+        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
+            return;
         }
+
+        use crate::library::Library;
+
+        // var lib = try Library.init(alloc); defer lib.deinit();
+        let mut lib = Library::init().unwrap();
+
+        // var fc = Fontconfig.init(lib); defer fc.deinit();
+        let mut fc = Fontconfig::init(lib);
+
+        // var it = try fc.discover(alloc, .{ .family = "monospace", .size = 12 });
+        // defer it.deinit();
+        let mut it = fc
+            .discover(Descriptor {
+                family: Some(b"monospace".to_vec()),
+                size: 12.0,
+                ..Descriptor::default()
+            })
+            .unwrap();
+
+        // defers run in reverse: it.deinit, fc.deinit, lib.deinit.
+        it.deinit();
+        fc.deinit();
+        lib.deinit();
     }
 
     // test "fontconfig codepoint" {
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
     #[test]
     fn fontconfig_codepoint() {
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
-        //
-        // PORT NOTE: DEFERRED with the Fontconfig backend (skips on the coretext
-        // gate). Full body recorded below:
-        //
+        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
+            return;
+        }
+
+        use crate::library::Library;
+
         // var lib = try Library.init(alloc); defer lib.deinit();
+        let mut lib = Library::init().unwrap();
+
         // var fc = Fontconfig.init(lib); defer fc.deinit();
+        let mut fc = Fontconfig::init(lib);
+
         // var it = try fc.discover(alloc, .{ .codepoint = 'A', .size = 12 });
         // defer it.deinit();
-        // // The first result should have the codepoint. Later ones may not
-        // // because fontconfig returns all fonts sorted.
-        // var face = (try it.next()).?;
-        // defer face.deinit();
+        let mut it = fc
+            .discover(Descriptor {
+                codepoint: u32::from('A'),
+                size: 12.0,
+                ..Descriptor::default()
+            })
+            .unwrap();
+
+        // The first result should have the codepoint. Later ones may not
+        // because fontconfig returns all fonts sorted.
+        // var face = (try it.next()).?; defer face.deinit();
+        let mut face = it.next().unwrap().unwrap();
+
         // try testing.expect(face.hasCodepoint('A', null));
-        // // Should have other codepoints too
+        assert!(face.has_codepoint(u32::from('A'), None));
+
+        // Should have other codepoints too
         // try testing.expect(face.hasCodepoint('B', null));
-        if crate::options::BACKEND == crate::Backend::FontconfigFreetype {
-            // (body DEFERRED with the Fontconfig backend)
-        }
+        assert!(face.has_codepoint(u32::from('B'), None));
+
+        // defers run in reverse: face.deinit, it.deinit, fc.deinit, lib.deinit.
+        face.deinit();
+        it.deinit();
+        fc.deinit();
+        lib.deinit();
     }
 
     // PORT NOTE: unit tests for `Descriptor::to_fc_pattern` (the port of
