@@ -7553,3 +7553,13 @@ mod macos_impl {
 
 #[cfg(target_os = "macos")]
 pub use macos_impl::*;
+
+// L4 (Linux-only): the SECOND `generic.zig` `Renderer(GraphicsAPI)` instantiation,
+// over `crate::opengl::OpenGL` — the sibling to `macos_impl`'s `Renderer(Metal)`.
+// ADDITIVE (R5): not one byte of `macos_impl` changes; the two arms are mutually
+// exclusive by target. Copy-adapted from `macos_impl` (READ-ONLY reference) against
+// the same `generic.zig` oracle. (docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md)
+#[cfg(target_os = "linux")]
+mod linux_impl;
+#[cfg(target_os = "linux")]
+pub use linux_impl::*;
