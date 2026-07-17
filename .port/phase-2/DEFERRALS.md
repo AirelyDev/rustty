@@ -3816,6 +3816,34 @@ are an API-surface ceiling, not a version oracle), so a `const fn` over
 *because* it has the header fold). T2 must implement it as a live delegate or get
 plan:96 amended; T1 flags, does not decide.
 
+**RESOLVED by L5.0 T2 [2026-07-17] — implemented as a live delegate; plan:96 is
+now stale and wants amending.** T2 took the first of the two options T1 left,
+because it is the only one inside a task's authority: amending plan:96 is the
+plan owner's call. `gtk_version::at_least` / `adw_version::at_least` are
+`#[inline]` delegates to their `runtime_at_least` twin, keeping the oracle's
+`atLeast` call sites portable 1:1 while every threshold stays live. Two
+reinforcing findings from the implementation:
+
+1. A const-`BASELINE` `at_least` would have **no legitimate call site**. The two
+   sites where the `v4_14` ceiling genuinely forces the legacy arm
+   (`application.zig:1261`, `:1565`) cannot name their modern arm's symbols at
+   all, so they port as the legacy arm *unconditionally, with no predicate* —
+   they never call `at_least`. The remaining sites (`window.zig:695`, `:1181`)
+   are exactly the ones the const fold would silently break. So the const shape
+   is not merely riskier; it is unused-and-wrong rather than a live trade-off.
+2. `BASELINE` survives as a real constant, but as *documentation + logging +
+   tripwire*, not as a predicate input: it is the honest analogue of the
+   oracle's `comptime_version` (the API surface the `v4_14`/`v1_5` Cargo
+   features select) and feeds `log_version`'s `build=` field — precisely the
+   oracle's own use of `comptime_version` at `gtk_version.zig:29-32`. plan:96's
+   `const _: () = assert!(BASELINE >= (4, 14, 0))` tripwire IS implemented (a
+   `BASELINE`-vs-`AD3_FLOOR` const assert in each module; verified to fail the
+   build on a downgrade).
+
+**Action for the plan owner:** amend plan:96's "`at_least(..) -> bool (const fn
+over BASELINE)`" to "live delegate to `runtime_at_least`", or reverse T2. Left
+as a flagged deviation rather than a silent one.
+
 ## App-core over-claim CORRECTION — `main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` are DEFERRED (already tracked at C6)
 
 The gap-analysis app-core inventory marked `src/main_gen.zig`, `src/main_wasm.zig`,

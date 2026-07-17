@@ -90,6 +90,9 @@
 //! an `adw::AboutDialog` built with the same properties.) See `Cargo.toml` for
 //! the full derivation and the open plan:96 reconciliation.
 
+pub mod adw_version;
+pub mod gtk_version;
+
 #[cfg(test)]
 mod tests {
     #[test]
