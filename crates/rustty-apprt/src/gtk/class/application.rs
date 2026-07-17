@@ -68,10 +68,19 @@ use glib::subclass::prelude::*;
 use rustty_config::Config as CoreConfig;
 
 use super::config::Config;
-use crate::gtk::{build_info, winproto, WeakRef};
+use crate::gtk::{build_info, ext, winproto, WeakRef};
 
 mod imp {
     use super::*;
+    // The GTK-tier traits the startup/activate/dispose vfuncs and their helpers
+    // reach through: `set_default` (gio `ApplicationExt`), the
+    // `parent_startup`/`parent_activate` chain-up (gio `ApplicationImplExt`), and
+    // the style-manager surface (`AdwApplicationExt::style_manager`,
+    // `StyleManagerExt::{set_color_scheme, is_dark, connect_dark_notify}`). `as _`
+    // so they enable method resolution without competing for a name.
+    use gio::prelude::ApplicationExt as _;
+    use gio::subclass::prelude::ApplicationImplExt as _;
+    use libadwaita::prelude::AdwApplicationExt as _;
 
     /// PORTS: `application.zig:194-201` `quit_timer`. The tagged union that tracks
     /// the "quit after the last window closes" timer. `active` carries the glib
@@ -182,6 +191,20 @@ mod imp {
         /// §5.4). Freed in `deinit` via [`winproto::App::deinit`]
         /// (`application.zig:439`). `RefCell` for the shared-`&self` `imp` access.
         pub winproto: RefCell<winproto::App>,
+
+        /// rustty-only seam carrying the monomorphized "queue a new window" push
+        /// (`priv.core_app.mailbox.push(.{ .new_window = {} }, .forever)`,
+        /// `application.zig:1464-1466`). The Zig `activate` vfunc names `*CoreApp`
+        /// directly because the whole program is comptime-monomorphized to one
+        /// apprt backend; the Rust `Application` GObject is non-generic and its
+        /// stored `core_app` is a type-erased `*mut c_void` (Task 8 PORT NOTE),
+        /// so the concrete `rustty_core::app::App<A>` it points at cannot be named
+        /// from the non-generic vfunc. [`super::Application::bind_core_app`]
+        /// installs this thunk once the concrete apprt `App` type `A` is known
+        /// (the run loop / `gtk::App` — Tasks 10/11, and the T9 test), and the
+        /// `activate` vfunc invokes it. `None` until bound; `activate` is then a
+        /// no-op push (faithful to a not-yet-wired core, placeholder-leaf doctrine).
+        pub new_window_thunk: RefCell<Option<Box<dyn Fn()>>>,
     }
 
     #[glib::object_subclass]
@@ -213,9 +236,49 @@ mod imp {
 
     #[glib::derived_properties]
     impl ObjectImpl for Application {
-        // PORT NOTE: `dispose` (`application.zig:1475-1493`) — the vfunc override
-        // slot exists here; its body (unref the OWNED rows) is Task 9's. The
-        // skeleton keeps the default (no-op) dispose so the type registers cleanly.
+        /// PORTS: `application.zig:1475-1493` `dispose`. Runs the two teardown
+        /// steps the reference does BEFORE chaining the parent dispose; the
+        /// gtk4-rs dispose glue chains the parent automatically after this returns
+        /// (`glib::subclass::object::dispose` — "Chain up to the parent's
+        /// dispose"), so the explicit `gobject.Object.virtual_methods.dispose.call`
+        /// (`:1489-1492`) is discharged for us.
+        fn dispose(&self) {
+            // Close + release the config-errors dialog (invariant 4,
+            // PREPORT_GTK §1.1 / `:1477-1480`): `get()` hands back a strong ref,
+            // which we would `close()` and then drop (unref).
+            if let Some(_diag) = self.config_errors_dialog.get() {
+                // PORT NOTE: `diag.close()` (`:1478`) lands with the
+                // `ConfigErrorsDialog` class (Task 24). The strong ref from
+                // `get()` is unref'd here by Rust's scope-end drop
+                // (`:1479`). Until Task 24, `show_config_errors_dialog` never
+                // populates this weak ref, so this arm is dormant.
+            }
+            self.config_errors_dialog.set(None);
+
+            // Remove the SIGUSR2 source (invariant 11, `:1482-1487`). `take()`
+            // gives us the OWNED `SourceId`; we remove it via the raw
+            // `g_source_remove` so we can warn-and-continue on failure, exactly
+            // like the reference (`SourceId::remove` would instead panic).
+            if let Some(source) = self.signal_source.take() {
+                let removed = unsafe { glib::ffi::g_source_remove(source.as_raw()) };
+                if removed == glib::ffi::GFALSE {
+                    eprintln!("warn(gtk): unable to remove signal source");
+                }
+            }
+        }
+    }
+
+    impl Drop for Application {
+        /// PORTS: `application.zig:1495-1501` `finalize`. GObject frees in its
+        /// finalizer; in gtk4-rs the `imp` struct's `Drop` IS the finalize hook
+        /// (the framework runs it then chains the parent finalize), so the
+        /// reference's `self.deinit()` + parent-`finalize` chain-up maps here.
+        /// [`super::Application::deinit`] is idempotent (every field-clear is a
+        /// no-op once cleared), so a prior explicit `deinit` (the run loop's
+        /// force-teardown, `application.zig:430-434`) leaves this a clean sweep.
+        fn drop(&mut self) {
+            deinit_private(self);
+        }
     }
 
     // PORTS: the parent-chain `*Impl` traits for an `adw.Application` subclass. Each
@@ -224,7 +287,62 @@ mod imp {
     // `:1889-1890`) are `ApplicationImpl` methods filled by Task 9; the skeleton
     // keeps the default passthroughs so `GhosttyApplication` registers over the full
     // `Object → GApplication → GtkApplication → AdwApplication` chain.
-    impl gio::subclass::prelude::ApplicationImpl for Application {}
+    impl gio::subclass::prelude::ApplicationImpl for Application {
+        /// PORTS: `application.zig:1294-1330` `startup`. Chains the parent startup,
+        /// installs us as the process-global default `GApplication`, then runs the
+        /// six startup helpers in the reference's exact order.
+        fn startup(&self) {
+            eprintln!("debug(gtk): startup");
+
+            // `gio.Application.virtual_methods.startup.call(parent)` (`:1297-1300`).
+            self.parent_startup();
+
+            let obj = self.obj();
+
+            // Set ourselves as the default application (`:1303`).
+            (*obj).set_default();
+
+            // The D-Bus connection is only valid after GApplication startup
+            // (`:1305-1308`). PORT NOTE (L6 placeholder): the portal `OpenURI`
+            // object lands later; its `set_dbus_connection(app.dbus_connection())`
+            // call site is kept INHABITED here as a documented deferral so the
+            // startup order is faithful. `app.dbus_connection()` is available now
+            // (post parent-startup) but has no consumer until the OpenURI body.
+
+            // Setup our event loop backend (`:1311`).
+            self.startup_xev();
+            // Setup our style manager — light/dark mode (`:1314`).
+            self.startup_style_manager();
+            // Setup signal handlers (`:1317`).
+            self.startup_signals();
+            // Setup our action map (`:1320`).
+            self.startup_action_map();
+            // Setup our global shortcuts (`:1323`).
+            self.startup_global_shortcuts();
+            // Show the config-diagnostics dialog if loading produced any (`:1329`).
+            self.show_config_errors_dialog();
+        }
+
+        /// PORTS: `application.zig:1459-1473` `activate`. Queues a new window onto
+        /// the core app mailbox (**the app's only window-creation entry** — it goes
+        /// through the mailbox, not a direct call), then chains the parent activate.
+        fn activate(&self) {
+            eprintln!("debug(gtk): activate");
+
+            // `priv.core_app.mailbox.push(.{ .new_window = {} }, .forever)`
+            // (`:1463-1466`), monomorphized into [`new_window_thunk`] by
+            // [`super::Application::bind_core_app`] (see that field's doc for why
+            // the non-generic vfunc cannot name `App<A>` directly). A `None` thunk
+            // — the core app is not yet bound — makes this a no-op push, faithful
+            // to a runtime with nothing wired behind the mailbox yet.
+            if let Some(thunk) = self.new_window_thunk.borrow().as_ref() {
+                thunk();
+            }
+
+            // `gio.Application.virtual_methods.activate.call(parent)` (`:1468-1472`).
+            self.parent_activate();
+        }
+    }
     impl gtk4::subclass::prelude::GtkApplicationImpl for Application {}
     impl libadwaita::subclass::prelude::AdwApplicationImpl for Application {}
 
@@ -251,7 +369,14 @@ mod imp {
         /// [`super::Application::new`] runs cleanly before the config-application
         /// body lands with the startup/activate vfuncs (Task 9).
         pub(super) fn prop_config(&self, _app: &super::Application) {
-            // Task 9: apply the configuration (updateConfig / CSS reload / etc.).
+            // Sync our accelerators for menu items (`:1233`).
+            self.sync_action_accelerators();
+
+            // Load our runtime and custom CSS (`:1238-1249`). A failure here just
+            // leaves the old CSS in place — it must not fail the whole config
+            // change — so both loaders warn-and-continue internally.
+            self.load_runtime_css();
+            self.load_custom_css();
         }
 
         /// PORTS: `application.zig:...` `signalCssParsingError` — the
@@ -261,12 +386,426 @@ mod imp {
         /// **Task 9 fills this.** Placeholder-leaf no-op.
         pub(super) fn signal_css_parsing_error(
             &self,
-            _section: &gtk4::CssSection,
-            _error: &glib::Error,
+            section: &gtk4::CssSection,
+            error: &glib::Error,
         ) {
-            // Task 9: log the CSS parsing error (section location + message).
+            // `css_section.toString()` (`:1259`). gtk4-rs's `CssSection` renders
+            // its location via `Display`.
+            let location = section.to_str();
+            // PORT NOTE: the reference's `gtk_version.atLeast(4, 16, 0)` arm
+            // (`:1261-1274`) additionally dumps the offending CSS bytes via
+            // `css_section.getBytes()`. `CssSection::bytes` is `#[cfg(v4_16)]` in
+            // gtk4-rs and the pinned binding surface is `v4_14` (AD-3 / Cargo.toml),
+            // so the byte-dump is not reachable through the bindings here; the
+            // location + domain/code/message line (`:1275-1280`) is preserved.
+            eprintln!(
+                "warn(gtk): css parsing failed at {location}: {:?} {} {}",
+                error.domain(),
+                error.code(),
+                error.message(),
+            );
+        }
+
+        /// PORTS: `application.zig:1335-1360` `startupXev`. Configures libxev to a
+        /// specific backend when `async-backend` is not `.auto`. Must run before
+        /// any other xev API is used.
+        fn startup_xev(&self) {
+            use rustty_config::value_types::AsyncBackend;
+
+            let config = self.config.borrow();
+            let Some(config) = config.as_ref() else {
+                return;
+            };
+            let config = config.get();
+
+            // If our backend is auto then we have no setup to do (`:1340`).
+            let backend = match config.async_backend {
+                AsyncBackend::Auto => return,
+                // On Linux `rustty_xev::DYNAMIC` is TRUE, so this branch is LIVE
+                // (unlike macOS). `.epoll => if (comptime xev.dynamic)
+                // xev.prefer(.epoll) else false` (`:1345-1346`).
+                AsyncBackend::Epoll => rustty_xev::Backend::Epoll,
+                AsyncBackend::IoUring => rustty_xev::Backend::IoUring,
+            };
+            let result = if rustty_xev::DYNAMIC {
+                rustty_xev::prefer(backend)
+            } else {
+                false
+            };
+
+            if result {
+                eprintln!(
+                    "info(gtk): libxev manual backend={:?}",
+                    rustty_xev::backend()
+                );
+            } else {
+                eprintln!(
+                    "warn(gtk): libxev manual backend failed, using default={:?}",
+                    rustty_xev::backend()
+                );
+            }
+        }
+
+        /// PORTS: `application.zig:1365-1397` `startupStyleManager`. Sets the
+        /// initial light/dark scheme from `window-theme`, subscribes to scheme
+        /// changes, and does one idempotent initial sync.
+        fn startup_style_manager(&self) {
+            use rustty_config::value_types::WindowTheme;
+
+            let obj = self.obj();
+            let style = (*obj).style_manager();
+
+            // Setup our initial light/dark (`:1370-1382`).
+            let scheme = {
+                let config = self.config.borrow();
+                let Some(config) = config.as_ref() else {
+                    return;
+                };
+                let config = config.get();
+                match config.window_theme {
+                    // `.auto, .ghostty` — perceived-luminance branch (`:1372-1378`).
+                    // (`WindowTheme::Rustty` is this port's rename of `.ghostty`.)
+                    WindowTheme::Auto | WindowTheme::Rustty => {
+                        let lum = config.background.to_terminal_rgb().perceived_luminance();
+                        if lum > 0.5 {
+                            libadwaita::ColorScheme::PreferLight
+                        } else {
+                            libadwaita::ColorScheme::PreferDark
+                        }
+                    }
+                    WindowTheme::System => libadwaita::ColorScheme::PreferLight,
+                    WindowTheme::Dark => libadwaita::ColorScheme::ForceDark,
+                    WindowTheme::Light => libadwaita::ColorScheme::ForceLight,
+                }
+            };
+            style.set_color_scheme(scheme);
+
+            // Setup color change notifications (`:1385-1391`) — the reference
+            // connects `notify::dark`.
+            style.connect_dark_notify(glib::clone!(
+                #[weak(rename_to = this)]
+                obj,
+                move |style| {
+                    this.imp().handle_style_manager_dark(style);
+                }
+            ));
+
+            // Initial idempotent color-scheme sync (`:1393-1396`).
+            self.handle_style_manager_dark(&style);
+        }
+
+        /// PORTS: `application.zig:1540-1584` `handleStyleManagerDark`. Propagates
+        /// the effective light/dark scheme to libghostty-core and every surface.
+        fn handle_style_manager_dark(&self, style: &libadwaita::StyleManager) {
+            let scheme = if style.is_dark() { "dark" } else { "light" };
+            eprintln!("debug(gtk): style manager changed scheme={scheme}");
+
+            // PORT NOTE (placeholder-leaf): the reference now calls
+            // `core_app.colorSchemeEvent(rt, scheme)` and, per surface,
+            // `surface.core().colorSchemeCallback(scheme)` (`:1551-1563`), plus the
+            // GTK ≥ 4.20 `css_provider "prefers-color-scheme"` push (`:1565-1583`).
+            // Both reach the type-erased `core_app`/`rt_app` (Task 8 stores them as
+            // `*mut c_void`; the concrete `App<A>`/`A` land with `gtk::App`, Task 11)
+            // and the surface list (Task 15+), and the 4.20 property type
+            // `gtk::InterfaceColorScheme` is `#[cfg(v4_20)]` (outside the pinned
+            // `v4_14` surface). The scheme computation + subscription are wired so
+            // the propagation body drops in with those dependencies.
+        }
+
+        /// PORTS: `application.zig:1400-1408` `startupSignals`. Installs the SIGUSR2
+        /// handler (config reload) via `g_unix_signal_add` and stores its source id
+        /// (invariant 11 — removed at dispose).
+        fn startup_signals(&self) {
+            debug_assert!(
+                self.signal_source.borrow().is_none(),
+                "startup_signals installs the signal source exactly once"
+            );
+
+            // The gtk4-rs bindings do not wrap `g_unix_signal_add`; call the GLib
+            // symbol directly (linked via glib-sys). The `self` userdata is the raw
+            // `GObject` pointer, valid until dispose removes this source.
+            let obj = self.obj();
+            let user_data = obj.as_ptr() as glib::ffi::gpointer;
+            let raw = unsafe {
+                g_unix_signal_add_full(
+                    glib::ffi::G_PRIORITY_DEFAULT,
+                    SIGUSR2,
+                    Some(handle_sigusr2),
+                    user_data,
+                    None,
+                )
+            };
+            // `g_unix_signal_add` returns a non-zero source id on success; wrap it
+            // as the OWNED `SourceId` handle.
+            let source: glib::SourceId = unsafe { glib::translate::from_glib(raw) };
+            self.signal_source.replace(Some(source));
+        }
+
+        /// PORTS: `application.zig:1411-1429` `startupActionMap`. Registers the
+        /// seven application actions verbatim (`:1418-1426`).
+        fn startup_action_map(&self) {
+            // `glib.ext.VariantType.newFor(u64)` (`:1412`) — the `present-surface`
+            // parameter is a `t` (u64); `"as"` (`:1415`) is an array-of-strings for
+            // `new-window-command`.
+            let t_variant_type = glib::VariantTy::UINT64.to_owned();
+            let as_variant_type = glib::VariantTy::STRING_ARRAY.to_owned();
+
+            let obj = self.obj();
+            let actions = [
+                ext::actions::Action::init("new-window", action_new_window, None),
+                ext::actions::Action::init(
+                    "new-window-command",
+                    action_new_window,
+                    Some(as_variant_type),
+                ),
+                ext::actions::Action::init("open-config", action_open_config, None),
+                ext::actions::Action::init(
+                    "present-surface",
+                    action_present_surface,
+                    Some(t_variant_type),
+                ),
+                ext::actions::Action::init("quit", action_quit, None),
+                ext::actions::Action::init("reload-config", action_reload_config, None),
+                ext::actions::Action::init(
+                    "toggle-quick-terminal",
+                    action_toggle_quick_terminal,
+                    None,
+                ),
+            ];
+
+            ext::actions::add(&*obj, &actions);
+        }
+
+        /// PORTS: `application.zig:1432-1457` `startupGlobalShortcuts`. Wires the
+        /// `GlobalShortcuts` object's dbus connection, the `config` property
+        /// binding, and the `trigger` signal.
+        fn startup_global_shortcuts(&self) {
+            // PORT NOTE (placeholder-leaf): the `GlobalShortcuts` GObject
+            // (`priv.global_shortcuts`) is created by Task 27, whose class also
+            // defines the `set_dbus_connection`, the `config` bind target, and the
+            // `trigger` signal (`:1436-1456`). Task 8's `new` leaves the field
+            // `None`, so there is nothing to bind yet; the three wire-ups land with
+            // that class. `global_shortcut_trigger` (`:1655-1663`) — the `trigger`
+            // handler that calls `core.performAllAction` — likewise defers to the
+            // action-dispatch surface (Task 23).
+        }
+
+        /// PORTS: `application.zig:1608-1653` `showConfigErrorsDialog`. Presents (or
+        /// refreshes) the config-diagnostics dialog when the config has diagnostics.
+        fn show_config_errors_dialog(&self) {
+            let has_diagnostics = {
+                let config = self.config.borrow();
+                config
+                    .as_ref()
+                    .is_some_and(|c| c.property::<bool>("has-diagnostics"))
+            };
+
+            // No diagnostics, do nothing (`:1634-1635`).
+            if !has_diagnostics {
+                return;
+            }
+
+            // PORT NOTE (placeholder-leaf): building/refreshing the dialog needs the
+            // `ConfigErrorsDialog` class (Task 24) — `.new(priv.config)`,
+            // `set_property("config", ...)`, `present`/`close`, and the
+            // `reload-config` signal connect (`:1614-1652`), plus the
+            // `config_errors_dialog` weak-ref narrowing (Task 8 PORT NOTE). Until
+            // then we surface the diagnostics on stderr so a bad config is not
+            // silent.
+            eprintln!(
+                "warn(gtk): configuration has diagnostics; errors dialog lands with the ConfigErrorsDialog class (Task 24)"
+            );
+        }
+
+        /// PORTS: `application.zig:1145-1200` `syncActionAccelerators` /
+        /// `syncActionAccelerator`. Re-derives every menu accelerator from the
+        /// current keybind set.
+        fn sync_action_accelerators(&self) {
+            // PORT NOTE (placeholder-leaf): each `syncActionAccelerator` maps a GTK
+            // action name to `config.keybind.set.getTrigger(action)` and installs
+            // the accelerator via `gtk_app.setAccelsForAction`
+            // (`:1169-1199`). That reaches the `input.Binding.Action`
+            // trigger→accelerator surface (`key.accelFromTrigger`), which the
+            // action-dispatch tier lands (Task 23); the ~24 concrete action rows
+            // (`:1150-1166`) come online with the Window/Surface actions they name.
+            // Wired here (called on every `notify::config`) so the body drops in.
+        }
+
+        /// PORTS: `application.zig` `loadRuntimeCss`. Regenerates the app-level CSS
+        /// (font size, window theme, etc.) into the shared `css_provider`.
+        fn load_runtime_css(&self) {
+            // PORT NOTE (placeholder-leaf): the runtime CSS generator walks the
+            // config into a CSS string and feeds `priv.css_provider.loadFromString`.
+            // It depends on the config→CSS surface (adwaita styling tier) that lands
+            // with the window/surface CSS work. The provider itself is created +
+            // registered on the display in Task 8's `new`; this loader is wired into
+            // `prop_config` so it activates when that surface exists.
+        }
+
+        /// PORTS: `application.zig` `loadCustomCss`. Loads each user
+        /// `custom-css` file into a fresh provider appended to
+        /// `custom_css_providers`.
+        fn load_custom_css(&self) {
+            // PORT NOTE (placeholder-leaf): iterates `config.@"custom-css"`,
+            // building one `gtk.CssProvider` per file, registering it on the
+            // display, and pushing it onto `priv.custom_css_providers` (the OWNED
+            // Vec Task 8 declared, freed in `deinit`). Depends on the config
+            // `custom-css` path list surface; wired into `prop_config` so it
+            // activates when that lands.
         }
     }
+}
+
+// PORTS: `application.zig:1507-1524` `handleSigusr2`. The SIGUSR2 handler
+// installed by [`imp::Application::startup_signals`]. `g_unix_signal_add` calls
+// it on the main loop when SIGUSR2 is delivered; returning `G_SOURCE_CONTINUE`
+// keeps the handler installed.
+unsafe extern "C" fn handle_sigusr2(_ud: glib::ffi::gpointer) -> glib::ffi::gboolean {
+    eprintln!("info(gtk): received SIGUSR2, reloading configuration");
+    // PORT NOTE (placeholder-leaf): `Action.reloadConfig(self, .app, .{})`
+    // (`:1512-1521`) reaches the action-dispatch surface (`performAction`, Task
+    // 23) through the `self` userdata. Until then we log the receipt; the reload
+    // wires up with that surface. `G_SOURCE_CONTINUE` (`:1523`).
+    glib::ffi::GTRUE
+}
+
+// SIGUSR2 on Linux (all glibc targets rustty builds for — aarch64/x86_64) is 12.
+// The reference reads `std.posix.SIG.USR2`; gtk-rs/glib-sys expose no signal
+// constant and `libc` is not a dependency here, so the value is inlined with this
+// citation. (`application.zig:1404` `std.posix.SIG.USR2`.)
+const SIGUSR2: core::ffi::c_int = 12;
+
+// `g_unix_signal_add` is a GLib macro over `g_unix_signal_add_full`; the gtk4-rs
+// bindings wrap neither, so the real symbol is declared here and resolved at link
+// time against the already-linked `libglib-2.0` (glib-sys). Signature per
+// `glib-unix.h`. (`application.zig:1403` `glib.unixSignalAdd`.)
+extern "C" {
+    fn g_unix_signal_add_full(
+        priority: core::ffi::c_int,
+        signum: core::ffi::c_int,
+        function: glib::ffi::GSourceFunc,
+        data: glib::ffi::gpointer,
+        notify: glib::ffi::GDestroyNotify,
+    ) -> core::ffi::c_uint;
+}
+
+// PORTS: the seven `app.*` action callbacks (`application.zig:1665-1850`). Each is
+// the `gio.SimpleAction::activate` handler `ext::actions` wires with a WEAK ref to
+// the target `Application` (see `ext/actions.rs`). Their bodies dispatch through
+// the core app / action surface (`core_app.performAction`, `Action.newWindow`,
+// `core().mailbox.push`), which reaches the type-erased `core_app`/`core()` and
+// the `performAction` dispatch (Task 23) — placeholder-leaves until then, but
+// REGISTERED verbatim so the action map is complete (the `startup` KAT asserts all
+// seven names).
+
+/// PORTS: `application.zig:1699-1809` `actionNewWindow` (`new-window` /
+/// `new-window-command`). Parses the optional `as` argv override, then requests a
+/// new window.
+fn action_new_window(
+    _action: &gio::SimpleAction,
+    _parameter: Option<&glib::Variant>,
+    _app: &Application,
+) {
+    eprintln!("debug(gtk): received new window action");
+    // PORT NOTE (placeholder-leaf): argv parsing (`-e`, `--command=`,
+    // `--working-directory=`, `--title=`) + `Action.newWindow(...)` (`:1716-1808`)
+    // land with the action-dispatch surface (Task 23).
+}
+
+/// PORTS: `application.zig:1811-1817` `actionOpenConfig` (`open-config`).
+fn action_open_config(
+    _action: &gio::SimpleAction,
+    _parameter: Option<&glib::Variant>,
+    _app: &Application,
+) {
+    // PORT NOTE (placeholder-leaf): `self.core().mailbox.push(.open_config, ...)`
+    // (`:1816`) reaches the type-erased core surface (Task 11+).
+}
+
+/// PORTS: `application.zig:1819-1850` `actionPresentSurface` (`present-surface`,
+/// `t`).
+fn action_present_surface(
+    _action: &gio::SimpleAction,
+    _parameter: Option<&glib::Variant>,
+    _app: &Application,
+) {
+    // PORT NOTE (placeholder-leaf): decode the u64 surface id, `findSurfaceByID`,
+    // and push `present_surface` (`:1824-1849`) — needs the core surface surface.
+}
+
+/// PORTS: `application.zig:1687-1696` `actionQuit` (`quit`).
+fn action_quit(
+    _action: &gio::SimpleAction,
+    _parameter: Option<&glib::Variant>,
+    _app: &Application,
+) {
+    // PORT NOTE (placeholder-leaf): `core_app.performAction(rt, .quit)` (`:1693`).
+}
+
+/// PORTS: `application.zig:1665-1674` `actionReloadConfig` (`reload-config`).
+fn action_reload_config(
+    _action: &gio::SimpleAction,
+    _parameter: Option<&glib::Variant>,
+    _app: &Application,
+) {
+    // PORT NOTE (placeholder-leaf): `core_app.performAction(rt, .reload_config)`
+    // (`:1671`).
+}
+
+/// PORTS: `application.zig:1676-1685` `actionToggleQuickTerminal`
+/// (`toggle-quick-terminal`).
+fn action_toggle_quick_terminal(
+    _action: &gio::SimpleAction,
+    _parameter: Option<&glib::Variant>,
+    _app: &Application,
+) {
+    // PORT NOTE (placeholder-leaf): `core_app.performAction(rt,
+    // .toggle_quick_terminal)` (`:1682`).
+}
+
+/// PORTS: `application.zig:435-459` `deinit` (the field-clearing body). Shared by
+/// [`Application::deinit`] (the run loop's explicit force-teardown) and
+/// [`imp::Application`]'s `Drop` (the GObject finalize hook). Idempotent: each
+/// clear is a no-op once the field is already cleared.
+fn deinit_private(priv_: &imp::Application) {
+    // `priv.config.unref()` (`application.zig:438`) — clearing drops the ref.
+    priv_.config.replace(None);
+
+    // `priv.winproto.deinit()` (`application.zig:439`).
+    priv_.winproto.borrow_mut().deinit();
+
+    // PORT NOTE: `priv.open_uri.deinit()` (`:440`) and
+    // `priv.global_shortcuts.unref()` (`:441`) free the portal `OpenURI` and the
+    // `GlobalShortcuts` GObject; neither is created yet (their types land in later
+    // tasks), so there is nothing to free. `global_shortcuts` is cleared
+    // defensively (a no-op while `None`).
+    priv_.global_shortcuts.replace(None);
+
+    // Drop the queued-window thunk (rustty-only seam) so it releases its captured
+    // `core_app` pointer; the pointer is a BACKREF (never owned here).
+    priv_.new_window_thunk.replace(None);
+
+    // `if (priv.saved_language) |language| alloc.free(language)` (`:442`) —
+    // clearing drops the `CString`.
+    priv_.saved_language.replace(None);
+
+    // Remove the css provider and each custom provider from the display
+    // (`application.zig:443-455`).
+    if let Some(display) = gdk4::Display::default() {
+        if let Some(provider) = priv_.css_provider.borrow().as_ref() {
+            gtk4::style_context_remove_provider_for_display(&display, provider);
+        }
+        for provider in priv_.custom_css_providers.borrow().iter() {
+            gtk4::style_context_remove_provider_for_display(&display, provider);
+        }
+    }
+
+    // `priv.css_provider.unref()` (`:456`).
+    priv_.css_provider.replace(None);
+
+    // Each custom provider `unref` + the list `deinit` (`:457-458`) — clearing the
+    // Vec drops (unrefs) each element.
+    priv_.custom_css_providers.borrow_mut().clear();
 }
 
 /// PORTS: `application.zig:48-110` `glibLogWriterFunction`. Funnels
@@ -694,43 +1233,47 @@ impl Application {
     /// (unrefs / frees) its contents through `Drop` (Invariant 12 for the manually
     /// held providers).
     pub fn deinit(&self) {
-        let priv_ = self.imp();
+        deinit_private(self.imp());
+    }
 
-        // `priv.config.unref()` (`application.zig:438`) — clearing drops the ref.
-        priv_.config.replace(None);
-
-        // `priv.winproto.deinit()` (`application.zig:439`).
-        priv_.winproto.borrow_mut().deinit();
-
-        // PORT NOTE: `priv.open_uri.deinit()` (`application.zig:440`) and
-        // `priv.global_shortcuts.unref()` (`application.zig:441`) free the portal
-        // `OpenURI` and the `GlobalShortcuts` GObject. Neither is created by this
-        // task's `new` (their types land in later tasks — see `new`'s PORT NOTE),
-        // so there is nothing to free yet; the frees wire up when those creators
-        // land. `global_shortcuts` is cleared defensively (a no-op while `None`).
-        priv_.global_shortcuts.replace(None);
-
-        // `if (priv.saved_language) |language| alloc.free(language)`
-        // (`application.zig:442`) — clearing drops the `CString`.
-        priv_.saved_language.replace(None);
-
-        // Remove the css provider and each custom provider from the display
-        // (`application.zig:443-455`).
-        if let Some(display) = gdk4::Display::default() {
-            if let Some(provider) = priv_.css_provider.borrow().as_ref() {
-                gtk4::style_context_remove_provider_for_display(&display, provider);
-            }
-            for provider in priv_.custom_css_providers.borrow().iter() {
-                gtk4::style_context_remove_provider_for_display(&display, provider);
-            }
-        }
-
-        // `priv.css_provider.unref()` (`application.zig:456`).
-        priv_.css_provider.replace(None);
-
-        // Each custom provider `unref` + the list `deinit` (`application.zig:457-458`)
-        // — clearing the Vec drops (unrefs) each element.
-        priv_.custom_css_providers.borrow_mut().clear();
+    /// Installs the monomorphized core-app bindings for the concrete apprt `App`
+    /// type `A` — the Rust seam that supplies what Zig gets from comptime
+    /// single-backend monomorphization (`priv.core_app: *CoreApp`,
+    /// `application.zig:170`).
+    ///
+    /// The `Application` GObject is non-generic (GObject subclasses cannot be
+    /// generic), and its stored `core_app` is a type-erased `*mut c_void` (Task 8),
+    /// so the non-generic `activate` vfunc cannot name the concrete
+    /// `rustty_core::app::App<A>` the pointer refers to. This method — called once
+    /// the backend type is known (the run loop / `gtk::App`, Tasks 10/11; and the
+    /// T9 activate test) — casts `core_app` back to `*mut App<A>` and captures it
+    /// in the [`imp::Application::new_window_thunk`], so `activate` can push
+    /// `Message::NewWindow` faithfully (`application.zig:1464-1466`).
+    ///
+    /// # Safety-adjacent contract
+    ///
+    /// `A` MUST be the same apprt `App` type whose `App<A>` was passed to
+    /// [`Application::new`] as `core_app`; the stored pointer is reinterpreted as
+    /// `*mut App<A>`. This mirrors the reference's single comptime backend: there
+    /// is exactly one `CoreApp` type per build. No-op when `core_app` is null.
+    pub fn bind_core_app<A>(&self)
+    where
+        A: rustty_apprt_api::App + 'static,
+    {
+        let Some(core_app) = self.imp().core_app.get() else {
+            return;
+        };
+        let core_app = core_app.as_ptr() as *mut rustty_core::app::App<A>;
+        self.imp().new_window_thunk.replace(Some(Box::new(move || {
+            // `priv.core_app.mailbox.push(.{ .new_window = {} }, .forever)`
+            // (`application.zig:1464-1466`). The `core_app` BACKREF is owned by
+            // libghostty-core (never freed through this thunk); the app thread
+            // validates surface pointers before use (core's threading contract).
+            let _ = unsafe { &*core_app }.mailbox.push(
+                rustty_core::app::Message::NewWindow(rustty_core::app::NewWindow::default()),
+                rustty_datastruct::blocking_queue::Timeout::Forever,
+            );
+        })));
     }
 
     /// PORTS: the active windowing-protocol tag the reference reads via
@@ -780,5 +1323,248 @@ mod tests {
         let _default: fn() -> Application = Application::default;
         let _alloc: fn(&Application) -> allocator_api2::alloc::Global = Application::allocator;
         let _get_config: fn(&Application) -> Option<Config> = Application::get_config;
+    }
+
+    // ---- display-dependent lifecycle tests --------------------------------
+    //
+    // These construct a real `GhosttyApplication` and drive its
+    // startup/activate/dispose vfuncs, so they need an initialized GTK + a
+    // display. Marked `#[ignore]`; run via
+    //   xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored
+    // GTK binds its "main thread" to whichever thread first calls `gtk::init`;
+    // the cargo harness runs each test on a worker thread, so at most ONE GTK
+    // test's body executes per multi-threaded run (the others `gtk::init().err()`
+    // and skip — the established pattern, see `ext/actions.rs`
+    // `adding_actions_to_an_object`). Run each individually to exercise its body.
+
+    use allocator_api2::alloc::Global;
+    use rustty_apprt_api as apprt;
+    use rustty_core::app::{App as CoreApp, Message};
+    use rustty_core::surface::Surface as CoreSurface;
+
+    /// A minimal apprt `App` double: enough to parametrize `CoreApp<Double>` so a
+    /// real core-app mailbox exists for the `activate` push to land in. Mirrors
+    /// `rustty-core`'s in-crate `TestApp`/`TestSurface` (app.rs).
+    struct Double {
+        config: rustty_config::Config,
+    }
+
+    impl apprt::App for Double {
+        type Surface = DoubleSurface;
+
+        fn perform_action<C: apprt::CoreSurfaceHandle>(
+            &self,
+            _target: apprt::Target<'_, C>,
+            _action: apprt::Action<'_>,
+        ) -> Result<bool, apprt::ApprtError> {
+            Ok(true)
+        }
+
+        fn perform_ipc(
+            &self,
+            _target: apprt::ipc::Target<'_>,
+            _action: apprt::ipc::Action<'_>,
+        ) -> Result<bool, apprt::ipc::Errors> {
+            unimplemented!("test double: not exercised")
+        }
+
+        fn wakeup(&self) {}
+
+        fn config(&self) -> &rustty_config::Config {
+            &self.config
+        }
+
+        fn keyboard_layout(&self) -> rustty_input::keyboard::Layout {
+            rustty_input::keyboard::Layout::Unknown
+        }
+    }
+
+    struct DoubleSurface;
+
+    impl apprt::Surface for DoubleSurface {
+        type App = Double;
+        type Core = CoreSurface<Double>;
+
+        fn core(&self) -> *mut Self::Core {
+            std::ptr::null_mut()
+        }
+        fn rt_app(&self) -> *mut Double {
+            std::ptr::null_mut()
+        }
+        fn close(&self, _process_alive: bool) {}
+        fn deinit(&mut self) {}
+        fn get_content_scale(&self) -> Result<apprt::ContentScale, apprt::ApprtError> {
+            unimplemented!("test double: not exercised")
+        }
+        fn get_size(&self) -> Result<apprt::SurfaceSize, apprt::ApprtError> {
+            unimplemented!("test double: not exercised")
+        }
+        fn get_title(&self) -> Option<&std::ffi::CStr> {
+            None
+        }
+        fn supports_clipboard(&self, _clipboard_type: apprt::Clipboard) -> bool {
+            unimplemented!("test double: not exercised")
+        }
+        fn clipboard_request(
+            &self,
+            _clipboard_type: apprt::Clipboard,
+            _state: apprt::ClipboardRequest,
+        ) -> Result<bool, apprt::ApprtError> {
+            unimplemented!("test double: not exercised")
+        }
+        fn set_clipboard(
+            &self,
+            _clipboard_type: apprt::Clipboard,
+            _contents: &[apprt::ClipboardContent<'_>],
+            _confirm: bool,
+        ) -> Result<(), apprt::ApprtError> {
+            unimplemented!("test double: not exercised")
+        }
+        fn get_cursor_pos(&self) -> Result<apprt::CursorPos, apprt::ApprtError> {
+            unimplemented!("test double: not exercised")
+        }
+        fn default_termio_env(
+            &self,
+        ) -> Result<std::collections::HashMap<String, String>, apprt::ApprtError> {
+            unimplemented!("test double: not exercised")
+        }
+    }
+
+    /// Build a `GhosttyApplication` for a lifecycle test WITHOUT going through
+    /// [`Application::new`]: `new` calls `set_gtk_env`, which `debug_assert!`s GTK
+    /// is not yet initialized (`application.zig:2850`) and so can run at most once
+    /// per process — unusable across multiple constructing tests. This builds the
+    /// subclass directly (the same `glib::Object::builder` shape `new` uses at
+    /// `:1178-1182`, minus the resource pin) and fills the two private fields the
+    /// startup/activate helpers read (`config`, `core_app`). Flags force
+    /// `NON_UNIQUE` so `register` stays local (no session-bus dependency).
+    fn build_test_app(core_app: *mut std::ffi::c_void) -> Application {
+        let app: Application = glib::Object::builder()
+            .property("application-id", "io.airely.rustty.LifecycleTest")
+            .property("flags", gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        let imp = app.imp();
+        imp.config
+            .replace(Some(Config::new(&rustty_config::Config::default_config())));
+        imp.core_app.set(NonNull::new(core_app));
+        app
+    }
+
+    /// PORTS: `application.zig:1294-1330` `startup` + `:1411-1429`
+    /// `startupActionMap`. Registering the app runs the startup vfunc, which must
+    /// install us as the default `GApplication` (`:1303`) and register the seven
+    /// application actions (`:1418-1426`).
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn application_startup_sets_default_and_actions() {
+        use gio::prelude::{ActionGroupExt, ApplicationExt};
+
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+
+        let app = build_test_app(std::ptr::null_mut());
+
+        // `register` emits `startup` synchronously on the primary instance.
+        app.register(gio::Cancellable::NONE).expect("register");
+
+        // We are the default application (`:1303`).
+        let default = gio::Application::default().expect("a default GApplication exists");
+        assert_eq!(
+            default.downcast::<Application>().ok().as_ref(),
+            Some(&app),
+            "startup must set our application as the process-global default"
+        );
+
+        // All seven actions are present (`:1418-1426`).
+        let names: Vec<String> = app.list_actions().into_iter().map(Into::into).collect();
+        for expected in [
+            "new-window",
+            "new-window-command",
+            "open-config",
+            "present-surface",
+            "quit",
+            "reload-config",
+            "toggle-quick-terminal",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "startup must register the '{expected}' action; got {names:?}"
+            );
+        }
+    }
+
+    /// PORTS: `application.zig:1459-1473` `activate`. Activating queues exactly one
+    /// `Message::NewWindow` onto the core app mailbox — the app's only
+    /// window-creation entry (`:1463-1466`).
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn application_activate_pushes_new_window() {
+        use gio::subclass::prelude::ApplicationImpl;
+
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+
+        // A real core app so the mailbox exists; `create` gives a heap-stable
+        // pointer (the `Box` address is stable for the app's lifetime).
+        let mut core_app: Box<CoreApp<Double>> =
+            CoreApp::<Double>::create(Global).expect("core app");
+        let core_ptr: *mut CoreApp<Double> = &mut *core_app;
+
+        let app = build_test_app(core_ptr.cast());
+        // Supply the concrete apprt `App` type so the `activate` thunk is
+        // monomorphized (the Rust analogue of Zig's comptime `*CoreApp`).
+        app.bind_core_app::<Double>();
+
+        // Drive the `activate` vfunc directly (no g_application_activate / no
+        // registration needed for the mailbox push).
+        <imp::Application as ApplicationImpl>::activate(app.imp());
+
+        // Drain: exactly one NewWindow.
+        let mut new_windows = 0usize;
+        let mut total = 0usize;
+        while let Some(msg) = core_app.mailbox.pop() {
+            total += 1;
+            if matches!(msg, Message::NewWindow(_)) {
+                new_windows += 1;
+            }
+        }
+        assert_eq!(new_windows, 1, "activate must push exactly one NewWindow");
+        assert_eq!(total, 1, "activate must push nothing but the NewWindow");
+    }
+
+    /// PORTS: `application.zig:1475-1493` `dispose` + `:1400-1408` `startupSignals`.
+    /// Startup installs the SIGUSR2 source (`:1403`); dispose removes it and clears
+    /// the field (invariant 11, `:1482-1487`).
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn application_dispose_removes_signal_source() {
+        use gio::prelude::ApplicationExt;
+
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+
+        let app = build_test_app(std::ptr::null_mut());
+
+        // `register` → `startup` → `startupSignals` installs the source.
+        app.register(gio::Cancellable::NONE).expect("register");
+        assert!(
+            app.imp().signal_source.borrow().is_some(),
+            "startup must install the SIGUSR2 signal source"
+        );
+
+        // `run_dispose` invokes the `dispose` vfunc. `unsafe`: it may run while
+        // other references to the object exist; here `app` is the sole owner and
+        // is not used for GObject operations after this, so it is sound.
+        unsafe { app.run_dispose() };
+        assert!(
+            app.imp().signal_source.borrow().is_none(),
+            "dispose must remove the signal source and clear the field"
+        );
     }
 }

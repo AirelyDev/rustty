@@ -58,6 +58,13 @@ dcimgui-sys = { workspace = true }
 rustty-config = { workspace = true }
 rustty-input = { workspace = true }
 rustty-os = { workspace = true }
+# `rustty_datastruct::blocking_queue::Timeout` — named by the gtk-gated
+# `Application::bind_core_app` seam so `activate` can push `Message::NewWindow`
+# onto the core `App<A>` mailbox with the reference's `.forever` timeout
+# (`application.zig:1464-1466`). Plain (non-optional) dep like the other pure
+# lower-tier crates here: on a macOS/default build it is compiled but unreferenced
+# (the sole consumer is `#[cfg(all(target_os = "linux", feature = "gtk"))]`).
+rustty-datastruct = { workspace = true }
 # `zig_string_escape` (the rustty port of `std.zig.stringEscape`) — used by
 # `embedded::Surface::init` to escape `initial_input` for the config `raw` field
 # (embedded.zig:561). Reused, not reimplemented (R3/R5). Acyclic: rustty-args deps
