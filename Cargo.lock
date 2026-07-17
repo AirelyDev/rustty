@@ -1047,6 +1047,7 @@ dependencies = [
  "rustty-core",
  "rustty-datastruct",
  "rustty-font",
+ "rustty-font-shaper",
  "rustty-identity",
  "rustty-input",
  "rustty-inspector",

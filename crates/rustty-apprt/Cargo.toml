@@ -48,6 +48,9 @@ rustty-apprt-api = { workspace = true }
 rustty-identity = { workspace = true }
 rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
+# `rustty_font_shaper::face::DesiredSize` — the `font.face.DesiredSize` the gtk
+# `Surface` boxes as its `font-size-request` property (`class/surface.zig:583`).
+rustty-font-shaper = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-inspector = { workspace = true }
 # The inspector's ImGui context lifecycle (`apprt.embedded.Inspector`

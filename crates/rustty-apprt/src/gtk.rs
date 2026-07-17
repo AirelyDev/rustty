@@ -96,6 +96,7 @@ pub mod build_info;
 pub mod class;
 pub mod ext;
 pub mod gresource;
+pub mod gsettings;
 pub mod gtk_version;
 pub mod surface;
 pub mod weak_ref;

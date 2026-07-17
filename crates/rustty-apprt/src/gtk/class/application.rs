@@ -1233,6 +1233,30 @@ impl Application {
         self.property("config")
     }
 
+    /// Test-only: build **and register** a default `GhosttyApplication` so widget
+    /// tests in other class modules (e.g. `class::surface`) can reach
+    /// [`Application::default`] for `init`'s config / allocator fallback. Mirrors
+    /// the tests' own `build_test_app` but registers (running `startup`, which
+    /// installs us as the default `GApplication`, `application.zig:1303`).
+    /// `NON_UNIQUE` keeps registration off the session bus. Must run after
+    /// `gtk4::init()`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn build_default_for_test() -> Self {
+        use gio::prelude::ApplicationExt as _;
+        let app: Application = glib::Object::builder()
+            .property("application-id", "io.airely.rustty.SurfaceTest")
+            .property("flags", gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        let imp = app.imp();
+        imp.config
+            .replace(Some(Config::new(&CoreConfig::default_config())));
+        imp.core_app.set(NonNull::new(std::ptr::null_mut()));
+        app.register(gio::Cancellable::NONE)
+            .expect("register default test application");
+        app
+    }
+
     // ---- INHABITED placeholder leaves (placeholder-leaf doctrine) ----
     //
     // The following are the class's heavyweight members. They are present so the

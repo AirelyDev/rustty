@@ -22,7 +22,7 @@
 /// PORTS: `slice.zig:8` `pub const StringList`. A boxed type holding a list of
 /// strings, registered as `"GhosttyStringList"` (`slice.zig:47`).
 #[derive(Clone, Debug, glib::Boxed)]
-#[boxed_type(name = "GhosttyStringList")]
+#[boxed_type(name = "GhosttyStringList", nullable)]
 pub struct StringList {
     strings: Vec<String>,
 }
