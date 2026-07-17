@@ -18,11 +18,33 @@ workspace = true
 name = "rustty"
 path = "src/main.rs"
 
+[features]
+# The NATIVE GTK4/libadwaita apprt backend leaf (L5.1 T12): turns
+# `main_rustty`'s GUI launch path (`App::create` + `gtk::App::init/run`) on for
+# the `Runtime::Gtk` build. DEFAULT-ON so a plain `cargo build -p rustty` on
+# Linux — where `Runtime::Gtk` is the build-config default
+# (`rustty-build-config/src/apprt.rs:30`) — enters the GTK app instead of the
+# deferred placeholder leaf.
+#
+# R5: a NO-OP off Linux. `rustty-apprt/gtk` only pulls the gtk4-rs stack behind
+# its own `cfg(target_os = "linux")` table, and the GTK arm in `main_rustty.rs`
+# is `#[cfg(all(target_os = "linux", feature = "gtk"))]`-gated — so on macOS the
+# default `gtk` feature compiles no gtk4-rs and changes no behavior (the None
+# runtime takes the usage-banner path). `--no-default-features` yields the
+# headless / deferred-leaf build.
+default = ["gtk"]
+gtk = ["rustty-apprt/gtk", "dep:allocator-api2"]
+
 [dependencies]
 # Entry points fan out only: cli, apprt, core.
 rustty-cli = { workspace = true }
 rustty-apprt = { workspace = true }
 rustty-core = { workspace = true }
+# C6 GUI leaf (L5.1 T12): `rustty_core::App::create` takes the workspace's
+# `std.mem.Allocator` map — `allocator_api2::alloc::Global` — exactly as the GTK
+# backend's own KATs construct `CoreApp::<A>::create(Global)`. Optional, pulled
+# only by the `gtk` feature (the sole consumer is the Linux GTK launch arm).
+allocator-api2 = { workspace = true, optional = true }
 # C6 (CLI_BLUEPRINT.md §5/§6 + ADV-FIX 2): the bin runs the CLI action DETECTION
 # itself (`cli::action::detect_iter::<cli::rustty::Action>`) and constructs its
 # OWN `rustty_global::GlobalState<Action>` (NOT `rustty_core::STATE`, which is
@@ -46,3 +68,12 @@ rustty-identity = { workspace = true }
 # ssh-cache / validate-config cases are created with std::env::temp_dir (no
 # extra dep — the disk_cache tests' precedent).
 rustty-build-config = { workspace = true }
+
+# The GUI-leaf KAT (`tests/gui_leaf.rs`) names `rustty_apprt::gtk::App` as a
+# compile-gate that the `Runtime::Gtk` arm wires the NATIVE backend (integration
+# tests reach only dev-dependencies, not the crate's regular `rustty-apprt`
+# edge). Linux-target-gated to mirror the backend's own `cfg(target_os =
+# "linux")` deps; the test file is itself `#[cfg(all(target_os = "linux",
+# feature = "gtk"))]`, so without the feature nothing here is referenced.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustty-apprt = { workspace = true, features = ["gtk"] }

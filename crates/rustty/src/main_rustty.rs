@@ -283,16 +283,132 @@ pub fn main() {
     // // Run the GUI event loop
     // try app_runtime.run();
     //
-    // PORT NOTE (Phase-3 GUI leaf): the windowed app path creates `rustty_core::App`
-    // and drives the concrete apprt backend (embedded/GTK) event loop over xev (D6).
-    // The reference reaches here only for a GUI build (`app_runtime != .none`); the
-    // headless `.none` bin never does. This is the same "deferred placeholder leaf"
-    // discipline the plan uses for GPU/GTK/xev — the live product runs headless
-    // today (see the action + usage-banner paths above).
+    // PORT NOTE (Phase-3 GUI leaf, L5.1 T12 — LANDED for `Runtime::Gtk`): the
+    // windowed app path creates `rustty_core::App` and drives the concrete apprt
+    // backend event loop. The reference reaches here only for a GUI build
+    // (`app_runtime != .none`); the headless `.none` bin never does (it exits via
+    // the usage banner above). For the NATIVE GTK backend the whole leaf
+    // (`App.create` + `apprt.App.init`/`terminate`/`run`) is [`run_gtk`], selected
+    // on `app_runtime() == .gtk` and gated `#[cfg(all(target_os = "linux", feature
+    // = "gtk"))]` (R5). A full window still needs the Surface tasks (T13+) and the
+    // L4 Renderer; today this enters the hand-rolled loop and ticks the core app.
+    #[cfg(all(target_os = "linux", feature = "gtk"))]
+    if build_config::app_runtime() == build_config::Runtime::Gtk {
+        // `run_gtk` diverges (`-> !`): every arm ends in `std::process::exit`
+        // after running the reference's `terminate`/`destroy` teardown, so control
+        // never returns to the placeholder below.
+        run_gtk(&state.logging);
+    }
+
+    // Any configured runtime whose backend is NOT compiled into this build — a
+    // Linux `--no-default-features` build with the GTK backend off, or a target
+    // that is neither `.none` (usage-banner, handled above) nor a built GUI
+    // backend — remains the deferred placeholder leaf. On macOS `app_runtime()`
+    // is `.none`, so this is unreachable there (R5: byte-identical).
     unimplemented!(
-        "GUI launch (App.create + apprt.App.init/run over xev) is the Phase-3 leaf; \
-         the headless `rustty` CLI (build_config.app_runtime == .none) runs today"
+        "GUI launch has no compiled backend in this build (app_runtime={:?}); the \
+         GTK backend lands via `--features gtk` (default on Linux), the headless \
+         `rustty` CLI (build_config.app_runtime == .none) runs today",
+        build_config::app_runtime()
     );
+}
+
+/// PORTS: `main_ghostty.zig:96-112` — the GUI launch leaf for the NATIVE gtk4-rs
+/// apprt backend. Faithfully reproduces the reference sequence:
+///
+/// ```zig
+/// const app: *App = try App.create(alloc);   // App = CoreApp (src/App.zig)
+/// defer app.destroy();
+/// var app_runtime: apprt.App = undefined;
+/// try app_runtime.init(app, .{});
+/// defer app_runtime.terminate();
+/// if (@hasDecl(apprt.App, "startQuitTimer")) app_runtime.startQuitTimer();
+/// try app_runtime.run();
+/// ```
+///
+/// `App` (reference `src/App.zig`) → [`rustty_core::app::App`] over the GTK apprt
+/// [`App`](rustty_apprt::gtk::App); `app_runtime.init(app, .{})` →
+/// [`gtk::App::init`](rustty_apprt::gtk::App::init) (the core-app pointer is a
+/// stable heap backref via [`Box`]); `app_runtime.run()` →
+/// [`gtk::App::run`](rustty_apprt::gtk::App::run) (the hand-rolled event loop that
+/// ticks the core app, `class/application.zig:474-592`).
+///
+/// The two reference `defer`s discharge in LIFO order — `terminate` then
+/// `destroy` — on every exit path, and `run`'s error propagates THROUGH them (the
+/// reference `try`): both are performed explicitly before the final
+/// `std::process::exit`, which — like the reference `posix.exit` / normal `main`
+/// return — is the process end (`run_gtk` returns `!`).
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn run_gtk(logging: &Logging) -> ! {
+    use allocator_api2::alloc::Global;
+    use rustty_apprt::gtk;
+    use rustty_core::app::App as CoreApp;
+
+    // const app: *App = try App.create(alloc);   defer app.destroy();
+    //   `App.create` → `rustty_core::App::create`; the reference `alloc` param is
+    //   the workspace's global allocator (`allocator_api2::alloc::Global`). The
+    //   returned `Box` is the reference's stable `*App` heap pointer.
+    let mut core_app: Box<CoreApp<gtk::App>> = match CoreApp::<gtk::App>::create(Global) {
+        Ok(app) => app,
+        // `try App.create` — a create failure (font `SharedGridSet` init) aborts
+        // startup. The reference propagates it out of `main` (nonzero exit); the
+        // port logs and exits 1 (no teardown is owed — nothing was constructed).
+        Err(err) => {
+            log_fn(
+                LogLevel::Err,
+                &format!("failed to initialize the app error={err:?}"),
+                logging,
+            );
+            std::process::exit(1);
+        }
+    };
+    // The reference passes `app` (its already-stable address) as the runtime App's
+    // backref; the `Box`'s heap address is stable for the app's lifetime.
+    let core_ptr: *mut CoreApp<gtk::App> = &mut *core_app;
+
+    // var app_runtime: apprt.App = undefined; try app_runtime.init(app, .{});
+    //   defer app_runtime.terminate();
+    //   `gtk::App::init`'s `InitError` is uninhabited (the reference `init` is
+    //   infallible in Rust — OOM aborts in the global allocator), so the `Err` arm
+    //   is unreachable and matched with `match err {}`.
+    let app_runtime = match gtk::App::init(core_ptr.cast()) {
+        Ok(rt) => rt,
+        Err(err) => match err {},
+    };
+
+    // if (@hasDecl(apprt.App, "startQuitTimer")) app_runtime.startQuitTimer();
+    //   PORT NOTE: for the GTK apprt this `@hasDecl` probe is comptime-FALSE, so
+    //   the reference elides the call. `startQuitTimer` is a PRIVATE method of the
+    //   `Application` GObject (`class/application.zig:823`), reached only via the
+    //   `.quit_timer` apprt action (`:2381`); it is NOT a public decl of the gtk
+    //   `apprt.App` (`App.zig` exposes only init/run/terminate/wakeup/
+    //   performAction/performIpc/redrawInspector). Hence `gtk::App` has no
+    //   `start_quit_timer` and nothing is ported here. (The probe is true only for
+    //   the macOS apprt, whose `App` does declare it.)
+
+    // try app_runtime.run();
+    let result = app_runtime.run();
+
+    // The two reference `defer`s, discharged LIFO on the way out (the reference
+    // `try` propagates the error THROUGH them): terminate first, then destroy.
+    // defer app_runtime.terminate();
+    app_runtime.terminate();
+    // defer app.destroy();
+    core_app.destroy();
+
+    match result {
+        // The reference `main` returns normally after `run` → exit 0.
+        Ok(()) => std::process::exit(0),
+        // `try app_runtime.run()` failing propagates out of `main` (nonzero exit).
+        Err(err) => {
+            log_fn(
+                LogLevel::Err,
+                &format!("the GTK event loop exited with an error={err:?}"),
+                logging,
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Log severity — the reference `std.log.Level` (`.debug`/`.info`/`.warn`/`.err`).
