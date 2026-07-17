@@ -3564,6 +3564,74 @@ seam notes: the `RtPreExecInfo`/`RtPostForkInfo` growth point, the C6 usage-bann
 `.gtk` guard, and the `MUST_DRAW_FROM_APP_THREAD` flip — none of which tracked the
 subsystem itself).
 
+## L5 GTK baseline pin (AD-3) — `v4_14` API ceiling costs `prefers-color-scheme` [added 2026-07-17, L5.0 T1 review]
+
+**Ghostty source:** `src/apprt/gtk/class/application.zig:1565-1583` (inside the
+style-manager color-scheme handler). **Rustty counterpart:** `crates/rustty-apprt`
+(`gtk` feature), NOT ported. **Status:** deferred, with a named un-defer trigger.
+
+**What is deferred.** The reference runs:
+
+```zig
+if (gtk_version.atLeast(4, 20, 0)) {
+    const gtk_scheme: gtk.InterfaceColorScheme = switch (scheme) { .light => …, .dark => … };
+    var value = gobject.ext.Value.newFrom(gtk_scheme);
+    gobject.Object.setProperty(priv.css_provider.as(gobject.Object), "prefers-color-scheme", &value);
+    for (priv.custom_css_providers.items) |css_provider| {
+        gobject.Object.setProperty(css_provider.as(gobject.Object), "prefers-color-scheme", &value);
+    }
+}
+```
+
+i.e. it propagates the resolved light/dark scheme onto the app's own
+`css_provider` **and** every entry of `custom_css_providers`, so that GTK 4.20+
+CSS `@media (prefers-color-scheme: …)` queries resolve correctly in user CSS.
+
+**Why it is deferred (this is a REAL loss, not a no-op).** `gtk_version.atLeast`
+is *not* a comptime predicate (`gtk_version.zig:49-68`): it folds to `false` at
+comptime only when the build headers are older than the threshold, otherwise it
+delegates to `runtimeAtLeast`. This site is not in a comptime context, so on any
+build host with gtk >= 4.20 headers it is a **live runtime check** — and the L5
+dev/target host is **gtk 4.22.4**, so upstream ghostty genuinely executes this
+branch here. It is therefore *not* covered by AD-3's "comptime branches collapse"
+argument.
+
+**What blocks it.** AD-3 pins the compat floor at gtk >= 4.14, expressed as
+gtk4-rs's `features = ["v4_14"]`. gtk4-rs gates the required type behind a
+strictly higher feature: `InterfaceColorScheme` is `#[cfg(feature = "v4_20")]`
+(gtk4-0.11.4 `src/auto/enums.rs:5985`, re-export `src/auto/mod.rs:1262`). At
+`v4_14` the type does not exist, so the branch cannot be written at all — the
+ceiling, not the floor, is what bites. A pure runtime predicate (which is what
+T2 ports) cannot recover it; only raising the Cargo feature can.
+
+**Decision (ratified here rather than left silent).** Keep `v4_14`. The pin is a
+*compatibility floor* — what rustty is allowed to assume of a user's system —
+and bumping it to `v4_20`/`v4_22` to match this dev box would raise rustty's
+minimum system gtk to 4.20 and break the 4.14 baseline AD-3 exists to hold. The
+cost is bounded and cosmetic: user/custom CSS `@media (prefers-color-scheme: …)`
+blocks will not see the app-resolved scheme on gtk >= 4.20 runtimes. Everything
+else in the handler (the `adw.StyleManager` dark/light resolution and the theme
+application itself) is unaffected and IS ported. **Scope: exactly one branch;
+zero tests affected** (the reference has no test over this site).
+
+**Un-defer trigger (either, whichever comes first):** (1) the AD-3 floor is
+formally raised to gtk >= 4.20 — then set `gtk4 = { features = ["v4_20"] }` and
+port the branch behind the existing runtime `at_least(4, 20, 0)` predicate, which
+is the exact shape the reference already uses; or (2) gtk4-rs's optional-feature
+story allows naming `v4_20` types under a lower floor. Until then this row is the
+authority: an L5 verify that flags `application.zig:1565` as G3b "missing" must
+treat it as **EXPECTED**, per §Rule.
+
+**Related note for L5.0 T2 (not a deferral — a correctness warning):** the other
+three `gtk_version.atLeast` sites must NOT be deleted as "comptime branches".
+`window.zig:695` (`!gtk_version.atLeast(4, 16, 0)` gating the
+`window-theme-ghostty` CSS class) and `window.zig:1181` (`if (!gtk_version
+.atLeast(4, 10, 0)) return;`) are live runtime checks needing no post-4.14
+symbol, and port directly onto `gtk4::{major,minor,micro}_version()`. Only
+`application.zig:1261` is genuinely `comptime`-forced — and at a 4.14 baseline it
+collapses to the **legacy** arm (drop the `v4_16`-gated `CssSection::bytes()`
+arm), not the modern one.
+
 ## App-core over-claim CORRECTION — `main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` are DEFERRED (already tracked at C6)
 
 The gap-analysis app-core inventory marked `src/main_gen.zig`, `src/main_wasm.zig`,

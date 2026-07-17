@@ -93,14 +93,52 @@ objc2 = { version = "0.6" }
 # AD-3 BASELINE PIN — the `v4_14`/`v1_5` features ARE the "gtk >= 4.14 /
 # adw >= 1.5" baseline, expressed where Cargo can enforce it: they select the
 # 4.14/1.5 API surface and make gtk4-sys's build script REJECT an older system
-# lib. Consequence (the whole point of the pin): every *comptime* version branch
-# in the reference collapses to its modern arm, so we do not port them. The
-# *runtime* predicates (`gtk_version.runtimeAtLeast`/`runtimeUntil`) stay live
-# and are ported in L5.0 T2 against `gtk4::{major,minor,micro}_version()`.
-# Do NOT bump these to `v4_22`/`v1_9` to match this host: the baseline is a
+# lib. Do NOT bump these to `v4_22`/`v1_9` to match this host: the baseline is a
 # COMPATIBILITY floor (what rustty is allowed to assume), not the dev box's
-# version. Bumping would silently let newer API through the comptime gate and
-# break the runtime predicates' reason to exist.
+# version. See the DEFERRALS row cited at the bottom of this block for the one
+# behavior the floor costs us.
+#
+# WHAT THE PIN DOES AND DOES NOT KILL (read before porting a version branch in
+# L5.0 T2 — the naive reading of AD-3 deletes LIVE runtime behavior):
+#
+# `gtk_version.atLeast` is NOT a comptime predicate (`gtk_version.zig:49-68`,
+# mirrored in `adw_version.zig:47-65`). It is an `inline fn` that short-circuits
+# to `false` at comptime ONLY when the BUILD HEADERS are older than the
+# threshold; otherwise it is `if (@inComptime()) return true;` and then
+# `return runtimeAtLeast(major, minor, micro)`. So it folds at comptime only
+# where the CALL SITE is itself a comptime context — everywhere else it is a
+# live runtime check that MUST be ported, not deleted.
+#
+#   * COMPTIME-CONTEXT sites at/below the floor -> collapse to the MODERN arm.
+#     This is exactly the set AD-3 enumerates, and it is all `adw` (thresholds
+#     1.5/1.4/1.3, all <= the 1.5 floor): `dialog.zig:21` and
+#     `debug_warning.zig:14` (`pub const Parent = if (...)`),
+#     `surface_child_exited.zig:15`, `clipboard_confirmation_dialog.zig:17`
+#     (file-level `const can_remember`), `clipboard_confirmation_dialog.zig:301`
+#     and `debug_warning.zig:42` (inside a `comptime` expression). These are the
+#     branches we do not port, and they are why the blueprint manifest is 19.
+#   * COMPTIME-FORCED sites ABOVE the floor -> collapse to the LEGACY arm, NOT
+#     the modern one: `application.zig:1261` `if (comptime gtk_version.atLeast(
+#     4, 16, 0))` yields FALSE at a 4.14 baseline, so we port the plain
+#     `log.warn` arm and drop the `getBytes` arm. Cargo agrees independently:
+#     `CssSection::bytes()` is `#[cfg(feature = "v4_16")]` (gtk4-0.11.4
+#     `src/auto/css_section.rs:57`), so the modern arm cannot compile at `v4_14`.
+#   * RUNTIME-CONTEXT `atLeast` sites -> LIVE. Port them as runtime predicates:
+#     `window.zig:695` (`!gtk_version.atLeast(4, 16, 0)` gating the
+#     `window-theme-ghostty` CSS class) and `window.zig:1181`
+#     (`if (!gtk_version.atLeast(4, 10, 0)) return;`) need no post-4.14 symbol,
+#     so they port straight onto `gtk4::{major,minor,micro}_version()`.
+#     `window.zig:1799` (`adw_version.supportsDialogs()`) is likewise a runtime
+#     `if`, not a comptime one.
+#   * `application.zig:1565` (`if (gtk_version.atLeast(4, 20, 0))`) is a live
+#     runtime branch that ghostty DOES execute on this 4.22.4 host, and the
+#     `v4_14` pin makes it unportable (`gtk::InterfaceColorScheme` is
+#     `#[cfg(feature = "v4_20")]`). This is a KNOWN, RATIFIED COST of the floor,
+#     not an oversight — see `.port/phase-2/DEFERRALS.md`, section "L5 GTK
+#     baseline pin (AD-3) — `v4_14` API ceiling costs `prefers-color-scheme`".
+#
+# The `runtimeAtLeast`/`runtimeUntil` predicates (`gtk_version.zig:75,90`) are
+# unconditionally live and are ported in L5.0 T2.
 [target.'cfg(target_os = "linux")'.dependencies]
 # glib 0.22 — `glib::Object`/`WeakRef`/`Variant`/`MainContext` + the
 # `#[glib::object_subclass]`/`#[derive(glib::Properties)]` macro triad that

@@ -45,9 +45,28 @@
 //!
 //! PORT NOTE (AD-3): the crate compiles against the PINNED gtk >= 4.14 /
 //! adw >= 1.5 API baseline (the `gtk4/v4_14` + `libadwaita/v1_5` Cargo features,
-//! `Cargo.toml`). The reference's *comptime* version branches collapse to their
-//! modern arm; its *runtime* predicates (`gtk_version.runtimeAtLeast/
-//! runtimeUntil`) stay live and are ported in L5.0 T2.
+//! `Cargo.toml`, where the full rationale lives).
+//!
+//! Do NOT read AD-3 as "the version branches are comptime, so delete them" —
+//! that deletes live behavior. `gtk_version.atLeast` is NOT a comptime
+//! predicate (`gtk_version.zig:49-68`; same shape in `adw_version.zig:47-65`):
+//! it is an `inline fn` that folds to `false` at comptime ONLY when the build
+//! headers are older than the threshold, and otherwise falls through to
+//! `runtimeAtLeast`. It therefore folds only at comptime CALL SITES. Concretely,
+//! for L5.0 T2:
+//!
+//! * Collapse to the MODERN arm: the comptime-context sites at/below the floor —
+//!   the `adw` set AD-3 enumerates (`dialog.zig:21`, `debug_warning.zig:14,42`,
+//!   `clipboard_confirmation_dialog.zig:17,301`, `surface_child_exited.zig:15`).
+//! * Collapse to the LEGACY arm: comptime-forced sites ABOVE the floor —
+//!   `application.zig:1261` (`comptime gtk_version.atLeast(4, 16, 0)`), which is
+//!   false at a 4.14 baseline. (`CssSection::bytes()` is `v4_16`-gated in
+//!   gtk4-rs, so the modern arm could not compile here regardless.)
+//! * Stay LIVE, port as runtime predicates: `window.zig:695` (the
+//!   `window-theme-ghostty` CSS-class gate), `window.zig:1181`,
+//!   `window.zig:1799`, and every `runtimeAtLeast`/`runtimeUntil` site.
+//! * DEFERRED (cost of the floor, ratified): `application.zig:1565`'s
+//!   `prefers-color-scheme` propagation — see `.port/phase-2/DEFERRALS.md`.
 
 #[cfg(test)]
 mod tests {
