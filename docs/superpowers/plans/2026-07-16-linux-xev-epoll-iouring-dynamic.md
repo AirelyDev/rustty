@@ -153,14 +153,16 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 
 ---
 
-### Task 6: io_uring timers, socket ops + watcher arms
+### Task 6: io_uring timers, socket ops + watchers (all INSIDE `io_uring.rs`)
+
+**Scope (per STRUCTURE CORRECTION):** everything lands in the self-contained `io_uring.rs` — do NOT modify the macOS-gated `async.rs`/`timer.rs`/`process.rs`/`stream.rs`. Mirror how `epoll.rs` (Tasks 3–4) carries its own watcher surfaces. Reuse the io_uring ABI structs HAND-DECLARED in `io_uring.rs` by Task 5 (libc does NOT provide `io_uring_params`/`sqe`/`cqe`/`IORING_*`), the `linux::{timerfd,eventfd}` primitives, `linux::net::Address` (added in T4), and the `linux::` twinned ABI enums.
 
 **Files:**
-- Modify: `crates/rustty-xev/src/io_uring.rs` (timer + socket `perform` arms), `async.rs`/`timer.rs`/`process.rs`/`stream.rs` (io_uring arms)
+- Modify: `crates/rustty-xev/src/io_uring.rs` (timer + socket + proc + stream `Operation`/`start`/`perform` arms; the `Async`/`Timer`/`Process`/`Stream`/`WriteQueue`/`WriteRequest` watcher surfaces). Re-measure the `size_of::<Completion>()` tripwire after adding fields.
 
 **Interfaces:**
-- Consumes: `io_uring::Loop`/`IoUring` (Task 5).
-- Produces: io_uring `Async` (eventfd via `IORING_OP_POLL_ADD`/read), `Timer` (`IORING_OP_TIMEOUT`), `Process`, `Stream`/`WriteQueue` arms.
+- Consumes: `io_uring::Loop`/`IoUring` (Task 5), `queue.rs`, `linux::{timerfd, eventfd, net}`.
+- Produces (all in `io_uring.rs`): io_uring `Async` (eventfd), `Timer` (`IORING_OP_TIMEOUT`/`TIMEOUT_REMOVE`), `Process`, `Stream`/`WriteQueue`/`WriteRequest` — the same surface `epoll.rs` exposes, so Task 7's `Dynamic` can union the two.
 
 - [ ] **Step 1: Write the failing tests** — port the remaining io_uring tests: `io_uring: timerfd` (:1173), `io_uring: timer` (:1226), `io_uring: timer reset` (:1272), `io_uring: timer remove` (:1357), `io_uring: socket accept/connect/send/recv/close` (:1401), `io_uring: sendmsg/recvmsg` (:1626), `io_uring: socket read cancellation` (:1725) as `#[test] fn io_uring_<snake>()`; add live KATs `io_uring_process_spawn_exit` + `io_uring_pty_write_roundtrip`.
 - [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-xev --target aarch64-unknown-linux-gnu io_uring_` → FAIL.
