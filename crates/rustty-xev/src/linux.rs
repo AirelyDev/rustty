@@ -25,6 +25,7 @@
 #![allow(dead_code)]
 
 pub mod eventfd;
+pub mod net;
 pub mod timerfd;
 
 /// TWIN of `loop.rs`'s `Options` (byte-faithful: same fields/derives/hand-
