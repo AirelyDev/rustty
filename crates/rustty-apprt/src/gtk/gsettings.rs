@@ -139,6 +139,31 @@ pub fn get_bool(key: Key) -> Option<bool> {
     Some(settings.property::<bool>(key.name()))
 }
 
+/// PORTS: `gsettings.zig:42-48,66-67` `get`/`getImpl` specialized to the
+/// `c_int` (non-allocating) keys the tier consumes — `Surface.getContentScale`
+/// reads `gtk-xft-dpi` (`surface.zig:1553`). Reads `gtk.Settings.getDefault()`
+/// (`:46`) and returns the value straight out of the `GValue` (`:66-67`
+/// `c_int => value.getInt()`). Returns `None` when no default `Settings` is
+/// available (`:46` `orelse return null`).
+#[must_use]
+pub fn get_c_int(key: Key) -> Option<i32> {
+    use glib::prelude::ObjectExt as _;
+
+    debug_assert!(
+        !key.requires_allocation(),
+        "get_c_int is a non-allocating reader; {} requires allocation",
+        key.name()
+    );
+    debug_assert!(
+        matches!(key.value_type(), KeyType::CInt),
+        "get_c_int reads a c_int key; {} is not c_int",
+        key.name()
+    );
+
+    let settings = gtk4::Settings::default()?;
+    Some(settings.property::<i32>(key.name()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

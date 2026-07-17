@@ -1,22 +1,34 @@
 //! rustty-apprt::gtk::surface
 //!
 //! PORTS: ghostty `src/apprt/gtk/Surface.zig` (the per-surface apprt backend —
-//! a `GtkWidget` subclass wrapping a libghostty-core `Surface`). **This file is
-//! an INHABITED placeholder skeleton (L5.1 T11).** Task 11 needs a concrete type
-//! to satisfy `gtk::App`'s `type Surface: apprt_api::Surface<App = App>`
-//! associated-type bound (`App.zig:14` `const Surface = @import("Surface.zig")`),
-//! so the type exists NOW with its seam methods as placeholder-leaves; **L5.1
-//! T18 ports the real `Surface.zig`** (the `GtkWidget` subclass, the core-surface
-//! embedding, the event/clipboard/render wiring) into this file.
+//! a thin backref wrapper around the `GhosttySurface` GObject widget, 105 loc).
 //!
-//! Per the placeholder-leaf doctrine, every method that reaches a Task-18
-//! dependency is present (so the seam's call-graph shape exists and the crate
-//! compiles standalone) but `unimplemented!()`s or returns a safe default until
-//! that task fills it. No `Surface` is constructed anywhere in this tier yet, so
-//! none of these bodies is reachable at runtime.
+//! # Scope (L5.2 T17, co-landed with the T15 GLArea lifecycle)
+//!
+//! This is the **apprt `Surface` shim**: `impl `[`rustty_apprt_api::Surface`] for
+//! the GTK backend. Every method forwards to the owning [`class::Surface`]
+//! (`Surface.zig`'s `self.surface.<method>()`). The struct is a BACKREF —
+//! `Surface.zig:12` `surface: *Surface` — embedded in the widget's private data
+//! (`class::surface::imp::Surface::rt_surface`, `surface.zig:639`), which is
+//! heap-pinned by the GObject instance, so a raw unowned pointer back to the
+//! widget is exactly the reference's model (no ref, no cycle).
+//!
+//! # The self-referential pin (memory `mirihar-surface-pin`)
+//!
+//! [`class::surface::initSurface`] hands `&priv.rt_surface` (a `*mut
+//! gtk::Surface`) to `rustty_core::Surface::init`, which stores it and hands it
+//! to the renderer/io threads. That pointer MUST stay stable for the surface's
+//! life — it does, because `rt_surface` lives inside the GObject private, and
+//! **the GObject instance IS the pin**: GObject heap-allocates the private and
+//! never moves it. The backref [`Surface::surface`] is likewise stable; it is
+//! set exactly once in `constructed` (`surface.zig:1793` `priv.rt_surface = .{
+//! .surface = self }`) and never rewritten.
 
 use std::collections::HashMap;
 use std::ffi::CStr;
+
+use glib::prelude::*;
+use gtk4::subclass::prelude::*;
 
 use rustty_apprt_api::{
     ApprtError, Clipboard, ClipboardContent, ClipboardRequest, ContentScale, CursorPos,
@@ -24,20 +36,54 @@ use rustty_apprt_api::{
 };
 
 use super::app::App;
+use super::class::application::Application;
+use super::class::surface::Surface as GhosttySurface;
 
 /// PORTS: `Surface.zig` `pub const Surface` — the GTK per-surface apprt backend.
 ///
-/// **Placeholder skeleton (L5.1 T11 → filled by T18).** The real type is a
-/// `GtkWidget` subclass embedding a `rustty_core::surface::Surface<App>`; the
-/// skeleton is field-less because Task 11 only requires the type to *exist* and
-/// satisfy the [`ApprtSurface`] seam so [`App`]'s associated `Surface` resolves.
-#[derive(Debug, Default)]
+/// Holds an unowned backref to the [`class::Surface`] GObject that embeds it
+/// (`Surface.zig:12` `surface: *Surface`). Stored as the raw `GObject` pointer;
+/// [`Surface::gobj`] reconstitutes the typed widget for each forward. `Default`
+/// yields a null backref (set in the widget's `constructed`).
+#[derive(Debug)]
 pub struct Surface {
-    // PORT NOTE (T18): the real fields — the embedded `core_surface`, the
-    // `GtkWidget`/`GLArea` handles, the IME/clipboard state — land with the
-    // `Surface.zig` port. The skeleton carries none so it constructs trivially
-    // (it never is, in this tier) and so T18 defines the storage from scratch.
-    _private: (),
+    /// PORTS: `Surface.zig:12` `surface: *Surface`. The owning `GhosttySurface`
+    /// GObject, as a raw unowned `*mut GObject`. Null until the widget's
+    /// `constructed` wires it (`surface.zig:1793`); never rewritten after.
+    surface: std::cell::Cell<*mut glib::gobject_ffi::GObject>,
+}
+
+impl Default for Surface {
+    fn default() -> Self {
+        Self {
+            surface: std::cell::Cell::new(std::ptr::null_mut()),
+        }
+    }
+}
+
+impl Surface {
+    /// Wire the backref to the owning widget. Called once from the widget's
+    /// `constructed` (`surface.zig:1793` `priv.rt_surface = .{ .surface = self }`).
+    pub(crate) fn set_widget(&self, widget: &GhosttySurface) {
+        self.surface
+            .set(widget.upcast_ref::<glib::Object>().as_ptr());
+    }
+
+    /// Reconstitute the owning [`class::Surface`] from the backref, or `None`
+    /// before `constructed` wires it. Returns a temporary strong ref (dropped at
+    /// the caller's scope end); the widget is owned by the GObject tree so this
+    /// is never the last ref.
+    fn gobj(&self) -> Option<GhosttySurface> {
+        let ptr = self.surface.get();
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: `ptr` is a live `GhosttySurface` GObject set by `set_widget`
+        // from `constructed`; the widget outlives every apprt-surface forward
+        // (it embeds this `Surface`). `from_glib_none` adds a temporary ref.
+        let obj: glib::Object = unsafe { glib::translate::from_glib_none(ptr) };
+        obj.downcast::<GhosttySurface>().ok()
+    }
 }
 
 impl ApprtSurface for Surface {
@@ -47,91 +93,118 @@ impl ApprtSurface for Surface {
 
     // PORTS: the embedded core surface. rustty-core constrains this to
     // `core::Surface<App>` at its impl blocks (`seam.rs` `Surface::Core` note),
-    // so the GTK backend's core is `rustty_core::surface::Surface<App>` — the
-    // faithful analogue of `Surface.core_surface: CoreSurface`.
+    // so the GTK backend's core is `rustty_core::surface::Surface<App>`.
     type Core = rustty_core::surface::Surface<App>;
 
     fn core(&self) -> *mut Self::Core {
-        // PORT NOTE (placeholder-leaf, T18): `pub fn core(self: *Surface)
-        // *CoreSurface` returns `&self.core_surface`. No core surface exists in
-        // the skeleton; T18 embeds it and returns its address.
-        unimplemented!("gtk::Surface::core lands with the Surface.zig port (L5.1 T18)")
+        // PORTS: `Surface.zig:24-28`. "This asserts the non-optional because
+        // libghostty should only be calling this for initialized surfaces."
+        self.gobj()
+            .and_then(|s| s.core())
+            .expect("gtk::Surface::core called on an uninitialized surface")
     }
 
     fn rt_app(&self) -> *mut Self::App {
-        // PORT NOTE (placeholder-leaf, T18): `pub fn rtApp(...) *App` returns the
-        // owning apprt `App` backref.
-        unimplemented!("gtk::Surface::rt_app lands with the Surface.zig port (L5.1 T18)")
+        // PORTS: `Surface.zig:30-33` `return Application.default().rt()`. The
+        // apprt `App` (`= gtk::App`) is stored type-erased in the singleton's
+        // `rt_app` cell (installed by the run loop); reconstitute it here.
+        let app = Application::default();
+        match app.imp().rt_app.get() {
+            Some(p) => p.as_ptr().cast::<App>(),
+            None => std::ptr::null_mut(),
+        }
     }
 
     fn close(&self, _process_alive: bool) {
-        // PORT NOTE (placeholder-leaf, T18): `pub fn close(...)` requests the
-        // window/tab close (confirming when a process is alive).
-        unimplemented!("gtk::Surface::close lands with the Surface.zig port (L5.1 T18)")
+        // PORTS: `Surface.zig:35-38`. The reference DISCARDS `process_active`
+        // (`_ = process_active;`) and emits the widget's close-request signal.
+        if let Some(s) = self.gobj() {
+            s.close();
+        }
     }
 
     fn deinit(&mut self) {
-        // PORT NOTE (placeholder-leaf, T18): tears down the core surface + GTK
-        // widgets. No-op while the skeleton owns nothing.
+        // PORTS: `Surface.zig:14-16` — a no-op. The GObject finalize
+        // (`class::surface`'s `Drop`, Task 14) does the real teardown.
     }
 
     fn get_content_scale(&self) -> Result<ContentScale, ApprtError> {
-        unimplemented!("gtk::Surface::get_content_scale lands with the Surface.zig port (L5.1 T18)")
+        // PORTS: `Surface.zig:48-50`.
+        self.gobj().map(|s| s.get_content_scale()).ok_or(ApprtError)
     }
 
     fn get_size(&self) -> Result<SurfaceSize, ApprtError> {
-        unimplemented!("gtk::Surface::get_size lands with the Surface.zig port (L5.1 T18)")
+        // PORTS: `Surface.zig:52-54`.
+        self.gobj().map(|s| s.get_size()).ok_or(ApprtError)
     }
 
     fn get_title(&self) -> Option<&CStr> {
-        // PORT NOTE (placeholder-leaf, T18): returns the stored surface title.
+        // PORTS: `Surface.zig:44-46` `return self.surface.getTitle()`.
+        //
+        // PORT NOTE (deferred): the widget stores its title in a GObject string
+        // property (`RefCell<Option<String>>`); handing out a `&CStr` borrow tied
+        // to `&self` would require pinning that storage as a NUL-terminated buffer
+        // owned by this backref. The title is cosmetic (not on the first-light
+        // render/pty path), so this returns `None` until the title-storage refit;
+        // the widget's `title` property remains authoritative for GTK consumers.
         None
     }
 
     fn supports_clipboard(&self, _clipboard_type: Clipboard) -> bool {
-        unimplemented!(
-            "gtk::Surface::supports_clipboard lands with the Surface.zig port (L5.1 T18)"
-        )
+        // PORTS: `Surface.zig:60-71` — `true` for all three variants
+        // (`.standard`, `.selection`, `.primary`).
+        true
     }
 
     fn clipboard_request(
         &self,
-        _clipboard_type: Clipboard,
-        _state: ClipboardRequest,
+        clipboard_type: Clipboard,
+        state: ClipboardRequest,
     ) -> Result<bool, ApprtError> {
-        unimplemented!("gtk::Surface::clipboard_request lands with the Surface.zig port (L5.1 T18)")
+        // PORTS: `Surface.zig:73-82`.
+        match self.gobj() {
+            Some(s) => s.clipboard_request(clipboard_type, state),
+            None => Err(ApprtError),
+        }
     }
 
     fn set_clipboard(
         &self,
-        _clipboard_type: Clipboard,
-        _contents: &[ClipboardContent<'_>],
-        _confirm: bool,
+        clipboard_type: Clipboard,
+        contents: &[ClipboardContent<'_>],
+        confirm: bool,
     ) -> Result<(), ApprtError> {
-        unimplemented!("gtk::Surface::set_clipboard lands with the Surface.zig port (L5.1 T18)")
+        // PORTS: `Surface.zig:84-95`.
+        match self.gobj() {
+            Some(s) => {
+                s.set_clipboard(clipboard_type, contents, confirm);
+                Ok(())
+            }
+            None => Err(ApprtError),
+        }
     }
 
     fn get_cursor_pos(&self) -> Result<CursorPos, ApprtError> {
-        unimplemented!("gtk::Surface::get_cursor_pos lands with the Surface.zig port (L5.1 T18)")
+        // PORTS: `Surface.zig:56-58`.
+        self.gobj().map(|s| s.get_cursor_pos()).ok_or(ApprtError)
     }
 
     fn default_termio_env(&self) -> Result<HashMap<String, String>, ApprtError> {
-        unimplemented!(
-            "gtk::Surface::default_termio_env lands with the Surface.zig port (L5.1 T18)"
-        )
+        // PORTS: `Surface.zig:97-99`.
+        self.gobj()
+            .map(|s| s.default_termio_env())
+            .ok_or(ApprtError)
     }
 }
 
 impl Surface {
-    /// PORTS: `Surface.zig` `redrawInspector` — requests a redraw of this
+    /// PORTS: `Surface.zig:102-104` `redrawInspector` — requests a redraw of this
     /// surface's terminal inspector overlay.
     ///
-    /// **Placeholder-leaf (T18 / the inspector tier).** Reached only through
-    /// [`App::redraw_inspector`](super::app::App::redraw_inspector), which is
-    /// itself dormant until a surface is created (no surface exists in this
-    /// tier). The body drops in with the inspector-rendering work.
+    /// **Placeholder-leaf (the inspector tier).** Reached only through
+    /// [`App::redraw_inspector`](super::app::App::redraw_inspector), dormant
+    /// until the inspector work lands.
     pub fn redraw_inspector(&self) {
-        // PORT NOTE (placeholder-leaf): `surface.redrawInspector()` queues the
-        // inspector render. No inspector/render surface exists yet (T18+).
+        // PORT NOTE (placeholder-leaf): `self.surface.redrawInspector()`.
     }
 }

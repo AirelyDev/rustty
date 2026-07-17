@@ -1233,6 +1233,19 @@ impl Application {
         self.property("config")
     }
 
+    /// PORTS: `application.zig` `savedLanguage` — the `LANG` value captured at
+    /// startup, applied to child-process environments by
+    /// [`crate::gtk::class::surface`]'s `defaultTermioEnv` (`surface.zig:1598`).
+    ///
+    /// **Placeholder-leaf (language-override tier):** the startup `LANG`
+    /// capture/override lands with that work; until then this reports `None`, so
+    /// `defaultTermioEnv` removes `LANG` (the reference's `else` branch) rather
+    /// than pinning a stale one.
+    #[must_use]
+    pub fn saved_language(&self) -> Option<String> {
+        None
+    }
+
     /// Test-only: build **and register** a default `GhosttyApplication` so widget
     /// tests in other class modules (e.g. `class::surface`) can reach
     /// [`Application::default`] for `init`'s config / allocator fallback. Mirrors

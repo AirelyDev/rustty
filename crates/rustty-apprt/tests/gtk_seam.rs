@@ -26,3 +26,23 @@ fn gtk_app_satisfies_seam_with_must_draw_const() {
     const _: () =
         assert!(!<rustty_apprt::embedded::App as rustty_apprt_api::App>::MUST_DRAW_FROM_APP_THREAD);
 }
+
+/// Compile-time KAT for the GTK apprt **`Surface`** seam (L5.2 T17): the GTK
+/// `Surface` shim must satisfy [`rustty_apprt_api::Surface`], and the two halves
+/// of the seam must refer to each other (`seam.rs:73,128` — `App::Surface = S`
+/// and `S::App = App`), exactly as the reference runtime types do
+/// (`App.zig:14` / `Surface.zig:7-9`). Pure compile-and-const-assert; no display.
+#[allow(dead_code)]
+fn _assert_surface_seam() {
+    fn needs_surface<S: rustty_apprt_api::Surface>() {}
+    needs_surface::<rustty_apprt::gtk::Surface>();
+
+    // The two halves of the seam refer to each other (`seam.rs:73,128`).
+    fn needs_pair<A, S>()
+    where
+        A: rustty_apprt_api::App<Surface = S>,
+        S: rustty_apprt_api::Surface<App = A>,
+    {
+    }
+    needs_pair::<rustty_apprt::gtk::App, rustty_apprt::gtk::Surface>();
+}

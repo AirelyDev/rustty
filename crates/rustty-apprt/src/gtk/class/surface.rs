@@ -54,8 +54,12 @@ use gtk4::CompositeTemplate;
 use libadwaita::prelude::BinExt;
 use libadwaita::subclass::prelude::*;
 
-use rustty_apprt_api::{CursorPos, NewSurfaceContext, SurfaceSize};
+use rustty_apprt_api::{
+    ApprtError, Clipboard, ClipboardContent, ClipboardRequest, ContentScale, CursorPos,
+    NewSurfaceContext, SurfaceSize,
+};
 use rustty_config::command::Command;
+use rustty_config::value_types::WorkingDirectory;
 use rustty_font_shaper::face::DesiredSize;
 use rustty_vt::mouse::Shape as MouseShape;
 
@@ -559,6 +563,13 @@ mod imp {
             self.parent_constructed();
             let obj = self.obj();
 
+            // `priv.rt_surface = .{ .surface = self }` (`surface.zig:1793`). Wire
+            // the embedded apprt `Surface`'s unowned backref to this widget. The
+            // GObject private is heap-pinned, so `&priv.rt_surface` (handed to
+            // core in `initSurface`) and this backref both stay stable for life
+            // (memory `mirihar-surface-pin`). Set exactly once, never rewritten.
+            self.rt_surface.set_widget(&obj);
+
             // `self.initActionMap()` (`surface.zig:1788`). **Invariant 10**.
             obj.init_action_map();
 
@@ -851,6 +862,39 @@ fn delete_surface_from_app(rt: *mut ApprtSurface) {
     unsafe { (*core_app).deleteSurface(rt) };
 }
 
+/// PORTS: `surface.zig:3406-3409` `InitError = Allocator.Error ||
+/// error{GLAreaError, SurfaceError}`. The only consumer ([`Surface::gl_resize`])
+/// logs and discards it (`:3401-3403`), so the variants carry no payload.
+enum InitError {
+    /// `error.GLAreaError` — `makeCurrent` reported a GL error (`:3423`).
+    GlArea,
+    /// `error.SurfaceError` — `CoreSurface.init` failed, or (rustty) the core
+    /// app / rt app is not bound so no surface can be constructed.
+    Surface,
+}
+
+/// The concrete core app backing [`Application::default`], reconstituted from the
+/// singleton's type-erased `core_app` cell (`app.core()`, `surface.zig:3434`).
+/// `None` when the core app is unbound (e.g. widget tests) — the callers then
+/// bail rather than construct a surface without a live app.
+fn app_core_ptr() -> Option<*mut rustty_core::app::App<App>> {
+    Application::default()
+        .imp()
+        .core_app
+        .get()
+        .map(|p| p.as_ptr().cast::<rustty_core::app::App<App>>())
+}
+
+/// The concrete apprt `App` backing [`Application::default`], reconstituted from
+/// the singleton's type-erased `rt_app` cell (`app.rt()`, `surface.zig:3469`).
+fn app_rt_ptr() -> Option<*mut App> {
+    Application::default()
+        .imp()
+        .rt_app
+        .get()
+        .map(|p| p.as_ptr().cast::<App>())
+}
+
 glib::wrapper! {
     /// PORTS: `surface.zig:42-...` `pub const Surface` (`GhosttySurface`). The GTK
     /// per-surface widget: an `adw::Bin` wrapping the terminal `GLArea` and the
@@ -974,6 +1018,372 @@ impl Surface {
     }
 }
 
+// ===========================================================================
+// Libghostty callbacks + GLArea lifecycle (L5.2 T15/T17)
+//
+// The apprt seam (`gtk::surface::Surface`) forwards to these; the GLArea
+// signal handlers (the `gl_*` template callbacks) drive them. Ported from
+// `surface.zig` — the "Libghostty Callbacks" region (`:1497-...`) and the
+// GLArea lifecycle (`:3228-3489`).
+// ===========================================================================
+
+impl Surface {
+    // PORTS: `surface.zig:2225-2229` `setError`. The `glib::Properties`-generated
+    // `set_error(bool)` setter for the `error` property already does the reference's
+    // `priv.@"error" = v; notifyByPspec(...)` (set the cell + notify on change), so
+    // callers use it directly (e.g. `Surface::gl_realize`'s GL-error branch).
+
+    /// PORTS: `surface.zig:1500-1507` `close`. Emits `close-request`; the window
+    /// tier decides what to do. The apprt seam's `close(process_alive)` discards
+    /// `process_alive` and calls this (`Surface.zig:35-38`).
+    pub fn close(&self) {
+        self.emit_by_name::<()>("close-request", &[]);
+    }
+
+    /// PORTS: `surface.zig:1532-1576` `getContentScale`. The GTK widget scale
+    /// factor multiplied by the `gtk-xft-dpi` font-DPI scale.
+    #[must_use]
+    pub fn get_content_scale(&self) -> ContentScale {
+        let imp = self.imp();
+
+        // The GTK widget scale factor (`:1536-1546`).
+        let scale = imp.gl_area.scale_factor();
+        let gtk_scale: f32 = if scale <= 0 {
+            eprintln!(
+                "warn(gtk): gtk_widget_get_scale_factor returned a non-positive number: {scale}"
+            );
+            1.0
+        } else {
+            scale as f32
+        };
+
+        // The gtk-xft-dpi font-DPI scale (`:1548-1572`). gtk-xft-dpi is the font
+        // DPI × 1024; divide by 1024 then by the 96 default to derive a scale.
+        let xft_dpi_scale: f32 = match gsettings::get_c_int(gsettings::Key::GtkXftDpi) {
+            None => {
+                eprintln!("warn(gtk): gtk-xft-dpi was not set, using default value");
+                1.0
+            }
+            Some(dpi) if dpi <= 0 => {
+                eprintln!("warn(gtk): gtk-xft-dpi has invalid value ({dpi}), using default");
+                1.0
+            }
+            Some(dpi) => (dpi as f32 / 1024.0) / 96.0,
+        };
+
+        let scale = gtk_scale * xft_dpi_scale;
+        ContentScale { x: scale, y: scale }
+    }
+
+    /// PORTS: `surface.zig:1578-1586` `getSize`. Returns the CACHED size, not a
+    /// live `gtk_widget_get_width` — this is VERY important because it avoids the
+    /// pty having an incorrect initial size. We cache it in [`Surface::gl_resize`]
+    /// and only build the core surface once we are in a widget tree with proper
+    /// dimensions (**invariant 3**).
+    #[must_use]
+    pub fn get_size(&self) -> SurfaceSize {
+        self.imp().size.get()
+    }
+
+    /// PORTS: `surface.zig:1588-1590` `getCursorPos`.
+    #[must_use]
+    pub fn get_cursor_pos(&self) -> CursorPos {
+        self.imp().cursor_pos.get()
+    }
+
+    /// PORTS: `surface.zig:1994-1996` `getTitle`. The stored surface title (the
+    /// terminal-set title, before the user override).
+    #[must_use]
+    pub fn get_title(&self) -> Option<String> {
+        self.imp().title.borrow().clone()
+    }
+
+    /// PORTS: `Surface.zig:40-42` `cgroup` → `self.surface.cgroupPath()`.
+    ///
+    /// **Placeholder-leaf (L6, invariant 8):** the systemd cgroup single-instance
+    /// work owns this; kept inhabited returning `None`.
+    #[must_use]
+    pub fn cgroup_path(&self) -> Option<String> {
+        None
+    }
+
+    /// PORTS: `surface.zig:1714-1724` `clipboardRequest`.
+    ///
+    /// **Placeholder-leaf (clipboard tier):** the GTK `Clipboard` module
+    /// (`Clipboard.request`) is unported, so no read request is started yet
+    /// (returns `false`, the "did not start" result, which is safe).
+    pub fn clipboard_request(
+        &self,
+        _clipboard_type: Clipboard,
+        _state: ClipboardRequest,
+    ) -> Result<bool, ApprtError> {
+        Ok(false)
+    }
+
+    /// PORTS: `surface.zig:1726-1738` `setClipboard`.
+    ///
+    /// **Placeholder-leaf (clipboard tier):** `Clipboard.set` is unported.
+    pub fn set_clipboard(
+        &self,
+        _clipboard_type: Clipboard,
+        _contents: &[ClipboardContent<'_>],
+        _confirm: bool,
+    ) {
+    }
+
+    /// PORTS: `surface.zig:1592-1641` `defaultTermioEnv`. The default environment
+    /// for the surface's termio subprocess: the inherited process env with the
+    /// language override applied and the GTK / desktop-activation vars stripped so
+    /// they don't leak to the child.
+    ///
+    /// PORT NOTE (deferred): the snap-path filtering (`:1621-1626`, comptime
+    /// `build_config.snap` — false in this build) and the `Window` winproto
+    /// `addSubprocessEnv` hook (`:1632-1638`, the `Window` class is unported) land
+    /// with their respective tiers; the load-bearing env is complete here.
+    #[must_use]
+    pub fn default_termio_env(&self) -> std::collections::HashMap<String, String> {
+        let app = Application::default();
+        let mut env = rustty_os::env::getEnvMap();
+
+        // Language override (`:1598-1602`).
+        match app.saved_language() {
+            Some(language) => {
+                env.insert("LANG".to_string(), language);
+            }
+            None => {
+                env.remove("LANG");
+            }
+        }
+
+        // Don't leak GTK debug / desktop-activation vars to children
+        // (`:1604-1617`).
+        for key in [
+            "GDK_DEBUG",
+            "GDK_DISABLE",
+            "GSK_RENDERER",
+            "GIO_LAUNCHED_DESKTOP_FILE",
+            "GIO_LAUNCHED_DESKTOP_FILE_PID",
+            "DBUS_STARTER_ADDRESS",
+            "DBUS_STARTER_BUS_TYPE",
+            "INVOCATION_ID",
+            "JOURNAL_STREAM",
+            "NOTIFY_SOCKET",
+        ] {
+            env.remove(key);
+        }
+
+        env
+    }
+
+    /// PORTS: `surface.zig:2754-2766` `updateFocus`. Records focus, drives the IME
+    /// focus, schedules the (idle) core focus callback, notifies, and stops the
+    /// bell on focus gain.
+    fn update_focus(&self, focused: bool) {
+        let imp = self.imp();
+        imp.focused.set(focused);
+
+        // `if (focused) ctx.focusIn() else ctx.focusOut()` (`:2758-2759`).
+        if focused {
+            imp.im_context.focus_in();
+        } else {
+            imp.im_context.focus_out();
+        }
+
+        // The focus callback runs on an idle source because libghostty callbacks
+        // can trigger focus loss and deadlock if the lock is held during the
+        // callback (`:2761,2768-2783`). The reference `ref`s the widget and
+        // `unref`s in the callback; capturing an owned strong ref here is the same
+        // (dropped at the closure's end).
+        let obj = self.clone();
+        glib::idle_add_local_once(move || {
+            let Some(core) = obj.core() else {
+                return;
+            };
+            // SAFETY: `core` points at this widget's boxed, initialized core
+            // surface (pinned in the imp); the idle source runs on the app thread.
+            if unsafe { &mut *core }
+                .focusCallback(obj.imp().focused.get())
+                .is_err()
+            {
+                eprintln!("warn(gtk): error in focus callback");
+            }
+        });
+
+        self.notify("focused");
+
+        // Bell stops ringing as soon as we gain focus (`:2764-2765`). The
+        // reference's `setBellRinging(false)` reduces here to the generated
+        // property setter (set + notify-on-change); the extra `ringBell` /
+        // freeze-notify semantics only matter for `setBellRinging(true)`, which
+        // this tier never calls — they land with the bell task (T16).
+        if focused {
+            self.set_bell_ringing(false);
+        }
+    }
+
+    /// PORTS: `surface.zig:3315-3319` `updateMapped`.
+    fn update_mapped(&self, mapped: bool) {
+        self.imp().mapped.set(mapped);
+        self.notify("mapped");
+    }
+
+    /// PORTS: `surface.zig:3321-3326` `updateOcclusion`.
+    fn update_occlusion(&self, visible: bool) {
+        let Some(core) = self.core() else {
+            return;
+        };
+        // SAFETY: `core` is the widget's boxed, initialized core surface; called
+        // on the app thread from map/unmap.
+        if unsafe { &mut *core }.occlusionCallback(visible).is_err() {
+            eprintln!("warn(gtk): error in occlusion callback");
+        }
+    }
+
+    /// PORTS: `surface.zig:3491-3520` `resizeOverlaySchedule`.
+    ///
+    /// **Placeholder-leaf (resize-overlay task, T16):** reached only with a live
+    /// core surface (post-init). The `ResizeOverlay.setLabel`/`schedule` methods
+    /// land with that task; until then this only honors the early-return guards.
+    fn resize_overlay_schedule(&self) {
+        // `const surface = priv.core_surface orelse return` (`:3493`).
+        if self.imp().core_surface.borrow().is_some() {
+            // PORT NOTE (placeholder-leaf, T16): only with a live core surface —
+            // format the grid size into the overlay label and schedule an idle
+            // show (`:3495-3519`).
+        }
+    }
+
+    /// PORTS: `surface.zig:3411-3489` `initSurface`. The lazy core-surface
+    /// constructor — built on the FIRST GLArea resize (**invariant 3**), NOT on
+    /// realize, so we have proper initial dimensions before constructing the pty.
+    ///
+    /// NOTE(mitchellh) (`surface.zig:642-649`): initializing lazily on first
+    /// resize is a known limitation to remove later; ported as-is — do NOT "fix".
+    fn init_surface(&self) -> Result<(), InitError> {
+        let imp = self.imp();
+        // `assert(priv.core_surface == null)` (`:3413`).
+        assert!(
+            imp.core_surface.borrow().is_none(),
+            "initSurface called with a core surface already present"
+        );
+
+        // Make the context current so we can call GL functions (`:3416-3424`).
+        imp.gl_area.make_current();
+        if let Some(err) = imp.gl_area.error() {
+            eprintln!("warn(gtk): failed to make GL context current: {err}");
+            eprintln!("warn(gtk): this error is usually due to a driver or gtk bug");
+            eprintln!("warn(gtk): common cause: https://gitlab.gnome.org/GNOME/gtk/-/issues/4950");
+            return Err(InitError::GlArea);
+        }
+
+        let app = Application::default();
+        let alloc = app.allocator();
+
+        // The core app / rt app backrefs (`app.core()` / `app.rt()`). In rustty
+        // these are reconstituted from the singleton's type-erased cells; when
+        // unbound (widget tests) we cannot construct a surface — bail (the lazy
+        // init simply doesn't complete, leaving `core_surface` None).
+        let Some(core_app) = app_core_ptr() else {
+            eprintln!("warn(gtk): core app not bound; cannot initialize surface");
+            return Err(InitError::Surface);
+        };
+        let Some(rt_app) = app_rt_ptr() else {
+            eprintln!("warn(gtk): rt app not bound; cannot initialize surface");
+            return Err(InitError::Surface);
+        };
+
+        // Our stable heap slot for the core surface (`alloc.create(CoreSurface)`,
+        // **invariant 2**, `:3430`). `Box`'s allocation is the pin the renderer/io
+        // threads' pointers rely on; on the error path the `MaybeUninit` box is
+        // dropped WITHOUT dropping a `CoreSurface` (the faithful `alloc.destroy`).
+        let mut slot = Box::<std::mem::MaybeUninit<CoreSurface>>::new_uninit();
+        // `MaybeUninit::as_mut_ptr` (via the cast) — `Box::as_mut_ptr` would yield
+        // `*mut MaybeUninit<_>`; the slot's payload address is layout-identical.
+        let surface_ptr: *mut CoreSurface = slot.as_mut_ptr().cast::<CoreSurface>();
+
+        // The `rt_surface` self-ref pointer handed to core (`&priv.rt_surface`,
+        // `:3470`). Stable because the GObject private is pinned.
+        let rt_surface: *mut ApprtSurface = self.rt().cast_mut();
+
+        // Add ourselves to the app's surface list (`:3434`); on any later failure
+        // we remove ourselves again (the `errdefer deleteSurface`, `:3435`).
+        // SAFETY: `core_app` is the live `App<App>` bound by `bind_core_app`.
+        unsafe { &mut *core_app }.addSurface(rt_surface);
+
+        // Initialize our surface configuration (`:3438-3442`), applying the
+        // caller overrides and font-size / pwd (`:3445-3462`).
+        let mut config = {
+            let cfg_ref = imp.config.borrow();
+            let core_cfg = cfg_ref
+                .as_ref()
+                .expect("surface config is set by init's app fallback")
+                .get();
+            // SAFETY: `core_app` is live; `new_config` reads the focused surface's
+            // pwd through the app's validated surface list.
+            rustty_core::app::new_config(unsafe { &*core_app }, core_cfg, imp.context.get())
+        };
+
+        // `if (priv.overrides.command) |c| config.command = c.clone(...)` (`:3445-3447`).
+        if let Some(cmd) = imp.overrides_command.borrow().as_ref() {
+            config.command = Some(cmd.clone());
+        }
+        // `if (priv.overrides.working_directory) |wd| ...` (`:3448-3453`).
+        if let Some(wd) = imp.overrides_working_directory.borrow().as_ref() {
+            let mut wd_val = WorkingDirectory::Path(wd.to_bytes().to_vec());
+            wd_val.finalize();
+            config.working_directory = Some(wd_val);
+        }
+        // `if (priv.font_size_request) |size| config.@"font-size" = size.points` (`:3456`).
+        if let Some(size) = imp.font_size_request.borrow().as_ref() {
+            config.font_size = size.0.points;
+        }
+        // `if (priv.pwd) |pwd| config.@"working-directory" = ...` (`:3457-3462`).
+        if let Some(pwd) = imp.pwd.borrow().as_ref() {
+            let mut wd_val = WorkingDirectory::Path(pwd.clone().into_bytes());
+            wd_val.finalize();
+            config.working_directory = Some(wd_val);
+        }
+
+        // Initialize the surface (`:3465-3474`). `config`'s Drop is the reference's
+        // `defer config.deinit()`.
+        // SAFETY: `surface_ptr` is a stable, uninitialized `CoreSurface` slot;
+        // `core_app`/`rt_app`/`rt_surface` are live for the call; on `Err` the slot
+        // is (still) uninitialized and freed below without being dropped.
+        let init_res =
+            unsafe { CoreSurface::init(surface_ptr, alloc, &config, core_app, rt_app, rt_surface) };
+        drop(config);
+
+        if init_res.is_err() {
+            eprintln!("warn(gtk): failed to initialize surface");
+            // `errdefer app.core().deleteSurface(self.rt())` (`:3435`).
+            // SAFETY: `core_app` is live; `rt_surface` still points at our pinned
+            // embedded apprt surface.
+            unsafe { &mut *core_app }.deleteSurface(rt_surface);
+            // `slot` (still `MaybeUninit`) drops here, freeing the heap slot
+            // without running `CoreSurface`'s teardown (`alloc.destroy`).
+            return Err(InitError::Surface);
+        }
+
+        // Store it! (`:3477-3478`). Rebuild the `Box` over the SAME heap allocation
+        // (now initialized), so `surface_ptr` (held by core's renderer/io threads)
+        // stays valid — the pin.
+        // SAFETY: `init_res` is `Ok`, so the slot's payload is fully initialized;
+        // the raw pointer came from `Box::into_raw` and is reconstituted exactly
+        // once as `Box<CoreSurface>` (layout-identical to `Box<MaybeUninit<_>>`).
+        let boxed: Box<CoreSurface> =
+            unsafe { Box::from_raw(Box::into_raw(slot).cast::<CoreSurface>()) };
+        imp.core_surface.replace(Some(boxed));
+
+        // Emit the signal that we initialized the surface (`:3481-3486`).
+        self.emit_by_name::<()>("init", &[]);
+
+        // `self.updateFocus(priv.focused)` (`:3488`).
+        self.update_focus(imp.focused.get());
+
+        Ok(())
+    }
+}
+
 // PORT NOTE (concern): the reference's typed `getMouseShape`/`setMouseShape`
 // (`surface.zig:2176-2184`) over `terminal.MouseShape`, plus the
 // `GhosttyMouseShape` GObject enum, are deferred to the mouse-input task
@@ -1070,30 +1480,163 @@ impl Surface {
         unimplemented!("gtk::class::Surface::drop lands in L5.2 T16/T17")
     }
 
-    // -- GLArea lifecycle (surface.blp:24-29) — filled in L5.2 T15/T19 ------
+    // -- GLArea lifecycle (surface.blp:24-29) ------------------------------
+    // These are the GLArea CHILD's signals, so `&self` is the Surface (the
+    // template instance, sourced from the instance-callback user data) and the
+    // emitting `gtk::GLArea` is the first explicit parameter — the gtk4-rs
+    // composite-template convention (unlike the self-emitted `notify::*`
+    // callbacks, where `&self` is the emitter). Ported from `surface.zig:3228-3404`.
+
+    /// PORTS: `surface.zig:3228-3263` `glareaRealize`.
     #[template_callback]
-    fn gl_realize(&self) {
-        unimplemented!("gtk::class::Surface::gl_realize lands in L5.2 T15/T19")
+    fn gl_realize(&self, _area: &gtk4::GLArea) {
+        eprintln!("debug(gtk): realize");
+        let imp = self.imp();
+
+        // Make the GL area current so we can detect any OpenGL errors; on error
+        // we can't render and switch to the error state (`:3234-3245`).
+        imp.gl_area.make_current();
+        if let Some(err) = imp.gl_area.error() {
+            eprintln!("warn(gtk): failed to make GL context current: {err}");
+            eprintln!(
+                "warn(gtk): this error is almost always due to a library, driver, or GTK issue"
+            );
+            eprintln!("warn(gtk): common cause: https://ghostty.org/docs/help/gtk-opengl-context");
+            self.set_error(true);
+            return;
+        }
+
+        // If we already have an initialized surface, notify it; otherwise we
+        // initialize it on the first resize (`:3247-3257`).
+        if let Some(core) = self.core() {
+            // SAFETY: `core` is the widget's boxed, initialized core surface; the
+            // renderer is aliased raw by the render thread (W5), so use raw-self.
+            match unsafe {
+                rustty_core::renderer_seam::Renderer::displayRealized(&raw mut (*core).renderer)
+            } {
+                Ok(()) => self.redraw(),
+                Err(_err) => eprintln!("warn(gtk): core displayRealized failed"),
+            }
+        }
+
+        // Set up our input method. This creates a strong ref back to ourselves,
+        // released in unrealize (`:3259-3262`).
+        imp.im_context.set_client_widget(Some(self));
     }
+
+    /// PORTS: `surface.zig:3265-3297` `glareaUnrealize`.
     #[template_callback]
-    fn gl_unrealize(&self) {
-        unimplemented!("gtk::class::Surface::gl_unrealize lands in L5.2 T15/T19")
+    fn gl_unrealize(&self, _area: &gtk4::GLArea) {
+        eprintln!("debug(gtk): unrealize");
+        let imp = self.imp();
+
+        if let Some(core) = self.core() {
+            // No guarantee the context is current on unrealize (`:3274-3276`).
+            imp.gl_area.make_current();
+            if let Some(err) = imp.gl_area.error() {
+                eprintln!("warn(gtk): gl_area_make_current failed in unrealize msg={err}");
+                eprintln!("warn(gtk): OpenGL resources and memory likely leaked");
+                return;
+            }
+            // SAFETY: `core` is the widget's boxed, initialized core surface;
+            // raw-self per the render-thread aliasing contract (W5).
+            unsafe {
+                rustty_core::renderer_seam::Renderer::displayUnrealized(&raw mut (*core).renderer);
+            }
+        }
+
+        // Unset our input method (`:3295-3296`).
+        imp.im_context.set_client_widget(gtk4::Widget::NONE);
     }
+
+    /// PORTS: `surface.zig:3299-3305` `glareaMap`.
     #[template_callback]
-    fn gl_map(&self) {
-        unimplemented!("gtk::class::Surface::gl_map lands in L5.2 T15/T19")
+    fn gl_map(&self, _area: &gtk4::GLArea) {
+        self.update_mapped(true);
+        self.update_occlusion(true);
     }
+
+    /// PORTS: `surface.zig:3307-3313` `glareaUnmap`.
     #[template_callback]
-    fn gl_unmap(&self) {
-        unimplemented!("gtk::class::Surface::gl_unmap lands in L5.2 T15/T19")
+    fn gl_unmap(&self, _area: &gtk4::GLArea) {
+        self.update_mapped(false);
+        self.update_occlusion(false);
     }
+
+    /// PORTS: `surface.zig:3328-3344` `glareaRender`. The app/main-thread draw
+    /// leg of the **T16 render contract** — the ONLY place a frame is drawn.
     #[template_callback]
-    fn gl_render(&self) -> bool {
-        unimplemented!("gtk::class::Surface::gl_render lands in L5.2 T19")
+    fn gl_render(&self, _area: &gtk4::GLArea) -> bool {
+        // No surface ⇒ we failed to initialize; nothing to draw (`:3333-3336`,
+        // returns 1 / `true`: handled).
+        let Some(core) = self.core() else {
+            return true;
+        };
+        // SAFETY: `core` is the widget's boxed, initialized core surface; the
+        // render signal fires on the app/main thread. Raw-self per W5 (the render
+        // thread aliases the renderer raw; no protected `&mut` may span the call).
+        match unsafe {
+            rustty_core::renderer_seam::Renderer::drawFrame(&raw mut (*core).renderer, true)
+        } {
+            Ok(()) => true,
+            Err(_err) => {
+                eprintln!("warn(gtk): failed to draw frame");
+                false
+            }
+        }
     }
+
+    /// PORTS: `surface.zig:3346-3404` `glareaResize`. Caches the size, drives the
+    /// content-scale / size callbacks when the surface exists, and otherwise
+    /// LAZILY builds the core surface (**invariant 3** — on first resize, not
+    /// realize, so we have proper initial dimensions).
     #[template_callback]
-    fn gl_resize(&self) {
-        unimplemented!("gtk::class::Surface::gl_resize lands in L5.2 T15")
+    fn gl_resize(&self, _area: &gtk4::GLArea, width: i32, height: i32) {
+        let imp = self.imp();
+
+        // Debug output to understand what GTK is telling us (`:3352-3369`). The
+        // window (gdk-surface) scale is elided from the log here.
+        eprintln!(
+            "debug(gtk): gl resize width={width} height={height} scale={}",
+            imp.gl_area.scale_factor(),
+        );
+
+        // Store our cached size (`:3371-3379`).
+        let new_size = SurfaceSize {
+            width: width as u32,
+            height: height as u32,
+        };
+        let changed = !imp.size.get().eql(&new_size);
+        imp.size.set(new_size);
+
+        // If our surface is realized, we send callbacks (`:3381-3398`).
+        if let Some(core) = self.core() {
+            // We also update the content scale because there is no signal for
+            // content-scale change and it seems to trigger a resize event
+            // (`:3383-3387`) — this note is load-bearing.
+            // SAFETY: `core` is the widget's boxed, initialized core surface.
+            if unsafe { &mut *core }
+                .contentScaleCallback(self.get_content_scale())
+                .is_err()
+            {
+                eprintln!("warn(gtk): error in content scale callback");
+            }
+
+            if changed {
+                // SAFETY: as above.
+                if unsafe { &mut *core }.sizeCallback(new_size).is_err() {
+                    eprintln!("warn(gtk): error in size callback");
+                }
+                self.resize_overlay_schedule();
+            }
+
+            return;
+        }
+
+        // If we don't have a surface, then we initialize it (`:3400-3403`).
+        if self.init_surface().is_err() {
+            eprintln!("warn(gtk): surface failed to initialize");
+        }
     }
 
     // -- IMMulticontext (surface.blp:253-256) ------------------------------
@@ -1145,9 +1688,27 @@ impl Surface {
         // PORT NOTE (placeholder, reachable): applies `config` to `resize_overlay`
         // (`surface.zig:2266-2307`); wired in T16.
     }
+    /// PORTS: `surface.zig:2310-...` `propError`. **Reached from
+    /// [`Surface::set_error`]** (the T15 GL-error path), so this must not panic.
+    /// Ports the opaque-background CSS toggle (`:2318-2331`); the idle-tick child
+    /// swap between the GLArea and the `error_page` (`onIdleRechild`, `:2333-...`)
+    /// is deferred to T16 with the resize-overlay / error-page display work.
     #[template_callback(name = "notify_error")]
     fn on_notify_error(&self) {
-        unimplemented!("gtk::class::Surface::notify_error lands in L5.2 T16/T17")
+        let widget = self.upcast_ref::<gtk4::Widget>();
+        if self.imp().error.get() {
+            // Ensure an opaque background so the error message is readable
+            // (`:2318-2322`).
+            widget.add_css_class("background");
+        } else {
+            // Parent widgets set it appropriately otherwise (`:2325-2330`).
+            widget.remove_css_class("background");
+        }
+
+        // PORT NOTE (placeholder, T16): schedule `idle_rechild` to swap the visible
+        // child to the `error_page` on an idle tick (`surface.zig:2333-...`,
+        // `onIdleRechild`) — deferred with the error-page display work. The `error`
+        // property + CSS are already authoritative for listeners.
     }
     #[template_callback(name = "notify_mouse_hover_url")]
     fn on_notify_mouse_hover_url(&self) {
@@ -1353,6 +1914,88 @@ mod tests {
             imp.pending_horizontal_scroll_reset.borrow().is_none(),
             "pending_horizontal_scroll_reset"
         );
+    }
+
+    /// **Invariant 3** — `core_surface` realize ordering. The core surface is NOT
+    /// constructed eagerly at widget-construction time: [`Surface::core`] is `None`
+    /// until the lazy `initSurface` runs on the FIRST GLArea resize
+    /// (`surface.zig:3247-3257,3400-3403`), never on construction or realize. The
+    /// live realize → lazy-init drive (which needs the T16 input/render signal
+    /// handlers, a bound core app, a pty, and a GL context) is exercised
+    /// end-to-end by T19 first-light; here we pin the structural ordering — nothing
+    /// builds a core surface before that resize.
+    ///
+    /// A default `GhosttyApplication` is registered (for `init`'s config fallback);
+    /// display-gated only for that. Before T15 the field simply didn't exist; this
+    /// pins that the lifecycle never constructs it eagerly.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn surface_core_is_none_before_first_resize() {
+        let Some(surface) = display_surface() else {
+            return;
+        };
+
+        // No core surface exists before the first resize (**invariant 3**). The
+        // apprt seam agrees: `core()` on the widget is `None`.
+        assert!(
+            surface.core().is_none(),
+            "core None before the first resize (not eagerly constructed)"
+        );
+    }
+
+    /// **T17 apprt-shim forwarders** — the apprt `Surface` (`gtk::surface::Surface`)
+    /// backref forwards the read accessors to the owning widget: `get_size` returns
+    /// the widget's CACHED size (`Surface.zig:52-54` → `surface.zig:1578-1586`, the
+    /// value `gl_resize` stamps), and `get_content_scale` / `get_cursor_pos`
+    /// resolve too. Reads them back through the seam pointer (`self.rt()`), proving
+    /// the whole `apprt::Surface -> class::Surface` forward and the `constructed`
+    /// backref wiring (`surface.zig:1793`). Before T15/T17 the shim
+    /// `unimplemented!()`d every one of these — RED.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn surface_shim_read_accessors_forward() {
+        use rustty_apprt_api::Surface as _;
+
+        let Some(surface) = display_surface() else {
+            return;
+        };
+
+        // Stamp a known size into the cache (what `gl_resize` does), then read it
+        // back through the apprt-surface seam pointer.
+        let sentinel = SurfaceSize {
+            width: 321,
+            height: 123,
+        };
+        surface.imp().size.set(sentinel);
+        let cursor = CursorPos { x: 4.0, y: 7.0 };
+        surface.imp().cursor_pos.set(cursor);
+
+        // SAFETY: `rt()` points at the widget's pinned embedded apprt surface,
+        // whose backref was wired in `constructed`; the widget is alive here.
+        let rt: &ApprtSurface = unsafe { &*surface.rt() };
+
+        let size = rt
+            .get_size()
+            .expect("get_size forwards through the backref");
+        assert_eq!(
+            size, sentinel,
+            "apprt Surface::get_size returns cached size"
+        );
+
+        let pos = rt.get_cursor_pos().expect("get_cursor_pos forwards");
+        assert_eq!(
+            pos, cursor,
+            "apprt Surface::get_cursor_pos returns cached pos"
+        );
+
+        // The content-scale forwarder resolves (value is display-dependent).
+        assert!(rt.get_content_scale().is_ok(), "get_content_scale forwards");
+
+        // The clipboard-support forwarder is `true` for all three variants
+        // (`Surface.zig:60-71`).
+        assert!(rt.supports_clipboard(Clipboard::Standard));
+        assert!(rt.supports_clipboard(Clipboard::Selection));
+        assert!(rt.supports_clipboard(Clipboard::Primary));
     }
 
     /// **Invariant 5** — `finalize` removes the surface from the app (`deleteSurface`)

@@ -539,6 +539,51 @@ impl Renderer {
         }
     }
 
+    // PORT NOTE: `pub fn displayRealized(self: *Self) !void` (generic.zig:937-942,
+    // `if (@hasDecl(GraphicsAPI, "displayRealized")) self.api.displayRealized()`).
+    // Callsite `Surface.zig:3251` (the GTK apprt's `glareaRealize`) — reload the
+    // GL loader over the context GDK just made current on (re-)realize.
+    //
+    // Raw-self, per the `drawFrame` precedent (W5): the renderer is aliased raw by
+    // the render thread, so no protected `&mut` may span the call. macOS is a
+    // no-op: the Metal graphics API declares no `displayRealized` (the `@hasDecl`
+    // arm is false), so the reference method is a no-op there.
+    //
+    /// # Safety
+    /// `self_` must be a valid, stable `*mut Renderer` (the Surface-embedded
+    /// renderer, aliased raw by the render thread). No protected `&mut` may span.
+    pub unsafe fn displayRealized(self_: *mut Renderer) -> Result<(), RendererError> {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = self_;
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = self_;
+            unimplemented!("Renderer::displayRealized — DEFERRED to L4 (OpenGL renderer backend)")
+        }
+    }
+
+    // PORT NOTE: `pub fn displayUnrealized(self: *Self) void` (generic.zig, the
+    // `displayRealized` sibling). Callsite `Surface.zig:3292` (`glareaUnrealize`)
+    // — free the GL-adjacent resources when the GLArea's context goes away. macOS
+    // no-op (Metal declares none), Linux deferred; raw-self per `drawFrame`.
+    //
+    /// # Safety
+    /// As [`Renderer::displayRealized`].
+    pub unsafe fn displayUnrealized(self_: *mut Renderer) {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = self_;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = self_;
+            unimplemented!("Renderer::displayUnrealized — DEFERRED to L4 (OpenGL renderer backend)")
+        }
+    }
+
     // PORT NOTE: `pub fn deinit(self: *Self) void` (generic.zig:800).
     pub fn deinit(&mut self) {
         #[cfg(target_os = "macos")]
