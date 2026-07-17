@@ -157,7 +157,8 @@ impl Thread {
     // precedent); the errors are the xev seam's.
     pub fn init() -> Result<Thread, xev::Error> {
         // Create our event loop.
-        let loop_ = xev::Loop::init()?;
+        // var loop = try xev.Loop.init(.{});
+        let loop_ = xev::Loop::init(xev::Options::default())?;
         // errdefer loop.deinit();
 
         // This async handle is used to stop the loop and force the thread to end.
@@ -1120,7 +1121,7 @@ impl Thread {
         cb_: *mut CallbackData<M>,
         _l: *mut xev::Loop,
         _c: *mut xev::Completion,
-        r: core::result::Result<(), xev::MachPortError>,
+        r: core::result::Result<(), xev::WaitError>,
     ) -> xev::CallbackAction {
         // _ = r catch |err| { log.err("error in wakeup err={}", .{err}); return .rearm; };
         if r.is_err() {
@@ -1150,7 +1151,7 @@ impl Thread {
         cb_: *mut CallbackData<M>,
         _l: *mut xev::Loop,
         _c: *mut xev::Completion,
-        r: core::result::Result<(), xev::MachPortError>,
+        r: core::result::Result<(), xev::WaitError>,
     ) -> xev::CallbackAction {
         // _ = r catch unreachable;
         r.expect("stop wait: unreachable error");

@@ -425,7 +425,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn async_() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let mut notifier = Async::init().unwrap();
 
@@ -472,7 +472,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn async_notify_first() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let mut notifier = Async::init().unwrap();
 
@@ -514,7 +514,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn async_batches_multiple_notifications() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let mut notifier = Async::init().unwrap();
 
@@ -569,7 +569,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kat1_async_wakeup_roundtrip() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let mut notifier = Async::init().unwrap();
 

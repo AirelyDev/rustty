@@ -1060,7 +1060,7 @@ mod tests {
         let mut pty = Pty::init().unwrap();
         // defer pty.deinit();
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         // defer loop.deinit();
 
         let parent = Stream::init_fd(pty.parent);
@@ -1134,7 +1134,7 @@ mod tests {
         // Create the pty parent/child side.
         let mut pty = Pty::init().unwrap();
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let parent = Stream::init_fd(pty.parent);
         let child = Stream::init_fd(pty.child);
@@ -1213,7 +1213,7 @@ mod tests {
         // Create the pty parent/child side.
         let mut pty = Pty::init().unwrap();
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let parent = Stream::init_fd(pty.parent);
         let child = Stream::init_fd(pty.child);
@@ -1320,7 +1320,7 @@ mod tests {
     )]
     fn kat4_pty_write_roundtrip() {
         let mut pty = Pty::init().unwrap();
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let parent = Stream::init_fd(pty.parent); // write side
         let child = Stream::init_fd(pty.child); // read side

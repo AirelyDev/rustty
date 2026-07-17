@@ -530,7 +530,7 @@ impl<A: apprt::App + 'static> Thread<A> {
         // Create our event loop.
         // var loop = try xev.Loop.init(.{});
         // errdefer loop.deinit();
-        let mut loop_ = xev::Loop::init()?;
+        let mut loop_ = xev::Loop::init(xev::Options::default())?;
 
         // This async handle is used to "wake up" the renderer and force a render.
         // var wakeup_h = try xev.Async.init();

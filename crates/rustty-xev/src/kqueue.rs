@@ -342,16 +342,25 @@ impl Loop {
     /// Initialize a new kqueue-backed event loop. See the Options docs
     /// for what options matter for kqueue.
     //
-    // PORT NOTE: reference `init(options: Options)`. ghostty's macOS build only
-    // ever calls `Loop.init(.{})` (no thread_pool — §1) and termio's D6 seam fixes
-    // the signature to no-arg, so we specialize to default `Options` here; the
-    // Options-carrying form + the `thread_pool` path are deferred with the
-    // ThreadPool body (DEFERRALS.md, the "file IO on thread pool" skip-stub). The
-    // `thread_pool: options.thread_pool` assignment is preserved (with the default
-    // `null`), keeping the dead thread-pool branch faithful.
-    pub fn init() -> core::result::Result<Loop, Error> {
-        let options = Options::default();
-
+    // PORT NOTE: `pub fn init(options: Options) !Loop` (backend/kqueue.zig:106) —
+    // restored to the reference signature (L1 LT9). This decl previously
+    // specialized to a no-arg `init()` that opened with `let options =
+    // Options::default();`, justified as "termio's D6 seam fixes the signature to
+    // no-arg". That premise was itself the divergence: ghostty spells
+    // `xev.Loop.init(.{})` (Thread.zig:95), and BOTH reference backends take
+    // Options (kqueue.zig:106; dynamic.zig:127) — the 0-arg shape appears nowhere
+    // upstream. Widening it here lets ONE termio spelling
+    // (`Loop::init(Options::default())` == `.{}`) serve kqueue AND Dynamic.
+    //
+    // BEHAVIOR IS IDENTICAL: every caller passes `Options::default()`, which is
+    // exactly the value the deleted first statement produced.
+    //
+    // The `thread_pool` path stays deferred with the ThreadPool body (DEFERRALS.md,
+    // the "file IO on thread pool" skip-stub); the `thread_pool: options.thread_pool`
+    // assignment is preserved, keeping the dead thread-pool branch faithful — it now
+    // forwards the caller's field instead of the hardcoded default `null`, which is
+    // the same `null` for every present caller.
+    pub fn init(options: Options) -> core::result::Result<Loop, Error> {
         // This creates a new kqueue fd
         // SAFETY: kqueue() is a plain syscall returning a new fd or -1.
         let fd = unsafe { libc::kqueue() };
@@ -2802,7 +2811,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_loop_time() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
         // defer loop.deinit();
 
         // should never init zero
@@ -2823,7 +2832,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_stop() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut called = false;
@@ -2869,7 +2878,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_timer() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut called = false;
@@ -2945,7 +2954,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_timer_reset() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -2992,7 +3001,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_timer_reset_before_tick() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -3035,7 +3044,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_timer_reset_after_trigger() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -3084,7 +3093,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_timer_cancellation() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -3155,7 +3164,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_canceling_a_completed_operation() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -3227,7 +3236,7 @@ mod tests {
     )]
     fn kqueue_socket_accept_connect_send_recv_close() {
         let _guard = SOCKET_TEST_LOCK.lock().unwrap();
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Create a TCP server socket
         let address = net::Address::parse_ip4(b"127.0.0.1", 3131).unwrap();
@@ -3500,7 +3509,7 @@ mod tests {
 
         //if (true) return error.SkipZigTest;
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Create a TCP server socket
         let address = net::Address::parse_ip4(b"127.0.0.1", 3131).unwrap();
@@ -3700,7 +3709,7 @@ mod tests {
         // if (builtin.os.tag != .macos) return error.SkipZigTest;
         // (this test module is `#[cfg(target_os = "macos")]`-gated in lib.rs.)
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Allocate the port
         let mach_self = unsafe { libc::mach_task_self() };

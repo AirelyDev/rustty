@@ -253,7 +253,7 @@ mod tests {
         // var child = std.process.Child.init(argv_0, alloc); try child.spawn();
         let child = Command::new(ARGV_0[0]).args(&ARGV_0[1..]).spawn().unwrap();
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         // defer loop.deinit()
 
         let mut p = Process::init(child.id() as pid_t).unwrap();
@@ -304,7 +304,7 @@ mod tests {
             .spawn()
             .unwrap();
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         // defer loop.deinit()
 
         let mut p = Process::init(child.id() as pid_t).unwrap();
@@ -346,7 +346,7 @@ mod tests {
     fn process_wait_on_a_process_that_already_exited() {
         let mut child = Command::new(ARGV_0[0]).args(&ARGV_0[1..]).spawn().unwrap();
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         // defer loop.deinit()
 
         let mut p = Process::init(child.id() as pid_t).unwrap();
@@ -416,7 +416,7 @@ mod tests {
         };
         assert_eq!(rc, 0, "posix_spawn /usr/bin/true");
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let mut p = Process::init(pid).unwrap();
 

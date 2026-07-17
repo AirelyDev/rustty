@@ -323,7 +323,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn timer() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         let timer = Timer::init().unwrap();
 
         // Add the timer
@@ -362,7 +362,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn timer_reset() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         let timer = Timer::init().unwrap();
 
         let mut c_timer = Completion::default();
@@ -420,7 +420,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn timer_reset_before_tick() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         let timer = Timer::init().unwrap();
 
         let mut c_timer = Completion::default();
@@ -474,7 +474,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn timer_reset_after_trigger() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         let timer = Timer::init().unwrap();
 
         let mut c_timer = Completion::default();
@@ -531,7 +531,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn timer_cancel() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
         let timer = Timer::init().unwrap();
 
         // Add the timer
@@ -610,7 +610,7 @@ mod kat {
         ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kat2_timer_fires() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(crate::Options::default()).unwrap();
 
         let start_now = loop_.now();
 

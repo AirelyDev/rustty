@@ -113,26 +113,27 @@ const _: fn() = || {
 // `Loop::init`'s signature — the ONE forwarded decl whose shape differs per
 // target, so it is asserted per target rather than once.
 //
-// REFERENCE: both `kqueue.zig`'s `Loop.init(options: Options)` and
-// `dynamic.zig:127`'s `Loop.init(opts: Options)` take `Options`.
+// REFERENCE: both `kqueue.zig:106`'s `Loop.init(options: Options)` and
+// `dynamic.zig:127`'s `Loop.init(opts: Options)` take `Options`, and ghostty spells
+// the sole call `xev.Loop.init(.{})` (Thread.zig:95). ONE signature, every target.
 //
-// RUSTTY DIVERGENCE (macOS side, PRE-EXISTING — kqueue.rs:345-351 + DEFERRALS.md):
-// this port specialized the macOS `Loop::init` to NO-ARG, because ghostty's macOS
-// build only ever calls `Loop.init(.{})` and the `Options.thread_pool` path is
-// deferred with the `ThreadPool` body. The Linux `Dynamic` side is NOT specialized
-// — it takes `Options` exactly as dynamic.zig:127 does, and `entries` is
-// load-bearing there (it is io_uring-only, loop.zig:15, and is what
-// `dynamic.rs`'s `dynamic_loop_init_dispatches_on_the_global` KAT discriminates
-// the two arms with). Un-specializing macOS would edit macOS-gated code (R5), so
-// the divergence is pinned HERE instead of papered over: each target asserts the
-// signature it actually has, and neither can drift silently.
+// RESOLVED IN L1 LT9 (this assertion was previously a per-target SPLIT): the macOS
+// `Loop::init` had been specialized to NO-ARG, and T8 pinned that divergence here
+// rather than edit macOS-gated code (R5). T9 un-specialized it — kqueue.rs's body
+// opened with `let options = Options::default();`, so taking `options: Options` and
+// having every caller pass `Options::default()` is provably the same program, and
+// `cargo check -p rustty-xev --target aarch64-apple-darwin --tests` verifies the
+// macOS lane still builds. `entries` is load-bearing on Linux (io_uring-only,
+// loop.zig:15 — what `dynamic.rs`'s `dynamic_loop_init_dispatches_on_the_global`
+// KAT discriminates the arms with); on kqueue it stays inert, and the `thread_pool`
+// path stays deferred with the `ThreadPool` body (DEFERRALS.md).
+//
+// So this is now a SINGLE target-neutral assertion — which is the real proof of the
+// L1 goal: termio's flat `pub use rustty_xev::*` seam sees the same `Loop::init` on
+// both targets, and neither can drift silently.
 // ---------------------------------------------------------------------------
-#[cfg(target_os = "linux")]
 const _: fn(rustty_xev::Options) -> Result<rustty_xev::Loop, rustty_xev::Error> =
     rustty_xev::Loop::init;
-
-#[cfg(target_os = "macos")]
-const _: fn() -> Result<rustty_xev::Loop, rustty_xev::Error> = rustty_xev::Loop::init;
 
 // ---------------------------------------------------------------------------
 // Linux-only: the `Dynamic`-specific decls `main.zig` forwards only when the
@@ -185,7 +186,7 @@ fn public_loop_surface_is_live() {
         rustty_xev::Loop::init(rustty_xev::Options::default()).expect("Loop::init")
     };
     #[cfg(target_os = "macos")]
-    let mut l = rustty_xev::Loop::init().expect("Loop::init");
+    let mut l = rustty_xev::Loop::init(rustty_xev::Options::default()).expect("Loop::init");
 
     // A real loop: it ticks, it stops, it reports stopped.
     assert!(!l.stopped());

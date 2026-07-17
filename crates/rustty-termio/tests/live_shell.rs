@@ -3,9 +3,14 @@
 //! This is the FIRST TIME THE PORT RUNS A REAL TERMINAL. A real `/bin/sh`
 //! executes a command in a real pty, driven through the real termio Exec path
 //! (fork/exec + xev `Process`/`Stream`/`Timer` wiring + a real `ReadThread`
-//! poll/read loop) and the real rustty-xev kqueue loop; the shell's output
-//! round-trips back through `Termio::processOutput` -> `terminal_stream` and
-//! lands in the terminal `Screen`.
+//! poll/read loop) and the real rustty-xev event loop — the kqueue `Api()` on
+//! macOS, the io_uring/epoll `Dynamic` union on Linux (L1 LT9); the shell's
+//! output round-trips back through `Termio::processOutput` -> `terminal_stream`
+//! and lands in the terminal `Screen`.
+//!
+//! ON LINUX this KAT is the keystone proof of the whole L1 event-loop port: the
+//! `Dynamic` backend it selects (io_uring, falling back to epoll) is what
+//! actually carries the live shell's `Process`/`Stream`/`Timer` completions.
 //!
 //! Blueprint: .port/phase-2/XEV_MILESTONE_B_BLUEPRINT.md §5.
 //!
@@ -49,10 +54,13 @@
 //! read thread is the sole concurrent `*mut Termio` toucher, via the raw-`*mut`
 //! `processOutput`, under the renderer mutex).
 
-// This whole file only compiles on macOS (the reference's `SkipZigTest`
-// analogue for a darwin-only pty/login spawn path). On other targets it is an
-// empty test binary (0 tests) — margin, no test-count regression.
-#![cfg(target_os = "macos")]
+// This whole file compiles on every unix (L1 LT9 widened the gate from
+// `target_os = "macos"`): the spawn path is POSIX fork/exec + openpty, and the
+// event loop underneath is now `rustty_xev`'s per-target surface — the kqueue
+// `Api()` on macOS, the io_uring/epoll `Dynamic` union on Linux — reached through
+// the SAME `xev_seam` names on both. On non-unix it is an empty test binary (0
+// tests) — margin, no test-count regression.
+#![cfg(unix)]
 // PARITY: the reference termio identifiers are camelCase (`threadEnter`,
 // `queueWrite`, ...); the KAT calls them verbatim per R1/R2.
 #![allow(non_snake_case)]
@@ -263,15 +271,61 @@ impl Harness {
 // live stack into the terminal `Screen`.
 #[test]
 fn live_shell_echo_round_trips_into_the_screen() {
-    // Command: `/bin/sh -c 'echo RUSTTY_OK'` (blueprint §5 preferred form —
-    // self-terminating, bounded output). On macOS this is login-wrapped
-    // (`/usr/bin/login -flp <user> /bin/sh -c "echo RUSTTY_OK"`, the same
-    // exec-path B1/B2 spawn); login may emit a banner, but we only assert the
-    // Screen CONTAINS the marker, so banner noise is harmless.
+    // dynamic.zig:18-19 — the documented startup call: pick the backend before
+    // the first `Loop::init`. Linux-only, and deliberately so: `detect`/`backend`/
+    // `CANDIDATES` are the `Dynamic`-specific decls `main.zig` forwards ONLY when
+    // the candidate list has more than one entry. On macOS `candidates() ==
+    // &.{.kqueue}`, so `Xev(bes)` short-circuits to the flat kqueue `Api()`
+    // (dynamic.zig:36-38) and `detect` is comptime-elided — it does NOT exist
+    // there (rustty-xev/src/lib.rs:333-334 gates the re-export to linux), hence
+    // the cfg rather than an unconditional call. On Linux this selects io_uring
+    // and falls back to epoll.
+    #[cfg(target_os = "linux")]
+    {
+        xev::detect().expect("detect() must find an available backend");
+        assert!(
+            xev::CANDIDATES.contains(&xev::backend()),
+            "detect() must land on a candidate backend"
+        );
+        eprintln!("live_shell: xev Dynamic backend = {:?}", xev::backend());
+    }
+
+    // Command: `/bin/sh -c 'echo RUSTTY_OK; /bin/sleep 1'` (blueprint §5 preferred
+    // form — self-terminating, bounded output). On macOS this is login-wrapped
+    // (`/usr/bin/login -flp <user> /bin/sh -c "..."`, the same exec-path B1/B2
+    // spawn); login may emit a banner, but we only assert the Screen CONTAINS the
+    // marker, so banner noise is harmless.
+    //
+    // WHY THE TRAILING `/bin/sleep 1` (L1 LT9 — this KAT must not race a REFERENCE
+    // QUIRK; it is NOT a port bug and NOT a weakening of the proof):
+    // `ReadThread.threadMainPosix` checks HUP BEFORE it re-drains —
+    // `if (pollfds[0].revents & posix.POLL.HUP != 0) return;` (ghostty
+    // Exec.zig:1355-1358, ported verbatim in exec.rs's read loop). The read thread
+    // reaches its blocking `poll(-1)` before a bare `echo` child can write, and on
+    // LINUX the pty master then reports POLLIN|POLLHUP in the SAME revents word
+    // (measured: 0x11) — the kernel raises HUP as soon as the last slave fd closes,
+    // even with bytes still buffered — so the reference returns and the pending
+    // echo is dropped. (Verified directly: at that HUP return the pty still held
+    // the unread bytes "RUSTTY_OK\r\n".) macOS does not hit this: there the dying
+    // child surfaces as `read() == 0` (the `n == 0` note in the read loop), not
+    // HUP, so the drain happens first — which is why this KAT passed on macOS with
+    // a bare `echo`.
+    //
+    // Keeping the shell alive for a beat AFTER the write decouples POLLIN from
+    // POLLHUP, so the read thread drains on a HUP-free wakeup exactly as on macOS.
+    // The command stays a real, self-terminating shell with bounded output; the
+    // sleep removes only the exit RACE, not any part of the proof. The reference's
+    // own trailing-output-at-exit behavior is preserved UNTOUCHED — "fixing" the
+    // read loop would be an R1 divergence (DEFERRALS.md).
+    //
+    // `/bin/sleep` is spelled ABSOLUTE on purpose: this harness's `Config.env` is a
+    // deliberately empty `EnvMap`, so there is no PATH for the shell to search — a
+    // bare `sleep` resolves to "command not found", the child exits instantly, and
+    // the POLLHUP race is back. (`/bin/sleep` exists on both Linux and macOS.)
     let command = rustty_config::command::Command::Direct(vec![
         b"/bin/sh".to_vec(),
         b"-c".to_vec(),
-        b"echo RUSTTY_OK".to_vec(),
+        b"echo RUSTTY_OK; /bin/sleep 1".to_vec(),
     ]);
     let h = Harness::build(command);
     let io = h.io;

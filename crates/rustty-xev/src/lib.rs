@@ -239,6 +239,25 @@ pub use timer::RunError as TimerRunError;
 // is already re-exported via the `kqueue` block).
 #[cfg(target_os = "macos")]
 pub use async_watcher::WaitError;
+// PORT NOTE: `Process.wait`'s callback error type (`pub const WaitError =
+// xev.Sys.ProcError;`, watcher/process.zig:150) must be nameable by consumers —
+// ghostty's termio spells this parameter `r: xev.Process.WaitError!u32`
+// (Exec.zig:303), NOT `xev.Sys.ProcError`, and a named fn-item callback cannot
+// infer it. The `process` module is private, so re-export the alias (the same
+// export gap the `TimerRunError`/`WaitError` re-exports closed; the underlying
+// `ProcError` is already re-exported via the `kqueue` block).
+//
+// WHY THE `ProcessWaitError` SPELLING: Rust has no stable inherent associated
+// type, so a watcher's `pub const <X>Error` flattens to a crate-root
+// `<Watcher><X>Error` — the convention `TimerRunError` (timer.zig's `Timer.RunError`)
+// already set. `Async.WaitError` took the unprefixed `WaitError` first, so
+// `Process.WaitError` takes the prefixed spelling. This is ALSO the name the Linux
+// block below already exports for the merged `ErrorSet(&.{"Process","WaitError"})`
+// (watcher/process.zig:368), so ONE neutral name — the reference's own
+// `Process.WaitError` — now resolves on both targets and termio's flat
+// `pub use rustty_xev::*` seam needs no per-target spelling.
+#[cfg(target_os = "macos")]
+pub use process::WaitError as ProcessWaitError;
 
 // ---------------------------------------------------------------------------
 // The Linux/Dynamic package re-export surface (XEV_BLUEPRINT §1 Linux port, task

@@ -4445,3 +4445,56 @@ the export signature already carries the faithful sentinel return. (quicklook_wo
 DONE in P2.1 — objc-free, needed no Phase-3 fill. quicklook_font: DONE in P2.2 —
 the CoreText font-grid read (embedded.zig:2147-2186) landed via objc2-core-text,
 returning the +1 CTFontRef the host releases (I16).)
+
+---
+
+## rustty-termio ReadThread — PRESERVED REFERENCE QUIRK: trailing pty output dropped on Linux POLLHUP (L1 LT9)
+
+**Status: preserved verbatim, NOT fixed. This is reference behavior, not a port bug.**
+
+`ReadThread.threadMainPosix` checks HUP *before* it re-drains the pty:
+
+```zig
+// ghostty src/termio/Exec.zig:1355-1358
+if (pollfds[0].revents & posix.POLL.HUP != 0) {
+    log.info("pty fd closed, read thread exiting", .{});
+    return;
+}
+```
+
+The read loop's shape is: tight `read()` until `EAGAIN` -> blocking `poll(-1)` ->
+quit check -> **HUP check -> return**. There is no final drain after the HUP check.
+
+**Why this is invisible on macOS but bites on Linux** (a kernel pty-semantics
+difference, verified empirically in L1 LT9, not inferred):
+
+* **Linux** raises `POLLHUP` on the pty *master* as soon as the last *slave* fd
+  closes — **even while unread bytes are still buffered** — so a child that writes
+  and immediately exits produces `POLLIN|POLLHUP` in the SAME `revents` word
+  (measured: `0x11`). The reference returns on the HUP check and the buffered bytes
+  are never read. Measured directly: at that HUP return the pty still held the
+  unread `"RUSTTY_OK\r\n"`.
+* **macOS** does not surface the dying child as HUP here; it surfaces as
+  `read() == 0`, which the loop already handles (`if (n == 0) break;` — and the
+  reference's own comment there says *"This happens on macOS instead of WouldBlock
+  when the child process dies"*). So macOS drains first and loses nothing.
+
+**Consequence:** on Linux, output written by a child in the same instant it exits
+can be dropped by the read thread. For a real interactive shell this is a
+shutdown-time edge (the shell is long-lived; the HUP only arrives at exit), which
+is presumably why it is unfixed upstream.
+
+**Why we do NOT fix it:** R1 — port faithfully, preserve reference quirks. Adding a
+post-HUP drain would be a real behavioral divergence from ghostty on the hot read
+path. If upstream fixes it, port the fix.
+
+**Impact on the KAT:** `crates/rustty-termio/tests/live_shell.rs` therefore spells
+its command `/bin/sh -c 'echo RUSTTY_OK; /bin/sleep 1'` rather than a bare `echo`:
+the trailing sleep keeps a slave fd open for a beat after the write, decoupling
+`POLLIN` from `POLLHUP` so the read thread drains on a HUP-free wakeup exactly as
+it does on macOS. This removes only the exit RACE — the KAT still spawns a real
+`/bin/sh` in a real pty and asserts the echo round-trips into the terminal
+`Screen`. (`/bin/sleep` is absolute because that harness's `Config.env` is an empty
+`EnvMap` — there is no PATH to search.)
+
+**Un-defer trigger:** an upstream ghostty fix to the `threadMainPosix` HUP path.

@@ -1031,7 +1031,7 @@ impl Exec {
         td_: *mut crate::termio_impl::ThreadData<M>,
         _l: *mut xev::Loop,
         _c: *mut xev::Completion,
-        r: core::result::Result<u32, xev::ProcError>,
+        r: core::result::Result<u32, xev::ProcessWaitError>,
     ) -> xev::CallbackAction {
         // const exit_code = r catch unreachable;
         let exit_code = r.unwrap();
@@ -4560,7 +4560,7 @@ mod tests {
 
         // The event loop (created here, driven here — the KAT stands in for the
         // io thread's `threadMain_` frame).
-        let mut loop_ = xev::Loop::init().expect("Loop::init");
+        let mut loop_ = xev::Loop::init(xev::Options::default()).expect("Loop::init");
         let loop_ptr: *mut xev::Loop = std::ptr::addr_of_mut!(loop_);
 
         // A REAL, heap-pinned `Termio<TestMailbox>` for the `io` arg: the read
