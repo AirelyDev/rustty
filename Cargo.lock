@@ -1032,6 +1032,7 @@ name = "rustty-apprt"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "cc",
  "dcimgui-sys",
  "gdk4",
  "gio",

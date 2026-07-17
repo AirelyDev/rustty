@@ -100,6 +100,47 @@ pub mod weak_ref;
 
 pub use weak_ref::WeakRef;
 
+// The gresource accessor emitted by `build.rs`'s `glib-compile-resources`
+// (`--c-name rustty --manual-register`): returns the process-static
+// `GResource*` for the compiled `.blp` / css / icon blob. Ports the
+// reference's `@cInclude("ghostty_resources.h")` `ghostty_get_resource()`
+// extern (`src/apprt/gtk/class/application.zig:1868-1873`).
+unsafe extern "C" {
+    fn rustty_get_resource() -> *mut gio::ffi::GResource;
+}
+
+/// Register the compiled gresource blob into the process-global gio registry
+/// exactly once. Ports the class-init block at
+/// `src/apprt/gtk/class/application.zig:1867-1881`: it registers
+/// `rustty_get_resource()` via `gio.resourcesRegister` and, on a null pointer,
+/// warns and continues ("unable to load resources", `:1875-1880`) rather than
+/// aborting — a missing blob degrades the UI but must not stop startup.
+///
+/// The reference registers inside GObject class-init (which runs once per class
+/// registration); rustty guards with a [`std::sync::Once`] so Task 7's
+/// class-init — and the resources KAT — can call it idempotently.
+pub fn register_resources() {
+    use std::sync::Once;
+
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        // SAFETY: `rustty_get_resource` is the C accessor `build.rs` generates
+        // and links; it returns a pointer to a process-static `GResource` (or
+        // null).
+        let ptr = unsafe { rustty_get_resource() };
+        if ptr.is_null() {
+            // Reference `class/application.zig:1875-1880`: warn and continue.
+            eprintln!("rustty: unable to load resources");
+            return;
+        }
+        // SAFETY: `ptr` is a non-null pointer to the static `GResource`.
+        // `from_glib_none` borrows it (adds a ref; never frees the static),
+        // matching the reference's `@ptrCast` borrow into `gio.resourcesRegister`.
+        let resource: gio::Resource = unsafe { glib::translate::from_glib_none(ptr) };
+        gio::resources_register(&resource);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

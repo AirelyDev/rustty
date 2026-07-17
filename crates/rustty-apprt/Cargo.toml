@@ -215,3 +215,32 @@ gtk4 = { version = "0.11", features = ["v4_14"], optional = true }
 # unconditional (dropping the `adw.MessageDialog`/`gtk.Box`/`void` legacy arms),
 # which is exactly what the `v1_5` floor buys.
 libadwaita = { version = "0.9", features = ["v1_5"], optional = true }
+
+# The gresource asset pipeline. build.rs runs blueprint-compiler over the 19
+# `.blp`, generates the gresource XML, drives `glib-compile-resources`, and
+# `cc`-compiles the generated `rustty_resources.c` into the crate. The whole
+# pipeline is a no-op unless BOTH `CARGO_FEATURE_GTK` and
+# `CARGO_CFG_TARGET_OS == "linux"` hold, so on macOS / a default Linux build the
+# script returns immediately (R5: the compiled artifact is unchanged). Declared
+# here (not `[workspace.dependencies]`) for the same reason as the gtk4-rs stack
+# above: exactly one crate consumes them.
+[build-dependencies]
+# R2: build.rs bakes the gresource prefixes / icon aliases from the SAME single
+# source of truth the library reads — `rustty_identity::BUNDLE_ID` — so the XML
+# it emits matches `gtk::build_info` exactly. Per R2 this crate lists
+# `rustty-identity` as BOTH a `[dependencies]` and a `[build-dependencies]` edge.
+rustty-identity = { workspace = true }
+# `cc` compiles the `glib-compile-resources`-generated `rustty_resources.c` (the
+# embedded gresource blob) and links it into the crate, exactly as the
+# workspace's `-sys` crates use `cc` for their vendored C.
+cc = "1"
+
+# `gio` is the lib's own (gtk-feature-gated, Linux-target-gated) binding; an
+# integration test (`tests/gtk_resources.rs`) needs it in scope to look up the
+# registered gresource, and integration tests can only reach dev-dependencies,
+# not the lib's optional deps. Linux-target-gated to mirror the `[dependencies]`
+# edge; the test file itself is `#[cfg(feature = "gtk")]`, so without `--features
+# gtk` nothing here is referenced. Resolves to the SAME `gio` 0.22 instance as
+# the library edge, so the process-global gresource registry is shared.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gio = { version = "0.22" }
