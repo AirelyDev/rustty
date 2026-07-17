@@ -26,6 +26,19 @@ pub mod buffer;
 pub mod sampler;
 pub mod texture;
 
+// PORT STATUS (L4 Task 6): the draw-plumbing leaves, layered over the resource
+// leaves (Task 5) + the `gl` package. These are the OpenGL twins of
+// `metal/{target,pipeline,render_pass,frame}.rs`: everything needed to stand up a
+// render target, compile a pipeline, and issue ONE clear+draw call.
+//   * `target`      — ports `src/renderer/opengl/Target.zig`     (renderbuffer-backed FBO)
+//   * `pipeline`    — ports `src/renderer/opengl/Pipeline.zig`   (program + vao + autoAttribute)
+//   * `render_pass` — ports `src/renderer/opengl/RenderPass.zig` (begin/step/complete)
+//   * `frame`       — ports `src/renderer/opengl/Frame.zig`      (begin/render_pass/complete)
+pub mod frame;
+pub mod pipeline;
+pub mod render_pass;
+pub mod target;
+
 // RUSTTY-ONLY smoke tests for the Task-5 leaves — same framing as `metal.rs`'s
 // `creates_buffer_texture_sampler_without_panic`: the reference has NO `test{}`
 // block over `renderer/opengl/{buffer,Texture,Sampler}.zig`, so there is no parity
@@ -171,6 +184,134 @@ mod tests {
         smp.deinit();
         empty.deinit();
         tex.deinit();
+        assert!(get_error().is_ok(), "after deinit");
+    }
+
+    /// A minimal, valid `#version 430 core` vertex shader with NO vertex input —
+    /// the clear-only pipeline's stage (`VertexAttributes = None`). NOT one of the
+    /// real GLSL assets (those are reused verbatim in a later task); this pair
+    /// exists only to give [`pipeline::Pipeline::init`] a real program to compile +
+    /// link, exactly as `gl.rs`'s own smoke test does.
+    const CLEAR_VERTEX_SRC: &std::ffi::CStr = c"#version 430 core\n\
+        void main() {\n\
+        \x20   gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n\
+        }\n";
+
+    /// The matching `#version 430 core` fragment shader.
+    const CLEAR_FRAGMENT_SRC: &std::ffi::CStr = c"#version 430 core\n\
+        out vec4 frag_color;\n\
+        void main() {\n\
+        \x20   frag_color = vec4(1.0, 0.0, 0.0, 1.0);\n\
+        }\n";
+
+    /// RUSTTY-ONLY smoke test (NOT a ghostty parity test): the OpenGL twin of
+    /// `metal.rs`'s `draw_plumbing_smoke`. It drives the four draw-plumbing leaves
+    /// through ONE clear-only render pass against a real GL context: a
+    /// `Target::init` OFFSCREEN (a renderbuffer-backed FBO — exercises the
+    /// `Renderbuffer.storage` + `Framebuffer.renderbuffer` attach path), a trivial
+    /// `Pipeline` compiled + linked from the inline clear-only shader pair
+    /// (exercises `Program.createVF` through `Pipeline::init`'s `defer`/`errdefer`
+    /// fan-out), a `RenderPass` whose one `step()` clears the target to a known
+    /// color and draws NOTHING, and `read_rgba()` — the golden-support readback.
+    /// Asserts the `4*4*4` bytes come back as the clear color.
+    ///
+    /// PORT NOTE (the step's `instance_count`): `RenderPass.zig:63` short-circuits a
+    /// step whose `instance_count == 0` at its FIRST line — BEFORE the clear at
+    /// `:88`. So to actually exercise (and verify) the clear-only path, the step
+    /// uses `instance_count: 1` with `vertex_count: 0`: the step runs the clear,
+    /// then `glDrawArraysInstanced(…, 0, 1)` draws zero vertices — nothing is
+    /// rendered, the clear color survives, and `read_rgba` reads it back. (A literal
+    /// `instance_count: 0` would skip the clear too, leaving the readback undefined
+    /// and the assertion meaningless.)
+    ///
+    /// Skips cleanly (never panics) when the host has no OpenGL 4.3 core context —
+    /// see [`gl::test_support::offscreen_gl`].
+    #[test]
+    fn opengl_draw_plumbing_smoke() {
+        use super::gl::errors::get_error;
+        use super::gl::primitives::Primitive;
+        use super::gl::test_support;
+        use super::gl::texture::InternalFormat;
+        use super::pipeline::{Options as PipelineOptions, Pipeline, StepFunction};
+        use super::render_pass::{
+            Attachment, AttachmentTarget, Draw, Options as PassOptions, RenderPass, Step,
+        };
+        use super::target::{Options as TargetOptions, Target};
+
+        let Some(_gl) = test_support::offscreen_gl("opengl_draw_plumbing_smoke") else {
+            return;
+        };
+        assert!(get_error().is_ok(), "context started in a GL error state");
+
+        let w = 4usize;
+        let h = 4usize;
+
+        // Target::init OFFSCREEN — a renderbuffer-backed FBO in RGBA8.
+        let target = Target::init(TargetOptions {
+            width: w,
+            height: h,
+            internal_format: InternalFormat::RGBA,
+        })
+        .expect("Target::init");
+        assert_eq!(target.width, w);
+        assert_eq!(target.height, h);
+        assert!(get_error().is_ok(), "after Target::init");
+
+        // A trivial clear-only Pipeline: compile + link the inline shader pair, no
+        // vertex input (`None`).
+        let pipeline = Pipeline::init(
+            None,
+            PipelineOptions {
+                vertex_fn: CLEAR_VERTEX_SRC,
+                fragment_fn: CLEAR_FRAGMENT_SRC,
+                step_fn: StepFunction::PerVertex,
+                blending_enabled: true,
+            },
+        )
+        .expect("Pipeline::init");
+        assert!(get_error().is_ok(), "after Pipeline::init");
+
+        // Blue, chosen for exact 8-bit round-trips: 0.0 -> 0, 1.0 -> 255.
+        let clear = [0.0f32, 0.0, 1.0, 1.0];
+
+        // One render pass, one step: clear to `clear`, draw nothing (see the note).
+        {
+            let attachments = [Attachment {
+                target: AttachmentTarget::Target(&target),
+                clear_color: Some(clear),
+            }];
+            let mut pass = RenderPass::begin(PassOptions {
+                attachments: &attachments,
+            });
+            pass.step(Step {
+                pipeline: &pipeline,
+                uniforms: None,
+                buffers: &[],
+                textures: &[],
+                samplers: &[],
+                draw: Draw {
+                    kind: Primitive::Triangle,
+                    vertex_count: 0,
+                    instance_count: 1,
+                },
+            });
+            pass.complete();
+        }
+        assert!(get_error().is_ok(), "after render pass");
+
+        // Golden-support readback: `w*h*4` RGBA bytes out of the offscreen target.
+        let pixels = target.read_rgba();
+        assert_eq!(pixels.len(), w * h * 4);
+        assert!(get_error().is_ok(), "after read_rgba");
+
+        // Every texel is the clear color: 0.0->0, 0.0->0, 1.0->255, 1.0->255.
+        let expected = [0u8, 0, 255, 255];
+        for (i, texel) in pixels.chunks_exact(4).enumerate() {
+            assert_eq!(texel, expected, "texel {i} is not the clear color");
+        }
+
+        pipeline.deinit();
+        target.deinit();
         assert!(get_error().is_ok(), "after deinit");
     }
 }
