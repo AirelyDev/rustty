@@ -1565,8 +1565,16 @@ impl Surface {
 
     /// PORTS: `surface.zig:3328-3344` `glareaRender`. The app/main-thread draw
     /// leg of the **T16 render contract** — the ONLY place a frame is drawn.
+    ///
+    /// The GTK `render` signal is `swapped`-connected (surface.blp), so gtk4-rs
+    /// delivers the argument vector `[self, GdkGLContext, GtkGLArea]` — `self`
+    /// first, the emitting widget LAST (builder_rust_scope pushes `self` then
+    /// swaps index 0 with the tail). The `render` signal carries a
+    /// `GdkGLContext`, so a `_area: &GLArea` second param would read the
+    /// *context* value and abort the (nounwind) FFI trampoline. We take only
+    /// `&self`; the trailing context / area values are ignored positionally.
     #[template_callback]
-    fn gl_render(&self, _area: &gtk4::GLArea) -> bool {
+    fn gl_render(&self) -> bool {
         // No surface ⇒ we failed to initialize; nothing to draw (`:3333-3336`,
         // returns 1 / `true`: handled).
         let Some(core) = self.core() else {
@@ -1590,8 +1598,16 @@ impl Surface {
     /// content-scale / size callbacks when the surface exists, and otherwise
     /// LAZILY builds the core surface (**invariant 3** — on first resize, not
     /// realize, so we have proper initial dimensions).
+    ///
+    /// The GTK `resize` signal is `swapped`-connected (surface.blp), so gtk4-rs
+    /// delivers the argument vector `[self, width, height, GtkGLArea]` — `self`
+    /// first, the emitting widget LAST (builder_rust_scope pushes `self` then
+    /// swaps index 0 with the tail). A leading `_area: &GLArea` param would read
+    /// values[1] (an `i32` width) and abort the (nounwind) FFI trampoline with a
+    /// type mismatch. We take `(&self, width, height)`; the trailing area value
+    /// is ignored positionally.
     #[template_callback]
-    fn gl_resize(&self, _area: &gtk4::GLArea, width: i32, height: i32) {
+    fn gl_resize(&self, width: i32, height: i32) {
         let imp = self.imp();
 
         // Debug output to understand what GTK is telling us (`:3352-3369`). The
@@ -1940,6 +1956,94 @@ mod tests {
         assert!(
             surface.core().is_none(),
             "core None before the first resize (not eagerly constructed)"
+        );
+    }
+
+    /// **Invariant 3 — the resize DRIVER.** Emits a real GTK `resize` on the child
+    /// `GLArea`, exercising the `swapped` template-callback trampoline end to end
+    /// (`surface.blp` → [`Surface::gl_resize`]). This is the regression guard for
+    /// the argument-order defect: gtk4-rs delivers the swapped vector
+    /// `[self, width, height, GtkGLArea]` (self first, emitting widget LAST), so a
+    /// leading `_area: &GLArea` param reads `values[1]` (an `i32`) and the nounwind
+    /// FFI trampoline ABORTS the process (SIGABRT) on the first resize — before
+    /// this test any real GTK resize killed first-light. Here we assert (a) the
+    /// signal reaches the handler at all (no abort) and (b) the emitted dimensions
+    /// are cached, proving width/height unpacked in the right slots.
+    ///
+    /// On first resize with no core surface, `gl_resize` falls through to
+    /// `init_surface` (invariant 3 — lazy on first RESIZE, not realize). This
+    /// structural harness does not `bind_core_app` (`build_default_for_test`), so
+    /// `init_surface` bails at the unbound-app guard and `core()` stays `None`; the
+    /// LIVE construction (bound core app + pty + GL renderer) is T19 first-light,
+    /// blocked on the renderer-seam un-gating. The point pinned here is that a real
+    /// resize reaches the lazy-init leg without aborting.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn surface_init_on_first_resize() {
+        let Some(surface) = display_surface() else {
+            return;
+        };
+        let imp = surface.imp();
+
+        assert!(surface.core().is_none(), "no core surface before resize");
+
+        // Drive the real signal through the swapped trampoline. With the buggy
+        // `(&self, _area, width, height)` order this line SIGABRTs.
+        let (w, h) = (640_i32, 480_i32);
+        imp.gl_area.emit_by_name::<()>("resize", &[&w, &h]);
+
+        // The handler cached exactly what we emitted — width/height came from
+        // `values[1]`/`values[2]`, not the trailing GLArea.
+        assert_eq!(
+            imp.size.get(),
+            SurfaceSize {
+                width: 640,
+                height: 480
+            },
+            "gl_resize cached the emitted width/height (correct swapped-arg order)"
+        );
+
+        // Lazy init was reached but bails (no core app bound in this harness), so
+        // the core surface stays None. Live construction is T19.
+        assert!(
+            surface.core().is_none(),
+            "init bails at the unbound-app guard in the structural harness"
+        );
+    }
+
+    /// **T16 render-contract leg — the render DRIVER.** Emits a real GTK `render`
+    /// on the child `GLArea`, exercising the `swapped` trampoline into
+    /// [`Surface::gl_render`]. The `render` signal carries a `GdkGLContext`, so
+    /// under `swapped` the delivered vector is `[self, GdkGLContext, GtkGLArea]`. A
+    /// buggy `(&self, _area: &GLArea)` handler reads `values[1]` (a `GdkGLContext`)
+    /// as a `GLArea` and the nounwind trampoline ABORTS. With the correct
+    /// `(&self)` shape the trailing context / area are ignored positionally.
+    ///
+    /// No core surface is bound here, so `gl_render` returns `true` on its
+    /// no-surface guard (`:3333-3336`) without touching GL — the assertion is
+    /// simply that the emission returns instead of aborting the process.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn surface_render_signal_does_not_abort() {
+        let Some(surface) = display_surface() else {
+            return;
+        };
+        let imp = surface.imp();
+
+        // A null `GdkGLContext` value (typed as GLContext so the emit type-checks);
+        // `gl_render` never dereferences it on the no-surface path.
+        let ctx = None::<gdk4::GLContext>;
+        let handled = imp.gl_area.emit_by_name::<bool>("render", &[&ctx]);
+
+        // No core surface ⇒ `gl_render` reports the frame handled (returns 1/true)
+        // and, crucially, the swapped `[self, ctx, area]` vector did not abort.
+        assert!(
+            handled,
+            "gl_render handled the no-surface frame without aborting"
+        );
+        assert!(
+            surface.core().is_none(),
+            "render did not construct a core surface"
         );
     }
 
