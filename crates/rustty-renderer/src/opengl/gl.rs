@@ -14,9 +14,10 @@
 //! spelling intact.
 //!
 //! Task 1 landed [`sys`]. Task 2 lands [`buffer`]/[`vertex_array`]/[`errors`]/
-//! [`primitives`]/[`draw`]. Task 3 lands [`shader`]/[`program`]. The remaining
-//! leaves (`Framebuffer`/`Renderbuffer`/`Sampler`/`Texture`/`extensions`) are
-//! Task 4.
+//! [`primitives`]/[`draw`]. Task 3 lands [`shader`]/[`program`]. Task 4 lands
+//! [`texture`]/[`sampler`]/[`framebuffer`]/[`renderbuffer`]/[`extensions`], which
+//! COMPLETES the package: every file of the ~1266-loc `pkg/opengl` oracle is now
+//! ported, and the renderer-facing leaves (Task 5+) build on top of it.
 //!
 //! PORT NOTE (`pub const c` / `pub const glad`, `main.zig:14-15`): no analogue.
 //! Both name ghostty's own vendored glad artifacts; the `gl` crate IS that layer
@@ -26,10 +27,15 @@
 pub mod buffer;
 pub mod draw;
 pub mod errors;
+pub mod extensions;
+pub mod framebuffer;
 pub mod primitives;
 pub mod program;
+pub mod renderbuffer;
+pub mod sampler;
 pub mod shader;
 pub mod sys;
+pub mod texture;
 pub mod vertex_array;
 
 // PORT NOTE (`const log = std.log.scoped(.opengl);`): EVERY file in `pkg/opengl`
@@ -67,12 +73,29 @@ pub(crate) use {log_debug, log_err, log_info, log_warn};
 #[cfg(test)]
 pub(crate) mod test_support;
 
+// pub const ext = @import("extensions.zig");
+//
+// PORT NOTE: the reference re-exports the MODULE under a shortened name — its
+// call sites would read `gl.ext.iterator()`, not `gl.extensions.iterator()`. The
+// module itself is `extensions` (after the file, per this tree's convention and
+// the brief's named path), and this alias restores the reference's spelling, so
+// both resolve.
+pub use extensions as ext;
+
 // pub const Buffer = @import("Buffer.zig");
 pub use buffer::Buffer;
+// pub const Framebuffer = @import("Framebuffer.zig");
+pub use framebuffer::Framebuffer;
+// pub const Renderbuffer = @import("Renderbuffer.zig");
+pub use renderbuffer::Renderbuffer;
 // pub const Program = @import("Program.zig");
 pub use program::Program;
+// pub const Sampler = @import("Sampler.zig");
+pub use sampler::Sampler;
 // pub const Shader = @import("Shader.zig");
 pub use shader::Shader;
+// pub const Texture = @import("Texture.zig");
+pub use texture::Texture;
 // pub const VertexArray = @import("VertexArray.zig");
 pub use vertex_array::VertexArray;
 
@@ -112,11 +135,18 @@ pub use draw::{
 mod tests {
     use std::ffi::CStr;
 
+    use gl::types::GLint;
+
     use super::buffer::{Buffer, Target, Usage};
     use super::errors::get_error;
+    use super::extensions;
+    use super::framebuffer::{self, Framebuffer};
     use super::program::{self, Program};
+    use super::renderbuffer::Renderbuffer;
+    use super::sampler::Sampler;
     use super::shader::{self, Shader};
     use super::test_support;
+    use super::texture::{self, Texture};
     use super::vertex_array::VertexArray;
 
     /// A minimal, valid `#version 430 core` vertex shader.
@@ -362,5 +392,253 @@ mod tests {
 
         vao.destroy();
         assert!(get_error().is_ok(), "after VertexArray::destroy");
+    }
+
+    /// RUSTTY-ONLY smoke test — same framing as [`gl_buffer_vertex_array_smoke`]:
+    /// the reference has NO `test{}` block over `Texture.zig`/`Sampler.zig`/
+    /// `Framebuffer.zig`/`Renderbuffer.zig`/`extensions.zig`, so there is no
+    /// parity oracle to match. It drives the ported wrappers through a REAL
+    /// driver, which is the only way to catch what a hand-transcribed FFI shim
+    /// gets silently wrong and still compiles: a wrong enum value, a swapped
+    /// argument, a bad pointer.
+    ///
+    /// The shape mirrors `metal.rs`'s texture smoke test (a 2x2 RGBA texture with
+    /// data), then adds the offscreen-target trio the reference builds in
+    /// `renderer/opengl/Target.zig`: a renderbuffer + framebuffer, attached at
+    /// `COLOR_ATTACHMENT0`, asserted `complete`.
+    ///
+    /// `get_error()` is asserted clean after every step rather than once at the
+    /// end, so a failure names the call that caused it — GL errors are
+    /// STICKY-until-read, so an un-asserted step would smear its error onto a
+    /// later assert.
+    ///
+    /// Skips cleanly (never panics) when the host has no OpenGL 4.3 core context
+    /// — see [`test_support::offscreen_gl`].
+    #[test]
+    fn gl_texture_framebuffer_renderbuffer_smoke() {
+        let Some(_gl) = test_support::offscreen_gl("gl_texture_framebuffer_renderbuffer_smoke")
+        else {
+            return;
+        };
+
+        assert!(get_error().is_ok(), "context started in a GL error state");
+
+        // --- Texture.zig: active -> create -> bind -> parameter -> image2D ----
+
+        // `Texture.active(0)` — `renderer/opengl/RenderPass.zig:139`'s call.
+        Texture::active(0).expect("Texture::active");
+        assert!(get_error().is_ok(), "after Texture::active");
+
+        let tex = Texture::create().expect("Texture::create");
+        assert!(get_error().is_ok(), "after Texture::create");
+
+        let tbind = tex.bind(texture::Target::Texture2D).expect("Texture::bind");
+        assert!(get_error().is_ok(), "after Texture::bind");
+
+        // The four `parameter` calls `renderer/opengl/Texture.zig` makes on every
+        // texture it creates. Each takes a `c.GLint`, the reference's only
+        // instantiated `parameter` arm.
+        tbind
+            .parameter(
+                texture::Parameter::WrapS,
+                texture::Wrap::ClampToEdge as GLint,
+            )
+            .expect("Binding::parameter WrapS");
+        tbind
+            .parameter(
+                texture::Parameter::WrapT,
+                texture::Wrap::ClampToEdge as GLint,
+            )
+            .expect("Binding::parameter WrapT");
+        tbind
+            .parameter(
+                texture::Parameter::MinFilter,
+                texture::MinFilter::Linear as GLint,
+            )
+            .expect("Binding::parameter MinFilter");
+        tbind
+            .parameter(
+                texture::Parameter::MagFilter,
+                texture::MagFilter::Linear as GLint,
+            )
+            .expect("Binding::parameter MagFilter");
+        assert!(get_error().is_ok(), "after Binding::parameter");
+
+        // A 2x2 RGBA texture with data — `metal.rs`'s texture smoke test shape.
+        // Opaque red / green / blue / white, one texel each.
+        #[rustfmt::skip]
+        let pixels: [u8; 16] = [
+            0xff, 0x00, 0x00, 0xff,   0x00, 0xff, 0x00, 0xff,
+            0x00, 0x00, 0xff, 0xff,   0xff, 0xff, 0xff, 0xff,
+        ];
+
+        // SAFETY: `pixels` is 16 live bytes = 2 * 2 texels * 4 bytes for
+        // (RGBA, UNSIGNED_BYTE), which is exactly what this call makes GL read at
+        // the default unpack alignment. See `image_2d`'s safety contract.
+        unsafe {
+            tbind.image_2d(
+                0,
+                texture::InternalFormat::RGBA,
+                2,
+                2,
+                texture::Format::RGBA,
+                texture::DataType::UNSIGNED_BYTE,
+                pixels.as_ptr().cast(),
+            )
+        }
+        .expect("Binding::image_2d");
+        assert!(get_error().is_ok(), "after Binding::image_2d");
+
+        // `subImage2D` over the just-sized image — the incremental-upload path
+        // `renderer/opengl/Texture.zig` drives. One texel at (1, 1).
+        // SAFETY: a 1x1 (RGBA, UNSIGNED_BYTE) upload reads 4 bytes; `pixels` is 16.
+        unsafe {
+            tbind.sub_image_2d(
+                0,
+                1,
+                1,
+                1,
+                1,
+                texture::Format::RGBA,
+                texture::DataType::UNSIGNED_BYTE,
+                pixels.as_ptr().cast(),
+            )
+        }
+        .expect("Binding::sub_image_2d");
+        assert!(get_error().is_ok(), "after Binding::sub_image_2d");
+
+        tbind.generate_mipmap();
+        assert!(get_error().is_ok(), "after Binding::generate_mipmap");
+
+        // --- Sampler.zig: create -> bind -> parameter -> destroy --------------
+        let sampler = Sampler::create().expect("Sampler::create");
+        assert!(get_error().is_ok(), "after Sampler::create");
+
+        sampler.bind(0).expect("Sampler::bind");
+        assert!(get_error().is_ok(), "after Sampler::bind");
+
+        // `Sampler.parameter` takes `Texture.Parameter` — the reference shares the
+        // one enum across both objects (`Sampler.zig:27`).
+        sampler
+            .parameter(
+                texture::Parameter::MinFilter,
+                texture::MinFilter::Linear as GLint,
+            )
+            .expect("Sampler::parameter");
+        assert!(get_error().is_ok(), "after Sampler::parameter");
+
+        sampler.destroy();
+        assert!(get_error().is_ok(), "after Sampler::destroy");
+
+        // --- Renderbuffer.zig: create -> bind -> storage ----------------------
+        let rbo = Renderbuffer::create().expect("Renderbuffer::create");
+        assert!(get_error().is_ok(), "after Renderbuffer::create");
+
+        let rbind = rbo.bind().expect("Renderbuffer::bind");
+        assert!(get_error().is_ok(), "after Renderbuffer::bind");
+
+        rbind
+            .storage(texture::InternalFormat::RGBA, 2, 2)
+            .expect("Renderbuffer::Binding::storage");
+        assert!(get_error().is_ok(), "after Renderbuffer::Binding::storage");
+
+        // --- Framebuffer.zig: create -> bind -> renderbuffer -> checkStatus ---
+        let fbo = Framebuffer::create().expect("Framebuffer::create");
+        assert!(get_error().is_ok(), "after Framebuffer::create");
+
+        let fbind = fbo
+            .bind(framebuffer::Target::FRAMEBUFFER)
+            .expect("Framebuffer::bind");
+        assert!(get_error().is_ok(), "after Framebuffer::bind");
+
+        fbind
+            .renderbuffer(framebuffer::Attachment::COLOR0, rbo)
+            .expect("Framebuffer::Binding::renderbuffer");
+        assert!(
+            get_error().is_ok(),
+            "after Framebuffer::Binding::renderbuffer"
+        );
+
+        // THE assertion of this test: a renderbuffer-backed framebuffer that GL
+        // itself certifies as renderable.
+        assert_eq!(
+            fbind.check_status(),
+            framebuffer::Status::COMPLETE,
+            "renderbuffer-backed framebuffer is not complete",
+        );
+
+        // `drawBuffers` (`Framebuffer.zig:104-111`) over that attachment.
+        fbind
+            .draw_buffers(&[framebuffer::Attachment::COLOR0])
+            .expect("Framebuffer::Binding::draw_buffers");
+        assert!(
+            get_error().is_ok(),
+            "after Framebuffer::Binding::draw_buffers"
+        );
+
+        // `copySubImage2D` (`Texture.zig:199-220`) reads from the READ framebuffer
+        // — which is now the complete, renderbuffer-backed one above, NOT the
+        // texture, so there is no feedback loop. This is the only point in the
+        // test where the call is legal, hence its placement here rather than with
+        // the other `Texture.Binding` methods.
+        tbind
+            .copy_sub_image_2d(0, 0, 0, 0, 0, 1, 1)
+            .expect("Binding::copy_sub_image_2d");
+        assert!(get_error().is_ok(), "after Binding::copy_sub_image_2d");
+
+        // `texture2D` (`Framebuffer.zig:73-88`) — the OTHER attachment path, which
+        // is what `renderer/opengl/Target.zig` actually uses. Replaces the
+        // renderbuffer at the same attachment point; must also be complete.
+        fbind
+            .texture_2d(
+                framebuffer::Attachment::COLOR0,
+                texture::Target::Texture2D,
+                tex,
+                0,
+            )
+            .expect("Framebuffer::Binding::texture_2d");
+        assert!(
+            get_error().is_ok(),
+            "after Framebuffer::Binding::texture_2d"
+        );
+
+        assert_eq!(
+            fbind.check_status(),
+            framebuffer::Status::COMPLETE,
+            "texture-backed framebuffer is not complete",
+        );
+
+        // --- extensions.zig: len -> iterator -> next --------------------------
+        let n = extensions::len().expect("extensions::len");
+        assert!(get_error().is_ok(), "after extensions::len");
+
+        let mut it = extensions::iterator().expect("extensions::iterator");
+        let mut seen = 0u32;
+        while let Some(ext) = it.next().expect("Iterator::next") {
+            // Every GL extension name is a non-empty ASCII token.
+            assert!(!ext.is_empty(), "extension {seen} has an empty name");
+            seen += 1;
+        }
+        assert_eq!(seen, n, "iterator yielded a different count than len()");
+        assert!(get_error().is_ok(), "after exhausting extensions::Iterator");
+
+        // A 4.3 core context always advertises at least one extension.
+        assert!(n > 0, "a live GL 4.3 core context advertised no extensions");
+
+        // --- teardown ---------------------------------------------------------
+        fbind.unbind();
+        assert!(get_error().is_ok(), "after Framebuffer::Binding::unbind");
+        fbo.destroy();
+        assert!(get_error().is_ok(), "after Framebuffer::destroy");
+
+        rbind.unbind();
+        assert!(get_error().is_ok(), "after Renderbuffer::Binding::unbind");
+        rbo.destroy();
+        assert!(get_error().is_ok(), "after Renderbuffer::destroy");
+
+        tbind.unbind();
+        assert!(get_error().is_ok(), "after Texture::Binding::unbind");
+        tex.destroy();
+        assert!(get_error().is_ok(), "after Texture::destroy");
     }
 }
