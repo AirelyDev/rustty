@@ -17,6 +17,14 @@
 - **Trait surface (load-bearing, [ADV-FIX F3]):** the Linux `Async`/`Completion`/`WriteQueue`/`WriteRequest`/`NotifyError` re-exports MUST satisfy the same bounds the kqueue types do — `Async: Copy`, `Completion/WriteQueue/WriteRequest: Default` (hand-written, not derived), `NotifyError: Debug+Clone+Copy+PartialEq+Eq`. termio (`xev_seam.rs: pub use rustty_xev::*`) and core default-construct and embed these; a missing bound breaks their compile.
 - **Reference pin:** all `libxev …:NNN` citations resolve against `scratchpad/libxev/src/` (pin `34fa5087`). All `rustty-xev …:NNN` citations resolve against the current crate.
 
+## STRUCTURE CORRECTION (2026-07-16, discovered at execution — GOVERNS over any conflicting task text below)
+
+The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, `net.rs`, `async.rs`, `timer.rs`, `process.rs`, `stream.rs`) `#[cfg(target_os = "macos")]` and concretized `loop.rs`'s callback ABI to `crate::kqueue::{Loop, Completion, Result}`. Therefore:
+- **Do NOT modify `async.rs`/`timer.rs`/`process.rs`/`stream.rs`** — they are macOS-only; editing them violates R5. Any task text saying "modify async.rs to add the epoll/io_uring arm" is SUPERSEDED: implement the Linux watcher surface **inside the self-contained `epoll.rs`/`io_uring.rs`** (each is a whole backend, parallel to `kqueue.rs` + its macOS helpers).
+- **`linux/` module** (`linux.rs` + `linux/*.rs`) holds the Linux-shared primitives BOTH backends use: `timerfd.rs`, `eventfd.rs`, and the shared plain ABI enums (`RunMode`/`CallbackAction`/`CompletionState`/`Options` — pure, byte-faithful twins of `loop.rs`'s; each backend's `Callback` fn-ptr type references its OWN `Loop`/`Completion`/`Result`).
+- `epoll.rs` and `io_uring.rs` are self-contained: own `Loop`/`Completion`/`Operation`/`Result`/`Callback` + their `Async`/`Timer`/`Process`/`Stream` watcher surfaces over the `linux/` primitives.
+- `dynamic.rs` (Task 7) unifies the two.
+
 ## File structure
 
 | File | Responsibility |
@@ -24,11 +32,10 @@
 | `crates/rustty-xev/src/epoll.rs` (**create**) | epoll `Loop`/`Completion`/`Operation`/`Result`/`submit`/`tick`; port of libxev `backend/epoll.zig` (2061 loc). Mirrors `kqueue.rs` structure. |
 | `crates/rustty-xev/src/io_uring.rs` (**create**) | io_uring `Loop`/`Completion`/`Operation`/`Result` + SQ/CQ ring engine; port of `backend/io_uring.zig` (1787 loc) + a small `IoUring` ring binding (libc syscalls). |
 | `crates/rustty-xev/src/linux/timerfd.rs` (**create**) | `timerfd`-backed timer primitive; port of libxev `linux/timerfd.zig` (89 loc). |
+| `crates/rustty-xev/src/linux/eventfd.rs` (**create**) | `eventfd` wakeup primitive both backends' `Async` wrap (create/notify/drain). |
+| `crates/rustty-xev/src/linux.rs` (**modify from stub**) | `mod timerfd; mod eventfd;` + the shared plain ABI enums (`RunMode`/`CallbackAction`/`CompletionState`/`Options`) both Linux backends use. |
 | `crates/rustty-xev/src/dynamic.rs` (**create**) | hand-authored `Dynamic` union layer (`Loop`/`Completion`/`Async`/`Timer`/`Process`/`Stream`/`WriteQueue`/`WriteRequest`/error sets) over `{IoUring, Epoll}` + the global `backend` selector + `detect`/`prefer`. Port of `dynamic.zig` (524 loc) WITHOUT comptime metaprogramming (concrete 2-variant). |
-| `crates/rustty-xev/src/async.rs` (**modify**) | add the `io_uring`/`epoll` eventfd arms of `Async` (currently kqueue mach-port only). |
-| `crates/rustty-xev/src/timer.rs` (**modify**) | add the epoll(timerfd)/io_uring(IORING_OP_TIMEOUT) arms. |
-| `crates/rustty-xev/src/process.rs` (**modify**) | add the epoll(pidfd/waitpid)/io_uring arms of `Process`. |
-| `crates/rustty-xev/src/stream.rs` (**modify**) | add the epoll/io_uring read/write/poll/`queueWrite` arms. |
+| `async.rs`/`timer.rs`/`process.rs`/`stream.rs`/`loop.rs`/`common.rs`/`net.rs` (**UNTOUCHED**) | macOS-only (R5). Linux watcher surfaces live INSIDE `epoll.rs`/`io_uring.rs`, not here. |
 | `crates/rustty-xev/src/backend.rs` (**modify**) | `candidates()`/`default()`/`Api` Linux arms (`[io_uring, epoll]`, default `io_uring`). |
 | `crates/rustty-xev/src/lib.rs` (**modify**) | per-target re-export: Linux → `dynamic::*`; macOS → kqueue flat (unchanged). |
 | `crates/rustty-termio/tests/live_shell.rs` (**modify**) | widen the KAT gate from `#[cfg(target_os="macos")]` to `#[cfg(unix)]`. |
@@ -63,21 +70,28 @@
 
 ---
 
-### Task 2: `linux/timerfd.rs` + epoll `Async` (eventfd) primitive
+### Task 2: Linux shared primitives — `timerfd` + `eventfd` + shared ABI enums (standalone)
+
+**Scope (per STRUCTURE CORRECTION):** the standalone `linux/` primitives both backends build on. NO loop yet — so tests are standalone (fd-level), and the loop-driven `epoll: timerfd`/async-wakeup tests move to Task 3.
 
 **Files:**
 - Create: `crates/rustty-xev/src/linux/timerfd.rs` (port `linux/timerfd.zig`, 89 loc)
-- Modify: `crates/rustty-xev/src/async.rs` (add the `#[cfg(target_os="linux")]` eventfd `Async` arm; ref `watcher/async.zig` `.io_uring, .epoll => …` eventfd variant at `async.zig:85,199`)
+- Create: `crates/rustty-xev/src/linux/eventfd.rs` (the eventfd wakeup primitive)
+- Modify: `crates/rustty-xev/src/linux.rs` (from stub → `mod timerfd; mod eventfd;` + the shared plain ABI enums `RunMode`/`CallbackAction`/`CompletionState`/`Options`, byte-faithful twins of `loop.rs`'s pure enums — do NOT import from the macOS-gated `loop.rs`)
 
 **Interfaces:**
-- Consumes: `libc::{timerfd_create, timerfd_settime, eventfd, read, write, close}`.
-- Produces: `timerfd::Timerfd { fd }` with `set`/`get`/`deinit`; `epoll::Async { fd: RawFd }` (eventfd-backed) with `init() -> Result<Async, Error>`, `deinit`, `notify() -> Result<(), Error>`, `wait::<UD>(…)`. NOTE: on epoll the loop's own wakeup IS an `Async` (eventfd) per `epoll.zig:37–41,78`. `Async` stays `Copy` (it wraps a raw fd) — required by the trait surface.
+- Consumes: `libc::{timerfd_create, timerfd_settime, timerfd_gettime, eventfd, read, write, close, CLOCK_MONOTONIC, TFD_*, EFD_*}`.
+- Produces:
+  - `linux::timerfd::Timerfd { fd: RawFd }` — `init() -> io::Result<Self>` (`CLOCK_MONOTONIC`, `TFD_NONBLOCK|TFD_CLOEXEC`), `set(next_ms)`, `get()`, `deinit()`; `Copy` (wraps a raw fd).
+  - `linux::eventfd::Eventfd { fd: RawFd }` — `init() -> io::Result<Self>` (`EFD_CLOEXEC|EFD_NONBLOCK`), `notify()` = `write(fd, &1u64)`, `drain() -> io::Result<u64>` = read+coalesce, `deinit()`; `Copy`.
+  - `linux::{RunMode, CallbackAction, CompletionState, Options}` — the shared ABI enums (values identical to `loop.rs`).
+- These are the primitives `epoll.rs`/`io_uring.rs` wrap into their `Async`(eventfd) + `Timer`(timerfd) surfaces in Tasks 3–6. The full loop-integrated `Async`/`Timer` watchers and their loop-driven tests (`epoll: timerfd`, async-wakeup) are Task 3.
 
-- [ ] **Step 1: Write the failing tests** — port `epoll: timerfd` (`epoll.zig:1626`) as `#[test] fn epoll_timerfd()` and the eventfd notify round-trip as a live KAT `#[test] fn epoll_async_wakeup()` (mirror the kqueue KAT 1 in `async.rs`).
-- [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-xev --target aarch64-unknown-linux-gnu epoll_timerfd epoll_async_wakeup` → FAIL.
-- [ ] **Step 3: Implement** — port `timerfd.zig` verbatim (create/settime with `CLOCK_MONOTONIC`, `TFD_NONBLOCK|TFD_CLOEXEC`); implement the eventfd `Async` arm (`eventfd(0, EFD_CLOEXEC|EFD_NONBLOCK)`, `notify` = `write(fd, &1u64)`, `wait` sets `op = .read`/poll on the eventfd; drain coalesces per `async.zig` eventfd `drain`). Hand-write `impl Copy for Async` + `impl Default` if the trait surface needs it.
+- [ ] **Step 1: Write the failing tests** — standalone (no loop): `#[test] fn timerfd_fires()` (init, `set(5ms)`, `poll`/read the fd, assert it becomes readable and `read` yields the expiration count) and `#[test] fn eventfd_notify_drain()` (init, `notify()` twice, `drain()` returns the coalesced count, second `drain` would block → returns WouldBlock).
+- [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-xev timerfd_fires eventfd_notify_drain` → FAIL.
+- [ ] **Step 3: Implement** — port `timerfd.zig` verbatim; implement the eventfd primitive; add the shared ABI enums to `linux.rs`.
 - [ ] **Step 4: Run to verify they pass** — same command → PASS.
-- [ ] **Step 5: Commit** — `git commit -m "rustty-xev: linux timerfd + epoll eventfd Async (L1 LT2)"`
+- [ ] **Step 5: Commit** — `git commit -m "rustty-xev: linux timerfd + eventfd primitives + shared ABI enums (L1 LT2)"`
 
 ---
 
