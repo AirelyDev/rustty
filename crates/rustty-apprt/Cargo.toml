@@ -244,3 +244,9 @@ cc = "1"
 # the library edge, so the process-global gresource registry is shared.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gio = { version = "0.22" }
+# `glib` in scope for the integration KATs: `tests/gtk_application.rs` builds a
+# `GhosttyApplication` via `glib::Object::builder` and compares GObject identity.
+# Integration tests reach only dev-dependencies, not the lib's optional `glib`
+# edge; this resolves to the SAME `glib` 0.22 instance so the GType registry and
+# the process-global `GApplication` default are shared with the library.
+glib = { version = "0.22" }

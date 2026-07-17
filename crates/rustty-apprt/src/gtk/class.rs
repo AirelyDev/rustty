@@ -45,6 +45,7 @@
 //! (double-freed); it is silent at compile time, which is why it is spelled out
 //! here for every class port to check against.
 
+pub mod application;
 pub mod config;
 
 /// One row of the `class.zig` → gtk4-rs porter's map. Live, test-checked data so
