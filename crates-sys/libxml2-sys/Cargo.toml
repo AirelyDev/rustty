@@ -1,0 +1,44 @@
+# libxml2-sys — vendored C dependency (R3: self-contained, no ghostty dep)
+#
+# This crate vendors the SAME upstream library the reference uses — libxml2
+# 2.11.5, the XML parser Fontconfig's `fcxml.c` parses `/etc/fonts/fonts.conf`
+# with — copied in-tree under `vendor/` and built standalone via `cc` +
+# `bindgen`. It mirrors the reference's pkg/libxml2/build.zig `build`: the same
+# `srcs` list (44 translation units), the same hardcoded version/`HAVE_*`/
+# `LIBXML_*_ENABLED` flags, and the same two `override/` config headers (the
+# pre-generated `config.h` / `xmlversion.h` upstream's `./configure` would
+# otherwise template).
+#
+# The host has a system libxml2 2.12 — deliberately NOT used: R3 pins parity to
+# the 2.11.5 the reference itself builds. No pkg-config, no system link.
+#
+# `links` declares the native lib so Cargo enforces one-version linking; the
+# archive name `xml2` matches the reference's `b.addLibrary(.{ .name = "xml2" })`.
+[package]
+name = "libxml2-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+links = "xml2"
+build = "build.rs"
+
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from libxml2's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[build-dependencies]
+# R3: compile the vendored libxml2 C standalone (`cc`) with the reference's
+# flags, and auto-generate the FFI (`bindgen`) from the same public headers
+# fontconfig's `fcxml.c` uses.
+cc = "1"
+bindgen = "0.72"

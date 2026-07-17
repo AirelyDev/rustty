@@ -128,6 +128,7 @@ members = [
     "crates-sys/freetype-sys",
     "crates-sys/harfbuzz-sys",
     "crates-sys/fontconfig-sys",
+    "crates-sys/libxml2-sys",
     "crates-sys/oniguruma-sys",
     "crates-sys/simdutf-sys",
     "crates-sys/highway-sys",

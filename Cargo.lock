@@ -697,6 +697,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "libxml2-sys"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+]
+
+[[package]]
 name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
