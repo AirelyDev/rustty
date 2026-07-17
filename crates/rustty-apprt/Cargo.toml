@@ -30,6 +30,12 @@ gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita"]
 [dependencies]
 rustty-core = { workspace = true }
 rustty-apprt-api = { workspace = true }
+# R2 single-source-of-truth for the product identity. `gtk::build_info` sources
+# `BASE_APPLICATION_ID`/`RESOURCE_PATH` from `rustty_identity::BUNDLE_ID` (never a
+# hardcoded `com.mitchellh.ghostty`). Plain (non-optional) dep: it is a small,
+# pure-const crate and the `gtk`-gated modules are its only consumers here, so on
+# a macOS/default build it is compiled but unreferenced — behavior-identical.
+rustty-identity = { workspace = true }
 rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
 rustty-renderer = { workspace = true }

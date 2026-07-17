@@ -91,8 +91,10 @@
 //! the full derivation and the open plan:96 reconciliation.
 
 pub mod adw_version;
+pub mod build_info;
 pub mod class;
 pub mod ext;
+pub mod gresource;
 pub mod gtk_version;
 pub mod weak_ref;
 
