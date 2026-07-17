@@ -40,6 +40,15 @@ use rustty_z2d::surface::{self, Surface};
 use rustty_vt::page::{SemanticContent, SemanticPrompt};
 use rustty_vt::render::RenderState;
 
+// PORT NOTE (linux-port): `image` is macOS-gated (its `Image::Ready` variant embeds
+// `crate::metal::Texture`), but NOTHING else in this file touches `image` — the
+// overlay is pure CPU/z2d. So the import, and the single `pending_image` leaf that
+// needs it, are gated here rather than gating the whole module: that keeps the
+// metal-free surface (`Feature`, `InitError`, `Overlay::init`/`apply_features`/the
+// four z2d render leaves) compiling and TESTED on every target. `Pending` and
+// `PixelFormat` are themselves metal-free plain data; they become reachable off-macOS
+// when L4 ungates a graphics-API-generic `image`.
+#[cfg(target_os = "macos")]
 use crate::image::{Pending, PixelFormat};
 use crate::size::{CellSize, Size};
 
@@ -182,6 +191,12 @@ impl Overlay {
     }
 
     /// Returns a pending image that can be used to copy, convert, upload, etc.
+    //
+    // PORT NOTE (linux-port): the ONLY `crate::image`-typed leaf on `Overlay`, hence
+    // the only thing in this file that binds it to the macOS-gated `image` module
+    // (see the gated import above). The body is FULL and target-independent — the
+    // gate is purely the `image::Pending` return type, and lifts with L4.
+    #[cfg(target_os = "macos")]
     pub fn pending_image(&self) -> Pending {
         Pending {
             // @intCast(self.surface.getWidth()) / getHeight()
@@ -761,7 +776,9 @@ enum OverlayError {
 // PORT NOTE (rustty-only smoke test, NOT a ghostty parity test): `Overlay.zig`
 // carries 0 `test{}` blocks (golden-image-gated). This proves the pure-z2d
 // lifecycle (init → pending_image → reset → deinit) compiles and runs with no
-// GPU. No Metal device needed.
+// GPU. No Metal device needed — and, since the linux-port ungated this module,
+// these tests now run on every target (the `pending_image` step alone is
+// macOS-gated; see `overlay_surface_roundtrip`).
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,16 +806,24 @@ mod tests {
     #[test]
     fn overlay_surface_roundtrip() {
         let sz = size(80, 40);
-        let term = sz.terminal();
         let mut o = Overlay::init(sz).unwrap();
 
         // pending_image reports the terminal (padding-less) surface dims, aliasing
         // the RGBA z2d buffer.
-        let p = o.pending_image();
-        assert_eq!(p.width, term.width);
-        assert_eq!(p.height, term.height);
-        assert_eq!(p.pixel_format, PixelFormat::Rgba);
-        assert!(!p.data.is_null());
+        //
+        // PORT NOTE (linux-port): `pending_image` is macOS-gated (its `image::Pending`
+        // return type is — see the module head), so its assertions are too. The
+        // init/reset/deinit lifecycle around them is metal-free and stays covered on
+        // every target.
+        #[cfg(target_os = "macos")]
+        {
+            let term = sz.terminal();
+            let p = o.pending_image();
+            assert_eq!(p.width, term.width);
+            assert_eq!(p.height, term.height);
+            assert_eq!(p.pixel_format, PixelFormat::Rgba);
+            assert!(!p.data.is_null());
+        }
 
         o.reset();
         o.deinit();

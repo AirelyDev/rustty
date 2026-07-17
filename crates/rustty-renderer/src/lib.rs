@@ -91,20 +91,29 @@ mod test_support;
 #[cfg(target_os = "macos")]
 pub mod metal;
 
-// GPU R-d Chunk-3 prerequisites (macOS-gated): the Kitty-graphics + overlay image
-// render state (`image.zig`) and the CPU/z2d debug overlay (`Overlay.zig`). Both
-// are macOS-only because `image::Image` embeds `crate::metal::Texture` (the
-// `Ready` variant) and `overlay` returns `image::Pending`. Neither names
+// GPU R-d Chunk-3 prerequisites: the Kitty-graphics + overlay image render state
+// (`image.zig`) and the CPU/z2d debug overlay (`Overlay.zig`). Neither names
 // `GenericRenderer`, so both compile standalone before Chunk 3 (GPU_RD_P1_DESIGN.md
 // §1.1). The new `rustty-renderer -> rustty-z2d` edge (Overlay's z2d) is a
 // downward, acyclic edge to a pure-Rust sink (check_acyclic.sh stays GREEN).
+//
+// `image` is macOS-only: `image::Image` embeds `crate::metal::Texture` (the `Ready`
+// variant), `image::Replace`/`ImageEntry` carry it, and `image::State`'s draw path
+// is written against the `crate::metal` leaves.
 #[cfg(target_os = "macos")]
 pub mod image;
-#[cfg(target_os = "macos")]
+// `overlay` is NOT gated: `Overlay` renders on the CPU via z2d (`Overlay.zig`'s
+// whole point — see the module docs) and names no Metal type. Its ONLY `image`-typed
+// leaf, `pending_image() -> image::Pending`, is gated WITHIN `overlay.rs` instead, so
+// the metal-free surface resolves on every target. That surface is load-bearing
+// off-macOS: `state::InspectorOverlay::overlay_features` names [`overlay::Feature`]
+// UNCONDITIONALLY (it is the acyclic inspector seam's only return type), and
+// `overlay::InitError` is named by the macOS-gated `generic::macos_impl`. The
+// `pending_image` leaf returns once the L4 OpenGL backend ungates a
+// graphics-API-generic `image` (docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md).
 pub mod overlay;
 // The GPU_RD_TRAIT_DESIGN §D field names `overlay: Option<Overlay>` via
 // `crate::Overlay`.
-#[cfg(target_os = "macos")]
 pub use overlay::Overlay;
 
 // renderer/size.zig lives in the rustty-render-types leaf (A1 hoist). The
