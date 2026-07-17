@@ -167,7 +167,55 @@ impl Drop for ThreadExitGuard {
 // `rustty_renderer::generic` (the `write!("{self:?}")` bump); `Surface::draw`'s
 // `Result<(), RendererError>` and `InitError::Renderer`'s `From`/`Display`
 // delegation are unchanged.
+#[cfg(target_os = "macos")]
 pub type RendererError = rustty_renderer::generic::Error;
+
+// ---------------------------------------------------------------------------
+// LINUX PLACEHOLDER — DEFERRED to L4 (OpenGL renderer backend), Task 9.
+//
+// `rustty_renderer::generic::Error` is the aggregate of the METAL leaf errors and
+// so lives inside `generic.rs`'s `#[cfg(target_os = "macos")] mod macos_impl`
+// (generic.rs:828) — there is no Linux twin yet, because the Linux `Renderer` is
+// `GenericRenderer(OpenGL)` (renderer.zig:38's `.opengl` arm) and L4 has not
+// landed its `linux_impl` leaf. Rather than name a type that does not exist, this
+// module carries the core-local placeholder for the seam it embeds — exactly the
+// "dependency placeholder" contract in this file's header, and the same shape the
+// (now-swapped) uninhabited `RendererDerivedConfig` placeholder had before the
+// real config plane landed.
+//
+// UNINHABITED ON PURPOSE: on Linux there is no renderer, so no renderer error can
+// ever be constructed — the placeholder `Renderer` leaves below `unimplemented!()`
+// before they could return one. This is the honest shape (it cannot silently
+// fabricate a "success" or a fake failure), and it makes the L4 swap mechanical:
+// delete this block + the `#[cfg]` on the alias above and change the alias's gate
+// to unconditional, once `rustty_renderer::generic::Error` exists on both targets.
+//
+// The `cfg` is the exact COMPLEMENT of rustty-renderer's own gate
+// (`#[cfg(target_os = "macos")] pub use generic::Renderer;`, renderer/src/lib.rs:154),
+// so every target resolves exactly one of the two arms — never both, never neither.
+// ---------------------------------------------------------------------------
+#[cfg(not(target_os = "macos"))]
+pub type RendererError = LinuxRendererErrorPlaceholder;
+
+/// See the `RendererError` block above — the uninhabited Linux placeholder for
+/// `rustty_renderer::generic::Error`. Carries the same derives + `Display`/
+/// `std::error::Error` impls the real (macOS) error has, so that core's
+/// `InitError::Renderer` `From`/`Display` delegation (surface.rs:1407/1465) is
+/// target-independent.
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinuxRendererErrorPlaceholder {}
+
+#[cfg(not(target_os = "macos"))]
+impl core::fmt::Display for LinuxRendererErrorPlaceholder {
+    fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Uninhabited — no value exists to format.
+        match *self {}
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl std::error::Error for LinuxRendererErrorPlaceholder {}
 
 // PORT NOTE (SWAP LANDED): the `renderer.Renderer.DerivedConfig`
 // (generic.zig:536, `pub fn init` generic.zig:574, `pub fn deinit`
@@ -196,7 +244,143 @@ pub type RendererError = rustty_renderer::generic::Error;
 // surface directly through `(*self.renderer).0`; out-of-module callers only
 // touch the 6 forwarders below. Surface.zig embeds it by value
 // (`renderer: renderer.Renderer`).
+#[cfg(target_os = "macos")]
 pub struct Renderer(pub rustty_renderer::Renderer);
+
+/// LINUX PLACEHOLDER — DEFERRED to L4 (OpenGL renderer backend), Task 9.
+/// See the `RendererError` block above for the full rationale + the swap recipe.
+//
+// There is nothing to forward TO on Linux yet (`rustty_renderer::Renderer` is
+// `#[cfg(target_os = "macos")]`, renderer/src/lib.rs:154 — the `.opengl` arm of
+// renderer.zig:38 is L4's work), so the newtype's inner field is dropped and the
+// forwarder bodies below become `unimplemented!()` leaves under the same `#[cfg]`
+// complement. INHABITED (a unit struct), per this file's header contract: Surface
+// embeds it BY VALUE (`renderer: renderer.Renderer`, Surface.zig), so the shape
+// must be constructible for the surrounding surface/thread code to type-check.
+// The method SIGNATURES are shared with the macOS arm (one `impl` block, only the
+// leaf bodies are cfg'd), so both targets type-check the same seam.
+//
+// The `.0` field is KEPT (over a placeholder inner, below) rather than dropped:
+// this file's header notes `.0` is `pub` precisely so the same-crate `Thread<A>`
+// callbacks reach the real renderer surface directly through
+// `(*self.renderer).0`. Keeping the field lets all 9 of those `Thread<A>` call
+// sites stay BYTE-IDENTICAL across targets — no `#[cfg]` sprinkled through the
+// renderer-thread logic — which is the header's "everything that calls them
+// compiles and is reviewable" contract. The deferral stays concentrated in the
+// leaves.
+#[cfg(not(target_os = "macos"))]
+pub struct Renderer(pub LinuxRendererPlaceholder);
+
+/// LINUX PLACEHOLDER — DEFERRED to L4 (OpenGL renderer backend), Task 9: the
+/// stand-in for `rustty_renderer::Renderer`'s (macOS-gated) method surface, for
+/// exactly the methods core's `Thread<A>` reaches through `(*self.renderer).0`.
+//
+// Every signature below MIRRORS the real one in `rustty_renderer::generic`'s
+// `macos_impl` (cited per method), so the L4 swap is a pure deletion: drop this
+// type + the `#[cfg]`s and the `Thread<A>` call sites already type-check against
+// the real `GenericRenderer(OpenGL)`.
+//
+// STATICALLY UNREACHABLE: `Renderer::init` above is an `unimplemented!()` leaf on
+// this target, so no `Renderer` — and hence no `LinuxRendererPlaceholder` — can
+// ever be constructed on Linux. These bodies exist to type-check the seam, and
+// each is its own honest `unimplemented!()` leaf regardless.
+#[cfg(not(target_os = "macos"))]
+pub struct LinuxRendererPlaceholder {
+    /// Mirrors `generic.rs:1227` `pub search_matches: Option<SearchMatches>`.
+    pub search_matches: Option<rustty_renderer::message::SearchMatches>,
+    /// Mirrors `generic.rs:1228` `pub search_selected_match: Option<SearchMatch>`.
+    pub search_selected_match: Option<rustty_renderer::message::SearchMatch>,
+    /// Mirrors `generic.rs:1229` `pub search_matches_dirty: bool`.
+    pub search_matches_dirty: bool,
+}
+
+#[cfg(not(target_os = "macos"))]
+impl LinuxRendererPlaceholder {
+    /// Mirrors `generic.rs:2252` `pub fn thread_enter<S>(&self, rt_surface: *mut S)`.
+    pub fn thread_enter<S>(&self, rt_surface: *mut S) -> Result<(), RendererError> {
+        let _ = rt_surface;
+        unimplemented!("Renderer::thread_enter — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2261` `pub fn thread_exit(&self)`.
+    pub fn thread_exit(&self) {
+        unimplemented!("Renderer::thread_exit — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2274` `pub fn loop_enter(&mut self, draw_now: Async)`.
+    pub fn loop_enter(&mut self, draw_now: xev::Async) -> Result<(), RendererError> {
+        let _ = draw_now;
+        unimplemented!("Renderer::loop_enter — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2301` `pub fn loop_exit(&self)`.
+    pub fn loop_exit(&self) {
+        unimplemented!("Renderer::loop_exit — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2360` `pub fn set_focus(&mut self, focus: bool)`.
+    pub fn set_focus(&mut self, focus: bool) -> Result<(), RendererError> {
+        let _ = focus;
+        unimplemented!("Renderer::set_focus — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2382` `pub fn set_visible(&self, visible: bool)`.
+    pub fn set_visible(&self, visible: bool) {
+        let _ = visible;
+        unimplemented!("Renderer::set_visible — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2410` `pub fn set_font_grid(&mut self, grid: *mut SharedGrid)`.
+    pub fn set_font_grid(&mut self, grid: *mut SharedGrid) {
+        let _ = grid;
+        unimplemented!("Renderer::set_font_grid — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:4424` `pub fn update_frame(&mut self, state: &state::State,
+    /// cursor_blink_visible: bool) -> Result<(), VtOutOfMemory>`.
+    pub fn update_frame(
+        &mut self,
+        state: &State,
+        cursor_blink_visible: bool,
+    ) -> Result<(), rustty_vt::pagelist::OutOfMemory> {
+        let _ = (state, cursor_blink_visible);
+        unimplemented!("Renderer::update_frame — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:5227` `pub fn has_animations(&self) -> bool`.
+    pub fn has_animations(&self) -> bool {
+        unimplemented!("Renderer::has_animations — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2468` `pub fn set_screen_size(&mut self, size: Size)`.
+    pub fn set_screen_size(&mut self, size: Size) {
+        let _ = size;
+        unimplemented!("Renderer::set_screen_size — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2501` `pub fn change_config(&mut self, config: DerivedConfig)`.
+    pub fn change_config(&mut self, config: DerivedConfig) -> Result<(), RendererError> {
+        let _ = config;
+        unimplemented!("Renderer::change_config — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2325` `pub fn set_macos_display_id(&self, id: u32)`.
+    //
+    // Kept on the Linux placeholder because core's `Thread<A>` drains the
+    // `.macos_display_id` mailbox message UNCONDITIONALLY (Thread.zig's
+    // `drainMailbox`) — the reference's own shape, which the real renderer answers
+    // with a no-op when there is no display link (generic.rs:2326-2328). Not core's
+    // call to re-gate.
+    pub fn set_macos_display_id(&self, id: u32) -> Result<(), RendererError> {
+        let _ = id;
+        unimplemented!("Renderer::set_macos_display_id — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+
+    /// Mirrors `generic.rs:2342` `pub fn has_vsync(&self) -> bool`.
+    pub fn has_vsync(&self) -> bool {
+        unimplemented!("Renderer::has_vsync — DEFERRED to L4 (OpenGL renderer backend)")
+    }
+}
 
 impl Renderer {
     /// This is called early right after surface creation.
@@ -208,7 +392,15 @@ impl Renderer {
     // needing an `App` bound.
     pub fn surfaceInit<S>(rt_surface: *mut S) -> Result<(), RendererError> {
         // (A) `Error == RendererError`, so the real error flows out directly.
-        rustty_renderer::Renderer::surface_init(rt_surface)
+        #[cfg(target_os = "macos")]
+        {
+            rustty_renderer::Renderer::surface_init(rt_surface)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = rt_surface;
+            unimplemented!("Renderer::surfaceInit — DEFERRED to L4 (OpenGL renderer backend)")
+        }
     }
 
     // PORT NOTE ([ADV-FIX 3]): the reference init takes `(alloc, options)` —
@@ -238,15 +430,23 @@ impl Renderer {
             thread,
         } = options;
         let _ = (surface_mailbox, rt_surface, thread); // held-in-core seam bits
-        let inner = rustty_renderer::Renderer::init(
-            alloc,
-            rustty_renderer::generic::Options {
-                config,
-                font_grid,
-                size,
-            },
-        )?;
-        Ok(Renderer(inner))
+        #[cfg(target_os = "macos")]
+        {
+            let inner = rustty_renderer::Renderer::init(
+                alloc,
+                rustty_renderer::generic::Options {
+                    config,
+                    font_grid,
+                    size,
+                },
+            )?;
+            Ok(Renderer(inner))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (alloc, config, font_grid, size);
+            unimplemented!("Renderer::init — DEFERRED to L4 (OpenGL renderer backend)")
+        }
     }
 
     /// This is called just prior to spinning up the renderer thread for
@@ -255,7 +455,17 @@ impl Renderer {
     // PORT NOTE: `pub fn finalizeSurfaceInit(self: *Self, surface:
     // *apprt.Surface) !void` (generic.zig:873); callsite Surface.zig:712.
     pub fn finalizeSurfaceInit<S>(&mut self, rt_surface: *mut S) -> Result<(), RendererError> {
-        self.0.finalize_surface_init(rt_surface)
+        #[cfg(target_os = "macos")]
+        {
+            self.0.finalize_surface_init(rt_surface)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = rt_surface;
+            unimplemented!(
+                "Renderer::finalizeSurfaceInit — DEFERRED to L4 (OpenGL renderer backend)"
+            )
+        }
     }
 
     /// W-ATTACH: route the host NSView into the renderer's windowed layer-attach.
@@ -268,7 +478,15 @@ impl Renderer {
         view: *mut core::ffi::c_void,
         scale: f64,
     ) -> Result<(), RendererError> {
-        self.0.attach_host_view(view, scale)
+        #[cfg(target_os = "macos")]
+        {
+            self.0.attach_host_view(view, scale)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (view, scale);
+            unimplemented!("Renderer::attachHostView — DEFERRED to L4 (OpenGL renderer backend)")
+        }
     }
 
     /// Callback called by renderer.Thread when it begins.
@@ -278,7 +496,15 @@ impl Renderer {
     // surface deinit path (Surface.zig:801
     // `self.renderer.threadEnter(self.rt_surface) catch unreachable;`).
     pub fn threadEnter<S>(&self, rt_surface: *mut S) -> Result<(), RendererError> {
-        self.0.thread_enter(rt_surface)
+        #[cfg(target_os = "macos")]
+        {
+            self.0.thread_enter(rt_surface)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = rt_surface;
+            unimplemented!("Renderer::threadEnter — DEFERRED to L4 (OpenGL renderer backend)")
+        }
     }
 
     /// Draw the frame to the screen.
@@ -301,12 +527,27 @@ impl Renderer {
     /// aliased raw by the render thread). No protected `&mut` may span the call.
     pub unsafe fn drawFrame(self_: *mut Renderer, sync: bool) -> Result<(), RendererError> {
         // self.0.draw_frame(sync)  →  raw-self draw (no protector spans the call)
-        unsafe { rustty_renderer::Renderer::draw_frame_raw(&raw mut (*self_).0, sync) }
+        #[cfg(target_os = "macos")]
+        {
+            unsafe { rustty_renderer::Renderer::draw_frame_raw(&raw mut (*self_).0, sync) }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (self_, sync);
+            unimplemented!("Renderer::drawFrame — DEFERRED to L4 (OpenGL renderer backend)")
+        }
     }
 
     // PORT NOTE: `pub fn deinit(self: *Self) void` (generic.zig:800).
     pub fn deinit(&mut self) {
-        self.0.deinit();
+        #[cfg(target_os = "macos")]
+        {
+            self.0.deinit();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            unimplemented!("Renderer::deinit — DEFERRED to L4 (OpenGL renderer backend)")
+        }
     }
 }
 
@@ -1235,9 +1476,23 @@ where
             // mutex cannot rescue a protector established before the lock).
             // `&raw mut (*(*self_).renderer).0` is a raw place projection off the
             // already-raw `renderer: *mut Renderer` — no reborrow, no protector.
-            let rp: *mut rustty_renderer::Renderer = unsafe { &raw mut (*(*self_).renderer).0 };
-            if let Err(_err) = unsafe { rustty_renderer::Renderer::draw_frame_raw(rp, false) } {
-                // log.warn("error drawing err={}", .{err});
+            #[cfg(target_os = "macos")]
+            {
+                let rp: *mut rustty_renderer::Renderer = unsafe { &raw mut (*(*self_).renderer).0 };
+                if let Err(_err) = unsafe { rustty_renderer::Renderer::draw_frame_raw(rp, false) } {
+                    // log.warn("error drawing err={}", .{err});
+                }
+            }
+            // LINUX PLACEHOLDER — DEFERRED to L4 (OpenGL renderer backend), Task 9.
+            // The raw-self draw goes through the core `Renderer::drawFrame` leaf
+            // (itself `unimplemented!()` on this target); routing through the seam
+            // rather than duplicating the `unimplemented!()` keeps ONE deferral
+            // point, and keeps the W5 raw-self shape for the L4 swap.
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Err(_err) = unsafe { Renderer::drawFrame((*self_).renderer, false) } {
+                    // log.warn("error drawing err={}", .{err});
+                }
             }
         }
     }

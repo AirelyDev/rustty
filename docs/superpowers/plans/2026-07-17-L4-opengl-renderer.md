@@ -638,27 +638,56 @@ Linux FFI arm recorded.
 
 ---
 
-## EMPIRICAL HOST FINDING (controller probe, 2026-07-17) — read before Task 1
+## EMPIRICAL HOST FINDING — **RESOLVED** (Task 1 execution, 2026-07-17)
 
-The plan's flagged "can this host reach GL 4.3 core?" risk was probed directly with a
-`dlopen`-based EGL harness. Results, so Task 1 does not repeat the dead end:
+> **This section SUPERSEDES the controller's earlier probe note, which was HALF WRONG.**
+> The earlier note said "config-selection failure, NOT a version ceiling; use GBM to lift it."
+> Task 1 proved these are **TWO INDEPENDENT FACTS sharing one symptom** — the config bug was
+> real, but fixing it does NOT lift the ceiling. Recorded verbatim so nobody re-walks it.
 
-- **EGL 1.5 (Mesa Project) is present**; `libEGL.so.1`/`libGL.so.1`/`libGLESv2.so.2` all load.
-- **A real DRM render node exists**: `/dev/dri/renderD128` (+ `card0`), with
-  `mesa-dri-drivers 26.0.3` and `virglrenderer 1.3.0` — i.e. NOT software-only.
-- **`EGL_PLATFORM_SURFACELESS_MESA` exposes NO `EGL_OPENGL_BIT` config** (and no ES2
-  config either). Every `eglCreateContext` against a surfaceless+pbuffer config fails
-  `EGL_BAD_MATCH (0x3009)` — for ALL requested versions including "any". This is a
-  CONFIG-SELECTION failure, **not** evidence of a GL version ceiling.
-- **The GL version ceiling is therefore UNRESOLVED** — do not conclude 4.3 is unavailable.
+### Fact 1 — the config query WAS broken (real bug, fixed in `51cea85`)
+`eglChooseConfig` **defaults `EGL_SURFACE_TYPE` to `EGL_WINDOW_BIT`**, which matches nothing on
+a windowless platform. Ask explicitly for `EGL_SURFACE_TYPE = EGL_PBUFFER_BIT` and configs
+appear: **35 (virgl) / 105 (llvmpipe)**. That was the cause of the "no `EGL_OPENGL_BIT` config"
+symptom — not an absent desktop-GL capability.
 
-**Actionable guidance for Task 1:** build the headless context over the **GBM platform**
-(`EGL_PLATFORM_GBM_KHR` on an opened `/dev/dri/renderD128`), or use
-**`EGL_KHR_no_config_context`** (`EGL_NO_CONFIG_KHR`) — not surfaceless-with-config.
-Re-run the version ladder (4.6/4.5/4.3/4.1/3.3 core) through that path to establish the
-real ceiling, and only then decide whether the offscreen golden runs or clean-skips.
+### Fact 2 — but the ceiling is the **DRIVER**, not the EGL platform
+Over a *real* pbuffer `EGL_OPENGL_BIT` config, the default **virgl** driver STILL refuses a
+4.3-core context (`EGL_BAD_MATCH 0x3009`):
+- `GL_VERSION = 2.1 Mesa 26.0.3`, `GL_RENDERER = virgl (ANGLE (Apple, Apple M4 Pro, OpenGL 4.1 Metal))`
+- Corroborated independently by `glxinfo -B`: **`Max core profile version: 0.0`** / `Max compat profile version: 2.1`
+- virgl exposes **no desktop core profile at all**. **GBM (`/dev/dri/renderD128`) and X11 were
+  both tried and also fail** — so the earlier "use GBM" guidance was a dead end. GBM should be
+  avoided regardless: it needs `libgbm`, a new dependency = **R3 violation**.
 
-Note also: **EGL/GL development headers are NOT installed** on this host (runtime libs
-only). This does not block the plan's chosen Rust stack — `khronos-egl` with the
-`dynamic` (dlopen) feature and the `gl` crate's generated loader both need no headers —
-but it does rule out any `-sys` crate that requires `EGL/egl.h` at build time.
+### ✅ The answer: **`LIBGL_ALWAYS_SOFTWARE=1` (llvmpipe) reaches GL 4.5 core**
+```
+GL_VERSION  = 4.5 (Core Profile) Mesa 26.0.3
+GL_RENDERER = llvmpipe (LLVM 22.1.1, 128 bits)      GLSL = 4.50
+```
+This clears the >= 4.3 gate, so **Task 11's offscreen golden CAN run on this host** — under
+llvmpipe. The Task-1 test correctly CLEAN-SKIPS on the default driver and REALLY RUNS under
+llvmpipe (verified both paths; it is not vacuous).
+
+### Consequences the later tasks MUST honor
+- **Task 11 MUST set `LIBGL_ALWAYS_SOFTWARE=1`**, or its golden silently clean-skips forever on
+  this host. Deliberately NOT forced in code, so a host with a real core-profile driver
+  exercises the real driver — this is an explicit harness/CI decision.
+- **llvmpipe is a software rasterizer**: the golden will be slow, and GPU-specific rasterization
+  differences surface there. Fine for a structural comparison; **do not attempt exact-pixel
+  assertions**.
+- **`eglTerminate` sharing hazard (bites at Task 11):** `eglGetPlatformDisplay` returns the SAME
+  `EGLDisplay` for the same platform+native-display, and `eglTerminate` marks EVERY resource on
+  it for deletion (not usefully refcounted). Rust runs tests in **parallel threads**, so a second
+  GL test will invalidate the first's context. Fix then: share one context, or drop the terminate.
+- **`sys.rs`'s private `enable`** is a minimal stand-in for `pkg/opengl`'s `draw.zig`/`errors.zig`
+  that `prepare_context` needs today — Tasks 2-4 must DELETE it and re-route `prepare_context` at
+  the real `opengl::gl::draw::enable`.
+
+### Toolchain notes
+- **EGL/GL dev headers are NOT installed** (runtime libs only). This does not block the chosen
+  stack — `khronos-egl` (`dynamic`/dlopen) + the `gl` crate's generated loader need no headers —
+  but it rules out any `-sys` crate requiring `EGL/egl.h` at build time.
+- **`/tmp` is a 4.9G tmpfs that hit quota**, producing `error writing to /tmp/ccXXXX.s: Disk quota
+  exceeded` from GCC in unrelated crates (e.g. `spirv-cross-sys`) — **this reads like a build
+  break but is pure disk pressure.** Swept; use `TMPDIR=/home/gael/tmp` (76G free) for builds.
