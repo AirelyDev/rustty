@@ -276,6 +276,10 @@ const _: () = assert!(offset_of!(Loop, backend) == 0);
 // a `Loop` onto the spawned termio thread, and after the move a `Loop` (and every
 // `Completion` it links) is touched by exactly one thread at a time — the owning
 // event-loop thread. No explicit `unsafe impl` is needed or wanted here.
+//
+// This derivation is an implicit chain, so it is PINNED by the `needs_send`
+// trait-bound tripwire near the bottom of this file — if an arm ever stops being
+// `Send`, that assert fires here rather than at termio's `thread::spawn`.
 
 impl Loop {
     /// PORT NOTE: `pub fn init(opts: Options) !Loop` (dynamic.zig:127) — the
@@ -2295,6 +2299,78 @@ impl Stream {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Trait-bound tripwires (brief Step 3: "Assert the trait bounds with
+// `const _: fn() = || { fn needs<T: Copy>(){} needs::<Async>(); };`-style
+// compile checks").
+// ---------------------------------------------------------------------------
+//
+// These are compile-time-only: a `const _: fn()` binding forces the closure to
+// type-check (and so the bounds to be satisfied) without emitting any code or
+// running anything. They exist because the bounds below are load-bearing for
+// CONSUMERS of this module, and every one of them is satisfied IMPLICITLY here —
+// by auto-trait derivation or by `#[derive]` — rather than by an explicit `impl`
+// that a reader (or a future edit) would have to notice. Without these, breaking
+// one of them is silent at this layer and surfaces as a confusing error at a
+// distance in termio.
+//
+// The `Send` set is the sharp one. This module deliberately writes NO
+// `unsafe impl Send` (see the PORT NOTE above `Loop`, and the matching ones on
+// `Completion`/`WriteRequest`): each type is a union whose arms already carry
+// their own documented `unsafe impl Send` (epoll.rs:205/1104/2064,
+// io_uring.rs:1233/1978/2916), `ManuallyDrop` is `repr(transparent)` and
+// transparent to auto traits, and Rust derives a union's auto traits from its
+// arms — so `Send` arrives for free, for exactly the arms' reasons. That
+// argument is PROSE, and these asserts are the only machine-checkable statement
+// of it: they fail HERE, instead of at the termio `thread::spawn` that moves a
+// `Loop` onto the event-loop thread.
+//
+// What actually trips them (verified by negative control, not assumed): because
+// each arm carries an EXPLICIT `unsafe impl Send`, an arm merely gaining a
+// non-`Send` field is NOT enough — the explicit impl keeps the arm `Send` and
+// the chain holds. The tripwire fires when an arm genuinely stops being `Send`:
+// its `unsafe impl` is deleted while a non-`Send` field is present, or an arm is
+// retyped/added (a third backend) that isn't `Send`. Confirmed by temporarily
+// removing epoll.rs's `unsafe impl Send for Loop` AND adding a
+// `PhantomData<*const ()>` field: `needs_send::<Loop>()` then fails with
+// "`*const ()` cannot be sent between threads safely", pointing through
+// `LoopUnion` to the offending field.
+//
+// NOTE: the tripwire pins the PROPERTY, not the justification — if one fires,
+// the fix is to re-examine the offending arm's thread-affinity story, NOT to
+// paper over it with an `unsafe impl Send` on the union.
+const _: fn() = || {
+    // `Send`: asserted, never `unsafe impl`'d — see above.
+    fn needs_send<T: Send>() {}
+    needs_send::<Loop>();
+    needs_send::<Completion>();
+    needs_send::<WriteRequest>();
+
+    // `Copy`: the brief marks `Async: Copy` REQUIRED (ghostty stores an `Async`
+    // by value and copies it onto other threads to `notify()`); `Timer`/`Stream`
+    // are `Copy` for the same by-value-handle reason. Each is a `#[derive]`,
+    // which a future field addition (e.g. a non-`Copy` arm) would silently break.
+    fn needs_copy<T: Copy>() {}
+    needs_copy::<Async>();
+    needs_copy::<Timer>();
+    needs_copy::<Stream>();
+
+    // `Default`: REQUIRED by termio (Exec default-constructs `write_queue`; its
+    // `SegmentedPool` default-constructs pooled `WriteRequest`s). Hand-written
+    // here, never derived — a derive would pick the wrong union arm.
+    fn needs_default<T: Default>() {}
+    needs_default::<Completion>();
+    needs_default::<WriteQueue>();
+    needs_default::<WriteRequest>();
+
+    // `NotifyError: Debug + Clone + Copy + PartialEq + Eq` (brief's merged
+    // `ErrorSet`, dynamic.zig:512). Satisfied by the crate's unified seam type
+    // (lib.rs) that this module re-exports; pinned here so the re-export cannot
+    // regress the bound out from under callers.
+    fn needs_error_bounds<T: core::fmt::Debug + Clone + Copy + PartialEq + Eq>() {}
+    needs_error_bounds::<NotifyError>();
+};
 
 // ---------------------------------------------------------------------------
 // Tests — the 5 `dynamic.zig` `test{}` blocks + the live KATs that prove the
