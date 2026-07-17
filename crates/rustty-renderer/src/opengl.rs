@@ -49,6 +49,15 @@ pub mod target;
 pub mod gpu_abi;
 pub mod shaders;
 
+// PORT STATUS (L4 Task 8): the graphics-API impl tying the leaves together — the
+// OpenGL twin of `metal::metal_impl::Metal`, ported from `src/renderer/OpenGL.zig`.
+// `OpenGL::{init_offscreen, deinit, init_shaders, init_target, present,
+// present_last_target, buffer/texture/sampler/image_texture options,
+// init_atlas_texture, begin_frame, draw_frame_start/end, surface_size}`. Consumed
+// by the `generic::linux_impl` monomorphic `Renderer(OpenGL)` in Task 9.
+pub mod opengl_impl;
+pub use opengl_impl::OpenGL;
+
 // RUSTTY-ONLY smoke tests for the Task-5 leaves — same framing as `metal.rs`'s
 // `creates_buffer_texture_sampler_without_panic`: the reference has NO `test{}`
 // block over `renderer/opengl/{buffer,Texture,Sampler}.zig`, so there is no parity
