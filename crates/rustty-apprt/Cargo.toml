@@ -27,6 +27,16 @@ workspace = true
 # `rustty` bin turns this on via a Linux-gated `features = ["gtk"]` edge (L5.5).
 gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita"]
 
+# Windowing-protocol backends behind the `gtk::winproto` union. Both are DECLARED
+# here so the `#[cfg(feature = …)]` arms in `src/gtk/winproto.rs` are recognized
+# cfgs (no `unexpected_cfgs` lint), but neither is wired into `gtk` yet: L5.1 T8
+# ships the noop-only build (PREPORT_GTK §5.4), so with only `--features gtk`
+# selected these stay OFF and zero Wayland/X11 protocol crates are pulled. The
+# `wayland` arm lands in L5.4, `x11` in L6, each turning its arm on and adding its
+# own protocol-crate deps.
+wayland = []
+x11 = []
+
 [dependencies]
 rustty-core = { workspace = true }
 rustty-apprt-api = { workspace = true }

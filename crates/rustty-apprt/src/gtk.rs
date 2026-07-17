@@ -97,6 +97,7 @@ pub mod ext;
 pub mod gresource;
 pub mod gtk_version;
 pub mod weak_ref;
+pub mod winproto;
 
 pub use weak_ref::WeakRef;
 

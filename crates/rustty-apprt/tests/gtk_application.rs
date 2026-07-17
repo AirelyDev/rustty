@@ -15,10 +15,13 @@
 //!   xvfb-run -a cargo test -p rustty-apprt --features gtk --test gtk_application -- --ignored
 #![cfg(all(target_os = "linux", feature = "gtk"))]
 
+use std::ffi::c_void;
+
 use gio::prelude::*;
 
 use rustty_apprt::gtk::build_info;
 use rustty_apprt::gtk::class::application::Application;
+use rustty_apprt::gtk::winproto;
 
 /// PORTS `application.zig:230-233` `default`. Build a `GhosttyApplication`, set it
 /// as the process-global default `GApplication`, and assert `Application::default()`
@@ -60,5 +63,91 @@ fn application_default_round_trips() {
     assert!(
         got.get_config().is_none(),
         "a skeleton Application has no config until Task 8's `new` sets it"
+    );
+}
+
+/// PORTS: the `noop`-fallthrough contract (`winproto/noop.zig:13-20` +
+/// `winproto.zig:46`). Display-free — [`winproto::noop::App::init`] takes no
+/// display and always returns `Ok(None)`, and the union's `Default` is the
+/// unconditional `.none` — so a noop-only build (this task: no `wayland`/`x11`
+/// feature) always lands on [`winproto::Protocol::None`] without ever touching a
+/// `gdk::Display`. Runs in the normal `--features gtk` gate (no `#[ignore]`).
+#[test]
+fn winproto_noop_init_falls_through() {
+    let config = rustty_config::Config::default_config();
+
+    // `noop::App::init` always falls through (`winproto/noop.zig:13-20`).
+    let probed = winproto::noop::App::init("io.airely.rustty", &config);
+    assert!(
+        matches!(probed, Ok(None)),
+        "noop::App::init must always return Ok(None)"
+    );
+
+    // The union's unconditional fallback arm is `.none` (`winproto.zig:46`).
+    let app = winproto::App::default();
+    assert_eq!(app.protocol(), winproto::Protocol::None);
+    assert!(matches!(app, winproto::App::None(_)));
+    assert!(
+        !app.supports_quick_terminal(),
+        "the noop backend never supports the quick terminal"
+    );
+
+    // The `Window` union's fallback arm reports CSD enabled (`winproto/noop.zig:65-68`).
+    let win = winproto::Window::None(winproto::noop::Window);
+    assert!(win.client_side_decoration_enabled());
+}
+
+/// PORTS `application.zig:243-428` `new` + `:435-459` `deinit`. Build a real
+/// `GhosttyApplication` through the full `new` path, assert the windowing
+/// protocol resolved to `.none` (noop-only build), that it installs as the
+/// process-global default, and that `deinit` tears the OWNED state down cleanly.
+///
+/// `#[ignore]`: `new` runs `adw::init()` / `gdk::Display::default()` / CSS
+/// provider registration, so it touches GTK and needs a display — run via the
+/// `--ignored` GTK lane:
+///   xvfb-run -a cargo test -p rustty-apprt --features gtk --test gtk_application -- --ignored
+#[test]
+#[ignore = "Application::new touches GTK (adw::init + display); run via the --ignored GTK lane"]
+fn application_new_then_deinit() {
+    // `rt_app`/`core_app` are opaque BACKREF pointers (PREPORT_GTK §1.1: "never
+    // freed here") that neither `new` nor `deinit` dereferences — the allocator
+    // seam is the global allocator, not `core_app.alloc`. A faithful
+    // `*ApprtApp`/`*CoreApp` needs `gtk::App` (Task 11), which does not exist yet,
+    // so this KAT passes stable non-null placeholders.
+    let mut rt_app_slot: u8 = 0;
+    let mut core_app_slot: u8 = 0;
+    let rt_app = std::ptr::addr_of_mut!(rt_app_slot).cast::<c_void>();
+    let core_app = std::ptr::addr_of_mut!(core_app_slot).cast::<c_void>();
+
+    let app = Application::new(rt_app, core_app);
+
+    // A noop-only build always lands on `.none` (`winproto.zig:46`).
+    assert_eq!(
+        app.winproto_protocol(),
+        winproto::Protocol::None,
+        "a noop-only build must select the .none windowing protocol"
+    );
+
+    // `new` sets the config, so the nullable `config` property is now `Some`.
+    assert!(
+        app.get_config().is_some(),
+        "Application::new must set the config"
+    );
+
+    // Install as the process-global default and prove `default()` round-trips
+    // (`application.zig:230-233`).
+    app.upcast_ref::<gio::Application>().set_default();
+    assert_eq!(
+        app.upcast_ref::<glib::Object>(),
+        Application::default().upcast_ref::<glib::Object>(),
+        "Application::default() must resolve to the constructed instance"
+    );
+
+    // Force teardown (`application.zig:435-459`) must run clean and clear the
+    // OWNED rows — witnessed by the config being unset afterward.
+    app.deinit();
+    assert!(
+        app.get_config().is_none(),
+        "deinit must clear the config (application.zig:438)"
     );
 }

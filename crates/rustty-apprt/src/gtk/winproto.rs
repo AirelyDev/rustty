@@ -1,0 +1,214 @@
+//! rustty-apprt::gtk::winproto
+//!
+//! PORTS: ghostty `src/apprt/gtk/winproto.zig` (156 loc) — the windowing-protocol
+//! backend seam. The reference is two `union(Protocol)` tagged unions — [`App`]
+//! (one per application) and [`Window`] (one per window) — each with a `none`,
+//! `wayland`, and `x11` arm selected at comptime by `build_options.wayland` /
+//! `build_options.x11` (`winproto.zig:24-27,89-92`). rustty models them as Rust
+//! `enum`s whose `wayland`/`x11` arms are `#[cfg(feature = …)]`-gated: this task
+//! (L5.1 T8) builds with NEITHER feature, so only the always-present `.none`
+//! ([`noop`]) arm compiles and zero protocol crates are pulled (PREPORT_GTK §5.4,
+//! the noop-first sub-milestone). The `wayland` arm lands in L5.4, `x11` in L6.
+//!
+//! # The `inline for` -> explicit-chain divergence (`winproto.zig:35-47`)
+//!
+//! The reference's `App.init` walks the union fields with a comptime `inline for`
+//! and returns the first arm whose `init` yields non-null. Rust has no field
+//! reflection, so [`App::init`] is an **explicit ordered chain** in declaration
+//! order (`none`, then the cfg-gated `wayland`, then `x11`) — behavior-identical:
+//! the first arm to return `Some` wins, else the unconditional `.none` default
+//! (`winproto.zig:46`). Because `noop::App::init` always returns `Ok(None)`, a
+//! noop-only build always lands on `.none`.
+
+pub mod noop;
+
+#[cfg(feature = "wayland")]
+pub mod wayland;
+#[cfg(feature = "x11")]
+pub mod x11;
+
+use rustty_config::Config as CoreConfig;
+
+/// The error returned by the winproto backends' `init`/lifecycle methods.
+///
+/// PORTS: the inferred error set of the reference's `!App` / `!Window` returns
+/// (`winproto.zig:29,94`). The only backends that can fail are `wayland`/`x11`
+/// (display/protocol probing), and both are `#[cfg(feature = …)]`-gated OFF in
+/// this task — so this build has NO error source: [`noop`] is infallible. The
+/// type is therefore an empty (uninhabited) enum here, and grows real variants
+/// when the protocol backends land (L5.4 / L6). `App::init`'s caller
+/// ([`crate::gtk::class::application::Application::new`]) still ports the
+/// reference's fallback-to-`.none`-on-error path (`application.zig:345-356`),
+/// which is provably-unreachable now but faithful and ready for those backends.
+#[derive(Debug)]
+pub enum WinprotoError {}
+
+impl core::fmt::Display for WinprotoError {
+    fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Uninhabited in a noop-only build: this arm is never reached.
+        match *self {}
+    }
+}
+
+impl std::error::Error for WinprotoError {}
+
+/// PORTS: `winproto.zig:16-20` `Protocol`. The discriminant of the [`App`] /
+/// [`Window`] tagged unions — which windowing protocol is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    /// `.none` (`winproto.zig:17`) — the no-op backend ([`noop`]).
+    None,
+    /// `.wayland` (`winproto.zig:18`) — the Wayland backend (L5.4).
+    #[cfg(feature = "wayland")]
+    Wayland,
+    /// `.x11` (`winproto.zig:19`) — the X11 backend (L6).
+    #[cfg(feature = "x11")]
+    X11,
+}
+
+/// PORTS: `winproto.zig:22-81` `App` — the per-application windowing state. One
+/// instance per [`Application`](crate::gtk::class::application::Application),
+/// stored in its private state (`application.zig:176`).
+#[derive(Debug)]
+pub enum App {
+    /// `none: noop.App` (`winproto.zig:25`).
+    None(noop::App),
+    /// `wayland: wayland.App` (`winproto.zig:26`).
+    #[cfg(feature = "wayland")]
+    Wayland(wayland::App),
+    /// `x11: x11.App` (`winproto.zig:27`).
+    #[cfg(feature = "x11")]
+    X11(x11::App),
+}
+
+impl Default for App {
+    /// The unconditional fallback arm, `.none` (`winproto.zig:46`).
+    fn default() -> Self {
+        App::None(noop::App)
+    }
+}
+
+impl App {
+    /// PORTS: `winproto.zig:29-47` `App.init`. Probe each backend in declaration
+    /// order and return the first that "detects" itself as active; if none does
+    /// (always the case in a noop-only build, since [`noop::App::init`] returns
+    /// `Ok(None)`), fall back to the unconditional `.none` (`winproto.zig:46`).
+    /// See the module doc for the `inline for` -> explicit-chain divergence.
+    ///
+    /// `gdk_display` is threaded to the protocol arms (`wayland`/`x11`), which
+    /// probe the live display; the always-present `noop` arm needs none.
+    pub fn init(
+        gdk_display: &gdk4::Display,
+        app_id: &str,
+        config: &CoreConfig,
+    ) -> Result<App, WinprotoError> {
+        // noop is first in declaration order (`winproto.zig:25`). It never
+        // detects itself, so this never returns here in a noop-only build.
+        if let Some(v) = noop::App::init(app_id, config)? {
+            return Ok(App::None(v));
+        }
+
+        #[cfg(feature = "wayland")]
+        if let Some(v) = wayland::App::init(gdk_display, app_id, config)? {
+            return Ok(App::Wayland(v));
+        }
+        #[cfg(feature = "x11")]
+        if let Some(v) = x11::App::init(gdk_display, app_id, config)? {
+            return Ok(App::X11(v));
+        }
+
+        // `gdk_display` is consumed only by the cfg-gated protocol arms above; on
+        // a noop-only build it is otherwise unused.
+        let _ = gdk_display;
+        Ok(App::default())
+    }
+
+    /// PORTS: `winproto.zig:49-53` `App.deinit`. Dispatch to the active arm's
+    /// `deinit`.
+    pub fn deinit(&mut self) {
+        match self {
+            App::None(v) => v.deinit(),
+            #[cfg(feature = "wayland")]
+            App::Wayland(v) => v.deinit(),
+            #[cfg(feature = "x11")]
+            App::X11(v) => v.deinit(),
+        }
+    }
+
+    /// PORTS: the union discriminant read the reference performs with
+    /// `@tagName(wp)` when it logs the selected protocol (`application.zig:358`).
+    /// Returns which backend is active.
+    #[must_use]
+    pub fn protocol(&self) -> Protocol {
+        match self {
+            App::None(_) => Protocol::None,
+            #[cfg(feature = "wayland")]
+            App::Wayland(_) => Protocol::Wayland,
+            #[cfg(feature = "x11")]
+            App::X11(_) => Protocol::X11,
+        }
+    }
+
+    /// PORTS: `winproto.zig:65-69` `App.supportsQuickTerminal`. Dispatch to the
+    /// active arm.
+    #[must_use]
+    pub fn supports_quick_terminal(&self) -> bool {
+        match self {
+            App::None(v) => v.supports_quick_terminal(),
+            #[cfg(feature = "wayland")]
+            App::Wayland(v) => v.supports_quick_terminal(),
+            #[cfg(feature = "x11")]
+            App::X11(v) => v.supports_quick_terminal(),
+        }
+    }
+}
+
+/// PORTS: `winproto.zig:83-155` `Window` — the per-window windowing state. In
+/// Wayland terms this is really "Surface"-specific state, but ghostty uses
+/// "Surface" for something else, so the reference calls it "Window"
+/// (`winproto.zig:83-88`). One instance per window (`window.zig:238`).
+///
+/// PORT STATUS: the `Window` arms carry only the surface this task needs — the
+/// tagged union shape, `deinit`, and `clientSideDecorationEnabled`. The reference's
+/// `init` (`winproto.zig:94-118`) and the `resizeEvent`/`syncAppearance`/
+/// `addSubprocessEnv`/`setUrgent` methods (`winproto.zig:126-154`) take the
+/// `class/window.zig` `Window` (`ApprtWindow`) and `std.process.EnvMap`, whose
+/// ports land with the GTK `Window` class (later L5/L6 tasks); they are added to
+/// this union and to [`noop::Window`] when that consumer exists.
+#[derive(Debug)]
+pub enum Window {
+    /// `none: noop.Window` (`winproto.zig:90`).
+    None(noop::Window),
+    /// `wayland: wayland.Window` (`winproto.zig:91`).
+    #[cfg(feature = "wayland")]
+    Wayland(wayland::Window),
+    /// `x11: x11.Window` (`winproto.zig:92`).
+    #[cfg(feature = "x11")]
+    X11(x11::Window),
+}
+
+impl Window {
+    /// PORTS: `winproto.zig:120-124` `Window.deinit`. Dispatch to the active arm.
+    pub fn deinit(&mut self) {
+        match self {
+            Window::None(v) => v.deinit(),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(v) => v.deinit(),
+            #[cfg(feature = "x11")]
+            Window::X11(v) => v.deinit(),
+        }
+    }
+
+    /// PORTS: `winproto.zig:138-142` `Window.clientSideDecorationEnabled`.
+    /// Dispatch to the active arm.
+    #[must_use]
+    pub fn client_side_decoration_enabled(&self) -> bool {
+        match self {
+            Window::None(v) => v.client_side_decoration_enabled(),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(v) => v.client_side_decoration_enabled(),
+            #[cfg(feature = "x11")]
+            Window::X11(v) => v.client_side_decoration_enabled(),
+        }
+    }
+}
