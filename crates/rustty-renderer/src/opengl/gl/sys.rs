@@ -21,16 +21,19 @@
 //!
 //! PORT NOTE (`const log = std.log.scoped(.opengl);`, `OpenGL.zig:34`): this
 //! crate has no log facade and R3 permits no new dependency for one, so the
-//! scoped logger is reproduced by the private `log_*!` macros below. They emit
-//! `std.log`'s own wire format (`error(opengl): …`), so every reference call site
-//! ports as a one-for-one textual match.
+//! scoped logger is reproduced by the `log_*!` macros in the parent module. They
+//! emit `std.log`'s own wire format (`error(opengl): …`), so every reference call
+//! site ports as a one-for-one textual match. Task 1 declared them privately here
+//! (this was then the only file in the package that logged); Task 3 hoisted them
+//! to `gl.rs` unchanged, because `Shader.zig`/`Program.zig` declare that same
+//! scoped logger and the reference shares ONE `.opengl` scope across the package.
 
 use std::ffi::{c_char, c_void, CStr};
 use std::fmt;
 
 use khronos_egl as egl;
 
-use super::{draw, errors};
+use super::{draw, errors, log_debug, log_err, log_info, log_warn};
 
 /// PORTS: `OpenGL.zig:36-38`.
 ///
@@ -42,22 +45,6 @@ use super::{draw, errors};
 pub const MIN_VERSION_MAJOR: u32 = 4;
 /// See [`MIN_VERSION_MAJOR`].
 pub const MIN_VERSION_MINOR: u32 = 3;
-
-// PORT NOTE: `const log = std.log.scoped(.opengl);` (`OpenGL.zig:34`). See the
-// module docs — these reproduce `std.log`'s output format so the reference's
-// `log.err`/`log.warn`/`log.info`/`log.debug` call sites port verbatim.
-macro_rules! log_err {
-    ($($arg:tt)*) => { eprintln!("error(opengl): {}", format_args!($($arg)*)) };
-}
-macro_rules! log_warn {
-    ($($arg:tt)*) => { eprintln!("warning(opengl): {}", format_args!($($arg)*)) };
-}
-macro_rules! log_info {
-    ($($arg:tt)*) => { eprintln!("info(opengl): {}", format_args!($($arg)*)) };
-}
-macro_rules! log_debug {
-    ($($arg:tt)*) => { eprintln!("debug(opengl): {}", format_args!($($arg)*)) };
-}
 
 /// `EGL_PLATFORM_SURFACELESS_MESA` (`EGL_MESA_platform_surfaceless`).
 ///

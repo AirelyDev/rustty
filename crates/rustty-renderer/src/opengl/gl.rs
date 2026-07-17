@@ -14,8 +14,9 @@
 //! spelling intact.
 //!
 //! Task 1 landed [`sys`]. Task 2 lands [`buffer`]/[`vertex_array`]/[`errors`]/
-//! [`primitives`]/[`draw`]. The remaining leaves (`Framebuffer`/`Program`/
-//! `Renderbuffer`/`Sampler`/`Shader`/`Texture`/`extensions`) are Tasks 3-4.
+//! [`primitives`]/[`draw`]. Task 3 lands [`shader`]/[`program`]. The remaining
+//! leaves (`Framebuffer`/`Renderbuffer`/`Sampler`/`Texture`/`extensions`) are
+//! Task 4.
 //!
 //! PORT NOTE (`pub const c` / `pub const glad`, `main.zig:14-15`): no analogue.
 //! Both name ghostty's own vendored glad artifacts; the `gl` crate IS that layer
@@ -26,8 +27,40 @@ pub mod buffer;
 pub mod draw;
 pub mod errors;
 pub mod primitives;
+pub mod program;
+pub mod shader;
 pub mod sys;
 pub mod vertex_array;
+
+// PORT NOTE (`const log = std.log.scoped(.opengl);`): EVERY file in `pkg/opengl`
+// that logs declares that same line and shares the ONE `.opengl` scope
+// (`Shader.zig:5`, `Program.zig:5`, `OpenGL.zig:34`). This crate has no log facade
+// and R3 permits no new dependency for one, so the scoped logger is reproduced by
+// these macros, which emit `std.log`'s own wire format (`error(opengl): …`) — so
+// every reference call site ports as a one-for-one textual match.
+//
+// They live HERE, at the package root, rather than in each leaf, because the
+// reference's logger is likewise one shared thing rather than a per-file one.
+// Task 1 introduced them privately inside `sys` (which was then the only file that
+// logged); Task 3 adds two more files that log (`Shader.zig`/`Program.zig`), so
+// they are hoisted rather than copied. `sys` now imports them from here; the
+// emitted text is unchanged.
+macro_rules! log_err {
+    ($($arg:tt)*) => { eprintln!("error(opengl): {}", format_args!($($arg)*)) };
+}
+macro_rules! log_warn {
+    ($($arg:tt)*) => { eprintln!("warning(opengl): {}", format_args!($($arg)*)) };
+}
+macro_rules! log_info {
+    ($($arg:tt)*) => { eprintln!("info(opengl): {}", format_args!($($arg)*)) };
+}
+macro_rules! log_debug {
+    ($($arg:tt)*) => { eprintln!("debug(opengl): {}", format_args!($($arg)*)) };
+}
+
+// `macro_rules!` is textually scoped; these re-exports make the macros addressable
+// as `super::log_err` etc. from the leaf modules regardless of declaration order.
+pub(crate) use {log_debug, log_err, log_info, log_warn};
 
 // RUSTTY-ONLY: the `#[cfg(test)]` GL-context scaffolding shared by this module's
 // leaf tests and `sys`'s. Not part of `main.zig`'s surface.
@@ -36,6 +69,10 @@ pub(crate) mod test_support;
 
 // pub const Buffer = @import("Buffer.zig");
 pub use buffer::Buffer;
+// pub const Program = @import("Program.zig");
+pub use program::Program;
+// pub const Shader = @import("Shader.zig");
+pub use shader::Shader;
 // pub const VertexArray = @import("VertexArray.zig");
 pub use vertex_array::VertexArray;
 
@@ -73,10 +110,121 @@ pub use draw::{
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CStr;
+
     use super::buffer::{Buffer, Target, Usage};
     use super::errors::get_error;
+    use super::program::{self, Program};
+    use super::shader::{self, Shader};
     use super::test_support;
     use super::vertex_array::VertexArray;
+
+    /// A minimal, valid `#version 430 core` vertex shader.
+    ///
+    /// NOT one of the real GLSL assets — those are reused verbatim from the
+    /// reference in Task 7. This pair exists only to drive `Shader`/`Program`
+    /// through a real GLSL compile+link, so it is kept as small as a legal
+    /// core-profile shader can be.
+    const VERTEX_SRC: &CStr = c"#version 430 core\n\
+        void main() {\n\
+        \x20   gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n\
+        }\n";
+
+    /// A minimal, valid `#version 430 core` fragment shader. Core profile has no
+    /// `gl_FragColor`, so it declares its own output.
+    const FRAGMENT_SRC: &CStr = c"#version 430 core\n\
+        out vec4 frag_color;\n\
+        void main() {\n\
+        \x20   frag_color = vec4(1.0, 0.0, 0.0, 1.0);\n\
+        }\n";
+
+    /// RUSTTY-ONLY smoke test — as with [`gl_buffer_vertex_array_smoke`], the
+    /// reference has NO `test{}` block over `Shader.zig`/`Program.zig`, so there
+    /// is no parity oracle to match. It proves the ported wrappers drive a REAL
+    /// GLSL compiler and linker through `createVF`'s whole sequence
+    /// (`Program.zig:29-44`) and then the `use`/`unbind` round-trip that
+    /// `Pipeline.zig:48-49` performs, without panicking and without provoking a
+    /// GL error.
+    ///
+    /// Skips cleanly (never panics) when the host has no OpenGL 4.3 core context
+    /// — see [`test_support::offscreen_gl`].
+    #[test]
+    fn gl_program_compiles_trivial_shader_pair() {
+        let Some(_gl) = test_support::offscreen_gl("gl_program_compiles_trivial_shader_pair")
+        else {
+            return;
+        };
+
+        assert!(get_error().is_ok(), "context started in a GL error state");
+
+        // `Program.createVF` (`Program.zig:29-44`) — the ONE call site the
+        // reference has for all of `Shader.zig` (`Pipeline.zig:42`). Compiles
+        // both stages, creates the program, attaches both, links.
+        let program = Program::create_vf(VERTEX_SRC, FRAGMENT_SRC).expect("Program::create_vf");
+        assert!(get_error().is_ok(), "after Program::create_vf");
+        assert_ne!(program.id, 0, "create_vf handed back the zero program name");
+
+        // `const pbind = try program.use(); defer pbind.unbind();` —
+        // `Pipeline.zig:48-49` verbatim.
+        let binding = program.use_().expect("Program::use_");
+        assert!(get_error().is_ok(), "after Program::use_");
+
+        binding.unbind();
+        assert!(get_error().is_ok(), "after Program::Binding::unbind");
+
+        // `errdefer program.destroy()` (`Pipeline.zig:46`).
+        program.destroy();
+        assert!(get_error().is_ok(), "after Program::destroy");
+    }
+
+    /// RUSTTY-ONLY. The FAILURE half of `setSourceAndCompile`
+    /// (`Shader.zig:32-37`) and of `link` (`Program.zig:63-72`): both check a
+    /// status flag that is NOT a GL error, so nothing in
+    /// [`gl_program_compiles_trivial_shader_pair`] — which only ever asserts
+    /// `get_error()` — can observe them. A port that dropped the status check
+    /// entirely, or inverted it, would pass that test and hand back a
+    /// silently-broken program.
+    ///
+    /// Skips cleanly when the host has no OpenGL 4.3 core context.
+    #[test]
+    fn gl_shader_compile_failure_is_reported() {
+        let Some(_gl) = test_support::offscreen_gl("gl_shader_compile_failure_is_reported") else {
+            return;
+        };
+
+        assert!(get_error().is_ok(), "context started in a GL error state");
+
+        // Not GLSL at all — guaranteed to fail GL_COMPILE_STATUS on any driver.
+        let shader = Shader::create(gl::VERTEX_SHADER).expect("Shader::create");
+        let err = shader
+            .set_source_and_compile(c"this is not glsl")
+            .expect_err("a non-GLSL source must fail to compile");
+        assert_eq!(err, shader::Error::CompileFailed);
+
+        // `getInfoLog` (`Shader.zig:46-50`) is what the reference logs on that
+        // failure; a driver that rejected the source must have said why.
+        let log = shader.get_info_log();
+        assert!(
+            log.iter().any(|&b| b != 0),
+            "a failed compile produced an empty info log"
+        );
+
+        shader.destroy();
+        assert!(get_error().is_ok(), "after Shader::destroy");
+
+        // A compile failure is reported via GL_COMPILE_STATUS, NOT via
+        // glGetError — so the context must still be clean. This is also what
+        // lets `create_vf`'s error path stay distinguishable from a GL error.
+        assert!(get_error().is_ok(), "a compile failure raised a GL error");
+
+        // The same failure through `createVF`, which is how the reference
+        // actually reaches it (`Program.zig:31`).
+        assert_eq!(
+            Program::create_vf(c"this is not glsl", FRAGMENT_SRC).unwrap_err(),
+            program::Error::CompileFailed,
+        );
+        assert!(get_error().is_ok(), "after a failed Program::create_vf");
+    }
 
     /// RUSTTY-ONLY smoke test — the reference has NO `test{}` block over
     /// `Buffer.zig`/`VertexArray.zig` (nor over any of `pkg/opengl`), so there is
