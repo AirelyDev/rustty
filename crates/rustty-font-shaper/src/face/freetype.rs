@@ -117,16 +117,24 @@ pub struct FreetypeLoadFlags {
     pub light: bool,
 }
 
+impl FreetypeLoadFlags {
+    /// The reference's field defaults, reachable as a `const` so the
+    /// `face::FREETYPE_LOAD_FLAGS_DEFAULT` constant (`face/mod.rs`'s port of
+    /// `freetype_load_flags_default`) can be built at compile time on the
+    /// freetype-active backends. `Default::default()` returns this same value.
+    pub const DEFAULT: Self = FreetypeLoadFlags {
+        hinting: true,
+        force_autohint: false,
+        monochrome: false,
+        autohint: true,
+        light: true,
+    };
+}
+
 impl Default for FreetypeLoadFlags {
     // The defaults here match FreeType's own defaults (see the config comment).
     fn default() -> Self {
-        FreetypeLoadFlags {
-            hinting: true,
-            force_autohint: false,
-            monochrome: false,
-            autohint: true,
-            light: true,
-        }
+        Self::DEFAULT
     }
 }
 

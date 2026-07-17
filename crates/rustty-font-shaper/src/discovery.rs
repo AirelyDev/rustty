@@ -63,10 +63,126 @@ pub type Discover = CoreText;
 #[cfg(not(target_os = "macos"))]
 pub type Discover = Fontconfig;
 
-/// DEFERRED Fontconfig discoverer stub (Linux default). See the `Fontconfig`
-/// reference-comment block below.
+// ---------------------------------------------------------------------------
+// Fontconfig (Linux default `fontconfig_freetype`) discoverer — typed stub.
+//
+// PORT NOTE: the real Fontconfig discoverer is DEFERRED (its full reference body
+// is recorded verbatim in the comment block further below, and it lands in L3
+// Task 6/7). This module exists so the crate TYPE-CHECKS on Linux: `Collection`,
+// `CodepointResolver` and `SharedGridSet` name `Discover::init`/`.deinit`/
+// `.discover`/`.discover_fallback` and a `DiscoverIterator{next,deinit}`
+// unconditionally (the reference comptime-elides them when `Discover == void`,
+// but Rust type-checks them on every target).
+//
+// Unlike the wasm arm below — which is a FUNCTIONAL noop, because `.web_canvas
+// => void` genuinely means "no discovery" — Linux discovery is a real,
+// not-yet-written feature. So these bodies are HONEST `unimplemented!()` leaves
+// rather than silent `Ok(None)`s: a Linux caller that reaches them gets a loud
+// panic naming the deferral, matching the convention already used by the
+// non-macOS `DeferredFace` stubs (`deferred_face.rs`). The SIGNATURES are real
+// and mirror the reference exactly, so call sites bind against the final shape.
 #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
-pub struct Fontconfig;
+pub use fontconfig_impl::{DiscoverIterator, Error, Fontconfig};
+
+#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod fontconfig_impl {
+    use super::Descriptor;
+    use crate::collection::Collection;
+    use crate::deferred_face::DeferredFace;
+    use crate::face::FaceError;
+    use crate::library::Library;
+
+    /// The error set for Fontconfig discovery.
+    // PORT NOTE: the reference errors are the inferred union of `fontconfig.Error`
+    // (`error.FontConfigFailed` from `fontSort`, plus the `pattern.get` failures
+    // threaded through `DiscoverIterator.next`), `Allocator.Error`, and the backend
+    // `Face`/`Collection` errors threaded through `discoverFallback`. Modeled as one
+    // enum with `From` conversions so `?` composes them — the same shape as the
+    // macOS `coretext_impl::Error`, so `SharedGridSet`'s `Discovery(discovery::Error)`
+    // variant and its `From<discovery::Error>` compose identically on both targets.
+    // The FontConfig-specific variants are fleshed out in L3 Task 6.
+    #[derive(Debug)]
+    pub enum Error {
+        /// `error.FontConfigFailed` — the `fontSort` call did not return `.match`.
+        FontConfigFailed,
+        /// `Allocator.Error`.
+        OutOfMemory,
+        Face(FaceError),
+        Collection(crate::collection::Error),
+    }
+
+    impl From<FaceError> for Error {
+        fn from(e: FaceError) -> Self {
+            Error::Face(e)
+        }
+    }
+
+    impl From<crate::collection::Error> for Error {
+        fn from(e: crate::collection::Error) -> Self {
+            Error::Collection(e)
+        }
+    }
+
+    /// The Fontconfig discoverer (Linux default backend).
+    // pub const Fontconfig = struct { fc_config: *fontconfig.Config, ... };
+    //
+    // PORT NOTE: the reference's `fc_config: *fontconfig.Config` field lands with
+    // the real discoverer (L3 Task 6/7); the stub is fieldless until then.
+    pub struct Fontconfig;
+
+    impl Fontconfig {
+        // pub fn init(lib: Library) Fontconfig
+        pub fn init(_lib: Library) -> Fontconfig {
+            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+        }
+
+        // pub fn deinit(self: *Fontconfig) void
+        pub fn deinit(&mut self) {
+            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+        }
+
+        /// Discover fonts from a descriptor. This returns an iterator that can
+        /// be used to build up the deferred fonts.
+        // pub fn discover(self: *const Fontconfig, alloc: Allocator, desc: Descriptor) !DiscoverIterator
+        //
+        // PORT NOTE: the reference threads `alloc`; rustty uses the global
+        // allocator, so `alloc` is omitted (matching `CoreText::discover`).
+        pub fn discover(&self, _desc: Descriptor) -> Result<DiscoverIterator, Error> {
+            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+        }
+
+        // pub fn discoverFallback(self, alloc, collection, desc) !DiscoverIterator
+        pub fn discover_fallback(
+            &self,
+            _collection: *mut Collection,
+            _desc: Descriptor,
+        ) -> Result<DiscoverIterator, Error> {
+            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+        }
+    }
+
+    /// The Fontconfig discovery iterator.
+    // pub const DiscoverIterator = struct { config, pattern, set, fonts, variations, i };
+    //
+    // PORT NOTE: the reference's fields are all `*fontconfig.*` handles; they land
+    // with the real discoverer (L3 Task 6/7).
+    pub struct DiscoverIterator;
+
+    impl DiscoverIterator {
+        // pub fn deinit(self: *DiscoverIterator) void
+        pub fn deinit(&mut self) {
+            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+        }
+
+        // pub fn next(self: *DiscoverIterator) fontconfig.Error!?DeferredFace
+        // (Named `next` to match the reference iterator; not `Iterator::next`,
+        // whose signature — no `Result`, no external `deinit` — doesn't fit.)
+        #[allow(clippy::should_implement_trait)]
+        pub fn next(&mut self) -> Result<Option<DeferredFace>, Error> {
+            unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // WASM (web_canvas backend) discoverer — a functional NOOP.
@@ -1747,6 +1863,45 @@ mod tests {
         };
         // try testing.expect(d1.hashcode() != d2.hashcode());
         assert!(d1.hashcode() != d2.hashcode());
+    }
+
+    /// Compile-gate: on every target that is neither macOS nor wasm32 (the
+    /// `fontconfig_freetype` backend class), the `Discover` seam that
+    /// `CodepointResolver`/`SharedGridSet` name unconditionally must type-check
+    /// against the reference signatures (`discovery.zig`'s `Fontconfig`).
+    ///
+    /// PORT NOTE: this mirrors the `refAllDecls` convention used across this crate
+    /// (e.g. `face/mod.rs`'s `ref_all_decls`): the methods are coerced to function
+    /// pointers with their exact expected signatures rather than CALLED, because
+    /// their bodies are honest `unimplemented!()` leaves until the real Fontconfig
+    /// discoverer lands (L3 Task 6/7). Coercion still fails to compile if a
+    /// signature drifts, which is exactly the guarantee this test exists to hold.
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[test]
+    fn discover_impl_typechecks() {
+        use crate::collection::Collection;
+        use crate::deferred_face::DeferredFace;
+        use crate::library::Library;
+
+        // The active discoverer on this backend class is the Fontconfig one.
+        let _: fn(Library) -> Fontconfig = Fontconfig::init;
+        let _: fn(&mut Fontconfig) = Fontconfig::deinit;
+        let _: fn(&Fontconfig, Descriptor) -> Result<DiscoverIterator, Error> =
+            Fontconfig::discover;
+        let _: fn(&Fontconfig, *mut Collection, Descriptor) -> Result<DiscoverIterator, Error> =
+            Fontconfig::discover_fallback;
+
+        // `SharedGridSet`/`CodepointResolver` drive the iterator via `next`/`deinit`.
+        let _: fn(&mut DiscoverIterator) -> Result<Option<DeferredFace>, Error> =
+            DiscoverIterator::next;
+        let _: fn(&mut DiscoverIterator) = DiscoverIterator::deinit;
+
+        // `Discover` (the backend selector) must resolve to that discoverer.
+        let _: fn(Library) -> Discover = Discover::init;
+
+        // `SharedGridSet::Error` composes the discovery error via `From`.
+        let _: fn(crate::face::FaceError) -> Error = Error::from;
+        let _: fn(crate::collection::Error) -> Error = Error::from;
     }
 
     // test "fontconfig" {

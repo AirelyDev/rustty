@@ -117,29 +117,53 @@ pub const DEFAULT_DPI: u16 = 96;
 // `FreetypeLoadFlags` placeholder — a faithful stand-in for
 // `config::FreetypeLoadFlags`, wired to the real type when the Linux freetype
 // backend + config DI land.
+// PORT NOTE (3-way split): `hasFreetype()` is FALSE only on the macOS default
+// `coretext` backend and the wasm `web_canvas` backend; it is TRUE on the Linux
+// default `fontconfig_freetype`. The three arms below therefore are:
+//   * macOS  (`coretext`)            → `void` (Rust `()`), per the reference.
+//   * wasm32 (`web_canvas`)          → the local placeholder struct. The
+//     `freetype` module is not compiled on wasm (no FreeType on freestanding
+//     wasm, see the `mod freetype` gate above) and `face/web_canvas.rs` names
+//     `super::Options`/`super::FreetypeLoadFlags` directly, so this arm must keep
+//     declaring its own types.
+//   * everyone else (`fontconfig_freetype`) → RE-EXPORTS the freetype backend's
+//     own `config::FreetypeLoadFlags` stand-in (`face/freetype.rs`). This is a
+//     `pub use`, NOT a redeclaration, so `face::FreetypeLoadFlags` and
+//     `face::freetype::FreetypeLoadFlags` are the SAME type — which is what lets
+//     `face::Options` flow directly into `face::Face::init`/`::init_file` (on this
+//     target class `face::Face` IS `freetype::Face`, which takes
+//     `freetype::Options`).
 #[cfg(target_os = "macos")]
 pub type FreetypeLoadFlags = ();
 
-/// Scaffold stand-in for `config::FreetypeLoadFlags` on freetype-active backends
-/// (break #9: config injected via DI, so `rustty-config` is not a dep of this
-/// tier). Replaced by the real config type when the Linux freetype backend lands.
-#[cfg(not(target_os = "macos"))]
+/// Scaffold stand-in for `config::FreetypeLoadFlags` on the wasm `web_canvas`
+/// backend (break #9: config injected via DI, so `rustty-config` is not a dep of
+/// this tier). `hasFreetype()` is false on `web_canvas`, so this carries no flags.
+#[cfg(target_arch = "wasm32")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FreetypeLoadFlags {
     _private: (),
 }
 
+/// On the freetype-active backends, `face::FreetypeLoadFlags` IS the freetype
+/// backend's `config::FreetypeLoadFlags` stand-in (`face/freetype.rs`).
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+pub use freetype::FreetypeLoadFlags;
+
 // pub const freetype_load_flags_default: FreetypeLoadFlags = if (FreetypeLoadFlags != void) .{} else {};
 #[cfg(target_os = "macos")]
 pub const FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = ();
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_arch = "wasm32")]
 pub const FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = FreetypeLoadFlags { _private: () };
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+pub const FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = freetype::FreetypeLoadFlags::DEFAULT;
 
 /// Options for initializing a font face.
 // pub const Options = struct {
 //     size: DesiredSize,
 //     freetype_load_flags: FreetypeLoadFlags = freetype_load_flags_default,
 // };
+#[cfg(any(target_os = "macos", target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     pub size: DesiredSize,
@@ -148,6 +172,12 @@ pub struct Options {
     // omit it supply that constant).
     pub freetype_load_flags: FreetypeLoadFlags,
 }
+
+/// On the freetype-active backends, `face::Options` IS `freetype::Options` — the
+/// reference's single `font.face.Options` type, which `freetype.Face.init` takes
+/// directly. Re-exported (not redeclared) so the two never diverge.
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+pub use freetype::Options;
 
 /// The desired size for loading a font.
 #[derive(Clone, Copy, Debug, PartialEq)]
