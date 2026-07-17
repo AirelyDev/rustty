@@ -41,6 +41,21 @@ use rustty_global::xev as _DeferredXevBackend;
 mod backend;
 pub use backend::Backend;
 
+// XEV_BLUEPRINT §1 Linux port, task L1 LT1: gated module skeleton for the
+// io_uring/epoll/Dynamic backends (backend.zig's `.linux => &.{ .io_uring,
+// .epoll }` candidates, wired above in `backend.rs`). Empty stubs ONLY here —
+// later L-tier tasks fill each module in place; downstream `use` paths won't
+// change. `linux` groups the Linux-only helper bindings (timerfd.zig, ...) the
+// way `darwin`/`kqueue`'s siblings group the macOS-only ones above.
+#[cfg(target_os = "linux")]
+mod dynamic;
+#[cfg(target_os = "linux")]
+mod epoll;
+#[cfg(target_os = "linux")]
+mod io_uring;
+#[cfg(target_os = "linux")]
+mod linux;
+
 // XEV_BLUEPRINT §8 chunk C1: the pure intrusive data structures that establish the
 // raw-pointer discipline for the whole libxev port (queue.zig / queue_mpsc.zig /
 // heap.zig, byte-faithful). The kqueue loop (C3) uses them (`submissions`/

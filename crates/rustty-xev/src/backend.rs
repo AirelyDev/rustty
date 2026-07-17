@@ -146,4 +146,15 @@ mod tests {
             assert!(!Backend::candidates().is_empty());
         }
     }
+
+    // XEV_BLUEPRINT Linux port, task L1 LT1: strengthens the weaker
+    // `backend_default_and_candidates` off-macOS assertion above with the exact
+    // linux values (backend.zig:19-41's `.linux => .io_uring` / `.linux =>
+    // &.{ .io_uring, .epoll }` arms).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_candidates_and_default() {
+        assert_eq!(Backend::default(), Backend::IoUring);
+        assert_eq!(Backend::candidates(), &[Backend::IoUring, Backend::Epoll]);
+    }
 }
