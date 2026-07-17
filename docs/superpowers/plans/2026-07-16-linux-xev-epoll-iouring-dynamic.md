@@ -112,24 +112,25 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 
 ---
 
-### Task 4: epoll socket ops + `Process`/`Stream` arms
+### Task 4: epoll socket ops + `Process`/`Stream` (all INSIDE `epoll.rs`)
+
+**Scope (per STRUCTURE CORRECTION):** everything lands in the self-contained `epoll.rs` (and a new Linux net type) — do NOT modify the macOS-gated `process.rs`/`stream.rs`/`net.rs`.
 
 **Files:**
-- Modify: `crates/rustty-xev/src/epoll.rs` (the `Operation.perform` socket arms: accept/connect/send/recv/close/read/write/poll)
-- Modify: `crates/rustty-xev/src/process.rs` (epoll `Process` arm — `pidfd_open` + `epoll` readable, `waitpid` reap; ref `watcher/process.zig` linux arm)
-- Modify: `crates/rustty-xev/src/stream.rs` (epoll read/write/close/poll + `queueWrite` arms)
+- Modify: `crates/rustty-xev/src/epoll.rs` (add the `Operation` socket/proc/stream variants + their `perform` arms: accept/connect/send/recv/close/read/write/poll/proc; the `Process`/`Stream`/`WriteQueue`/`WriteRequest` watcher surfaces; extend the deferred-in-T3 match arms). Re-measure the `size_of::<Completion>()` tripwire after adding these fields (carry-forward from T3 review). Fix the T3 timeout cast at the (former) L606 site: replace `saturating_sub(..) as i32` with a checked/`i32::try_from`-clamped conversion so a >24.8-day timer can't wrap negative (carry-forward from T3 review).
+- Create: `crates/rustty-xev/src/linux/net.rs` (the `sockaddr`/`Address` subset epoll's connect/sendto/recvfrom need — `net.rs` is macOS-gated, so twin the exact subset here; add `mod net;` to `linux.rs`). Ref the crate's macOS `net.rs` for the shape + `std.net.Address` subset epoll uses.
 
 **Interfaces:**
-- Consumes: `epoll::Loop` (Task 3), `queue.rs` (`WriteQueue`).
-- Produces: `epoll::Process { pid }` (`init`/`deinit`/`wait`), `epoll` `Stream`/`WriteQueue`/`WriteRequest` arms; all satisfy the shared watcher signatures in `stream.rs`/`process.rs`.
+- Consumes: `epoll::Loop` (Task 3), `queue.rs` (`WriteQueue` = intrusive FIFO of `WriteRequest`), `linux::net::Address`.
+- Produces (all in `epoll.rs`): `epoll::Process { pid }` (`init`/`deinit`/`wait`), `epoll::Stream { fd }` (`init_fd`/`deinit`/`read`/`write`/`close`/`poll`/`queue_write`), `epoll::WriteQueue`/`WriteRequest` (hand-written `Default`), and the socket-op `Operation` variants.
 
-- [ ] **Step 1: Write the failing tests** — port `epoll: socket accept/connect/send/recv/close` (`epoll.zig:1672`) as `#[test] fn epoll_socket_roundtrip()`; add live KATs `#[test] fn epoll_process_spawn_exit()` (spawn `/bin/true`, `Process.wait`, assert status 0) and `#[test] fn epoll_pty_write_roundtrip()` (openpty + `queue_write` + read back), mirroring kqueue KATs 3/4.
-- [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-xev --target aarch64-unknown-linux-gnu epoll_socket epoll_process epoll_pty` → FAIL.
-- [ ] **Step 3: Implement** — port the socket `perform` arms from `epoll.zig`; the epoll `Process` via `pidfd_open(pid, 0)` registered readable → `waitpid(pid, WNOHANG)` reap (fallback to SIGCHLD path if `pidfd_open` ENOSYS); the epoll `Stream` read/write/poll + the `queueWrite` ordered-write engine (partial-write remainder re-init, `container_of` `WriteRequest::from`, byte-faithful to `stream.zig:780`).
-- [ ] **Step 4: Run to verify they pass** — same command → PASS.
+- [ ] **Step 1: Write the failing tests** — port `epoll: socket accept/connect/send/recv/close` (`epoll.zig:1672`) as `#[test] fn epoll_socket_roundtrip()`; add live KATs `#[test] fn epoll_process_spawn_exit()` (spawn `/bin/true` via `libc` fork/exec or `posix_spawn`, `Process.wait`, assert exit status 0) and `#[test] fn epoll_pty_write_roundtrip()` (openpty + `queue_write` a payload + read it back on the other end; assert bytes + `WriteQueue` drains), mirroring the kqueue KATs 3/4 in `kqueue.rs`.
+- [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-xev epoll_socket epoll_process epoll_pty` → FAIL.
+- [ ] **Step 3: Implement** — port the socket `perform` arms from `epoll.zig`; the epoll `Process` via `pidfd_open(pid, 0)` registered readable → `waitpid(pid, WNOHANG)` reap (fallback to the SIGCHLD/`waitpid` path if `pidfd_open` returns ENOSYS on an old kernel); the epoll `Stream` read/write/poll + the `queue_write` ordered-write engine (partial-write remainder re-init, `container_of`/offset-of `WriteRequest::from`, byte-faithful to `watcher/stream.zig:780`).
+- [ ] **Step 4: Run to verify they pass** — same command → PASS; full `cargo test -p rustty-xev` green.
 - [ ] **Step 5: Commit** — `git commit -m "rustty-xev: epoll socket/process/stream arms + live KATs (L1 LT4)"`
 
-**Gate after Task 4:** `cargo test -p rustty-xev --target aarch64-unknown-linux-gnu` runs all 12 epoll `#[test]` + 3 epoll live KATs green; macOS `cargo test -p rustty-xev` unaffected.
+**Gate after Task 4:** `cargo test -p rustty-xev` runs all 12 epoll `#[test]` + the 3 epoll live KATs green; the epoll backend is feature-complete for the shell path. macOS unaffected (R5).
 
 ---
 
