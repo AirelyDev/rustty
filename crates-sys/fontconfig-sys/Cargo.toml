@@ -1,9 +1,21 @@
 # fontconfig-sys — vendored C dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (Fontconfig font discovery) and build them standalone via `cc` + `bindgen`.
-# `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
+# This crate vendors the SAME upstream library the reference uses — Fontconfig
+# 2.14.2, the font-discovery/matching engine — copied in-tree under `vendor/`
+# and built standalone via `cc` + `bindgen`. It mirrors the reference's
+# pkg/fontconfig/build.zig `buildLib`: the same 28 `src/*.c` translation units
+# (build.zig:269-298), the same verbatim `-D`/`-W`/`-f` flag list
+# (build.zig:87-194) plus the libxml2 enablement flags (build.zig:216-221), and
+# the same five `override/include/` headers (the four empty alias stubs + the
+# pre-generated `fcobjshash.h` gperf table upstream's build would otherwise run
+# `makealias`/`gperf` to produce).
+#
+# The host has a system fontconfig 2.17 — deliberately NOT used: R3 pins parity
+# to the 2.14.2 the reference itself builds. No pkg-config, no system link.
+#
+# `links` declares the native lib so Cargo enforces one-version linking; the
+# archive name `fontconfig` matches the reference's
+# `b.addLibrary(.{ .name = "fontconfig" })`.
 [package]
 name = "fontconfig-sys"
 version.workspace = true
@@ -15,10 +27,36 @@ authors.workspace = true
 links = "fontconfig"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from fontconfig's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
+# fontconfig's FreeType backend (`src/fcfreetype.c`) does `#include <ft2build.h>`
+# / `FT_FREETYPE_H` and references the FreeType API (the reference hard-enables
+# the five `HAVE_FT_*` capability flags). A normal dependency on `freetype-sys`
+# (a) exposes its vendored FreeType headers to this build script as
+# `DEP_FREETYPE_INCLUDE` (for compiling `fcfreetype.c`), and (b) propagates its
+# static `freetype` archive to the final link of the KAT test binary — the
+# reference wires FreeType the same way via `lib.linkLibrary(freetype)`. The
+# dependency is link-only; fontconfig-sys uses none of freetype-sys's Rust API.
+freetype-sys = { path = "../freetype-sys" }
+# fontconfig's config parser (`src/fcxml.c`, under `-DENABLE_LIBXML2`) does
+# `#include <libxml/parser.h>`. A normal dependency on `libxml2-sys` (a) exposes
+# its vendored libxml2 headers via `DEP_XML2_INCLUDE` + `DEP_XML2_OVERRIDE_INCLUDE`
+# (for compiling `fcxml.c` and bindgen), and (b) keeps its static `xml2` archive
+# on the link line — the reference wires libxml2 the same way via
+# `lib.linkLibrary(libxml2)`. Link-only, same as freetype-sys above.
+libxml2-sys = { path = "../libxml2-sys" }
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored fontconfig C standalone (`cc`) with the reference's
+# flags, and auto-generate the FFI (`bindgen`) from the same public header the
+# reference's `c.zig` @cImports (`fontconfig/fontconfig.h`).
+cc = "1"
+bindgen = "0.72"

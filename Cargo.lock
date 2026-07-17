@@ -213,6 +213,12 @@ dependencies = [
 [[package]]
 name = "fontconfig-sys"
 version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+ "freetype-sys",
+ "libxml2-sys",
+]
 
 [[package]]
 name = "freetype-sys"
