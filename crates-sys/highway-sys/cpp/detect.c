@@ -89,26 +89,28 @@ int64_t rustty_hwy_detect_targets(void) {
   unsigned long hwcap = getauxval(AT_HWCAP_);
   unsigned long hwcap2 = getauxval(AT_HWCAP2_);
 
-  // Bit positions from Linux UAPI asm/hwcap.h
-  const unsigned long HWCAP_AES = 1UL << 3;
-  const unsigned long HWCAP_FPHP = 1UL << 9;     // FEAT_FP16
-  const unsigned long HWCAP_ASIMDDP = 1UL << 20; // DotProd
-  const unsigned long HWCAP_SVE = 1UL << 22;
+  // Bit positions from Linux UAPI asm/hwcap.h. Trailing-underscore names (like
+  // AT_HWCAP_ / AT_HWCAP2_ / PR_SVE_GET_VL_ above) so we don't collide with the
+  // HWCAP_*/HWCAP2_* macros glibc's <sys/auxv.h> pulls in via <bits/hwcap.h>.
+  const unsigned long HWCAP_AES_ = 1UL << 3;
+  const unsigned long HWCAP_FPHP_ = 1UL << 9;     // FEAT_FP16
+  const unsigned long HWCAP_ASIMDDP_ = 1UL << 20; // DotProd
+  const unsigned long HWCAP_SVE_ = 1UL << 22;
 
-  const unsigned long HWCAP2_BF16 = 1UL << 14;
+  const unsigned long HWCAP2_BF16_ = 1UL << 14;
 
-  if (hwcap & HWCAP_AES) {
+  if (hwcap & HWCAP_AES_) {
     t |= TGT_NEON;
 
-    if ((hwcap & HWCAP_FPHP) && (hwcap & HWCAP_ASIMDDP) &&
-        (hwcap2 & HWCAP2_BF16)) {
+    if ((hwcap & HWCAP_FPHP_) && (hwcap & HWCAP_ASIMDDP_) &&
+        (hwcap2 & HWCAP2_BF16_)) {
       t |= TGT_NEON_BF16;
     }
   }
 
   // SVE width probing (sve/sve2 bits are not used by the simd kernels here,
   // but we probe to keep the mask faithful to the reference).
-  if (hwcap & HWCAP_SVE) {
+  if (hwcap & HWCAP_SVE_) {
     (void)sve_vector_bytes();
   }
 

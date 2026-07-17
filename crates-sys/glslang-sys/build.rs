@@ -126,6 +126,20 @@ fn main() {
         build.flag_if_supported("-fPIC");
     }
 
+    // GCC 16 / libstdc++ no longer transitively pulls <cstdint> in through the
+    // STL headers glslang relies on (<stack>, <unordered_map>, ...), so several
+    // SPIRV/ headers (e.g. SpvBuilder.h) reference uint32_t before it is
+    // declared. The reference builds with Zig's bundled clang/libc++ (which
+    // still leaks <cstdint>), so it never hit this. Force the include to restore
+    // the same visibility without touching the pristine vendored sources — this
+    // is semantically inert: <cstdint> only supplies the fixed-width integer
+    // typedefs the code already assumes are in scope.
+    if target_env == "msvc" {
+        build.flag_if_supported("/FIcstdint");
+    } else {
+        build.flag("-include").flag("cstdint");
+    }
+
     for src in SOURCES {
         build.file(vendor.join(src));
         println!("cargo:rerun-if-changed=vendor/{src}");

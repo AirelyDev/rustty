@@ -171,7 +171,20 @@ fn main() {
         .include(&onig_src)
         // Vendored upstream code: do not let its warnings fail the host build.
         .warnings(false)
-        .flag_if_supported("-w");
+        .flag_if_supported("-w")
+        // Pin the C standard to gnu17 (pre-C23). GCC 16 defaults to gnu23, in
+        // which an empty parameter list `()` now means `(void)` instead of the
+        // historical "unspecified arguments". Oniguruma's st.h declares
+        // `onig_st_foreach` with an ANYARGS (== empty, in C) callback prototype
+        // `int (*)()` while st.c defines it with the concrete
+        // `int (*)(st_data_t, st_data_t, st_data_t)` — compatible under the K&R
+        // rule, but a hard "conflicting types" error under C23 (and the source
+        // of the -Wincompatible-pointer-types errors at the call sites). The
+        // reference's clang toolchain (Zig 0.15.2) defaults to gnu17, so gnu17
+        // reproduces exactly how the vendored source was compiled upstream; the
+        // emitted library is byte-for-byte identical (a front-end language-mode
+        // choice only, no codegen difference for this C89-era source).
+        .flag_if_supported("-std=gnu17");
 
     // The reference disables ubsan on MSVC (Zig's ubsan runtime cannot be
     // bundled on Windows, leaving __ubsan_handle_* unresolved).
