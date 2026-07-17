@@ -65,9 +65,11 @@ use std::ptr::NonNull;
 
 use glib::prelude::*;
 use glib::subclass::prelude::*;
+use rustty_apprt_api::{CoreSurfaceHandle, Target};
 use rustty_config::Config as CoreConfig;
 
 use super::config::Config;
+use crate::gtk::surface::Surface as ApprtSurface;
 use crate::gtk::{build_info, ext, winproto, WeakRef};
 
 mod imp {
@@ -1784,6 +1786,47 @@ impl Application {
     #[must_use]
     pub fn perform_action(&self) -> bool {
         unimplemented!("Application::perform_action lands in L5.1 Task 23 (application.zig:668)")
+    }
+}
+
+/// PORTS: `application.zig:2481-2486` `Action.render` — the `.render` arm of
+/// `performAction` (`:740` `.render => Action.render(target)`). The app/main-thread
+/// leg of the **T16 render contract**: the core app, draining a `redraw_surface`
+/// mailbox message, calls `rt_app.performAction(.{ .surface = core }, .render, {})`
+/// (`rustty_core::app::redrawSurface`, `app.rs:474-479`); that reaches
+/// [`crate::gtk::app::App::perform_action`], which dispatches the `.render` action
+/// here.
+///
+/// `.app` is a no-op (nothing to redraw at the app level); `.surface` reaches the
+/// core surface's opaque `rt_surface` handle through the [`CoreSurfaceHandle`]
+/// trait (`v.rt_surface_ptr()` — the reference's `v.rt_surface`), reconstitutes the
+/// apprt [`Surface`](ApprtSurface) it points at, and calls `redraw()` — which forwards
+/// to the `GhosttySurface` widget's `gl_area.queue_render()` (`surface.zig:822-826`,
+/// the reference's `v.rt_surface.surface.redraw()`). GTK then emits `render` on the
+/// app thread → `glareaRender` → `drawFrame(true)` (the final two hops).
+///
+/// PORT NOTE (T23): the reference routes here through the big `performAction`
+/// switch (`application.zig:668-799`), which [`Application::perform_action`] fills
+/// in Task 23. Until then [`crate::gtk::app::App::perform_action`] special-cases
+/// `.render` to this helper directly, so the render contract is live now — the one
+/// action first-light needs — while the full dispatch surface stays deferred.
+pub(crate) fn action_render<C: CoreSurfaceHandle>(target: Target<'_, C>) {
+    match target {
+        // `.app => {}` (`application.zig:2483`).
+        Target::App => {}
+        // `.surface => |v| v.rt_surface.surface.redraw()` (`:2484`).
+        Target::Surface(v) => {
+            let rt = v.rt_surface_ptr().cast::<ApprtSurface>();
+            if rt.is_null() {
+                return;
+            }
+            // SAFETY: for a `.render` action the core app hands the LIVE core
+            // surface whose `rt_surface` points at a pinned, still-alive apprt
+            // `Surface` embedded in the `GhosttySurface` widget's GObject private
+            // (memory `mirihar-surface-pin`); the render runs synchronously on the
+            // app thread while that widget is alive.
+            unsafe { (*rt).redraw() };
+        }
     }
 }
 

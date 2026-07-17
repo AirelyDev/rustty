@@ -198,6 +198,20 @@ impl ApprtSurface for Surface {
 }
 
 impl Surface {
+    /// PORTS: the widget leg of `Action.render` — `v.rt_surface.surface.redraw()`
+    /// (`class/application.zig:2485`). The reference reaches the `GhosttySurface`
+    /// widget through the apprt surface's `.surface` field and calls `redraw()`;
+    /// rustty's widget backref ([`Surface::gobj`]) is private, so this `pub(crate)`
+    /// forwarder is the faithful analogue. Dormant (no-op) before `constructed`
+    /// wires the backref. This is the app/main-thread leg of the **T16 render
+    /// contract**, driven by `performAction(.render)`
+    /// ([`super::class::application::action_render`]).
+    pub(crate) fn redraw(&self) {
+        if let Some(s) = self.gobj() {
+            s.redraw();
+        }
+    }
+
     /// PORTS: `Surface.zig:102-104` `redrawInspector` — requests a redraw of this
     /// surface's terminal inspector overlay.
     ///

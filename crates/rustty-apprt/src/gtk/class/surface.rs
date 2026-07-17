@@ -2102,6 +2102,102 @@ mod tests {
         assert!(rt.supports_clipboard(Clipboard::Primary));
     }
 
+    /// **T16 — the render contract.** The app-thread chain the renderer thread
+    /// triggers (invariant 1, `MUST_DRAW_FROM_APP_THREAD`):
+    ///
+    ///   `performAction(.render)` → [`action_render`](crate::gtk::class::application::action_render)
+    ///   → [`ApprtSurface::redraw`] → `gl_area.queue_render()` → GTK emits `render`
+    ///   on the app thread → [`Surface::gl_render`] → `drawFrame(true)`.
+    ///
+    /// Hops 1-3 (renderer thread → app mailbox → `core_app.tick` → `drainMailbox`
+    /// → `redrawSurface` → `rt_app.performAction(.{ .surface }, .render, {})`) live
+    /// in rustty-core (`app.rs:439,469-481`) and are exercised there. This test
+    /// drives **hop 4** (the T16 code): a `.render` action on a surface target whose
+    /// opaque `rt_surface` handle points at THIS widget's pinned apprt surface — the
+    /// exact shape `redrawSurface` hands `performAction` — and runs every line of
+    /// `action_render` → `redraw()` → `queue_render()` on a live widget. It then
+    /// drives **hop 5** by emitting the `render` signal GTK delivers on the app
+    /// thread after `queue_render`, asserting `gl_render` runs and reports "handled".
+    ///
+    /// The LIVE causal delivery (frame clock → real GL context → `drawFrame(true)`
+    /// pixel) needs a mapped window, a working GL driver, and a lazily-built core
+    /// surface (bound core app + pty + renderer) — that is T19 first-light. Here
+    /// `core_surface` is `None`, so `gl_render` returns `true` on its no-surface
+    /// guard (`:3333-3336`) before touching GL, and no window is mapped (mapping
+    /// fires the not-yet-ported focus/input template callbacks — T17). Before T16
+    /// wired the `.render` arm, `action_render` did not exist — RED (would not
+    /// compile); with `action_render` a no-op the surface never re-renders.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn render_contract_chain() {
+        use rustty_apprt_api::{CoreSurfaceHandle, Surface as _, Target};
+
+        let Some(surface) = display_surface() else {
+            return;
+        };
+        let app_thread = std::thread::current().id();
+
+        // A surface-target handle whose `rt_surface` points at this widget's pinned
+        // apprt surface — what `rustty_core::app::redrawSurface` builds before it
+        // calls `rt_app.performAction(.{ .surface = core }, .render, {})`.
+        struct FakeCore {
+            rt: *mut std::ffi::c_void,
+        }
+        impl CoreSurfaceHandle for FakeCore {
+            fn rt_surface_ptr(&self) -> *mut std::ffi::c_void {
+                self.rt
+            }
+        }
+        let handle = FakeCore {
+            rt: surface.rt().cast_mut().cast::<std::ffi::c_void>(),
+        };
+
+        // The `.app` arm is a no-op (`application.zig:2483`); it must not touch a
+        // surface (or panic) with no widget in play.
+        crate::gtk::class::application::action_render(Target::<FakeCore>::App);
+
+        // Hop 4 (the T16 code): the `.surface` arm reaches through `rt_surface_ptr`
+        // to the apprt surface and calls `redraw()` → `gl_area.queue_render()`.
+        // Runs every line of `action_render`/`redraw` on a live widget (no panic;
+        // `queue_render` on an unrealized GLArea is a safe no-op here).
+        crate::gtk::class::application::action_render(Target::Surface(&handle));
+
+        // Confirm the handle's `rt_surface` pointer — the one `action_render`
+        // dereferenced — resolves to THIS widget: the apprt-surface backref round-
+        // trips a sentinel stamped on the widget's cached size.
+        let sentinel = SurfaceSize {
+            width: 333,
+            height: 111,
+        };
+        surface.imp().size.set(sentinel);
+        // SAFETY: `handle.rt` is `surface.rt()`, the widget's pinned embedded apprt
+        // surface, alive for this scope.
+        let rt: &ApprtSurface = unsafe { &*handle.rt.cast::<ApprtSurface>() };
+        assert_eq!(
+            rt.get_size().expect("backref resolves"),
+            sentinel,
+            "action_render's rt_surface handle resolves to this widget"
+        );
+
+        // Hop 5: GTK delivers `render` on the app thread after `queue_render` →
+        // `gl_render` → `drawFrame(true)`. We drive that emission synchronously (the
+        // live frame-clock delivery is T19). No core surface ⇒ the no-surface guard
+        // returns `true` before touching GL.
+        let ctx = None::<gdk4::GLContext>;
+        let handled = surface
+            .imp()
+            .gl_area
+            .emit_by_name::<bool>("render", &[&ctx]);
+        assert!(handled, "gl_render reported the frame handled");
+        // The whole render leg ran synchronously on the app/main thread — the only
+        // thread allowed to draw a GLArea (invariant 1).
+        assert_eq!(
+            std::thread::current().id(),
+            app_thread,
+            "the render leg stayed on the app/main thread"
+        );
+    }
+
     /// **Invariant 5** — `finalize` removes the surface from the app (`deleteSurface`)
     /// BEFORE `deinit`ing the core surface (`surface.zig:1925-1940`). Exercises the
     /// extracted ordering directly (a live `CoreSurface` cannot be built in this

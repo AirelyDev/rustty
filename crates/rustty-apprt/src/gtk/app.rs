@@ -156,20 +156,37 @@ impl ApprtApp for App {
     /// PORTS: `App.zig:65-72` `performAction`. Dispatches an apprt action onto a
     /// target via the backing [`Application`].
     ///
-    /// PORT NOTE (placeholder-leaf, T23): the reference forwards to
-    /// `self.app.performAction(target, action, value)` (`App.zig:71`);
-    /// [`Application::perform_action`] is the action-dispatch surface that L5.1
-    /// T23 fills (it is `unimplemented!()` today and takes no args). Until then
-    /// this reports "not handled" (`false`) rather than reaching the panic — the
-    /// faithful pre-dispatch behavior (nothing is wired behind the action map yet)
-    /// — and T23 re-types [`Application::perform_action`] and forwards here.
+    /// The `.render` action is live here — it is the **T16 render contract**'s
+    /// app-thread leg: the core app, draining a `redraw_surface` mailbox message
+    /// (invariant 1, `MUST_DRAW_FROM_APP_THREAD`), calls
+    /// `rt_app.performAction(.{ .surface = core }, .render, {})`
+    /// (`rustty_core::app::redrawSurface`, `app.rs:474-479`), which lands here and
+    /// dispatches to [`Application::action_render`] → `Surface::redraw()` →
+    /// `gl_area.queue_render()`. GTK then emits `render` on the app thread →
+    /// `glareaRender` → `drawFrame(true)`.
+    ///
+    /// PORT NOTE (placeholder-leaf, T23): the reference forwards EVERY action to
+    /// `self.app.performAction(target, action, value)` (`App.zig:71`), whose big
+    /// switch (`application.zig:668-799`) [`Application::perform_action`] fills in
+    /// L5.1 T23. Until then this special-cases `.render` (the one action first-light
+    /// needs) and reports "not handled" (`false`) for the rest — the faithful
+    /// pre-dispatch behavior — rather than reaching the T23 panic; T23 folds the
+    /// `.render` arm into the full switch.
     fn perform_action<C: CoreSurfaceHandle>(
         &self,
         target: Target<'_, C>,
         action: Action<'_>,
     ) -> Result<bool, ApprtError> {
-        let _ = (target, action);
-        Ok(false)
+        match action {
+            // `.render => Action.render(target)` (`application.zig:740`). Falls
+            // through to the switch's `return true` (handled), `:797-799`.
+            Action::Render => {
+                super::class::application::action_render(target);
+                Ok(true)
+            }
+            // The remaining actions land with the T23 dispatch surface.
+            _ => Ok(false),
+        }
     }
 
     /// PORTS: `App.zig:80-90` `performIpc` — routed to the static
