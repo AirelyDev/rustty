@@ -20,7 +20,9 @@
 //! below) AND the whole in-scope Linux surface (L1 LT1–LT8) are filled; the
 //! `ThreadPool` body is the one ledgered deferral on both (DEFERRALS.md "kqueue:
 //! file IO on thread pool", honest-skip stub; on Linux the pool has no type
-//! surface either — R5). `Timer::cancel` is additionally deferred on Linux only.
+//! surface either — R5). (`Timer::cancel` WAS additionally deferred on Linux;
+//! L1 LT9 un-defers it — `dynamic.rs`'s `Timer::cancel` now carries the real
+//! io_uring `timer_remove` / epoll `cancel` arms of timer.zig:137-210.)
 //! (Marker normalized from 'CHUNK STATUS' per VALIDATION_REPORT.md §3b.)
 //!
 //! CHUNK LOG: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:

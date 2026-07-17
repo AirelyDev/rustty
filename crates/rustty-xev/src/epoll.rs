@@ -1133,7 +1133,13 @@ impl Completion {
     /// PORT NOTE: the `c.* = .{ .op, .userdata, .callback }` initialization the
     /// watcher `wait`/`read`/`write`/`close`/`poll` methods perform — a FULL reset
     /// with the internal fields (`next`/`flags`) taking their `Default` values.
-    fn new_op(op: Operation, userdata: *mut c_void, callback: Callback) -> Completion {
+    //
+    // PORT NOTE (`pub(crate)`): `watcher/timer.zig`'s `TimerLoop.cancel`
+    // (timer.zig:137-210) builds its `c_cancel` completion as `.{ .op = .{ .cancel
+    // = .{ .c = c_timer } }, ... }` from OUTSIDE this backend module, so the
+    // watcher needs this full-reset seam — exactly the visibility `kqueue.rs`'s
+    // twin (kqueue.rs:1589) already carries for the macOS `timer.rs` watcher.
+    pub(crate) fn new_op(op: Operation, userdata: *mut c_void, callback: Callback) -> Completion {
         Completion {
             op,
             userdata,

@@ -1465,28 +1465,172 @@ impl Timer {
         )
     }
 
-    // -----------------------------------------------------------------------
-    // PORT NOTE (DEFERRED — `Timer::cancel`, timer.zig:369):
+    /// Cancel a previously started timer. The timer to cancel used the completion
+    /// "c_cancel". A new completion "c" must be specified which will be called
+    /// with the callback once cancellation is complete.
+    ///
+    /// The original timer will still have its callback fired but with the
+    /// error "error.Canceled".
     //
-    // `TimerDynamic.cancel` forwards to `api.Timer.cancel` = `TimerLoop.cancel`
-    // (timer.zig:137-210), whose body is a `switch (xev.backend)` that builds a
-    // `.cancel = .{ .c = c_timer }` completion for kqueue/epoll and a
-    // `.timer_remove = .{ .timer = c_timer }` one for io_uring — i.e. it must
-    // WRITE a backend `Operation` into a completion. Those `Operation` variants
-    // (`epoll::Operation::Cancel`, `io_uring::Operation::TimerRemove`) are
-    // module-private to the backends, and neither backend exposes a
-    // `Completion::new_op`-style seam to this module (macOS's `timer.rs` can do
-    // it only because `kqueue::Completion::new_op` is `pub(crate)`).
+    // PORT NOTE: `TimerDynamic.cancel` (timer.zig:376-430) does
+    // `c_timer.ensureTag(tag)` + `c_cancel.ensureTag(tag)` then forwards to
+    // `api.Timer.cancel` = `TimerLoop.cancel` (timer.zig:137-210), whose body is a
+    // `switch (xev.backend)` writing a backend op into `c_cancel` and then
+    // `loop.add(c_cancel)`:
+    //   * io_uring — `.op = .{ .timer_remove = .{ .timer = c_timer } }` (timer.zig:160-164)
+    //   * epoll    — `.op = .{ .cancel = .{ .c = c_timer } }` (timer.zig:181-187)
+    // Both arms are inlined here for the same reason `run`/`reset` are: this type
+    // is `TimerLoop(Dynamic)`-shaped and reaches the backend loop directly.
+    // (This un-defers the C7 gap the earlier PORT NOTE described, via exactly the
+    // route it prescribed: `Completion::new_op` is now `pub(crate)` in both
+    // backends, matching kqueue.rs:1589.)
+    ///
+    /// # Safety
+    /// `c_timer`/`c_cancel`/`loop_` must be valid, stable pointers that outlive
+    /// the timer.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn cancel<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c_timer: *mut Completion,
+        c_cancel: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                core::result::Result<(), TimerCancelError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "Timer::cancel cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        match backend() {
+            Backend::IoUring => unsafe {
+                Completion::ensure_tag_raw(c_timer, Backend::IoUring);
+                Completion::ensure_tag_raw(c_cancel, Backend::IoUring);
+                // `c_cancel.* = .{ .op = .{ .timer_remove = .{ .timer = c_timer } },
+                // .userdata = userdata, .callback = ... }` — written through the
+                // backend arm, leaving the Dynamic `tag` set by `ensure_tag_raw`.
+                *Completion::as_io_uring(c_cancel) = io_uring::Completion::new_op(
+                    io_uring::Operation::TimerRemove {
+                        timer: Completion::as_io_uring(c_timer),
+                    },
+                    userdata.cast::<c_void>(),
+                    Self::io_uring_cancel_trampoline::<UD, CB>,
+                );
+                (*Loop::as_io_uring(loop_)).add(Completion::as_io_uring(c_cancel));
+            },
+            Backend::Epoll => unsafe {
+                Completion::ensure_tag_raw(c_timer, Backend::Epoll);
+                Completion::ensure_tag_raw(c_cancel, Backend::Epoll);
+                // `c_cancel.* = .{ .op = .{ .cancel = .{ .c = c_timer } }, ... }`.
+                *Completion::as_epoll(c_cancel) = epoll::Completion::new_op(
+                    epoll::Operation::Cancel {
+                        c: Completion::as_epoll(c_timer),
+                    },
+                    userdata.cast::<c_void>(),
+                    Self::epoll_cancel_trampoline::<UD, CB>,
+                );
+                (*Loop::as_epoll(loop_)).add(Completion::as_epoll(c_cancel));
+            },
+            be => unreachable!("non-candidate backend {be:?}"),
+        }
+    }
+
+    /// The monomorphized io_uring trampoline for `cancel` — maps
+    /// `io_uring::Result::TimerRemove` → `TimerCancelError!void`.
     //
-    // Ported honestly as a DEFERRAL rather than by widening two backends'
-    // internals from a task whose brief scopes it to this file: nothing in the
-    // Linux shell path calls `Timer.cancel` (`Timer.reset`, which IS ported above,
-    // is what termio's scroll/coalesce/sync timers use), and the underlying loop
-    // machinery is already ported + tested inside each backend
-    // (`epoll_timer_cancellation`, `io_uring_timer_remove`). To un-defer: make
-    // `Completion::new_op` `pub(crate)` in epoll.rs/io_uring.rs (as kqueue.rs
-    // already does) and add the two arms here.
-    // -----------------------------------------------------------------------
+    // PORT NOTE: `if (r.timer_remove) |_| {} else |err| err` (timer.zig:176). Zig's
+    // structural error sets let `TimerRemoveError` flow straight into the
+    // `CancelError!void` slot because io_uring's two sets are the SAME literal set
+    // ({NotFound, ExpirationInProgress, Unexpected} — io_uring.rs's
+    // `TimerRemoveError`/`CancelError`); Rust's nominal enums need the explicit
+    // 1:1 widening into the merged `ErrorSet` that `TimerCancelError` is.
+    fn io_uring_cancel_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut io_uring::Loop,
+        c_inner: *mut io_uring::Completion,
+        r: io_uring::Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                core::result::Result<(), TimerCancelError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        // SAFETY: `CB` is a ZST (asserted in `cancel`), so reading it through an
+        // aligned dangling pointer accesses zero bytes and is sound.
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let mapped: core::result::Result<(), TimerCancelError> = match r {
+            io_uring::Result::TimerRemove(Ok(())) => Ok(()),
+            io_uring::Result::TimerRemove(Err(e)) => Err(match e {
+                io_uring::TimerRemoveError::NotFound => TimerCancelError::NotFound,
+                io_uring::TimerRemoveError::ExpirationInProgress => {
+                    TimerCancelError::ExpirationInProgress
+                }
+                io_uring::TimerRemoveError::Unexpected => TimerCancelError::Unexpected,
+            }),
+            _ => unreachable!("timer cancel completion yielded a non-timer_remove result"),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            Loop::from_io_uring(l_inner),
+            Completion::from_io_uring(c_inner),
+            mapped,
+        )
+    }
+
+    /// See `io_uring_cancel_trampoline`. Maps `epoll::Result::Cancel` →
+    /// `TimerCancelError!void` (`if (r.cancel) |_| {} else |err| err`,
+    /// timer.zig:202).
+    fn epoll_cancel_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut epoll::Loop,
+        c_inner: *mut epoll::Completion,
+        r: epoll::Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                core::result::Result<(), TimerCancelError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        // SAFETY: see `io_uring_cancel_trampoline`.
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let mapped: core::result::Result<(), TimerCancelError> = match r {
+            epoll::Result::Cancel(Ok(())) => Ok(()),
+            // epoll's `CancelError` is `ThreadPoolError || error{NotFound}`; only
+            // `NotFound` is ported (epoll.rs's `CancelError`).
+            epoll::Result::Cancel(Err(epoll::CancelError::NotFound)) => {
+                Err(TimerCancelError::NotFound)
+            }
+            _ => unreachable!("timer cancel completion yielded a non-cancel result"),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            Loop::from_epoll(l_inner),
+            Completion::from_epoll(c_inner),
+            mapped,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2797,6 +2941,83 @@ mod tests {
 
             loop_.run(RunMode::UntilDone).unwrap();
             assert!(called, "backend {be:?} timer reset did not fire");
+
+            timer.deinit();
+            loop_.deinit();
+        }
+    }
+
+    // KAT — `watcher/timer.zig`'s `test "timer cancel"` (timer.zig:595-639),
+    // through the Dynamic union on BOTH candidates: a long timer is started, then
+    // canceled; the ORIGINAL timer callback must still fire but with
+    // `error.Canceled`, and the cancel callback must confirm success. This pins
+    // both `Timer::cancel` arms (io_uring `timer_remove`, epoll `cancel`) end to
+    // end — if cancel did nothing, `loop.run(.until_done)` would block for the
+    // full 100s rather than return.
+    #[test]
+    fn dynamic_timer_cancel() {
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+            let timer = Timer::init().unwrap();
+
+            // Add the timer. `100_000` ms — so long that the ONLY way the loop
+            // finishes is a real cancellation.
+            let mut canceled = false;
+            let mut c1 = Completion::default();
+            let run_cb = |ud: *mut bool,
+                          _l: *mut Loop,
+                          _c: *mut Completion,
+                          r: core::result::Result<(), TimerRunError>| {
+                // `ud.?.* = if (r) false else |err| err == error.Canceled;`
+                unsafe { *ud = matches!(r, Err(TimerRunError::Canceled)) };
+                CallbackAction::Disarm
+            };
+            unsafe {
+                timer.run(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c1),
+                    100_000,
+                    ptr::addr_of_mut!(canceled),
+                    run_cb,
+                );
+            }
+            assert_eq!(c1.state(), CompletionState::Active);
+
+            // Cancel.
+            let mut cancel_confirm = false;
+            let mut c2 = Completion::default();
+            let cancel_cb =
+                |ud: *mut bool,
+                 _l: *mut Loop,
+                 _c: *mut Completion,
+                 r: core::result::Result<(), TimerCancelError>| {
+                    // `_ = r catch unreachable; ud.?.* = true;`
+                    r.unwrap();
+                    unsafe { *ud = true };
+                    CallbackAction::Disarm
+                };
+            unsafe {
+                timer.cancel(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c1),
+                    ptr::addr_of_mut!(c2),
+                    ptr::addr_of_mut!(cancel_confirm),
+                    cancel_cb,
+                );
+            }
+            // Both completions live under the running backend's arm.
+            assert_eq!(c1.tag(), be);
+            assert_eq!(c2.tag(), be);
+
+            // Wait.
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(canceled, "backend {be:?}: timer cb did not report Canceled");
+            assert!(cancel_confirm, "backend {be:?}: cancel cb did not confirm");
+            assert_eq!(c1.state(), CompletionState::Dead);
 
             timer.deinit();
             loop_.deinit();
