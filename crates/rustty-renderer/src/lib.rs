@@ -91,6 +91,16 @@ mod test_support;
 #[cfg(target_os = "macos")]
 pub mod metal;
 
+// PORT STATUS (L4, Linux-only): the OpenGL graphics-API backend, the second
+// concrete graphics API alongside `metal` (R5: purely additive — not one byte of
+// the Metal lane changes). Task 1 lands only the headless-EGL context + the raw
+// `gl` loader (`opengl::gl::sys`), i.e. the `OpenGL.zig::prepareContext` half; the
+// `pkg/opengl` leaf wrappers and the monomorphic `GenericRenderer(OpenGL)`
+// (`generic::linux_impl`) are later tasks.
+// (docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md)
+#[cfg(target_os = "linux")]
+pub mod opengl;
+
 // GPU R-d Chunk-3 prerequisites: the Kitty-graphics + overlay image render state
 // (`image.zig`) and the CPU/z2d debug overlay (`Overlay.zig`). Neither names
 // `GenericRenderer`, so both compile standalone before Chunk 3 (GPU_RD_P1_DESIGN.md

@@ -199,6 +199,26 @@ dispatch2 = { version = "0.3", features = ["block2"] }
 # seam (Frame.complete's `!sync` path). Also brought in transitively by dispatch2.
 block2 = { version = "0.6" }
 
+# Linux: the OpenGL graphics-API backend (L4). R5: purely additive and
+# target-gated — the macOS/Metal lane above is untouched. R3: these are the two
+# deps the L4 plan names, and nothing else.
+[target.'cfg(target_os = "linux")'.dependencies]
+# `gl`: raw `gl_generator`-produced FFI bindings loaded through an explicit
+# `gl::load_with(|s| …)` closure — Rust's analogue of ghostty's own glad
+# function-pointer context (`pkg/opengl/glad.zig`, `gl.c.gl*` / `gl.c.GL_*`).
+# Deliberately NOT `glow` (its `Context` trait has a foreign method vocabulary, so
+# the `renderer/opengl/*.zig` leaves could not port method-for-method) and NOT
+# `epoxy-sys` (libepoxy is the right loader for L5's windowed GLArea path, where
+# GDK owns context creation; it is not needed for this offscreen EGL context).
+# See the plan's "Tech Stack / GL loader decision (D-D, resolved)".
+gl = "0.14"
+# `khronos-egl`: raw EGL. The `dynamic` feature dlopen's `libEGL.so.1` at runtime
+# rather than link-time, which is REQUIRED here: this host ships the EGL runtime
+# libraries but NOT the EGL development headers, so any `-sys` crate needing
+# `EGL/egl.h` at build time is unusable. `dynamic` also means a machine with no
+# EGL at all fails at `init()` (a clean test skip) instead of failing to link.
+khronos-egl = { version = "6", features = ["dynamic"] }
+
 [dev-dependencies]
 # Pure-Rust PNG encoder — generates the small solid-color background-image fixture
 # the offscreen bg-image golden (T3) writes to a temp file + `prepBackgroundImage`
