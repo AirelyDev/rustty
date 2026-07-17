@@ -77,11 +77,12 @@ const CURSOR_BLINK_INTERVAL: u64 = 600;
 //       else
 //           false;
 // `@hasDecl(apprt.App, "must_draw_from_app_thread")` — the embedded/macOS App
-// (this milestone) does NOT declare it (only GTK does, which is deferred), so
-// the probe resolves to `false`. When GTK lands it flips this to an
-// `apprt::App::MUST_DRAW_FROM_APP_THREAD` (a new default-false trait const).
+// does NOT declare it (only the GTK App does), so the probe resolves to
+// `false` there. Rust models the `@hasDecl` two-case fold as a trait const that
+// DEFAULTS to `false` (`apprt::App::MUST_DRAW_FROM_APP_THREAD`); the GTK backend
+// overrides it to `true`. This is read at the `drawFrame` site below as
+// `A::MUST_DRAW_FROM_APP_THREAD` — the concrete apprt backend `A` picks the arm.
 // Both `drawFrame` arms (the `drawFrame` helper below) stay live regardless.
-const MUST_DRAW_FROM_APP_THREAD: bool = false;
 
 /// PORT NOTE (Rust-only glue): the reference `threadMain_` returns an INFERRED
 /// error union combining the xev handle errors (`loop.run`, `wakeup.notify`)
@@ -1460,7 +1461,7 @@ where
         }
 
         // if (must_draw_from_app_thread) {
-        if MUST_DRAW_FROM_APP_THREAD {
+        if A::MUST_DRAW_FROM_APP_THREAD {
             // _ = self.app_mailbox.push(.{ .redraw_surface = self.surface }, .{ .instant = {} });
             let _ = unsafe {
                 (*self_).app_mailbox.push(

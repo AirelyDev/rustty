@@ -91,14 +91,23 @@
 //! the full derivation and the open plan:96 reconciliation.
 
 pub mod adw_version;
+pub mod app;
 pub mod build_info;
 pub mod class;
 pub mod ext;
 pub mod gresource;
 pub mod gtk_version;
+pub mod surface;
 pub mod weak_ref;
 pub mod winproto;
 
+// PORTS: `apprt/gtk.zig:8-9` `pub const App = @import("gtk/App.zig")` /
+// `pub const Surface = @import("gtk/Surface.zig")` — the required comptime apprt
+// API. In rustty these are the concrete backend types the `rustty_apprt_api` seam
+// is `impl`'d against (`App` in `app.rs`, the `Surface` placeholder in
+// `surface.rs`, filled by L5.1 T18).
+pub use app::App;
+pub use surface::Surface;
 pub use weak_ref::WeakRef;
 
 // The gresource accessor emitted by `build.rs`'s `glib-compile-resources`
