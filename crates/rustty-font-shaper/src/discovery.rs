@@ -4,8 +4,8 @@
 // `CTFontCollection`), fully ported here. The Fontconfig discoverer (the Linux
 // default) is DEFERRED and recorded as verbatim reference comments; likewise the
 // Windows FreeType-scan discoverer (`freetype_windows` backend). `Descriptor`
-// (the search descriptor) and its `toCoreTextDescriptor` conversion are ported;
-// `toFcPattern` (Fontconfig) is a DEFERRED comment.
+// (the search descriptor) and both conversions — `toCoreTextDescriptor` and
+// `toFcPattern` (Fontconfig, gated to the fontconfig backend class) — are ported.
 //
 // PORT NOTE (imports): the reference imports are
 //   const std = @import("std");
@@ -399,53 +399,128 @@ impl Descriptor {
         self.clone()
     }
 
-    // ----------------------------------------------------------------------
-    // PORT NOTE (DEFERRED — Fontconfig): `toFcPattern` builds a `fontconfig.Pattern`
-    // from the descriptor. It lands with the Fontconfig backend. Recorded verbatim:
-    //
-    // /// Convert to Fontconfig pattern to use for lookup. The pattern does
-    // /// not have defaults filled/substituted (Fontconfig thing) so callers
-    // /// must still do this.
+    /// Convert to Fontconfig pattern to use for lookup. The pattern does
+    /// not have defaults filled/substituted (Fontconfig thing) so callers
+    /// must still do this.
+    ///
+    /// The returned raw pointer is owned by the caller (matching the reference's
+    /// manually managed `*fontconfig.Pattern`); the caller must `destroy` it.
+    // PORT NOTE: `discovery.zig:117-157` `toFcPattern`. `assert = quirks.inlineAssert`
+    // (imported crate-wide as in `face/freetype.rs:41`); each `pat.add`/`cs.addChar`
+    // is `assert`ed exactly as the reference. Gated to the fontconfig backend class
+    // (`not(any(macos, wasm32))`) — the coretext path uses `to_coretext_descriptor`,
+    // and wasm has no discovery.
     // pub fn toFcPattern(self: Descriptor) *fontconfig.Pattern {
-    //     const pat = fontconfig.Pattern.create();
-    //     if (self.family) |family| {
-    //         assert(pat.add(.family, .{ .string = family }, false));
-    //     }
-    //     if (self.style) |style| {
-    //         assert(pat.add(.style, .{ .string = style }, false));
-    //     }
-    //     if (self.codepoint > 0) {
-    //         const cs = fontconfig.CharSet.create();
-    //         defer cs.destroy();
-    //         assert(cs.addChar(self.codepoint));
-    //         assert(pat.add(.charset, .{ .char_set = cs }, false));
-    //     }
-    //     if (self.size > 0) assert(pat.add(
-    //         .size,
-    //         .{ .integer = @intFromFloat(@round(self.size)) },
-    //         false,
-    //     ));
-    //     if (self.bold) assert(pat.add(
-    //         .weight,
-    //         .{ .integer = @intFromEnum(fontconfig.Weight.bold) },
-    //         false,
-    //     ));
-    //     if (self.italic) assert(pat.add(
-    //         .slant,
-    //         .{ .integer = @intFromEnum(fontconfig.Slant.italic) },
-    //         false,
-    //     ));
-    //     // For fontconfig, we always add monospace in the pattern. Since
-    //     // fontconfig sorts by closeness to the pattern, this doesn't fully
-    //     // exclude non-monospace but helps prefer it.
-    //     assert(pat.add(
-    //         .spacing,
-    //         .{ .integer = @intFromEnum(fontconfig.Spacing.mono) },
-    //         false,
-    //     ));
-    //     return pat;
-    // }
-    // ----------------------------------------------------------------------
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    pub fn to_fc_pattern(&self) -> *mut crate::fc::Pattern {
+        use crate::fc;
+        use rustty_util::quirks::inlineAssert as assert;
+        use std::ffi::CString;
+
+        // const pat = fontconfig.Pattern.create();
+        let pat_ptr = fc::Pattern::create();
+        // SAFETY: `create` returns a freshly allocated, non-null pattern which this
+        // function owns and hands back to the caller.
+        let pat = unsafe { &mut *pat_ptr };
+
+        // if (self.family) |family| {
+        //     assert(pat.add(.family, .{ .string = family }, false));
+        // }
+        if let Some(family) = &self.family {
+            // The reference `family` is a `[:0]const u8` (a C string); rustty stores
+            // the raw bytes, so NUL-terminate here. Interior NUL violates the field
+            // contract (a fontconfig family/pattern string).
+            let family = CString::new(family.as_slice())
+                .expect("Descriptor::family must not contain an interior NUL");
+            assert(pat.add(fc::Property::Family, fc::Value::String(&family), false));
+        }
+
+        // if (self.style) |style| {
+        //     assert(pat.add(.style, .{ .string = style }, false));
+        // }
+        if let Some(style) = &self.style {
+            let style = CString::new(style.as_slice())
+                .expect("Descriptor::style must not contain an interior NUL");
+            assert(pat.add(fc::Property::Style, fc::Value::String(&style), false));
+        }
+
+        // if (self.codepoint > 0) {
+        //     const cs = fontconfig.CharSet.create();
+        //     defer cs.destroy();
+        //     assert(cs.addChar(self.codepoint));
+        //     assert(pat.add(.charset, .{ .char_set = cs }, false));
+        // }
+        if self.codepoint > 0 {
+            let cs_ptr = fc::CharSet::create();
+            // SAFETY: `create` returns a freshly allocated, non-null char set.
+            let cs = unsafe { &mut *cs_ptr };
+            assert(cs.add_char(self.codepoint));
+            // `add` (FcPatternAdd) copies the char set into pattern-owned memory, so
+            // `cs` is destroyed below (the reference's `defer cs.destroy()`).
+            assert(pat.add(
+                fc::Property::Charset,
+                fc::Value::CharSet(cs_ptr.cast_const()),
+                false,
+            ));
+            cs.destroy();
+        }
+
+        // if (self.size > 0) assert(pat.add(
+        //     .size,
+        //     .{ .integer = @intFromFloat(@round(self.size)) },
+        //     false,
+        // ));
+        if self.size > 0.0 {
+            assert(pat.add(
+                fc::Property::Size,
+                fc::Value::Integer(self.size.round() as i32),
+                false,
+            ));
+        }
+
+        // if (self.bold) assert(pat.add(
+        //     .weight,
+        //     .{ .integer = @intFromEnum(fontconfig.Weight.bold) },
+        //     false,
+        // ));
+        if self.bold {
+            assert(pat.add(
+                fc::Property::Weight,
+                fc::Value::Integer(fc::Weight::Bold as i32),
+                false,
+            ));
+        }
+
+        // if (self.italic) assert(pat.add(
+        //     .slant,
+        //     .{ .integer = @intFromEnum(fontconfig.Slant.italic) },
+        //     false,
+        // ));
+        if self.italic {
+            assert(pat.add(
+                fc::Property::Slant,
+                fc::Value::Integer(fc::Slant::Italic as i32),
+                false,
+            ));
+        }
+
+        // For fontconfig, we always add monospace in the pattern. Since
+        // fontconfig sorts by closeness to the pattern, this doesn't fully
+        // exclude non-monospace but helps prefer it.
+        // assert(pat.add(
+        //     .spacing,
+        //     .{ .integer = @intFromEnum(fontconfig.Spacing.mono) },
+        //     false,
+        // ));
+        assert(pat.add(
+            fc::Property::Spacing,
+            fc::Value::Integer(fc::Spacing::Mono as i32),
+            false,
+        ));
+
+        // return pat;
+        pat_ptr
+    }
 }
 
 /// Bridge a `CodepointMap` descriptor (the thin seam in `rustty-font`, carrying
@@ -1944,6 +2019,68 @@ mod tests {
         if crate::options::BACKEND == crate::Backend::FontconfigFreetype {
             // (body DEFERRED with the Fontconfig backend)
         }
+    }
+
+    // PORT NOTE: unit tests for `Descriptor::to_fc_pattern` (the port of
+    // `discovery.zig:117-157` `toFcPattern`). The reference has no dedicated test
+    // for `toFcPattern` (it is exercised indirectly by the `fontconfig`/`fontconfig
+    // codepoint` tests, whose bodies discover real fonts); these directly assert
+    // the built pattern's contents, and are gated to the fontconfig backend class
+    // (the only class where `to_fc_pattern` is compiled).
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[test]
+    fn descriptor_to_fc_pattern_family_size_mono() {
+        use crate::fc::{Property, Spacing, Value};
+
+        let desc = Descriptor {
+            family: Some(b"monospace".to_vec()),
+            size: 12.0,
+            ..Descriptor::default()
+        };
+        // SAFETY: `to_fc_pattern` returns a freshly created, non-null pattern that
+        // this test owns and destroys below.
+        let pat = unsafe { &mut *desc.to_fc_pattern() };
+
+        let Value::String(family) = pat.get(Property::Family, 0).unwrap() else {
+            panic!("family value was not a string");
+        };
+        assert_eq!(family, c"monospace");
+
+        let Value::Integer(size) = pat.get(Property::Size, 0).unwrap() else {
+            panic!("size value was not an integer");
+        };
+        assert_eq!(size, 12);
+
+        // Spacing is added UNCONDITIONALLY (the reference always biases toward
+        // monospace matches, `discovery.zig:147-154`).
+        let Value::Integer(spacing) = pat.get(Property::Spacing, 0).unwrap() else {
+            panic!("spacing value was not an integer");
+        };
+        assert_eq!(spacing, Spacing::Mono as i32);
+
+        pat.destroy();
+    }
+
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[test]
+    fn descriptor_to_fc_pattern_codepoint() {
+        use crate::fc::{Property, Value};
+
+        let desc = Descriptor {
+            codepoint: u32::from('A'),
+            ..Descriptor::default()
+        };
+        // SAFETY: as above — owned, non-null, destroyed below.
+        let pat = unsafe { &mut *desc.to_fc_pattern() };
+
+        let Value::CharSet(cs) = pat.get(Property::Charset, 0).unwrap() else {
+            panic!("charset value was not a char set");
+        };
+        // SAFETY: `cs` borrows the pattern-owned char set; valid until `pat` is
+        // destroyed.
+        assert!(unsafe { (*cs).has_char(u32::from('A')) });
+
+        pat.destroy();
     }
 
     // test "coretext" {
