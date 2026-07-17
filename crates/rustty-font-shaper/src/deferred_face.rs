@@ -492,8 +492,9 @@ pub use fontconfig_payload::FontconfigData;
 #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
 mod fontconfig_payload {
     use super::DeferredFace;
-    use crate::face::Variation;
+    use crate::face::{Face, FaceError, Options, Variation};
     use crate::fc;
+    use crate::library::Library;
     use crate::Presentation;
 
     /// Fontconfig specific data. This is only present if building with fontconfig.
@@ -527,6 +528,25 @@ mod fontconfig_payload {
         }
     }
 
+    /// Build a backend-face `OutOfMemory` error (the reference `error.OutOfMemory`
+    /// returned by `name`/`familyName` when the name can't be produced). Mirrors the
+    /// CoreText payload's `oom()`.
+    fn oom() -> FaceError {
+        crate::face::freetype::Error::OutOfMemory
+    }
+
+    /// Copy `bytes` into `buf` and return the written sub-slice, or `OutOfMemory` if
+    /// it doesn't fit. The reference returns a slice into pattern-owned memory
+    /// directly; to unify lifetimes in Rust the bytes are copied into `buf` and a
+    /// sub-slice of it is returned (identical bytes), exactly as the CoreText arm.
+    fn copy_into<'a>(bytes: &[u8], buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+        if bytes.len() > buf.len() {
+            return Err(oom());
+        }
+        buf[..bytes.len()].copy_from_slice(bytes);
+        Ok(&buf[..bytes.len()])
+    }
+
     impl DeferredFace {
         // pub fn deinit(self: *DeferredFace) void { ... if (self.fc) |*fc| fc.deinit() ... }
         pub fn deinit(&mut self) {
@@ -544,24 +564,111 @@ mod fontconfig_payload {
             DeferredFace { fc: None }
         }
 
+        /// Returns the family name of the font.
+        // pub fn familyName(self: DeferredFace, buf: []u8) ![]const u8 {
+        //   .fontconfig_freetype => if (self.fc) |fc|
+        //       return (try fc.pattern.get(.family, 0)).string,
+        //   ...
+        //   return "";
+        // }
+        pub fn family_name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+            if let Some(fc) = self.fc.as_ref() {
+                // SAFETY: `pattern` is the render-prepared pattern this payload owns
+                // (from `FcFontRenderPrepare`); non-null and not yet destroyed.
+                let pattern = unsafe { &*fc.pattern };
+                // return (try fc.pattern.get(.family, 0)).string,
+                let name = match pattern.get(fc::Property::Family, 0) {
+                    Ok(fc::Value::String(s)) => s,
+                    // See the ERROR-ATOM note on `name` below.
+                    _ => return Err(oom()),
+                };
+                return copy_into(name.to_bytes(), buf);
+            }
+            // return "";
+            Ok(&[])
+        }
+
         /// Returns the name of this face. The memory is always owned by the
         /// face so it doesn't have to be freed.
-        // PORT NOTE: the fontconfig `familyName`/`name` arms
-        // (`DeferredFace.zig:149-150,179-180`) are DEFERRED to L3 Task 7; no
-        // current caller reaches them via a fontconfig-discovered face.
-        pub fn name<'a>(&self, _buf: &'a mut [u8]) -> Result<&'a [u8], crate::face::FaceError> {
-            unimplemented!("Fontconfig DeferredFace::name is DEFERRED to L3 Task 7")
+        // pub fn name(self: DeferredFace, buf: []u8) ![]const u8 {
+        //   .fontconfig_freetype => if (self.fc) |fc|
+        //       return (try fc.pattern.get(.fullname, 0)).string,
+        //   ...
+        //   return "";
+        // }
+        //
+        // ERROR-ATOM NOTE (R1, the two-error-atoms gotcha): the reference's `try`
+        // propagates the package-level `fontconfig.Error` (see `fc.rs`'s ERROR-ATOM
+        // NOTE) out of `name`, whose inferred error set unions it with the backend
+        // `Face` errors. This port pins `name`'s error to `FaceError` (= the backend
+        // `freetype::Error`) so the signature is byte-identical to the macOS/CoreText
+        // arm the callers bind against; `FaceError` carries no fontconfig atom, so a
+        // failed/mistyped `get` is mapped to `FaceError::OutOfMemory` — the SAME
+        // failure atom the CoreText `name` arm returns when it cannot materialize the
+        // name (`DeferredFace.zig:193-194`). This is a non-panicking error return:
+        // the callers (`codepoint_resolver.rs`, `shared_grid_set.rs`) discard it, as
+        // the reference does with its own error. A render-prepared pattern always
+        // carries `FC_FAMILY`; `FC_FULLNAME` is present for effectively all real
+        // fonts, so this path is not reached in practice.
+        pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+            if let Some(fc) = self.fc.as_ref() {
+                // SAFETY: see `family_name`.
+                let pattern = unsafe { &*fc.pattern };
+                // return (try fc.pattern.get(.fullname, 0)).string,
+                let name = match pattern.get(fc::Property::Fullname, 0) {
+                    Ok(fc::Value::String(s)) => s,
+                    _ => return Err(oom()),
+                };
+                return copy_into(name.to_bytes(), buf);
+            }
+            // return "";
+            Ok(&[])
         }
 
         /// Load the deferred font face. This does nothing if the face is loaded.
-        // PORT NOTE: `loadFontconfig` (`DeferredFace.zig:223-238`) is DEFERRED to
-        // L3 Task 7.
-        pub fn load(
-            &mut self,
-            _lib: crate::library::Library,
-            _opts: crate::face::Options,
-        ) -> Result<crate::face::Face, crate::face::FaceError> {
-            unimplemented!("Fontconfig DeferredFace::load is DEFERRED to L3 Task 7")
+        // fn loadFontconfig(self: *DeferredFace, lib: Library, opts: font.face.Options) !Face {
+        //     const fc = self.fc.?;
+        //     const filename = (try fc.pattern.get(.file, 0)).string;
+        //     const face_index = (try fc.pattern.get(.index, 0)).integer;
+        //     var face = try Face.initFile(lib, filename, face_index, opts);
+        //     errdefer face.deinit();
+        //     try face.setVariations(fc.variations, opts);
+        //     return face;
+        // }
+        //
+        // (See the ERROR-ATOM NOTE on `name`: `FC_FILE`/`FC_INDEX` are always present
+        // on a render-prepared pattern, so the two `get`s never fail in practice; a
+        // failure is mapped to `FaceError::OutOfMemory` rather than propagating the
+        // fontconfig atom, which `FaceError` cannot represent.)
+        pub fn load(&mut self, lib: Library, opts: Options) -> Result<Face, FaceError> {
+            // const fc = self.fc.?;
+            let fc = self.fc.as_ref().unwrap();
+            // SAFETY: see `family_name`.
+            let pattern = unsafe { &*fc.pattern };
+
+            // Filename and index for our face so we can load it
+            // const filename = (try fc.pattern.get(.file, 0)).string;
+            let filename = match pattern.get(fc::Property::File, 0) {
+                Ok(fc::Value::String(s)) => s,
+                _ => return Err(oom()),
+            };
+            // const face_index = (try fc.pattern.get(.index, 0)).integer;
+            let face_index = match pattern.get(fc::Property::Index, 0) {
+                Ok(fc::Value::Integer(i)) => i,
+                _ => return Err(oom()),
+            };
+
+            // var face = try Face.initFile(lib, filename, face_index, opts);
+            let mut face = Face::init_file(lib, filename, face_index, opts)?;
+            // errdefer face.deinit();
+            // try face.setVariations(fc.variations, opts);
+            match face.set_variations(&fc.variations, opts) {
+                Ok(()) => Ok(face),
+                Err(e) => {
+                    face.deinit();
+                    Err(e)
+                }
+            }
         }
 
         /// Returns true if this face can satisfy the given codepoint and
@@ -642,17 +749,82 @@ impl DeferredFace {
 #[cfg(test)]
 mod tests {
     // test "fontconfig"
+    //
+    // PORT NOTE: the reference's runtime `if (options.backend != .fontconfig_freetype)
+    // return error.SkipZigTest;` is expressed here as a compile-time `cfg` gate to
+    // the fontconfig-active target class (mirroring the `coretext` test's
+    // `#[cfg(target_os = "macos")]`), since the body names `discovery::Fontconfig`,
+    // which only exists on that target. The runtime `!= fontconfig_freetype` skip is
+    // additionally kept as an inverted `== fontconfig_freetype` guard for fidelity.
+    #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
     #[test]
     fn fontconfig() {
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
-        //
-        // PORT NOTE: on the macOS/coretext gate this test always skips (its body
-        // exercises the Fontconfig discoverer, which is DEFERRED). The full body
-        // lands with the Fontconfig backend. The `!= fontconfig_freetype` skip is
-        // expressed as an inverted `== fontconfig_freetype` guard (clippy-clean).
-        if crate::options::BACKEND == crate::Backend::FontconfigFreetype {
-            // (body DEFERRED with the Fontconfig backend)
+        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
+            return;
         }
+
+        use crate::discovery;
+        use crate::face::DesiredSize;
+        use crate::library::Library;
+
+        // Load freetype
+        // var lib = try Library.init(alloc);
+        let mut lib = Library::init().unwrap();
+        // defer lib.deinit();
+
+        // Get a deferred face from fontconfig
+        let mut def = {
+            // var fc = discovery.Fontconfig.init(lib);
+            let mut fc = discovery::Fontconfig::init(lib);
+            // defer fc.deinit();
+            // var it = try fc.discover(alloc, .{ .family = "monospace", .size = 12 });
+            let mut it = fc
+                .discover(discovery::Descriptor {
+                    family: Some(b"monospace".to_vec()),
+                    size: 12.0,
+                    ..Default::default()
+                })
+                .unwrap();
+            // defer it.deinit();
+            // break :def (try it.next()).?;
+            let d = it.next().unwrap().unwrap();
+            it.deinit();
+            fc.deinit();
+            d
+        };
+        // defer def.deinit();
+
+        // Verify we can get the name
+        // var buf: [1024]u8 = undefined;
+        // const n = try def.name(&buf);
+        // try testing.expect(n.len > 0);
+        let mut buf = [0u8; 1024];
+        let n = def.name(&mut buf).unwrap();
+        assert!(!n.is_empty());
+
+        // Load it and verify it works
+        // var face = try def.load(lib, .{ .size = .{ .points = 12 } });
+        let mut face = def
+            .load(
+                lib,
+                crate::face::Options {
+                    size: DesiredSize {
+                        points: 12.0,
+                        xdpi: crate::face::DEFAULT_DPI,
+                        ydpi: crate::face::DEFAULT_DPI,
+                    },
+                    freetype_load_flags: crate::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+                },
+            )
+            .unwrap();
+        // defer face.deinit();
+        // try testing.expect(face.glyphIndex(' ') != null);
+        assert!(face.glyph_index(u32::from(' ')).is_some());
+
+        face.deinit();
+        def.deinit();
+        lib.deinit();
     }
 
     // test "coretext"
