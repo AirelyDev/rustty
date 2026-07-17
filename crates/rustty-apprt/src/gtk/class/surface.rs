@@ -607,19 +607,132 @@ mod imp {
             obj.on_notify_config();
         }
 
-        /// PORTS: `surface.zig:1855-1920` `dispose` — **only** the template
-        /// double-free workaround (**invariant 6**, `:1905-1911`) here; the OWNED
-        /// field free-sites (`:1858-1903`) land in L5.2 T14.
+        /// PORTS: `surface.zig:1855-1920` `dispose`. Frees the OWNED §1.3 rows in
+        /// the reference's exact field order (`:1858-1903`), then the template
+        /// double-free workaround (**invariant 6**, `:1905-1911`), then chains the
+        /// parent dispose (gtk4-rs does this for us after we return).
+        ///
+        /// Every field is `take()`n (null-guarded) so `dispose` is idempotent — it
+        /// can run more than once (PREPORT_GTK §5.2). For GObject-typed rows the
+        /// `take()`'d value's scope-end drop is the `unref`; for the glib source ids
+        /// (**invariant 11**) the `SourceId` is removed via `g_source_remove` with
+        /// the reference's warn-on-failure (`SourceId::drop` does NOT remove).
         fn dispose(&self) {
-            // Unset the Bin child before disposing the template. `terminal_page` is
-            // both a template child and the Bin's root child (`surface.blp:248`
-            // `child: terminal_page`); without this, GTK double-frees it
-            // (`surface.zig:1905-1909`).
+            // `config` unref+null (`surface.zig:1858-1861`). Scope-end drop unrefs.
+            drop(self.config.take());
+
+            // `bell_media` unref+null (`surface.zig:1863-1866`).
+            drop(self.bell_media.take());
+
+            // `vadj_signal_group`: `setTarget(null)` THEN unref (`:1868-1872` — the
+            // order matters: detach the target before releasing our ref). The typed
+            // `SignalGroup` binding is behind a glib feature this build does not
+            // enable, so the untyped `GSignalGroup` is detached via FFI; the
+            // scope-end drop then unrefs (`:1870`).
+            if let Some(group) = self.vadj_signal_group.take() {
+                // SAFETY: `group` is a live `GSignalGroup` (the only thing T15 ever
+                // stores here); `g_signal_group_set_target(_, null)` is always valid.
+                // The `glib::gobject_ffi` binding is behind the `v2_72` feature this
+                // build does not enable, so we bind the libgobject-2.0 symbol
+                // directly (it exists since 2.72; this build links 2.88).
+                unsafe {
+                    g_signal_group_set_target(group.as_ptr().cast(), std::ptr::null_mut());
+                }
+            }
+
+            // `hadj` unref+null (`surface.zig:1874-1877`).
+            drop(self.hadjustment.take());
+
+            // `vadj` unref+null (`surface.zig:1879-1882`).
+            drop(self.vadjustment.take());
+
+            // The three glib source ids — `Source.remove` + null, warn-on-failure
+            // (**invariant 11**, `surface.zig:1884-1903`).
+            remove_source_id(self.progress_bar_timer.take(), "progress bar timer");
+            remove_source_id(self.idle_rechild.take(), "idle source");
+            remove_source_id(
+                self.pending_horizontal_scroll_reset.take(),
+                "pending horizontal scroll reset source",
+            );
+
+            // **Invariant 6** — the GTK double-free workaround. Unset the Bin child
+            // before disposing the template: `terminal_page` is both a template
+            // child and the Bin's root child (`surface.blp:248` `child:
+            // terminal_page`); without this, GTK double-frees it. Port the comment
+            // verbatim (`surface.zig:1905-1909`):
+            //
+            //   This works around a GTK double-free bug where if you bind
+            //   to a top-level template child, it frees twice if the widget is
+            //   also the root child of the template. By unsetting the child here,
+            //   we avoid the double-free.
             self.obj().set_child(gtk4::Widget::NONE);
 
             // `gtk.Widget.disposeTemplate(self, getGObjectType())`
             // (`surface.zig:1911-1914`).
             self.dispose_template();
+        }
+    }
+
+    impl Drop for Surface {
+        /// PORTS: `surface.zig:1922-1988` `finalize`. In gtk4-rs the `imp` struct's
+        /// `Drop` IS the finalize hook (the framework runs it, then chains the
+        /// parent finalize) — the same idiom [`super::super::application`] uses.
+        ///
+        /// The load-bearing part is the core-surface teardown (**invariant 5**):
+        /// `deleteSurface` MUST run before `deinit` (`:1926-1936`), extracted into
+        /// [`super::finalize_core_surface`] so the ordering is unit-testable without
+        /// a live `CoreSurface` (which is built lazily in T15/T19). The remaining
+        /// OWNED rows (`:1941-1982`) are freed by Rust's field-drop; the explicit
+        /// `take()`s here reproduce the reference's field-order free+null one for
+        /// one (idempotent, and the checklist against PREPORT_GTK §1.3).
+        fn drop(&mut self) {
+            // **Invariant 5** — core-surface teardown (`surface.zig:1922-1940`).
+            //
+            // NOTE: We must deinit the surface in the finalize (this `Drop`) and
+            // NOT in `dispose`, because the inspector widget relies on this behavior
+            // with a weakRef to properly deactivate (`surface.zig:1931-1933`).
+            let present = self.core_surface.borrow().is_some();
+            super::finalize_core_surface(
+                present,
+                // Remove ourselves from the list of known surfaces in the app. We
+                // do this before deinit in case a callback triggers searching for
+                // this surface (`surface.zig:1926-1929`).
+                || super::delete_surface_from_app(std::ptr::from_ref(&self.rt_surface).cast_mut()),
+                || {
+                    if let Some(mut boxed) = self.core_surface.borrow_mut().take() {
+                        // `v.deinit(); alloc.destroy(v)` (**invariant 2**,
+                        // `surface.zig:1936-1937`). `CoreSurface` has no `Drop`, so
+                        // dropping the `Box` frees the heap slot WITHOUT re-running
+                        // teardown — the faithful `alloc.destroy`.
+                        //
+                        // SAFETY: `present` implies a fully-initialized surface (a
+                        // successful `Surface::init`); `deinit`'s contract is met and
+                        // the slot is freed without being used again.
+                        unsafe { boxed.deinit() };
+                    }
+                },
+            );
+
+            // The remaining OWNED rows, in the reference's field order
+            // (`surface.zig:1941-1982`). Each `take()` drops (frees) + nulls.
+            // `default_size`/`font_size_request`/`min_size` are `Copy` POD boxes,
+            // so `take()` alone nulls the field (the `boxedFree`/`destroy`
+            // free-site) and the returned value is trivially discarded.
+            drop(self.mouse_hover_url.take()); // `:1941` `glib.free`
+            self.default_size.take(); // `:1945` `ext.boxedFree`
+            self.font_size_request.take(); // `:1949` `glib.ext.destroy`
+            self.min_size.take(); // `:1953` `ext.boxedFree`
+            drop(self.pwd.take()); // `:1957` `glib.free`
+            drop(self.title.take()); // `:1961` `glib.free`
+            drop(self.title_override.take()); // `:1965` `glib.free`
+            drop(self.overrides_command.take()); // `:1969-1972` `command.deinit`
+            drop(self.overrides_working_directory.take()); // `:1973-1976` `alloc.free`
+
+            // Clean up key sequence and key table state (`:1979-1982`): free each
+            // element + deinit the container. `Vec::clear` drops every `CString`
+            // then leaves the container empty (the `deinit`).
+            self.key_sequence.borrow_mut().clear();
+            self.key_tables.borrow_mut().clear();
         }
     }
 
@@ -661,6 +774,81 @@ mod imp {
         let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
         ext::StringList::new(&refs)
     }
+}
+
+// PORTS: `gobject.SignalGroup.setTarget` (`surface.zig:1869`). The `glib`
+// crate's typed `SignalGroup` and its `gobject_ffi::g_signal_group_set_target`
+// binding are both gated behind the `v2_72` glib feature this build does not
+// enable (see the `vadj_signal_group` field note), so `dispose` binds the
+// libgobject-2.0 C symbol directly. It has existed since GLib 2.72; this build
+// links 2.88. `GSignalGroup*` is ABI-compatible with `GObject*`.
+extern "C" {
+    fn g_signal_group_set_target(
+        self_: *mut glib::gobject_ffi::GObject,
+        target: *mut glib::gobject_ffi::GObject,
+    );
+}
+
+/// Removes a glib source id in `dispose`, warning (not panicking) on failure —
+/// the faithful shape of the reference's `if (glib.Source.remove(id) == 0)
+/// log.warn(...)` (`surface.zig:1884-1903`, **invariant 11**). Called with the
+/// already-`take()`n `Option<SourceId>` so the field is nulled by the caller.
+///
+/// `g_source_remove` is used directly (not [`glib::SourceId::remove`], which
+/// panics on a stale id) so a source that already fired warns-and-continues,
+/// exactly like the reference and like the sibling `Application::dispose`.
+/// `SourceId`'s own drop does not remove the source, so the scope-end drop of
+/// `id` after this is a no-op.
+fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
+    if let Some(id) = id {
+        // SAFETY: `id.as_raw()` is a source id previously returned by glib; passing
+        // it to `g_source_remove` is always valid (returns FALSE if already gone).
+        let removed = unsafe { glib::ffi::g_source_remove(id.as_raw()) };
+        if removed == glib::ffi::GFALSE {
+            eprintln!("warn(gtk): unable to remove {what}");
+        }
+    }
+}
+
+/// PORTS: the **invariant 5** ordering of `finalize`'s core-surface teardown
+/// (`surface.zig:1925-1940`): `deleteSurface` MUST run before `deinit` ("in case
+/// a callback triggers searching for this surface", `:1926-1929`).
+///
+/// Extracted from [`imp::Surface`]'s `Drop` so the ordering is unit-testable
+/// without constructing a live `CoreSurface` — that requires the lazy GLArea
+/// realize path (T15) and the renderer wiring (T19), neither of which exists in
+/// this tier, so `core_surface` is always `None` here and the block is dormant at
+/// runtime. `present` mirrors the reference's `if (priv.core_surface) |v|` guard.
+fn finalize_core_surface(
+    present: bool,
+    delete_surface: impl FnOnce(),
+    deinit_and_destroy: impl FnOnce(),
+) {
+    if !present {
+        return;
+    }
+    delete_surface();
+    deinit_and_destroy();
+}
+
+/// PORTS: `surface.zig:1929` `Application.default().core().deleteSurface(self.rt())`.
+///
+/// The `Application` GObject stores its `core_app` type-erased as `*mut c_void`
+/// (it is non-generic; see the `class::application` field notes), so — unlike the
+/// reference's comptime-monomorphized `core()` — this reconstitutes the concrete
+/// `rustty_core::app::App<App>` from that pointer before calling `deleteSurface`.
+/// No-op when the core app is unbound (`core_app` null), e.g. in widget tests.
+fn delete_surface_from_app(rt: *mut ApprtSurface) {
+    let app = Application::default();
+    let Some(core_app) = app.imp().core_app.get() else {
+        return;
+    };
+    let core_app = core_app.as_ptr().cast::<rustty_core::app::App<App>>();
+    // SAFETY: when a core surface exists, `bind_core_app` has installed a live
+    // `App<App>` at `core_app`, and `rt` points at this widget's embedded
+    // `rt_surface` (still alive during finalize). Reached only with a realized
+    // surface (never in this tier).
+    unsafe { (*core_app).deleteSurface(rt) };
 }
 
 glib::wrapper! {
@@ -1086,5 +1274,114 @@ mod tests {
         // `gl_area` is a GLArea (the render context source).
         let gl_area: &gtk4::GLArea = &imp.gl_area;
         assert_eq!(gl_area.type_(), gtk4::GLArea::static_type());
+    }
+
+    /// Sets up GTK + a default `GhosttyApplication` and returns a fresh `Surface`.
+    /// Returns `None` when no display is available (the caller returns early).
+    #[cfg(test)]
+    fn display_surface() -> Option<Surface> {
+        if gtk4::init().is_err() {
+            return None;
+        }
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+        let _app = crate::gtk::class::application::Application::build_default_for_test();
+        Some(Surface::new(SurfaceOverrides::default()))
+    }
+
+    /// **Invariant 6 / §5.2** — `dispose` is idempotent (the null-guards). Populates
+    /// an OWNED row (`config`) and a glib source id, calls `dispose()` twice, and
+    /// asserts no panic/double-free and that every touched field is nulled. Before
+    /// the T14 free-sites landed, `dispose` left these fields `Some` — RED.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn surface_dispose_is_idempotent() {
+        let Some(surface) = display_surface() else {
+            return;
+        };
+        let imp = surface.imp();
+
+        // `config` is populated by `init`'s app fallback; also install a source id.
+        assert!(imp.config.borrow().is_some(), "config seeded by init");
+        let id = glib::timeout_add_seconds_local(3600, || glib::ControlFlow::Break);
+        imp.progress_bar_timer.replace(Some(id));
+
+        // Dispose twice — the second call must not double-free or panic.
+        imp.dispose();
+        imp.dispose();
+
+        assert!(imp.config.borrow().is_none(), "config nulled after dispose");
+        assert!(
+            imp.progress_bar_timer.borrow().is_none(),
+            "progress_bar_timer nulled after dispose"
+        );
+    }
+
+    /// **Invariant 11** — `dispose` removes every glib source id. Installs all three
+    /// (`progress_bar_timer`, `idle_rechild`, `pending_horizontal_scroll_reset`) and
+    /// asserts they are nulled after a single `dispose`. Before T14, `dispose` never
+    /// touched them — RED.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn surface_dispose_removes_all_source_ids() {
+        let Some(surface) = display_surface() else {
+            return;
+        };
+        let imp = surface.imp();
+
+        imp.progress_bar_timer
+            .replace(Some(glib::timeout_add_seconds_local(3600, || {
+                glib::ControlFlow::Break
+            })));
+        imp.idle_rechild
+            .replace(Some(glib::timeout_add_seconds_local(3600, || {
+                glib::ControlFlow::Break
+            })));
+        imp.pending_horizontal_scroll_reset
+            .replace(Some(glib::timeout_add_seconds_local(3600, || {
+                glib::ControlFlow::Break
+            })));
+
+        imp.dispose();
+
+        assert!(
+            imp.progress_bar_timer.borrow().is_none(),
+            "progress_bar_timer"
+        );
+        assert!(imp.idle_rechild.borrow().is_none(), "idle_rechild");
+        assert!(
+            imp.pending_horizontal_scroll_reset.borrow().is_none(),
+            "pending_horizontal_scroll_reset"
+        );
+    }
+
+    /// **Invariant 5** — `finalize` removes the surface from the app (`deleteSurface`)
+    /// BEFORE `deinit`ing the core surface (`surface.zig:1925-1940`). Exercises the
+    /// extracted ordering directly (a live `CoreSurface` cannot be built in this
+    /// tier); both closures record into a shared log and we assert the order. No
+    /// display needed. Before the helper existed the test did not compile — RED.
+    #[test]
+    fn surface_finalize_deletes_from_app_before_deinit() {
+        use std::cell::RefCell;
+        let order: RefCell<Vec<&'static str>> = RefCell::new(Vec::new());
+
+        finalize_core_surface(
+            true,
+            || order.borrow_mut().push("delete"),
+            || order.borrow_mut().push("deinit"),
+        );
+        assert_eq!(*order.borrow(), ["delete", "deinit"]);
+
+        // Absent core surface ⇒ neither runs (the `if (priv.core_surface)` guard).
+        order.borrow_mut().clear();
+        finalize_core_surface(
+            false,
+            || order.borrow_mut().push("delete"),
+            || order.borrow_mut().push("deinit"),
+        );
+        assert!(
+            order.borrow().is_empty(),
+            "no teardown when core surface absent"
+        );
     }
 }
