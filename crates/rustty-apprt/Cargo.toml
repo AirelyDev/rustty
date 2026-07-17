@@ -99,46 +99,94 @@ objc2 = { version = "0.6" }
 # behavior the floor costs us.
 #
 # WHAT THE PIN DOES AND DOES NOT KILL (read before porting a version branch in
-# L5.0 T2 — the naive reading of AD-3 deletes LIVE runtime behavior):
+# L5.0 T2). State the rule first; the buckets then FALL OUT of it.
 #
-# `gtk_version.atLeast` is NOT a comptime predicate (`gtk_version.zig:49-68`,
-# mirrored in `adw_version.zig:47-65`). It is an `inline fn` that short-circuits
-# to `false` at comptime ONLY when the BUILD HEADERS are older than the
-# threshold; otherwise it is `if (@inComptime()) return true;` and then
-# `return runtimeAtLeast(major, minor, micro)`. So it folds at comptime only
-# where the CALL SITE is itself a comptime context — everywhere else it is a
-# live runtime check that MUST be ported, not deleted.
+# THE ORACLE'S FOLD IS UNIVERSAL, NOT CALL-SITE-CONDITIONAL. `atLeast` opens with
+# `if (comptime comptime_version.order(threshold) == .lt) return false;`
+# (`gtk_version.zig:58-62`, mirrored `adw_version.zig:55-59`). That condition is
+# a compile-time CONSTANT inside an `inline fn` whose params are `comptime`, so
+# it collapses at EVERY call site — runtime sites included. Its own doc comment
+# says exactly this (`gtk_version.zig:47-48`): "This is inlined so that the
+# comptime checks will disable the runtime checks if the comptime checks fail."
+# The `@inComptime()` arm below it only decides what happens when the fold does
+# NOT fire. So `comptime_version` — not the call site's context — is what picks
+# the arm.
 #
-#   * COMPTIME-CONTEXT sites at/below the floor -> collapse to the MODERN arm.
-#     This is exactly the set AD-3 enumerates, and it is all `adw` (thresholds
-#     1.5/1.4/1.3, all <= the 1.5 floor): `dialog.zig:21` and
-#     `debug_warning.zig:14` (`pub const Parent = if (...)`),
-#     `surface_child_exited.zig:15`, `clipboard_confirmation_dialog.zig:17`
-#     (file-level `const can_remember`), `clipboard_confirmation_dialog.zig:301`
-#     and `debug_warning.zig:42` (inside a `comptime` expression). These are the
-#     branches we do not port, and they are why the blueprint manifest is 19.
-#   * COMPTIME-FORCED sites ABOVE the floor -> collapse to the LEGACY arm, NOT
-#     the modern one: `application.zig:1261` `if (comptime gtk_version.atLeast(
-#     4, 16, 0))` yields FALSE at a 4.14 baseline, so we port the plain
-#     `log.warn` arm and drop the `getBytes` arm. Cargo agrees independently:
-#     `CssSection::bytes()` is `#[cfg(feature = "v4_16")]` (gtk4-0.11.4
-#     `src/auto/css_section.rs:57`), so the modern arm cannot compile at `v4_14`.
-#   * RUNTIME-CONTEXT `atLeast` sites -> LIVE. Port them as runtime predicates:
-#     `window.zig:695` (`!gtk_version.atLeast(4, 16, 0)` gating the
-#     `window-theme-ghostty` CSS class) and `window.zig:1181`
-#     (`if (!gtk_version.atLeast(4, 10, 0)) return;`) need no post-4.14 symbol,
-#     so they port straight onto `gtk4::{major,minor,micro}_version()`.
-#     `window.zig:1799` (`adw_version.supportsDialogs()`) is likewise a runtime
-#     `if`, not a comptime one.
-#   * `application.zig:1565` (`if (gtk_version.atLeast(4, 20, 0))`) is a live
-#     runtime branch that ghostty DOES execute on this 4.22.4 host, and the
-#     `v4_14` pin makes it unportable (`gtk::InterfaceColorScheme` is
-#     `#[cfg(feature = "v4_20")]`). This is a KNOWN, RATIFIED COST of the floor,
-#     not an oversight — see `.port/phase-2/DEFERRALS.md`, section "L5 GTK
-#     baseline pin (AD-3) — `v4_14` API ceiling costs `prefers-color-scheme`".
+# RUSTTY HAS NO SUCH CONSTANT. The oracle's `comptime_version` is read from the
+# BUILD BOX's headers (`gtk_version.zig:7,14-18`: `@cInclude("gtk/gtk.h")` ->
+# `c.GTK_MAJOR_VERSION`), so on this host it is 4.22, not 4.14. rustty has no
+# header include: `gtk4::minor_version()` is ALWAYS a runtime read of the real
+# shared library, and the `v4_14`/`v1_5` Cargo features are an API-SURFACE
+# CEILING (which symbols exist) — not a version oracle. Hence:
 #
-# The `runtimeAtLeast`/`runtimeUntil` predicates (`gtk_version.zig:75,90`) are
-# unconditionally live and are ported in L5.0 T2.
+#   THE RULE: every `atLeast` site ports as a LIVE runtime predicate, with
+#   exactly two exceptions —
+#
+#   (1) CEILING -> forced LEGACY arm, and the loss MUST be recorded. The modern
+#       arm names a symbol `v4_14`/`v1_5` does not expose, so it cannot compile:
+#         - `application.zig:1261` — `CssSection::bytes()` is
+#           `#[cfg(feature = "v4_16")]` (gtk4-0.11.4 `src/auto/css_section.rs:57`)
+#         - `application.zig:1565` — `gtk::InterfaceColorScheme` is
+#           `#[cfg(feature = "v4_20")]` (gtk4-0.11.4 `src/auto/enums.rs:5985`)
+#       These two are the SAME case. That 1261 is written `if (comptime ...)` and
+#       1565 is a plain `if` is IRRELEVANT here — neither arm exists at `v4_14`.
+#       Both are losses against ghostty-on-this-host, and both are recorded in
+#       `.port/phase-2/DEFERRALS.md` ("L5 GTK baseline pin (AD-3) — `v4_14` API
+#       ceiling costs `prefers-color-scheme`").
+#
+#   (2) COMPILE-TIME ARTIFACT -> collapse; at/below the floor that is the MODERN
+#       arm. The branch picks a Rust *type*, a file-level `const`, or a
+#       build-time artifact (the blueprint manifest) — Rust cannot defer those to
+#       runtime. All `adw`, all thresholds <= the 1.5 floor:
+#         - `dialog.zig:21`, `debug_warning.zig:14`,
+#           `surface_child_exited.zig:15`  (`pub const Parent`/type alias)
+#         - `clipboard_confirmation_dialog.zig:17` (file-level `const can_remember`)
+#         - `debug_warning.zig:42`, `clipboard_confirmation_dialog.zig:301`
+#           (inside `comptime gresource.blueprint(...)` — the resource manifest)
+#       This is the set AD-3 enumerates, and it is why the manifest is 19, not 21.
+#
+# WHAT THE RULE GIVES AT THE REMAINING SITES:
+#   * `window.zig:695` (`!gtk_version.atLeast(4, 16, 0)` gating the
+#     `window-theme-ghostty` CSS class) -> LIVE. Threshold is ABOVE the floor and
+#     the arm needs no gated symbol, so neither exception fires.
+#   * `window.zig:1181` (`if (!gtk_version.atLeast(4, 10, 0)) return;` — "Debian
+#     12 is stuck on GTK 4.8") -> LIVE. The threshold is BELOW the floor, so the
+#     guard is true on every AD-3-supported runtime and could in principle be
+#     dropped — but AD-3's deletion set is ENUMERATED (the five `adw`
+#     `supports_*` helpers) and this is not in it. Port it live: oracle-exact,
+#     and a no-op on any supported host. Do not widen AD-3 to reach it.
+#   * every `runtimeAtLeast`/`runtimeUntil` site (`gtk_version.zig:75,90`) ->
+#     unconditionally LIVE.
+#
+# AD-3's ONE EXTENSION BEYOND THE RULE — `window.zig:1799`. The rule alone would
+# keep it live (`adw_version.supportsDialogs()` = `atLeast(1, 5, 0)`,
+# `adw_version.zig:104-106`; a plain runtime `if` around two `showAboutDialog`
+# arms, not a compile-time artifact; and NOT ceiling-blocked — `adw::AboutDialog`
+# is `#[cfg(feature = "v1_5")]`, libadwaita-0.9.2 `src/auto/mod.rs:6-11`, i.e.
+# available exactly AT the floor; verified by probe). AD-3 nevertheless DELETES
+# it: the plan (`docs/superpowers/plans/2026-07-17-L5-gtk-apprt.md:101`) names
+# `supports_dialogs()` among the five deleted helpers and directs inlining the
+# modern arm at each of their 6 call sites, and `window.zig:1799` is one of those
+# 6 (it is also the ONLY `adw_version.` call site in `window.zig` — the plan's
+# "tab-overview/toolbar-view" label there is a mislabel; `supportsTabOverview`/
+# `supportsToolbarView` have zero call sites repo-wide). PORT AS RATIFIED: the
+# `adw` arm unconditionally, no predicate, dropping the `gtk.showAboutDialog`
+# legacy arm (`window.zig:1817-1830`). This is behavior-preserving inside the
+# supported envelope — `runtime_at_least(1, 5, 0)` is true on every runtime AD-3
+# admits — and is observable only on an adw < 1.5 runtime, which AD-3 declares
+# unsupported. Recorded as a deviation from ghostty-on-this-host, NOT as an
+# unflagged silent narrowing.
+#
+# T20 SHAPE NOTE: the oracle's `adw.showAboutDialog(...)`/`gtk.showAboutDialog(...)`
+# are C VARARGS functions; gtk-rs binds no such free fn. The modern arm ports as
+# an `adw::AboutDialog` built with the same property names and `present()`ed.
+#
+# T2 NOTE (unreconciled, do not silently pick): plan:96 specs `at_least(..)` as a
+# "const fn over BASELINE". Under the rule above that manufactures a header fold
+# rustty does not have, and it would const-FALSE `window.zig:695` — the very site
+# DEFERRALS:3625 ratifies as live. Under the rule, `at_least` degenerates to
+# `runtime_at_least` (the oracle only distinguishes them BECAUSE of the header
+# fold). T2 must either implement it as a live delegate or get plan:96 amended.
 [target.'cfg(target_os = "linux")'.dependencies]
 # glib 0.22 — `glib::Object`/`WeakRef`/`Variant`/`MainContext` + the
 # `#[glib::object_subclass]`/`#[derive(glib::Properties)]` macro triad that

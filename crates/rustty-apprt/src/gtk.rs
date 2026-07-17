@@ -47,26 +47,48 @@
 //! adw >= 1.5 API baseline (the `gtk4/v4_14` + `libadwaita/v1_5` Cargo features,
 //! `Cargo.toml`, where the full rationale lives).
 //!
-//! Do NOT read AD-3 as "the version branches are comptime, so delete them" —
-//! that deletes live behavior. `gtk_version.atLeast` is NOT a comptime
-//! predicate (`gtk_version.zig:49-68`; same shape in `adw_version.zig:47-65`):
-//! it is an `inline fn` that folds to `false` at comptime ONLY when the build
-//! headers are older than the threshold, and otherwise falls through to
-//! `runtimeAtLeast`. It therefore folds only at comptime CALL SITES. Concretely,
-//! for L5.0 T2:
+//! The oracle's fold is UNIVERSAL, not call-site-conditional: `atLeast` opens
+//! with `if (comptime comptime_version.order(threshold) == .lt) return false;`
+//! (`gtk_version.zig:58-62`), a compile-time-constant condition in an `inline
+//! fn` with `comptime` params — so it collapses at EVERY call site, runtime ones
+//! included ("This is inlined so that the comptime checks will disable the
+//! runtime checks if the comptime checks fail", `gtk_version.zig:47-48`).
+//! `comptime_version` — not the call site's context — picks the arm, and it
+//! comes from the BUILD BOX's headers (`gtk_version.zig:7,14-18`, `@cInclude
+//! ("gtk/gtk.h")`), i.e. 4.22 here.
 //!
-//! * Collapse to the MODERN arm: the comptime-context sites at/below the floor —
-//!   the `adw` set AD-3 enumerates (`dialog.zig:21`, `debug_warning.zig:14,42`,
-//!   `clipboard_confirmation_dialog.zig:17,301`, `surface_child_exited.zig:15`).
-//! * Collapse to the LEGACY arm: comptime-forced sites ABOVE the floor —
-//!   `application.zig:1261` (`comptime gtk_version.atLeast(4, 16, 0)`), which is
-//!   false at a 4.14 baseline. (`CssSection::bytes()` is `v4_16`-gated in
-//!   gtk4-rs, so the modern arm could not compile here regardless.)
-//! * Stay LIVE, port as runtime predicates: `window.zig:695` (the
-//!   `window-theme-ghostty` CSS-class gate), `window.zig:1181`,
-//!   `window.zig:1799`, and every `runtimeAtLeast`/`runtimeUntil` site.
-//! * DEFERRED (cost of the floor, ratified): `application.zig:1565`'s
-//!   `prefers-color-scheme` propagation — see `.port/phase-2/DEFERRALS.md`.
+//! rustty has no such constant. `gtk4::minor_version()` is always a runtime read
+//! of the real shared library; the `v4_14`/`v1_5` features are an API-surface
+//! CEILING, not a version oracle. Hence THE RULE — every `at_least` site ports
+//! LIVE, with two exceptions:
+//!
+//! * CEILING -> forced LEGACY arm, loss recorded: the modern arm names a symbol
+//!   `v4_14` does not expose. `application.zig:1261` (`CssSection::bytes()` is
+//!   `v4_16`-gated) and `application.zig:1565` (`gtk::InterfaceColorScheme` is
+//!   `v4_20`-gated) are the SAME case — the `comptime`/runtime spelling of the
+//!   two `if`s is irrelevant. Both are in `.port/phase-2/DEFERRALS.md`.
+//! * COMPILE-TIME ARTIFACT -> collapse to the MODERN arm (at/below the floor):
+//!   the branch picks a type, a file-level `const`, or the blueprint manifest,
+//!   which Rust cannot defer to runtime. This is AD-3's enumerated `adw` set
+//!   (`dialog.zig:21`, `debug_warning.zig:14,42`,
+//!   `clipboard_confirmation_dialog.zig:17,301`, `surface_child_exited.zig:15`)
+//!   and it is why the manifest is 19.
+//!
+//! Everything else stays LIVE: `window.zig:695` (threshold above the floor),
+//! `window.zig:1181` (below the floor, but NOT in AD-3's enumerated set — port
+//! it live rather than widen AD-3), and every `runtimeAtLeast`/`runtimeUntil`
+//! site.
+//!
+//! `window.zig:1799` is AD-3's one extension BEYOND the rule: the rule would
+//! keep `adw_version.supportsDialogs()` live (it is not ceiling-blocked —
+//! `adw::AboutDialog` is `v1_5`-gated, i.e. available exactly at the floor), but
+//! plan:101 deletes the helper and inlines the modern arm at all 6 of its call
+//! sites, of which this is one. Port as ratified — the `adw` arm unconditionally,
+//! dropping the `gtk.showAboutDialog` legacy arm; it is observable only on an
+//! adw < 1.5 runtime, which AD-3 declares unsupported. (Shape note: the oracle's
+//! `showAboutDialog` is C varargs and has no gtk-rs free-fn binding; it ports as
+//! an `adw::AboutDialog` built with the same properties.) See `Cargo.toml` for
+//! the full derivation and the open plan:96 reconciliation.
 
 #[cfg(test)]
 mod tests {

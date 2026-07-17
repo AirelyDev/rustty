@@ -3588,13 +3588,20 @@ i.e. it propagates the resolved light/dark scheme onto the app's own
 CSS `@media (prefers-color-scheme: …)` queries resolve correctly in user CSS.
 
 **Why it is deferred (this is a REAL loss, not a no-op).** `gtk_version.atLeast`
-is *not* a comptime predicate (`gtk_version.zig:49-68`): it folds to `false` at
-comptime only when the build headers are older than the threshold, otherwise it
-delegates to `runtimeAtLeast`. This site is not in a comptime context, so on any
-build host with gtk >= 4.20 headers it is a **live runtime check** — and the L5
-dev/target host is **gtk 4.22.4**, so upstream ghostty genuinely executes this
-branch here. It is therefore *not* covered by AD-3's "comptime branches collapse"
-argument.
+folds on the **build headers**, not on the call site's context: it opens with
+`if (comptime comptime_version.order(threshold) == .lt) return false;`
+(`gtk_version.zig:58-62`) — a compile-time-constant condition inside an `inline
+fn` with `comptime` params, so it collapses at *every* call site, runtime ones
+included (`gtk_version.zig:47-48`: "This is inlined so that the comptime checks
+will disable the runtime checks if the comptime checks fail"). What matters is
+`comptime_version`, which is read from the build box's headers
+(`gtk_version.zig:7,14-18`, `@cInclude("gtk/gtk.h")`). The L5 dev/target host is
+**gtk 4.22.4**, so `atLeast(4, 20, 0)` does *not* fold there and upstream ghostty
+genuinely executes this branch on this host. It is therefore *not* covered by
+AD-3's "comptime branches collapse" argument — but note that the reason is the
+4.22 headers, **not** the fact that the site is spelled as a plain `if` (see the
+sibling note on `application.zig:1261` below, which is spelled `if (comptime …)`
+and is nonetheless the same case).
 
 **What blocks it.** AD-3 pins the compat floor at gtk >= 4.14, expressed as
 gtk4-rs's `features = ["v4_14"]`. gtk4-rs gates the required type behind a
@@ -3622,15 +3629,69 @@ story allows naming `v4_20` types under a lower floor. Until then this row is th
 authority: an L5 verify that flags `application.zig:1565` as G3b "missing" must
 treat it as **EXPECTED**, per §Rule.
 
+**Sibling site, same ceiling — `application.zig:1261` [corrected 2026-07-17,
+L5.0 T1 re-review].** `if (comptime gtk_version.atLeast(4, 16, 0))` guards a
+richer CSS-parse-error log line that calls `css_section.getBytes()`. On this
+host's 4.22 headers the fold does not fire and the `comptime` arm resolves
+**true**, so upstream ghostty takes the *modern* arm here — exactly as at
+`:1565`. rustty cannot: `CssSection::bytes()` is `#[cfg(feature = "v4_16")]`
+(gtk4-0.11.4 `src/auto/css_section.rs:57`), so at `v4_14` the arm does not
+compile and T2 must port the plain `log.warn` arm. **This is the same ceiling
+loss as the row above, and is ratified on the same terms and the same un-defer
+trigger.** Cost: CSS-parse-error logs omit the offending source bytes (the
+location string, level, and message are all still logged). Zero tests affected.
+Recording it here dissolves an earlier asymmetry in which `:1261` was treated as
+"comptime-forced, therefore free" while `:1565` was treated as "live, therefore a
+loss" — the `comptime` vs plain `if` spelling was never the discriminator; the
+`v4_14` **ceiling** is, and it bites both sites identically.
+
 **Related note for L5.0 T2 (not a deferral — a correctness warning):** the other
-three `gtk_version.atLeast` sites must NOT be deleted as "comptime branches".
+two `gtk_version.atLeast` sites must NOT be deleted as "comptime branches".
 `window.zig:695` (`!gtk_version.atLeast(4, 16, 0)` gating the
 `window-theme-ghostty` CSS class) and `window.zig:1181` (`if (!gtk_version
-.atLeast(4, 10, 0)) return;`) are live runtime checks needing no post-4.14
-symbol, and port directly onto `gtk4::{major,minor,micro}_version()`. Only
-`application.zig:1261` is genuinely `comptime`-forced — and at a 4.14 baseline it
-collapses to the **legacy** arm (drop the `v4_16`-gated `CssSection::bytes()`
-arm), not the modern one.
+.atLeast(4, 10, 0)) return;`) need no post-4.14 symbol and are not compile-time
+artifacts, so both port live onto `gtk4::{major,minor,micro}_version()`.
+`:1181`'s threshold (4.10) sits *below* the AD-3 floor, so the guard is true on
+every supported runtime and could in principle be dropped — do NOT drop it: AD-3's
+deletion set is enumerated (the five `adw` `supports_*` helpers) and `:1181` is
+not in it. Porting it live is oracle-exact and a no-op on any supported host.
+
+**AD-3 scope note — `window.zig:1799` [added 2026-07-17, L5.0 T1 re-review].**
+`adw_version.supportsDialogs()` (= `atLeast(1, 5, 0)`, `adw_version.zig:104-106`)
+at `window.zig:1799` is a plain runtime `if` around two `showAboutDialog` arms; it
+is neither ceiling-blocked (`adw::AboutDialog` is `#[cfg(feature = "v1_5")]`,
+libadwaita-0.9.2 `src/auto/mod.rs:6-11` — available exactly AT the floor; probe-
+verified) nor a compile-time artifact, so on the rule alone it would stay live.
+AD-3 deletes it
+anyway: plan:101 names `supports_dialogs()` among the five deleted helpers and
+directs inlining the modern arm at each of their **6** call sites, and this is one
+of them (it is also the only `adw_version.` call site in `window.zig`; plan:101's
+"tab-overview/toolbar-view" label is a mislabel — `supportsTabOverview`/
+`supportsToolbarView` have zero call sites repo-wide, and plan:101's list further
+cites `clipboard_confirmation_dialog.zig:302-312`, which is an `atLeast(1, 4, 0)`
+site rather than a `supports_*` one, while omitting the real sixth site
+`surface_child_exited.zig:15`). **T2/T20 port it as ratified** — the `adw` arm
+unconditionally, dropping the `gtk.showAboutDialog` legacy arm
+(`window.zig:1817-1830`). (Shape note for T20: both `showAboutDialog`s are C
+varargs with no gtk-rs free-fn binding; the modern arm ports as an
+`adw::AboutDialog` built with the same properties and `present()`ed.) This is
+behavior-preserving inside the supported
+envelope (`runtime_at_least(1, 5, 0)` is true on every runtime AD-3 admits) and
+observable only on an adw < 1.5 runtime, which AD-3 declares unsupported. It is
+recorded here as an explicit, flagged deviation from ghostty-on-this-host rather
+than left as a doc comment asserting compliance. **Open for the plan owner:** if
+parity on sub-floor runtimes is wanted at this site, amend AD-3 to exclude
+`window.zig:1799` from the deletion set; T1 did not take that authority.
+
+**Open for the plan owner — plan:96's `at_least` shape.** plan:96 specs
+`at_least(..)` as a "const fn over `BASELINE`". rustty has no header fold
+(`gtk4::minor_version()` always reads the real shared library; the Cargo features
+are an API-surface ceiling, not a version oracle), so a `const fn` over
+`BASELINE = (4, 14, 0)` would manufacture one and const-**false**
+`window.zig:695` — the very site this row ratifies as live. Under the rule,
+`at_least` degenerates to `runtime_at_least` (the oracle distinguishes them only
+*because* it has the header fold). T2 must implement it as a live delegate or get
+plan:96 amended; T1 flags, does not decide.
 
 ## App-core over-claim CORRECTION — `main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` are DEFERRED (already tracked at C6)
 
