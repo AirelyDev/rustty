@@ -3231,6 +3231,129 @@ DEFERRED (documented; not needed to boot a shell on macOS — the permanent fina
   capped with a live-shell KAT. `renderer.Thread` stays Phase-3 GPU tier (GPU-and-xev
   blocked; landing rustty-xev does not unblock it). See NEXT_PHASE_PLAN.md.
 
+## rustty-xev LINUX port L1 LT8 (per-target Dynamic re-export + gate wiring) — deferrals
+
+Task LT8 is the finale of the Linux half of `rustty-xev` (the Milestone-A-equivalent
+for Linux). It wires the per-target package surface in `lib.rs`: on Linux the crate
+re-exports `dynamic::*` under the SAME public names the macOS block exports, so
+`rustty_xev::Loop`/`Completion`/`Async`/... resolve to `Dynamic` on Linux and stay
+flat kqueue on macOS — which is exactly what the reference does, since ghostty
+imports the package as `@import("xev").Dynamic` and `Xev(bes)` short-circuits to
+`bes[0].Api()` only when there is ONE candidate (dynamic.zig:36-38 — true on macOS
+`&.{.kqueue}`, false on Linux `&.{.io_uring, .epoll}`). The pre-LT8
+`#[cfg(not(target_os = "macos"))]` placeholder seam (no-op `unimplemented!()`
+handles) is NARROWED to `not(any(macos, linux))` and renamed `deferred_backend_seam`
+— it now stands in only for the `wasi_poll`/`iocp` targets it actually describes
+(notably the wasm32 build, which has no event loop at all).
+
+**[ADV-FIX F7] gate wiring:** `check_test_counts.py` gains four rows against the
+SAME pinned `GHXEV` libxev package the macOS rows use (the Linux read-only oracle
+checkout is the same commit, verified by reproducing every existing xev row's
+authored zig count exactly): `xev_epoll` (zig=12, rust=15), `xev_io_uring` (zig=13,
+rust=16), `xev_dynamic` (zig=4 gate-counted of 5 `test{}` — the 5th is the anon
+`refAllDecls`, rust=14), `xev_timerfd` (zig=1, rust=1). All 19 xev rows are rust ≥
+zig. This moves `backend/epoll` / `io_uring` / `dynamic.zig` OUT of the C7 finale's
+"Other backends ... whole follow-up ports (§1)" DEFERRED bullet above — that bullet
+is now only `iocp` (14t) and `wasi_poll` (9t).
+
+**R1 tally (Linux side, gate-counted):** in-scope zig `test{}` = 12 (epoll) + 13
+(io_uring) + 4 (dynamic) + 1 (timerfd) = **30**. Rust `#[test]` over the same four
+mapped files = **46** (15 + 16 + 14 + 1) = 30 R1-parity + 16 rustty KATs/+margin
+(live loop/timer/async/process/pty round-trips, each run under BOTH candidate arms).
+Per-crate `cargo test -p rustty-xev` on aarch64-unknown-linux-gnu = **59** = those 46
++ 8 target-shared (queue 1 + queue_mpsc 1 + heap 6) + 1 `linux/eventfd.rs` + 2
+`backend.rs` + 2 the new `tests/surface_parity.rs` integration tests. (`lib.rs`'s
+`api_tests` are macOS-gated and do not run here — `api.zig`'s R1 test is instead
+carried on Linux by `dynamic_completion_zero_able`, the same `test "completion is
+zero-able"` at dynamic.zig:202.)
+
+STILL DEFERRED on Linux (documented; each is a REFERENCE decision or a ledgered
+follow-up, not a weakening of a live path):
+
+- **`watcher/file.zig` (8t), `watcher/tcp.zig` (5t), `watcher/udp.zig` (6t)** — the
+  `xev.File`/`xev.TCP`/`xev.UDP` watchers stay deferred on Linux exactly as they are
+  on macOS (the C7 finale bullet above): zero ghostty uses. `main.zig:35,38-39` +
+  `dynamic.zig:83,86-87` forward them; `lib.rs` forwards them on NEITHER target, so
+  the two surfaces stay identical in what they omit as well as what they export.
+- **`ThreadPool` (body AND type surface, on Linux only)** — macOS forwards
+  `xev::ThreadPool` (type surface, body deferred). `dynamic.zig:56` forwards
+  `main.ThreadPool` too, but the Linux side exports NOTHING: R5 forbids importing
+  the macOS-gated `thread_pool` module, and neither `epoll::Loop` nor
+  `io_uring::Loop` carries a pool (epoll.rs:149-152 — the reference's `thread_pool:
+  ?*ThreadPool` + `thread_pool_completions` fields are omitted, and
+  `linux::Options::thread_pool` is an opaque `Option<*mut c_void>` instead of the
+  macOS-gated type name). Consequence: epoll's threadpool-requiring ops yield
+  `CloseError::ThreadPoolRequired` exactly as the reference's `thread_schedule` does
+  when `Loop.thread_pool == null`. Same status as the macOS "kqueue: file IO on
+  thread pool" skip-stub — genuinely-unused functionality, not a live path. Un-defer
+  together with the macOS ThreadPool body.
+- **`Callback` / `noopCallback` / `Result` / `Operation` / `Sys`** — the macOS block
+  exports these (there the surface IS the static kqueue `Api()`); the Linux block
+  does not, because `dynamic.zig`'s forwarded-decl list (dynamic.zig:56-88) contains
+  none of them. This is the reference's own "must be limited to the least common
+  denominator of all backends" statement (dynamic.zig:20-23), not a gap: a Dynamic
+  `Completion`'s op/callback are backend-typed and private, so no consumer could
+  build one to hand to `Loop.add`. Same reason `Loop::tick` (epoll-only),
+  `Loop::submit`/`cancel` (io_uring-only) and `Loop::add`/`timer`/`timer_reset` are
+  absent from `dynamic::Loop` (dynamic.rs's "OMITTED `Loop` methods" note).
+- **`available`** — `main.zig:11` forwards the *static* Api()'s availability probe.
+  `Dynamic` has no such decl; `detect`/`prefer` (exported) consult each candidate's
+  `available()` internally (dynamic.zig:98/113), so `epoll::available`/
+  `io_uring::available` stay module-private.
+- **`Timer::cancel` on Linux** (timer.zig:369) — carried over from LT7 (see
+  dynamic.rs's PORT NOTE at the end of `impl Timer`). `TimerLoop.cancel` must WRITE a
+  backend `Operation` (`epoll::Operation::Cancel` / `io_uring::Operation::TimerRemove`)
+  into a completion, and neither backend exposes a `Completion::new_op` seam to
+  `dynamic.rs` the way `kqueue::Completion::new_op` (`pub(crate)`) does for macOS's
+  `timer.rs`. Nothing in the Linux shell path calls it (`Timer::reset`, which IS
+  ported, is what termio's scroll/coalesce/sync timers use) and the underlying loop
+  machinery is ported + tested inside each backend (`epoll_timer_cancellation`,
+  `io_uring_timer_remove`). To un-defer: make `Completion::new_op` `pub(crate)` in
+  epoll.rs/io_uring.rs and add the two arms. NOTE `rustty-core`'s renderer_seam
+  (`cursor_h.cancel(...)`, renderer_seam.rs:1060) DOES call it — that is a
+  core-tier/Phase-3 path, not termio's, but it means core will not build on Linux
+  until this is un-deferred.
+- **`io_uring::available()`'s false path is untestable on this host** (carried over
+  from LT5), and so is the `detect()` FALLBACK arm that depends on it: this host has
+  io_uring enabled, so `detect()` always lands on the FIRST candidate and the
+  "io_uring unavailable → fall back to epoll" branch never executes. NOT papered over
+  with a mock seam: `available()` is a live `io_uring_setup` probe, and a seam that
+  let a test force it false would be testing the seam, not the fallback.
+  `dynamic_detect` therefore asserts the reference's own invariant in a form that
+  holds either way (`detect()` lands on the FIRST AVAILABLE candidate, computed from
+  the same `available()` the code uses), and `dynamic_prefer`/every KAT drive BOTH
+  arms explicitly via `prefer()` — so the epoll arm itself is fully exercised; only
+  the automatic *transition* to it is not. The reference has the same hole (its own
+  `test "prefer"` assumes `prefer(bes[0])` succeeds, dynamic.zig:218-227). To close:
+  run the suite on a kernel with `io_uring_disabled=2`.
+
+**KNOWN CROSS-TARGET SURFACE DIVERGENCES (pinned by `tests/surface_parity.rs`, not
+hidden — both are consequences of R5 forbidding edits to macOS-gated code):**
+
+1. **`Loop::init` arity.** The reference takes `Options` on BOTH sides
+   (`kqueue.zig`'s `Loop.init(options: Options)`, `dynamic.zig:127`'s
+   `Loop.init(opts: Options)`). `kqueue.rs:345-351` specialized the macOS form to
+   NO-ARG (ghostty's macOS build only ever calls `Loop.init(.{})`, and the
+   `Options.thread_pool` path is deferred with the ThreadPool body). The Linux side
+   is NOT specialized — it is faithful to dynamic.zig:127, and `Options::entries` is
+   load-bearing there (io_uring-only, loop.zig:15; it is what
+   `dynamic_loop_init_dispatches_on_the_global` discriminates the two arms with).
+   `surface_parity.rs` asserts the signature each target actually has, so neither can
+   drift silently. **CONSEQUENCE FOR LT9:** termio calls `xev::Loop::init()` with no
+   args (thread.rs:160, exec.rs:4563); on Linux it must pass
+   `xev::Options::default()`. LT9 must either cfg that call site or (better) revisit
+   the macOS specialization when R5 is liftable.
+2. **`Completion::state` vs `state_of`.** The reference names the decl `state` on
+   every backend (kqueue.zig:1035 / epoll.zig:941 / io_uring.zig:649) and on the
+   Dynamic completion (dynamic.zig:270). `kqueue.rs` could not use that name for its
+   public `&self` accessor — its raw-pointer discipline already owns `state` for the
+   `fn state(c: *mut Completion)` associated fn — so macOS exports `state_of`
+   (kqueue.rs:1648-1659), and termio's completions already call it (exec.rs:799,
+   thread.rs:1022/1173). A `pub use` can rename a type but not a method, so LT8 gives
+   `dynamic::Completion` a `state_of` INLINE ALIAS of its faithful `state`: both names
+   resolve on Linux, `state_of` resolves on both targets, and `surface_parity.rs` pins
+   it. This is the only method added beyond the reference's decl list.
+
 ## rustty-renderer GPU R-d P1 (Chunk-3 prereqs) — `image.zig` + `Overlay.zig`
 
 Ports `src/renderer/image.zig` → `crates/rustty-renderer/src/image.rs` and

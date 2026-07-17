@@ -805,6 +805,43 @@ MAP = {
     # (thread_pool.rs). net.rs (a std.net.Address subset, not a libxev source file)
     # is intentionally UNMAPPED — it has no `.zig` reference oracle.
     "xev_thread_pool":   ([f"{GHXEV}/ThreadPool.zig"], [f"{RSXEV}/thread_pool.rs"], 0),
+    # ---------------------------------------------------------------------
+    # rustty-xev LINUX port (XEV_BLUEPRINT §1, tasks L1 LT1-LT8) — the epoll +
+    # io_uring backends and the Dynamic selector that picks between them. These
+    # three files were the "Other backends ... whole follow-up ports (§1)" bullet
+    # of the C7 finale's DEFERRED list; LT8 lands them, so the rows move from
+    # that ledger into this MAP ([ADV-FIX F7] precedent: the count-gate is what
+    # makes R1 binding per module).
+    #
+    # SAME base path as every xev row above (GHXEV = the pinned content-addressed
+    # libxev zig-cache package). No new base path or in-repo manifest is needed:
+    # the Linux port's own read-only oracle checkout is the SAME libxev commit
+    # ghostty pins (34fa5087), so these rows bind against the existing GHXEV like
+    # their macOS siblings, and the R3 missing-ref guard below still protects
+    # them from vacuous greens.
+    # ---------------------------------------------------------------------
+    # backend/epoll.zig: 12 quoted `test "epoll: ..."` → zig=12. epoll.rs ports all
+    # 12 as live #[test] + rustty KATs → rust=15 >= 12.
+    "xev_epoll":         ([f"{GHXEV}/backend/epoll.zig"], [f"{RSXEV}/epoll.rs"], 0),
+    # backend/io_uring.zig: 13 quoted `test "io_uring: ..."` → zig=13. io_uring.rs
+    # ports all 13 as live #[test] + rustty KATs → rust=16 >= 13.
+    "xev_io_uring":      ([f"{GHXEV}/backend/io_uring.zig"], [f"{RSXEV}/io_uring.rs"], 0),
+    # dynamic.zig: the `Xev(bes)` multi-backend selector. 5 `test{}` total, of which
+    # 4 are quoted (`completion is zero-able`, `detect`, `prefer`, `loop basics`)
+    # and 1 is the anon `test { refAllDecls }` that zig_count skips → zig=4.
+    # dynamic.rs ports all 5 (the anon one as the `dynamic_ref_all_decls`
+    # compile-touch) + the ensure-tag/backend-default checks + 6 live KATs that run
+    # BOTH candidate arms → rust=14 >= 4. NOTE dynamic.zig is comptime-elided on
+    # macOS (§0, single candidate), so this row is only meaningful for the Linux
+    # surface — but the COUNT binds on either host, since both sides are static text.
+    "xev_dynamic":       ([f"{GHXEV}/dynamic.zig"], [f"{RSXEV}/dynamic.rs"], 0),
+    # linux/timerfd.zig: the timerfd binding the epoll backend's timers ride. 1
+    # behavioral named-unquoted `test` → zig=1; linux/timerfd.rs=1. `linux/eventfd.rs`
+    # + `linux/net.rs` + `linux.rs` are intentionally UNMAPPED for the same reason
+    # `net.rs` is: they have no 1:1 `.zig` reference oracle (libxev's eventfd lives
+    # inline in watcher/async.zig's `AsyncEventFd`, and the other two are a
+    # std.net/loop.zig-twin slice), so there is nothing to count them against.
+    "xev_timerfd":       ([f"{GHXEV}/linux/timerfd.zig"], [f"{RSXEV}/linux/timerfd.rs"], 0),
 }
 
 def expand(globs):

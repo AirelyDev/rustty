@@ -1,9 +1,12 @@
 //! rustty-xev
 //!
 //! PARITY (D6): the `xev` event-loop backend — a faithful port of the libxev
-//! LIBRARY (mitchellh/libxev, the commit ghostty pins), macOS/kqueue-only for now
-//! (XEV_BLUEPRINT §0: on macOS `xev.Dynamic` IS the static kqueue `Api()`, so
-//! `dynamic.zig` is comptime-elided/deferred, not weakened).
+//! LIBRARY (mitchellh/libxev, the commit ghostty pins). Live on TWO targets:
+//! macOS/kqueue (XEV_BLUEPRINT §0: there `xev.Dynamic` IS the static kqueue
+//! `Api()`, since `Backend::candidates()` has one element, so `dynamic.zig` is
+//! comptime-elided/deferred, not weakened) and Linux/`{io_uring, epoll}` behind
+//! the real `Dynamic` selector (§1 Linux port, tasks L1 LT1-LT8 — two candidates,
+//! so nothing elides). `wasi_poll`/`iocp` remain whole follow-up ports.
 //!
 //! Every termio reference file (and, with the core tier, renderer/Thread.zig +
 //! core Surface.zig) imports `const xev = @import("../global.zig").xev` — the
@@ -14,8 +17,10 @@
 //! const xev` is; the concrete handle types live here.
 //!
 //! PORT STATUS: done — the whole in-scope macOS/kqueue surface (chunks C1–C7
-//! below) is filled; the `ThreadPool` body is the one ledgered deferral
-//! (DEFERRALS.md "kqueue: file IO on thread pool", honest-skip stub).
+//! below) AND the whole in-scope Linux surface (L1 LT1–LT8) are filled; the
+//! `ThreadPool` body is the one ledgered deferral on both (DEFERRALS.md "kqueue:
+//! file IO on thread pool", honest-skip stub; on Linux the pool has no type
+//! surface either — R5). `Timer::cancel` is additionally deferred on Linux only.
 //! (Marker normalized from 'CHUNK STATUS' per VALIDATION_REPORT.md §3b.)
 //!
 //! CHUNK LOG: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:
@@ -27,7 +32,19 @@
 //! `api.zig`'s 2 `test{}` + `backend.zig`'s `Backend`; `Timer::reset`/`cancel`
 //! un-deferred with `watcher/timer.zig`'s 5 `test{}`) have LANDED — the whole
 //! macOS/kqueue in-scope surface is now filled in place; downstream `use` paths
-//! never change. Milestone A (isolated real `rustty-xev`) is DONE. See
+//! never change. Milestone A (isolated real `rustty-xev`) is DONE.
+//!
+//! LINUX LOG (§1 Linux port): LT1 (module skeleton + `backend.zig`'s `.linux`
+//! arms), LT2 (`linux/`: timerfd/eventfd/net plus the pure `loop.zig` ABI twins),
+//! LT3–LT4 (`backend/epoll.zig`: the whole loop + its watcher surfaces), LT5–LT6
+//! (`backend/io_uring.zig`: ditto, over the hand-declared io_uring ABI libc
+//! lacks), LT7 (`dynamic.zig`: the hand-authored `Xev(&.{.io_uring, .epoll})`
+//! instantiation — Rust has no comptime `@Type`/`@unionInit`), LT8 (THIS
+//! `lib.rs` per-target surface: Linux re-exports `dynamic::*` under the SAME
+//! public names the macOS block exports, so `rustty_xev::Loop` etc. resolve to
+//! `Dynamic` on Linux and stay flat kqueue on macOS — pinned by
+//! `tests/surface_parity.rs`; plus the [ADV-FIX F7] count-gate rows) have LANDED.
+//! Milestone-A-equivalent for Linux is DONE. See
 //! .port/phase-2/XEV_BLUEPRINT.md + DEFERRALS.md + NEXT_PHASE_PLAN.md.
 
 // PORT NOTE: `rustty_global::seam::Xev` (= `()`), the deferred xev backend package.
@@ -41,12 +58,20 @@ use rustty_global::xev as _DeferredXevBackend;
 mod backend;
 pub use backend::Backend;
 
-// XEV_BLUEPRINT §1 Linux port, task L1 LT1: gated module skeleton for the
-// io_uring/epoll/Dynamic backends (backend.zig's `.linux => &.{ .io_uring,
-// .epoll }` candidates, wired above in `backend.rs`). Empty stubs ONLY here —
-// later L-tier tasks fill each module in place; downstream `use` paths won't
-// change. `linux` groups the Linux-only helper bindings (timerfd.zig, ...) the
-// way `darwin`/`kqueue`'s siblings group the macOS-only ones above.
+// XEV_BLUEPRINT §1 Linux port: the io_uring/epoll/Dynamic backends (backend.zig's
+// `.linux => &.{ .io_uring, .epoll }` candidates, wired above in `backend.rs`).
+// LT1 landed these as empty stubs; LT3–LT7 filled each in place, and LT8 wires the
+// package surface below — downstream `use` paths never changed, exactly as planned.
+//  - `epoll` (backend/epoll.zig) + `io_uring` (backend/io_uring.zig): each is a
+//    SELF-CONTAINED whole backend (its own Loop/Completion/Operation/Result/
+//    Callback + the Async/Timer/Process/Stream watcher surfaces), mirroring how
+//    `kqueue` + its macOS siblings form the macOS backend.
+//  - `dynamic` (dynamic.zig): the 2-candidate `Xev(bes)` selector over them — the
+//    Linux package surface (§0's single-candidate elision does NOT apply here).
+//  - `linux` groups the Linux-only helper bindings (timerfd.zig, eventfd, the
+//    std.net subset) the way `darwin`/`kqueue`'s siblings group the macOS-only
+//    ones above, plus byte-faithful twins of `loop.zig`'s pure ABI enums (R5
+//    forbids importing the macOS-gated `looppkg`).
 #[cfg(target_os = "linux")]
 mod dynamic;
 #[cfg(target_os = "linux")]
@@ -215,6 +240,80 @@ pub use timer::RunError as TimerRunError;
 #[cfg(target_os = "macos")]
 pub use async_watcher::WaitError;
 
+// ---------------------------------------------------------------------------
+// The Linux/Dynamic package re-export surface (XEV_BLUEPRINT §1 Linux port, task
+// L1 LT8) — the exact twin of the macOS block above, under the SAME public names.
+//
+// WHY THE SAME NAMES ARE THE WHOLE POINT: ghostty imports the package as
+// `@import("xev").Dynamic` (global.zig), i.e. `DynamicXev(Backend.candidates())`
+// — ONE import for every target. The per-target split happens INSIDE
+// `dynamic.zig`:
+//
+//   * macOS — `candidates() == &.{.kqueue}`, and `Xev(bes)` short-circuits at
+//     "Ensure that if we only have one candidate that we have no overhead to use
+//     the dynamic API: if (bes.len == 1) return bes[0].Api();" (dynamic.zig:36-38).
+//     So `Dynamic` IS the flat kqueue `Api()` — the §0 fact that comptime-elides
+//     the whole Dynamic layer there, which is why the block above re-exports
+//     `kqueue`/`timer`/`stream`/... directly.
+//
+//   * Linux — `candidates() == &.{.io_uring, .epoll}` (backend.zig's `.linux`
+//     arm). Two candidates, so `Xev(bes)` really does generate the `Dynamic`
+//     struct, and THAT is the package surface. Hence: `dynamic::*` here.
+//
+// Downstream never sees the difference (`rustty-termio`'s `xev_seam` is a flat
+// `pub use rustty_xev::*`), which is exactly the property `tests/surface_parity.rs`
+// pins on both targets.
+//
+// PORT NOTE (what is deliberately NOT forwarded on Linux, and why — each is the
+// reference's own decision, not a weakening):
+//  - `Callback` / `noopCallback` / `Result` / `Operation` / `Sys`: `dynamic.zig`'s
+//    forwarded-decl list (dynamic.zig:56-88) contains none of them. They are
+//    backend-typed, and a Dynamic `Completion`'s op/callback are private, so a
+//    consumer could not build one to hand to `Loop.add` anyway. The macOS block
+//    exports them because there the surface IS the static kqueue `Api()`.
+//  - `KEventError`/`MachPortError`/`ProcError`/`TimerError`/`TimerTrigger`/
+//    `ShutdownHow`: kqueue/Darwin-specific spellings with no Linux analogue; the
+//    Linux twins are the merged `ErrorSet`s below (`ProcessWaitError`,
+//    `TimerRunError`, ...).
+//  - `ThreadPool`: `dynamic.zig:56` does forward `main.ThreadPool`, but the LINUX
+//    `ThreadPool` is a whole follow-up port — R5 forbids reaching into the
+//    macOS-gated `thread_pool` module, and `epoll::Loop`/`io_uring::Loop` carry no
+//    pool (epoll.rs:149-152; `Options.thread_pool` is an opaque `*mut c_void`
+//    there). DEFERRALS.md.
+//  - `File`/`TCP`/`UDP`: deferred on BOTH targets (zero ghostty uses).
+//
+// `Backend` (above), `Error` + `NotifyError` (below) are declared ONCE at the
+// crate root for every target and so are absent from this list: `dynamic::Error`/
+// `dynamic::NotifyError` are already aliases OF those crate-root types (the
+// unified D6 seam error), and re-exporting an alias of a local item under its own
+// name would collide with the declaration.
+// ---------------------------------------------------------------------------
+#[cfg(target_os = "linux")]
+pub use dynamic::{
+    AcceptError, Async, CallbackAction, CancelError, CloseError, Completion, CompletionState,
+    ConnectError, Loop, Options, PollError, PollEvent, Process, ProcessWaitError, ReadBuffer,
+    ReadError, RunMode, ShutdownError, Stream, Timer, TimerCancelError, TimerRunError, WaitError,
+    WriteBuffer, WriteError, WriteQueue, WriteRequest,
+};
+// The `Dynamic`-only decls (`main.zig` forwards `dynamic`/`backend`/`available`
+// from the selected Api(); on macOS they are the elided single-candidate ones —
+// `dynamic == false`, `backend == .kqueue` — and are not exported there).
+//
+// PORT NOTE: `available` is NOT forwarded. `main.zig:11`'s `pub const available =
+// xev.available;` is the *static* Api()'s "is this backend usable on this system"
+// probe; `Dynamic` has no such decl (it has `detect`/`prefer`, which consult each
+// candidate's `available()` internally — dynamic.zig:98/113). `epoll::available`/
+// `io_uring::available` stay module-private, reachable only through those two.
+//
+// PORT NOTE (name collision, benign): the private `mod backend` (backend.zig)
+// occupies `backend` in the TYPE namespace; this `pub use` puts the `fn backend()`
+// reader of `dynamic.zig:91`'s `pub var backend` in the VALUE namespace. Rust
+// keeps the two apart, so `rustty_xev::backend()` is the function and the module
+// stays private — the same `backend`/`Backend` pairing `main.zig:9`+`main.zig:91`
+// has, where Zig's single namespace distinguishes them only by case.
+#[cfg(target_os = "linux")]
+pub use dynamic::{backend, detect, prefer, CANDIDATES, DYNAMIC};
+
 // PORT NOTE: `main.zig` also forwards `File`/`TCP`/`UDP` (watchers) + `Dynamic`/
 // `DynamicXev` (the runtime backend switch) + `IO_Uring`/`Epoll`/`Kqueue`/
 // `WasiPoll`/`IOCP` (the per-backend Api()s) + `Sys`/`dynamic`/`backend`/
@@ -317,39 +416,49 @@ mod api_tests {
 }
 
 // ---------------------------------------------------------------------------
-// Non-macOS: the crate is kqueue-only (XEV_BLUEPRINT §0/§1); other backends are
-// whole follow-up ports. Keep the D6 seam placeholder handle types so the
-// workspace still type-checks off-macOS (real types are macOS-gated above).
+// Neither macOS nor Linux: the remaining backends (`wasi_poll`, `iocp`) are whole
+// follow-up ports (XEV_BLUEPRINT §1). Keep the D6 seam placeholder handle types so
+// the workspace still type-checks on those targets — notably the wasm32 build,
+// which runs the synchronous C-ABI with no event loop at all and never calls any
+// of these (backend.rs:60-69).
+//
+// PORT NOTE (LT8): this block used to be `#[cfg(not(target_os = "macos"))]` and
+// therefore stood in for LINUX too. Linux now has real backends (`epoll`/
+// `io_uring`) behind the real `Dynamic` surface re-exported above, so the
+// placeholder is narrowed to exclude it. The module was named `non_macos_seam`
+// while that was true; it is renamed to match the cfg it now carries, since a
+// stale name here is exactly what would let a future target quietly land on
+// `unimplemented!()` handles while believing it had a backend.
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_os = "macos"))]
-pub use non_macos_seam::*;
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub use deferred_backend_seam::*;
 
-#[cfg(not(target_os = "macos"))]
-mod non_macos_seam {
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+mod deferred_backend_seam {
     use super::Error;
 
-    /// PORT NOTE: `xev.Loop` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Loop` placeholder (wasi_poll/iocp backends deferred).
     pub struct Loop {}
-    /// PORT NOTE: `xev.Async` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Async` placeholder (wasi_poll/iocp backends deferred).
     #[derive(Clone, Copy)]
     pub struct Async {}
-    /// PORT NOTE: `xev.Completion` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Completion` placeholder (wasi_poll/iocp backends deferred).
     #[derive(Default)]
     pub struct Completion {}
-    /// PORT NOTE: `xev.Timer` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Timer` placeholder (wasi_poll/iocp backends deferred).
     pub struct Timer {}
-    /// PORT NOTE: `xev.Process` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Process` placeholder (wasi_poll/iocp backends deferred).
     #[derive(Clone, Copy)]
     pub struct Process {}
-    /// PORT NOTE: `xev.Stream` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Stream` placeholder (wasi_poll/iocp backends deferred).
     #[derive(Clone, Copy)]
     pub struct Stream {}
-    /// PORT NOTE: `xev.WriteRequest` placeholder (non-macOS backend deferred) — Exec's
+    /// PORT NOTE: `xev.WriteRequest` placeholder (wasi_poll/iocp backends deferred) — Exec's
     /// `SegmentedPool<xev::WriteRequest>` requires `Default`.
     #[derive(Default)]
     pub struct WriteRequest {}
-    /// PORT NOTE: `xev.WriteQueue` placeholder (non-macOS backend deferred) — Exec's
+    /// PORT NOTE: `xev.WriteQueue` placeholder (wasi_poll/iocp backends deferred) — Exec's
     /// `write_queue` field default-constructs it.
     #[derive(Default)]
     pub struct WriteQueue {}
@@ -357,7 +466,7 @@ mod non_macos_seam {
     impl Stream {
         pub fn deinit(&self) {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
     }
@@ -365,12 +474,12 @@ mod non_macos_seam {
     impl Loop {
         pub fn init() -> Result<Loop, Error> {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
         pub fn deinit(&mut self) {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
     }
@@ -378,17 +487,17 @@ mod non_macos_seam {
     impl Async {
         pub fn init() -> Result<Async, Error> {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
         pub fn deinit(&mut self) {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
         pub fn notify(&self) -> Result<(), super::NotifyError> {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
     }
@@ -396,12 +505,12 @@ mod non_macos_seam {
     impl Timer {
         pub fn init() -> Result<Timer, Error> {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
         pub fn deinit(&self) {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
     }
@@ -409,12 +518,12 @@ mod non_macos_seam {
     impl Process {
         pub fn init(_pid: i32) -> Result<Process, Error> {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
         pub fn deinit(&mut self) {
             unimplemented!(
-                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
     }

@@ -580,6 +580,31 @@ impl Completion {
         }
     }
 
+    /// Convenience alias of `state` under the spelling the macOS seam exports
+    /// (LT8).
+    //
+    // PORT NOTE: the reference names this decl `state` on EVERY backend
+    // (kqueue.zig:1035, epoll.zig:941, io_uring.zig:649) and on the Dynamic
+    // completion (dynamic.zig:270) — which is why `state` above is the faithful
+    // spelling and stays. But `kqueue.rs` could not use that name for its public
+    // `&self` form: its raw-pointer discipline already owns `state` for the
+    // `fn state(c: *mut Completion)` associated fn, so the public accessor there
+    // is `state_of` (kqueue.rs:1648-1659) — and `state_of` is therefore the name
+    // the macOS `xev::Completion` answers to, and the one termio's completions
+    // already call (exec.rs:799, thread.rs:1022/1173). The same rename already
+    // happened one level down: `epoll::Completion`/`io_uring::Completion` expose
+    // `state_of` too, which is what `state` above dispatches to.
+    //
+    // lib.rs's job is to make ONE surface out of two backends; a `pub use` can
+    // rename a TYPE but not a method, so the Linux side grows the macOS spelling
+    // as an alias rather than the seam silently differing per target. Both names
+    // are the same reference decl; `tests/surface_parity.rs` pins `state_of` on
+    // both targets. DEFERRALS.md records this as a known cross-target divergence.
+    #[inline]
+    pub fn state_of(&self) -> CompletionState {
+        self.state()
+    }
+
     /// This ensures that the tag is currently set for this
     /// completion. If it is not, it will be set to the given
     /// tag with a zero-initialized value.
