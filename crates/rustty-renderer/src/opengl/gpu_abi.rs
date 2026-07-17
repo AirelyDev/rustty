@@ -102,6 +102,79 @@ pub struct BgImage {
                       // align 4 ⇒ size 8 (tail pad 5..8)
 }
 
+// ---------------------------------------------------------------------------
+// Ergonomic (`crate::shaders`) -> OpenGL-ABI serializers.
+//
+// PARALLEL: the OpenGL twins of `metal::gpu_abi`'s `From` impls
+// (metal/gpu_abi.rs:58-177). The FIELD copies are identical; the BIT PACKING is
+// the discrepancy the design flagged — `Uniforms.padding_extend`/`Uniforms.bools`
+// are 4-byte `u32` bitfields here (`opengl/shaders.zig:200-231` `packed
+// struct(u32)`), where the Metal twin uses a 1-byte `padding_extend` and four
+// separate bool bytes. Bit ORDER is LSB-first, matching the Zig `packed struct`
+// field declaration order in BOTH APIs (verified against `opengl/shaders.zig:
+// 200-231`: `cursor_wide,use_display_p3,use_linear_blending,use_linear_correction`
+// and `left,right,up,down`). `CellText.bools`/`BgImage.info` are single bytes,
+// byte-identical to the Metal twin.
+// ---------------------------------------------------------------------------
+
+impl From<&crate::shaders::Uniforms> for Uniforms {
+    fn from(u: &crate::shaders::Uniforms) -> Self {
+        let pe = &u.padding_extend; // UniformsPaddingExtend { left,right,up,down }
+        let b = &u.bools; // UniformsBools { cursor_wide, use_display_p3, .. }
+        Uniforms {
+            projection_matrix: u.projection_matrix,
+            screen_size: u.screen_size,
+            cell_size: u.cell_size,
+            grid_size: u.grid_size,
+            _pad0: [0; 12],
+            grid_padding: u.grid_padding,
+            // packed struct(u32): left bit0, right bit1, up bit2, down bit3.
+            padding_extend: (pe.left as u32)
+                | ((pe.right as u32) << 1)
+                | ((pe.up as u32) << 2)
+                | ((pe.down as u32) << 3),
+            min_contrast: u.min_contrast,
+            cursor_pos: u.cursor_pos,
+            cursor_color: u.cursor_color,
+            bg_color: u.bg_color,
+            // packed struct(u32): cursor_wide bit0, use_display_p3 bit1,
+            // use_linear_blending bit2, use_linear_correction bit3.
+            bools: (b.cursor_wide as u32)
+                | ((b.use_display_p3 as u32) << 1)
+                | ((b.use_linear_blending as u32) << 2)
+                | ((b.use_linear_correction as u32) << 3),
+        }
+    }
+}
+
+impl From<&crate::shaders::CellText> for CellText {
+    fn from(c: &crate::shaders::CellText) -> Self {
+        CellText {
+            glyph_pos: c.glyph_pos,
+            glyph_size: c.glyph_size,
+            bearings: c.bearings,
+            grid_pos: c.grid_pos,
+            color: c.color,
+            atlas: c.atlas as u8, // repr(u8): Grayscale=0, Color=1
+            // packed struct(u8): no_min_contrast bit0, is_cursor_glyph bit1.
+            bools: (c.bools.no_min_contrast as u8) | ((c.bools.is_cursor_glyph as u8) << 1),
+        }
+    }
+}
+
+impl From<&crate::shaders::BgImage> for BgImage {
+    fn from(b: &crate::shaders::BgImage) -> Self {
+        let i = &b.info; // BgImageInfo { position: enum(u4), fit: enum(u2), repeat }
+        BgImage {
+            opacity: b.opacity,
+            // packed struct(u8): position bits0-3, fit bits4-5, repeat bit6.
+            info: ((i.position as u8) & 0x0F)
+                | (((i.fit as u8) & 0x03) << 4)
+                | ((i.repeat as u8) << 6),
+        }
+    }
+}
+
 // Compile-time drift guards: fail the build if any offset/size drifts from the
 // OpenGL reference `@offsetOf`/`@sizeOf`.
 const _: () = {

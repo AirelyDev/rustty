@@ -185,6 +185,23 @@ impl OpenGL {
         // (OpenGL.zig:132-159 `prepareContext`, reached via `load_gl`).
         sys::load_gl(&context)?;
 
+        // RUSTTY-ONLY (offscreen viewport — no ghostty analogue): ghostty NEVER calls
+        // `glViewport` in the renderer — the windowing host (GtkGLArea / GLFW) sets it
+        // to the drawable size on resize, and `surfaceSize` merely READS it back
+        // (OpenGL.zig:280-286). A surfaceless offscreen context has no host and starts
+        // with a 0×0 (undefined) viewport, so primitives would rasterize into nothing
+        // (`glClear` ignores the viewport — a clear "works" while no draw shows). We set
+        // it once to `offscreen_size`, the offscreen stand-in for the host's resize
+        // callback, keeping it consistent with what `surface_size` returns (the fixed
+        // `offscreen_size`) and the target the generic renderer resizes to match. First
+        // exercised by the Task-11 offscreen golden.
+        draw::viewport(
+            0,
+            0,
+            width as gl::types::GLsizei,
+            height as gl::types::GLsizei,
+        )?;
+
         Ok(OpenGL {
             blending,
             last_target: None,

@@ -64,15 +64,19 @@ use rustty_vt::{color, page, point, sgr};
 use rustty_zigstd::thread::{Mutex, Semaphore};
 
 use core::mem;
+use core::ptr::addr_of_mut;
 use std::ffi::{CStr, CString};
 
 use super::{AtomicHealth, DerivedConfig, Options, TerminalColor};
 use crate::cell::{self, Contents, Key};
 use crate::cursor;
 use crate::opengl::buffer::Buffer;
+use crate::opengl::frame::Frame;
+use crate::opengl::gl::primitives::Primitive;
 use crate::opengl::gpu_abi::{
     BgImage as BgImageGpu, CellText as CellTextGpu, Uniforms as UniformsGpu,
 };
+use crate::opengl::render_pass::{Attachment, AttachmentTarget, Draw, Step};
 use crate::opengl::sampler::Sampler;
 use crate::opengl::shaders::Shaders;
 use crate::opengl::target::Target;
@@ -703,6 +707,43 @@ impl From<shape::harfbuzz::Error> for RebuildRowError {
     fn from(e: shape::harfbuzz::Error) -> Self {
         RebuildRowError::Shape(e)
     }
+}
+
+/// The `Frame` completion tail (`opengl::frame::CompletionFn`) — the OpenGL twin of
+/// `macos_impl::metal_buffer_completed` (generic.rs:5171). `Frame::complete` computes
+/// `health` from `gl.errors.getError()` (after its blocking `gl.finish()`) and hands
+/// it in, so — unlike Metal, which inspects an `MTLCommandBuffer` here — this only has
+/// to run the present-if-healthy + `frameCompleted` tail (`opengl/Frame.zig:62-70`).
+//
+// MILESTONE-SCOPE-CUT (GL-ATTACH, DEFERRALS.md): the reference tail is
+//   `if (health == .healthy) self.renderer.api.present(self.target.*) catch …;`
+//   `self.renderer.frameCompleted(health);`
+// `OpenGL::present` blits the target FBO to the DEFAULT framebuffer, which exists only
+// under a live windowing host (L5's GtkGLArea). Offscreen there is no default
+// framebuffer, and the golden reads the target back via `Target::read_rgba` instead —
+// so `present` is "ported (Task 8) but never exercised" per the brief's GL-ATTACH
+// deferral. It is also unavailable to call from here: `present` consumes `Target` BY
+// VALUE (Rust `Target` is move-only, no `Drop`), but `target` is a raw pointer into
+// the frame that the renderer still owns, so there is nothing to move. The present
+// call is therefore cut with this note (matching the file's honesty bar); the
+// `frameCompleted(health)` half runs UNCONDITIONALLY, faithful to the reference.
+//
+// PORT NOTE (raw-ptr re-entry, `rust-mut-args-strongly-protected`): the renderer is
+// recovered as a RAW `*mut Renderer` (never `&mut`) and deref'd HERE — inside
+// `Frame::complete`, which runs inside `draw_frame_raw` while its `self_ptr` raw root
+// is live. `frame_completed(&self)` reborrows only `&self` (narrow, `AtomicHealth`
+// store + the no-op mailbox + `swap_chain.release_frame`), matching the Metal lane's
+// proven-clean shape.
+//
+// # Safety
+// `renderer` must be a live, whole-`Renderer`-provenance `*mut ()` (the `self_ptr`
+// `begin_frame` was handed); single-threaded on this path (we just blocked on
+// `gl.finish()`).
+unsafe fn opengl_frame_completed(renderer: *mut (), _target: *mut Target, health: crate::Health) {
+    let renderer = renderer as *mut Renderer;
+    // (present cut — see the MILESTONE-SCOPE-CUT note above.)
+    // block.renderer.frameCompleted(health);
+    unsafe { (*renderer).frame_completed(health) };
 }
 
 impl Renderer {
@@ -2763,6 +2804,488 @@ impl Renderer {
 
         Ok(())
     }
+
+    /// Sync the atlas data to the given texture. This copies the bytes associated with
+    /// the atlas to the given texture. If the atlas no longer fits into the texture,
+    /// the texture will be resized.
+    //
+    // PORTS: generic.zig:1234-1257 `syncAtlasTexture`; macos_impl generic.rs:5291-5317.
+    //
+    // PORT NOTE (raw-ptr — the same MIRIHAR-proven shape as the Metal twin): the
+    // reference is `syncAtlasTexture(self: *const Self, atlas: *const font.Atlas,
+    // texture: *Texture)` — `self` and `texture` are RAW pointers. A `&self`/`&mut
+    // texture` form is unsound because `texture` is `&mut frame.grayscale`, which
+    // aliases INTO `self.swap_chain`. Ported as raw self + raw texture: it reborrows
+    // only `self.api` (narrow, disjoint from `swap_chain`) and writes `*texture`.
+    // `atlas` stays a real `&FontAtlas` — it lives in the `*mut SharedGrid` (a SEPARATE
+    // allocation).
+    //
+    // DIVERGENCE from `macos_impl` (Metal `Texture` is ARC-`Retained`, dropped on
+    // reassign): the OpenGL `Texture` has a MANUAL `deinit(self)` and no `Drop`, so the
+    // old texture is freed EXPLICITLY before the reassignment (Zig `texture.*.deinit()`,
+    // generic.zig:1240) rather than by an implicit ARC release.
+    //
+    // # Safety
+    // `self_raw`/`texture` must be valid, well-aligned, whole-provenance pointers that
+    // outlive the call; `texture` must not alias `atlas`.
+    unsafe fn sync_atlas_texture(
+        self_raw: *const Renderer,
+        atlas: &FontAtlas,
+        texture: *mut Texture,
+    ) -> Result<(), Error> {
+        // if (atlas.size > texture.width) {
+        if atlas.size() as usize > unsafe { (*texture).width } {
+            // Free our old texture / Reallocate.
+            // texture.*.deinit();  texture.* = try self.api.initAtlasTexture(atlas);
+            let new_texture = unsafe { (*self_raw).api.init_atlas_texture(atlas)? };
+            // `mem::replace` + explicit `deinit` of the old value (manual GL delete —
+            // the OpenGL leaf has no `Drop`, unlike Metal's ARC release).
+            let old = unsafe { mem::replace(&mut *texture, new_texture) };
+            old.deinit();
+        }
+
+        // try texture.replaceRegion(0, 0, atlas.size, atlas.size, atlas.data);
+        unsafe {
+            (*texture).replace_region(
+                0,
+                0,
+                atlas.size() as usize,
+                atlas.size() as usize,
+                atlas.data(),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Callback from the graphics API when a frame is completed.
+    //
+    // PORTS: generic.zig:1259-1276 `frameCompleted`; macos_impl generic.rs:5351-5372.
+    // `&self` narrowing (faithful): every op is `&self`-safe — `health.store`
+    // (`AtomicHealth`), the no-op `surface_mailbox.push`, and `swap_chain.release_frame`
+    // (posts the semaphore).
+    pub fn frame_completed(&self, health: crate::Health) {
+        // If our health value hasn't changed, then we do nothing.
+        // if (self.health.load(.seq_cst) != health) {
+        if self.health.load() != health {
+            // self.health.store(health, .seq_cst);
+            self.health.store(health);
+
+            // Notify the surface so it can react (deferred no-op mailbox — the real
+            // routing lands with the apprt tier; `push` returns 0).
+            // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
+            let _ = self.surface_mailbox.push(health, MailboxTimeout::Forever);
+        }
+
+        // Always release our semaphore.
+        // self.swap_chain.releaseFrame();
+        self.swap_chain.release_frame();
+    }
+
+    /// Draw the frame to the screen.
+    ///
+    /// If `sync` is true, this will synchronously block until the frame is finished
+    /// drawing and has been presented. (For OpenGL `Frame::complete` ALWAYS blocks via
+    /// `gl.finish()` regardless of `sync` — `opengl/Frame.zig:50-57`.)
+    //
+    // PORTS: generic.zig:1278-1466 `drawFrame`; macos_impl generic.rs:5408-6022.
+    //
+    // MILESTONE-SCOPE-CUT (L4 plan Global Constraints — bg_color/cell_bg/cell_text only):
+    // the reference branches for kitty-image draws, the debug overlay, the background
+    // image (the `bg_image` shader arm), and the custom-shader (post-process) render
+    // passes are CUT, each cited below — matching the file's honesty bar (never silently
+    // deleted). `linux_impl` has no `images`/`bg_image` field (the `crate::image` port is
+    // macOS-only; kitty/bg-image are deferred), and custom shaders are deferred, so the
+    // encode path is exactly begin_frame → one render_pass { bg_color, cell_bg, cell_text }
+    // → complete.
+    //
+    // PORT NOTE (raw-ptr discipline, identical to the Metal twin / MIRIHAR-proven): the
+    // whole body drives `self` through the SINGLE raw root `self_ptr` with NARROW field
+    // reborrows, and re-derives the `frame` raw root FRESH via
+    // `addr_of_mut!((*self_ptr).swap_chain.frames[idx])` after every whole-`&mut self`
+    // call, because a whole `&mut *self_ptr` reborrow POPS a held `frame` tag.
+    //
+    /// # Safety
+    /// `self_ptr` must be a valid, well-aligned, whole-`Renderer`-provenance pointer
+    /// that outlives the call.
+    pub unsafe fn draw_frame_raw(self_ptr: *mut Renderer, sync: bool) -> Result<(), Error> {
+        // self.draw_mutex.lock(); defer self.draw_mutex.unlock();
+        unsafe { (*self_ptr).draw_mutex.lock() };
+
+        // Hand-rolled `defer`s as RAII guards (each holds the raw root, cleans up via a
+        // NARROW field reborrow), dropping LIFO in the reference order:
+        // draw_frame_end → scrollbar → unlock.
+        struct UnlockGuard(*mut Renderer);
+        impl Drop for UnlockGuard {
+            fn drop(&mut self) {
+                // self.draw_mutex.unlock();
+                unsafe { (*self.0).draw_mutex.unlock() };
+            }
+        }
+        struct ScrollbarGuard(*mut Renderer);
+        impl Drop for ScrollbarGuard {
+            fn drop(&mut self) {
+                // defer if (self.scrollbar_dirty) { if (self.surface_mailbox.push(...,
+                //     .instant) > 0) self.scrollbar_dirty = false; };
+                // (push is the no-op placeholder ⇒ returns 0 ⇒ the branch is never taken
+                //  offscreen.)
+                unsafe {
+                    if (*self.0).scrollbar_dirty
+                        && (*self.0)
+                            .surface_mailbox
+                            .push((*self.0).scrollbar, MailboxTimeout::Instant)
+                            > 0
+                    {
+                        (*self.0).scrollbar_dirty = false;
+                    }
+                }
+            }
+        }
+        struct DrawEndGuard(*mut Renderer);
+        impl Drop for DrawEndGuard {
+            fn drop(&mut self) {
+                // defer self.api.drawFrameEnd();
+                unsafe { (*self.0).api.draw_frame_end() };
+            }
+        }
+        // errdefer-only guard: releases the swap-chain semaphore ONLY on an early error
+        // return after `next_frame`. Disarmed on the success path (the frame's
+        // `frameCompleted` releases instead — else a double-release).
+        struct ReleaseGuard {
+            r: *mut Renderer,
+            armed: bool,
+        }
+        impl Drop for ReleaseGuard {
+            fn drop(&mut self) {
+                // errdefer self.swap_chain.releaseFrame();
+                if self.armed {
+                    unsafe { (*self.r).swap_chain.release_frame() };
+                }
+            }
+        }
+
+        let _unlock = UnlockGuard(self_ptr);
+        let _scrollbar = ScrollbarGuard(self_ptr);
+
+        // self.api.drawFrameStart(); defer self.api.drawFrameEnd();
+        unsafe { (*self_ptr).api.draw_frame_start() };
+        let _draw_end = DrawEndGuard(self_ptr);
+
+        // const surface_size = try self.api.surfaceSize();
+        let surface_size = unsafe { (*self_ptr).api.surface_size() }?;
+
+        // If either dimension is zero, drawing is absurd — return.
+        if surface_size.width == 0 || surface_size.height == 0 {
+            return Ok(());
+        }
+
+        let size_changed = unsafe {
+            (*self_ptr).size.screen.width != surface_size.width
+                || (*self_ptr).size.screen.height != surface_size.height
+        };
+
+        // Conditions under which we need to draw the frame.
+        let needs_redraw = size_changed
+            || unsafe { (*self_ptr).cells_rebuilt }
+            || unsafe { (*self_ptr).has_animations() }
+            || sync;
+
+        if !needs_redraw {
+            // try self.api.presentLastTarget();
+            unsafe { (*self_ptr).api.present_last_target() }?;
+            return Ok(());
+        }
+        // self.cells_rebuilt = false;
+        unsafe { (*self_ptr).cells_rebuilt = false };
+
+        // const frame = try self.swap_chain.nextFrame(); errdefer self.swap_chain.releaseFrame();
+        // (called for its side effects; the returned `&mut FrameState` is dropped
+        // immediately and `frame` is re-derived fresh from `self_ptr` at each use.)
+        if let Err(e) = unsafe { (*self_ptr).swap_chain.next_frame() } {
+            return Err(e.into());
+        }
+        let mut release_guard = ReleaseGuard {
+            r: self_ptr,
+            armed: true,
+        };
+        let idx = unsafe { (*self_ptr).swap_chain.frame_index as usize };
+
+        // If we need to reinitialize our shaders, do so.
+        // if (self.reinitialize_shaders) { self.reinitialize_shaders = false;
+        //     self.shaders.deinit(); try self.initShaders(); }
+        if unsafe { (*self_ptr).reinitialize_shaders } {
+            unsafe {
+                (*self_ptr).reinitialize_shaders = false;
+                // `drawFrame` deinits `self.shaders` DIRECTLY (generic.zig:1500), NOT via
+                // `self.deinit_shaders()`.
+                (*self_ptr).shaders.deinit();
+                (*self_ptr).init_shaders()?; // whole-&mut self
+            }
+        }
+
+        // Our shaders should not be defunct at this point.
+        // assert(!self.shaders.defunct);
+        assert!(!unsafe { (*self_ptr).shaders.defunct });
+
+        // MILESTONE-SCOPE-CUT (custom shaders): macos_impl generic.rs:5575-5605 sets up /
+        // tears down `frame.custom_shader_state` based on `self.has_custom_shaders`. Custom
+        // shaders are deferred (the golden's config never sets them ⇒ `has_custom_shaders`
+        // is always false), so the whole setup block is cut; `frame.custom_shader_state`
+        // stays `None`. Cited, not silently dropped (generic.zig:1305-1324).
+
+        // If our stored size doesn't match the surface size we need to update it.
+        // (Golden: size_changed=false ⇒ skipped. `update_screen_size_uniforms` is a
+        //  whole-&mut self call, so no `frame` raw root is held across it.)
+        if size_changed {
+            unsafe {
+                (*self_ptr).size.screen = ScreenSize {
+                    width: surface_size.width,
+                    height: surface_size.height,
+                };
+                (*self_ptr).update_screen_size_uniforms();
+            }
+        }
+
+        // If this frame's target isn't the correct size / config, replace it.
+        // if (frame.target.width != self.size.screen.width or … or
+        //     frame.target_config_modified != self.target_config_modified) { … }
+        {
+            let frame: *mut FrameState =
+                unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+            let need_resize = unsafe {
+                (*frame).target.width != (*self_ptr).size.screen.width as usize
+                    || (*frame).target.height != (*self_ptr).size.screen.height as usize
+                    || (*frame).target_config_modified != (*self_ptr).target_config_modified
+            };
+            if need_resize {
+                unsafe {
+                    (*frame).resize(
+                        &(*self_ptr).api,
+                        (*self_ptr).size.screen.width as usize,
+                        (*self_ptr).size.screen.height as usize,
+                    )?;
+                    (*frame).target_config_modified = (*self_ptr).target_config_modified;
+                }
+            }
+        }
+
+        // MILESTONE-SCOPE-CUT (kitty images / background image): macos_impl generic.rs:
+        // 5653-5668 uploads `self.images` + `self.uploadBackgroundImage()` +
+        // `self.updateCustomShaderUniformsForFrame()`. `linux_impl` has no `images`/
+        // `bg_image` field and custom shaders are deferred, so all three are cut
+        // (generic.zig:1360-1372).
+
+        // Re-derive the frame raw root FRESH. (No whole-`&mut self` reborrows occur from
+        // here to `complete()`, so this root survives to the end.)
+        let frame: *mut FrameState = unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+
+        // Setup our frame data (the serialization boundary: ergonomic `crate::shaders`
+        // structs → their OpenGL-ABI POD images via `opengl::gpu_abi`'s `From`).
+        // try frame.uniforms.sync(&.{self.uniforms});
+        unsafe {
+            (*frame)
+                .uniforms
+                .sync(&[UniformsGpu::from(&(*self_ptr).uniforms)])?;
+        }
+        // try frame.cells_bg.sync(self.cells.bg_cells);  (CellBg is already ABI = [u8;4])
+        unsafe {
+            (*frame).cells_bg.sync(&(*self_ptr).cells.bg_cells)?;
+        }
+        // const fg_count = try frame.cells.syncFromArrayLists(self.cells.fg_rows.lists);
+        //
+        // PORT NOTE (accepted deviation, same as the Metal twin): the reference's
+        // `syncFromArrayLists` is a zero-copy memcpy of the `extern struct`s. Rust's
+        // ergonomic `CellText` is NOT the packed-`u8` ABI (byte 29), so we FUSE the row
+        // concatenation (order-preserving) with the `CellText → CellTextGpu` ABI
+        // serialization into one transient `Vec`, then `sync` it (still reuses
+        // `frame.cells`).
+        let flat: Vec<CellTextGpu> = unsafe {
+            (*self_ptr)
+                .cells
+                .fg_rows
+                .lists
+                .iter()
+                .flat_map(|row| row.iter().map(CellTextGpu::from))
+                .collect()
+        };
+        unsafe { (*frame).cells.sync(&flat)? };
+        let fg_count = flat.len();
+
+        // If our background image buffer has changed, sync it. (Golden: modified stays 0
+        // ⇒ skipped — the `bg_image_buffer` BUFFER is kept for parity even though the
+        // bg-image DRAW is cut.)
+        // if (frame.bg_image_buffer_modified != self.bg_image_buffer_modified) { … }
+        if unsafe { (*frame).bg_image_buffer_modified != (*self_ptr).bg_image_buffer_modified } {
+            unsafe {
+                (*frame)
+                    .bg_image_buffer
+                    .sync(&[BgImageGpu::from(&(*self_ptr).bg_image_buffer)])?;
+                (*frame).bg_image_buffer_modified = (*self_ptr).bg_image_buffer_modified;
+            }
+        }
+
+        // If our font atlas changed, sync the texture data. Load-bearing: without it the
+        // `cell_text` shader samples an empty texture → no glyphs. The `*mut SharedGrid`
+        // is a SEPARATE allocation; the shared read lock is the reference
+        // `lock.lockShared()`.
+        {
+            let grid = unsafe { &*(*self_ptr).font_grid };
+            let modified = grid.atlas_grayscale().modified();
+            if modified > unsafe { (*frame).grayscale_modified } {
+                let _guard = grid.lock.read().unwrap();
+                unsafe {
+                    (*frame).grayscale_modified = grid.atlas_grayscale().modified();
+                    Renderer::sync_atlas_texture(
+                        self_ptr,
+                        grid.atlas_grayscale(),
+                        addr_of_mut!((*frame).grayscale),
+                    )?;
+                }
+            }
+        }
+        {
+            let grid = unsafe { &*(*self_ptr).font_grid };
+            let modified = grid.atlas_color().modified();
+            if modified > unsafe { (*frame).color_modified } {
+                let _guard = grid.lock.read().unwrap();
+                unsafe {
+                    (*frame).color_modified = grid.atlas_color().modified();
+                    Renderer::sync_atlas_texture(
+                        self_ptr,
+                        grid.atlas_color(),
+                        addr_of_mut!((*frame).color),
+                    )?;
+                }
+            }
+        }
+
+        // Get a frame context from the graphics API.
+        // var frame_ctx = try self.api.beginFrame(self, &frame.target);
+        // defer frame_ctx.complete(sync);
+        //   — `self` is the type-erased `*mut ()` renderer root; the target is the raw
+        //     `addr_of_mut!((*frame).target)`; the completion fn is the trampoline.
+        //     (OpenGL `beginFrame` is infallible — `opengl/Frame.zig` has an empty error
+        //     set — so no `?` here, unlike the Metal twin.)
+        let frame_ctx: Frame = unsafe {
+            (*self_ptr).api.begin_frame(
+                self_ptr as *mut (),
+                addr_of_mut!((*frame).target),
+                opengl_frame_completed,
+            )
+        };
+
+        {
+            // var pass = frame_ctx.renderPass(&.{.{ .target = … , .clear_color = {0,0,0,0} }});
+            // defer pass.complete();
+            //
+            // MILESTONE-SCOPE-CUT (custom shaders): the reference's attachment target is
+            // `if (frame.custom_shader_state) |state| .{ .texture = state.back_texture }
+            // else .{ .target = frame.target }` (generic.rs:5804-5807). `custom_shader_state`
+            // is always `None` here (cut above), so the target is ALWAYS `frame.target`.
+            //
+            // PORT NOTE: OpenGL `RenderPass::step` takes `&mut self` (it bumps
+            // `step_number`), unlike Metal's `&self`, so `pass` is `mut`. The
+            // `attachments` slice is bound to a `let` so it outlives `pass` (the
+            // `RenderPass` borrows it — E0716).
+            let attachments = [Attachment {
+                target: AttachmentTarget::Target(unsafe { &(*frame).target }),
+                clear_color: Some([0.0, 0.0, 0.0, 0.0]),
+            }];
+            let mut pass = frame_ctx.render_pass(&attachments);
+
+            // Background color. (Reference: with no `bg_image`, the `else` arm draws the
+            // bg color in its own step — generic.zig:1621-1628. The `bg_image` arm is
+            // MILESTONE-SCOPE-CUT: no `bg_image` field.)
+            // pass.step(.{ .pipeline = bg_color, .uniforms, .buffers = &.{ null,
+            //     frame.cells_bg.buffer }, .draw = {triangle, 3} });
+            pass.step(Step {
+                pipeline: unsafe { &(*self_ptr).shaders.pipelines.bg_color },
+                uniforms: Some(unsafe { (*frame).uniforms.buffer }),
+                buffers: &[None, Some(unsafe { (*frame).cells_bg.buffer })],
+                textures: &[],
+                samplers: &[],
+                draw: Draw {
+                    kind: Primitive::Triangle,
+                    vertex_count: 3,
+                    instance_count: 1,
+                },
+            });
+
+            // MILESTONE-SCOPE-CUT (kitty images below bg): generic.zig:1630-1637.
+
+            // Opaque cell backgrounds.
+            // pass.step(.{ .pipeline = cell_bg, .uniforms, .buffers = &.{ null,
+            //     frame.cells_bg.buffer }, .draw = {triangle, 3} });
+            pass.step(Step {
+                pipeline: unsafe { &(*self_ptr).shaders.pipelines.cell_bg },
+                uniforms: Some(unsafe { (*frame).uniforms.buffer }),
+                buffers: &[None, Some(unsafe { (*frame).cells_bg.buffer })],
+                textures: &[],
+                samplers: &[],
+                draw: Draw {
+                    kind: Primitive::Triangle,
+                    vertex_count: 3,
+                    instance_count: 1,
+                },
+            });
+
+            // MILESTONE-SCOPE-CUT (kitty images below text): generic.zig:1647-1653.
+
+            // Text.
+            // pass.step(.{ .pipeline = cell_text, .uniforms, .buffers = &.{
+            //     frame.cells.buffer, frame.cells_bg.buffer }, .textures = &.{
+            //     frame.grayscale, frame.color }, .draw = {triangle_strip, 4, fg_count} });
+            pass.step(Step {
+                pipeline: unsafe { &(*self_ptr).shaders.pipelines.cell_text },
+                uniforms: Some(unsafe { (*frame).uniforms.buffer }),
+                buffers: &[
+                    Some(unsafe { (*frame).cells.buffer }),
+                    Some(unsafe { (*frame).cells_bg.buffer }),
+                ],
+                textures: &[
+                    Some(unsafe { &(*frame).grayscale }),
+                    Some(unsafe { &(*frame).color }),
+                ],
+                samplers: &[],
+                draw: Draw {
+                    kind: Primitive::TriangleStrip,
+                    vertex_count: 4,
+                    instance_count: fg_count,
+                },
+            });
+
+            // MILESTONE-SCOPE-CUT (kitty images above text + debug overlay):
+            // generic.zig:1656-1672,1674-1683.
+
+            // defer pass.complete();
+            pass.complete();
+        }
+
+        // MILESTONE-SCOPE-CUT (custom-shader post-process passes): macos_impl generic.rs:
+        // 5947-6007 (generic.zig:1685-1720). `frame.custom_shader_state` is always `None`,
+        // so this whole `if` is cut.
+
+        // Disarm the errdefer: from here we always reach `frame_ctx.complete`, whose
+        // trampoline calls `frame_completed` → `release_frame`. Leaving it armed would
+        // double-release.
+        release_guard.armed = false;
+
+        // defer frame_ctx.complete(sync); — the reference's LAST-registered defer; for
+        // OpenGL it `gl.finish()`es (always blocking) then invokes `opengl_frame_completed`
+        // directly. `frame` is NOT used after this.
+        frame_ctx.complete(sync);
+
+        Ok(())
+        // The three RAII guards drop here in the reference LIFO order:
+        // draw_frame_end → scrollbar → unlock.
+    }
+
+    /// `&mut self` convenience wrapper over [`draw_frame_raw`]. Sound for the exclusive
+    /// single-threaded offscreen callers (the golden unit tests). Mirrors
+    /// `macos_impl::draw_frame` (generic.rs:6032-6035).
+    pub fn draw_frame(&mut self, sync: bool) -> Result<(), Error> {
+        let self_ptr: *mut Renderer = self;
+        unsafe { Self::draw_frame_raw(self_ptr, sync) }
+    }
 }
 
 // FFI-heavy (raw GL calls behind the leaves + the `*mut SharedGrid` handle) —
@@ -2775,10 +3298,12 @@ mod tests {
     use crate::generic::{Color, DerivedConfig, Options, RepeatablePath, TerminalColor};
     use crate::link;
     use crate::opengl::gl::test_support;
+    use crate::opengl::OpenGL;
     use crate::size::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, CellSize,
         FontShapingBreak, Padding, ScreenSize, Size, WindowColorspace,
     };
+    use crate::state;
     use rustty_font_shaper::codepoint_resolver::{CodepointResolver, DescriptorCache, StyleStatus};
     use rustty_font_shaper::collection::{AddOptions, Collection, LoadOptions, SizeAdjustment};
     use rustty_font_shaper::face::{
@@ -2795,6 +3320,7 @@ mod tests {
     use rustty_vt::size::CellCountInt;
     use rustty_vt::terminal::{Colors, Options as TermOptions, Terminal};
     use rustty_zigstd::arena_allocator::ArenaAllocator;
+    use rustty_zigstd::thread::Mutex;
 
     use crate::cursor;
     use crate::shaders::Atlas;
@@ -3071,6 +3597,164 @@ mod tests {
         assert_eq!(&cur.color[0..3], &[0xFF, 0, 0]);
         assert_eq!(cur.grid_pos, [2, 0]);
         assert_eq!(r.uniforms.cursor_pos, [2, 0]);
+
+        r.deinit();
+        t.deinit(Global);
+    }
+
+    // GPU_RD_CHUNK4_DESIGN §3.2 / this file's Task-11 milestone: the GOLDEN harness =
+    // the offscreen `Renderer(OpenGL)` with its offscreen size PINNED to the grid's
+    // pixel size (`size.screen`), so `draw_frame`'s `surface_size == self.size.screen`
+    // ⇒ `size_changed == false` (projection 1:1; cell (x,y) at pixel
+    // [x*cw..(x+1)*cw) × [y*ch..(y+1)*ch)). Mirrors `macos_impl::tests::golden_renderer`
+    // (generic.rs:6357) — probe with `OpenGL::init_offscreen` FIRST, THEN `Renderer::init`.
+    //
+    // GL-CONTEXT SKIP (Task-1 OPEN RISK): if the host cannot stand up a 4.3-core
+    // context, `init_offscreen` fails ⇒ clean skip (returns None), mirroring the Metal
+    // "no device ⇒ skip" precedent. The probe context is dropped (its `eglTerminate`
+    // fires) BEFORE `Renderer::init` stands up its own; the CALLER holds
+    // `test_support::gl_lock`, so the terminate/re-init is SEQUENTIAL — the parallel
+    // 2nd-live-context hazard the lock guards against never arises.
+    fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
+        if OpenGL::init_offscreen(AlphaBlending::Native, 1, 1).is_err() {
+            eprintln!("no headless OpenGL 4.3 core context; skipping golden");
+            return None;
+        }
+
+        let (font_grid, size) = test_font_grid_and_size(cols, rows);
+        let opts = Options {
+            config: derived_config_for_test(),
+            font_grid,
+            size,
+        };
+        Some(Renderer::init(Global, opts).expect("Renderer::init (GL probed above)"))
+    }
+
+    // Sample the RGBA byte 4-tuple at pixel (x, y) in a tight `w*h*4` readback
+    // (`Target::read_rgba` returns `[R,G,B,A]` per pixel, rows tight). Returns
+    // (r,g,b,a). The OpenGL twin of `macos_impl::tests::px_at` (generic.rs:6453),
+    // which samples BGRA — the byte order differs because the two backends read back
+    // in their native order, but the STRUCTURAL assertions are the same.
+    fn px_at(px: &[u8], w: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
+        let i = (y * w + x) * 4;
+        (px[i], px[i + 1], px[i + 2], px[i + 3])
+    }
+
+    /// L4 T11 MILESTONE GATE: render a deterministic terminal Screen OFFSCREEN into a
+    /// GL FBO (via the monomorphic `Renderer(OpenGL)`'s `draw_frame`), read the pixels
+    /// back with `Target::read_rgba`, and assert the STRUCTURE the port is responsible
+    /// for (background color region, foreground glyph presence, block cursor at grid
+    /// (2,0)). The OpenGL twin of `macos_impl::tests::golden_renders_cursor_fg_bg`
+    /// (generic.rs:6520) — SAME input ("Ab" on 10×3), SAME structural facts.
+    ///
+    /// NOT A CROSS-API BYTE COMPARISON: this deliberately does NOT compare GL bytes
+    /// against the Metal golden's bytes. They are different rendering pipelines
+    /// (llvmpipe software rasterizer here vs. Metal there) and are NOT expected to
+    /// produce identical pixels — only the same STRUCTURAL result. The thresholds are
+    /// the Metal golden's own THRESHOLD PHILOSOPHY (structural, lenient enough to
+    /// survive AA/rounding differences across GPU backends — generic.rs:6478-6490),
+    /// applied fresh to the GL readback, never a literal byte-diff.
+    ///
+    /// RUNS FOR REAL only under `LIBGL_ALWAYS_SOFTWARE=1` (llvmpipe ⇒ GL 4.5 core on
+    /// this host); CLEAN-SKIPS (never panics, never fabricates a golden) on the
+    /// default virgl driver, which exposes no desktop core profile (Task-1 finding).
+    /// Holds the process-wide `test_support::gl_lock` for the whole context lifetime
+    /// (the `eglTerminate`-shared-display + `gl::load_with`-global hazards); `_guard`
+    /// declared FIRST so it drops LAST (after `deinit` terminates the context).
+    #[test]
+    fn golden_renders_cursor_fg_bg() {
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+
+        // "Ab" on a 10×3 grid ⇒ a block cursor at grid (2,0) (the empty cell after
+        // "Ab"; focused + blink_visible ⇒ block). Verified by the T10 test.
+        let mut mutex = Mutex::new();
+        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"Ab");
+            s.deinit();
+        }
+        let st = state::State {
+            mutex: &mut mutex,
+            terminal: &mut t,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: state::Mouse::default(),
+        };
+        // Drive the full pipeline through update_frame: fills cells + uniforms;
+        // rebuild_cells sets dirty. cursor_blink_visible=true ⇒ visible block cursor.
+        r.update_frame(&st, true).unwrap();
+        // sync ⇒ the frame is drawn + `gl.finish()` lands the pixels + the completion
+        // trampoline runs.
+        r.draw_frame(true).unwrap();
+
+        // Read back the FBO pixels of the frame just drawn (RGBA, rows tight).
+        let idx = r.swap_chain.frame_index as usize;
+        let px = r.swap_chain.frames[idx].target.read_rgba();
+
+        let w = r.size.screen.width as usize;
+        let h = r.size.screen.height as usize;
+        let cw = r.grid_metrics.cell_width as usize;
+        let ch = r.grid_metrics.cell_height as usize;
+        assert_eq!(px.len(), w * h * 4);
+
+        // GL Y-FLIP (the one real divergence from the Metal golden): the projection is a
+        // top-left-origin `ortho2d` (generic.zig `updateScreenSizeUniforms`) so grid row 0
+        // renders to the TOP of the FBO — but OpenGL's `glReadPixels` reads BOTTOM-UP
+        // (origin bottom-left), so a top-down grid pixel row `y` lands at readback row
+        // `h-1-y`. (Metal's IOSurface readback is already top-down, so its golden samples
+        // `y` directly.) `sample(x, y)` samples the terminal-grid pixel (x, y).
+        let sample = |x: usize, y: usize| px_at(&px, w, x, h - 1 - y);
+
+        // (A) CURSOR CELL — solid red block at grid (2,0). Sample the cell interior
+        //     center. Can only pass if `cell_text` ran with `is_cursor_glyph` set +
+        //     `cursor_color` red reached the shader ⇒ proves the packed `bools` byte
+        //     (bit 1) AND the uniform serialization.
+        let (rr, g, b, _a) = sample(2 * cw + cw / 2, ch / 2);
+        assert!(rr > 128, "cursor cell not bright-red (R={rr})");
+        assert!(
+            rr > g && rr > b,
+            "cursor cell not red-dominant (R={rr} G={g} B={b})"
+        );
+
+        // (B) BACKGROUND — config bg is black (0,0,0), opacity 1.0 ⇒ bg_color =
+        //     [0,0,0,255]. Sample an empty cell far from glyphs/cursor (grid (8,2),
+        //     bottom row): cell_bg is transparent there (alpha 0) ⇒ the opaque
+        //     full-screen bg_color layer shows through. The RGB check ALONE is VACUOUS
+        //     (config bg RGB == clear RGB == 0), so we ALSO assert the ALPHA: the
+        //     bg_color step writes an opaque layer (a=255) whereas the render-pass clear
+        //     leaves a=0 ⇒ `ba > 128` can only pass if the full-screen bg_color step ran
+        //     AND `bg_color.a = 255` serialized (offset 128 + 3).
+        let (br, bg2, bb, ba) = sample(8 * cw + cw / 2, 2 * ch + ch / 2);
+        assert!(
+            br < 96 && bg2 < 96 && bb < 96,
+            "background not dark (R={br} G={bg2} B={bb})"
+        );
+        assert!(
+            ba > 128,
+            "bg_color step absent / bg alpha not opaque (A={ba})"
+        );
+
+        // (C) FOREGROUND GLYPH present in row 0 — "A" at grid (0,0) is white. Scan the
+        //     cell for a bright mark (antialiased glyph ⇒ max luminance over the cell).
+        //     Proves the atlas sync + `cell_text` glyph sampling.
+        let mut maxlum = 0u32;
+        for yy in 0..ch {
+            for xx in 0..cw {
+                let (r3, g3, b3, _) = sample(xx, yy);
+                maxlum = maxlum.max((r3 as u32 + g3 as u32 + b3 as u32) / 3);
+            }
+        }
+        assert!(
+            maxlum > 128,
+            "no fg glyph rendered in cell (0,0) (maxlum={maxlum})"
+        );
 
         r.deinit();
         t.deinit(Global);
