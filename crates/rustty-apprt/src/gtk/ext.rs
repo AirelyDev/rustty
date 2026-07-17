@@ -10,9 +10,9 @@
 //!
 //! The pinned `ext.zig` defines exactly: `boxedCopy` (`:19`), `boxedFree`
 //! (`:25`), `listFind` (`:34`), `getAncestor` (`:52`), `gValueHolds` (`:61`),
-//! and re-exports `actions` + `StringList`. This module ports the reusable
-//! helpers plus the two submodules. See the report for the `listFind` /
-//! `ancestor_while` disposition (both are noted there).
+//! and re-exports `actions` + `StringList`. All five reusable helpers are ported
+//! here (`listFind` → [`list_find`]), plus the two submodules. See the report for
+//! the `ancestor_while` disposition (no oracle counterpart at this pin).
 
 pub mod actions;
 pub mod slice;
@@ -53,6 +53,33 @@ pub fn boxed_free<T: StaticType>(ptr: *mut T) {
     }
 }
 
+/// PORTS: `ext.zig:34` `listFind`. "A wrapper around `glib.List.findCustom` to
+/// find an element in the list. The type `T` must be the guaranteed type of every
+/// list element." (`ext.zig:32-33`).
+///
+/// The oracle threads a raw `*glib.List` plus a `comptime func: *const fn (*T)
+/// bool` down into `list.findCustom` with a C `callconv(.c)` trampoline that
+/// `@ptrCast`s each element's `f_data` back to `*T` (`ext.zig:39-45`). gtk4-rs's
+/// [`glib::List<T>`] is already the typed, `Iterator<Item = &T>` view over the
+/// same `GList` — for `T: TransparentPtrType` every node's `data` IS a `T` — so
+/// the trampoline collapses to a safe [`Iterator::find`] over a Rust predicate.
+///
+/// Faithful to the oracle's ownership: the borrow (`&`) leaves the list intact
+/// for the caller's `defer list.free()`; the oracle returns a borrowed `*T` into
+/// the still-owned list, and the Rust analogue returns an owned strong clone
+/// (`T: TransparentPtrType: Clone` adds one ref — the memory-safe equivalent,
+/// per Invariant 4). Live at pin `4749c4e9`: called from
+/// `class/application.zig:2717` (`getQuickTerminalWindow`, over
+/// `gtk.Window.listToplevels()`).
+#[must_use]
+pub fn list_find<T, F>(list: &glib::List<T>, predicate: F) -> Option<T>
+where
+    T: glib::translate::TransparentPtrType,
+    F: Fn(&T) -> bool,
+{
+    list.iter().find(|item| predicate(item)).cloned()
+}
+
 /// PORTS: `ext.zig:52` `getAncestor`. "Wrapper around `gtk.Widget.getAncestor`
 /// to get the widget ancestor of the given type `T`, or null if it doesn't
 /// exist." The oracle asserts the final cast is non-null (`:56` `.?`) because
@@ -91,5 +118,27 @@ mod tests {
         let _: fn(*const StringList) -> *mut StringList = boxed_copy::<StringList>;
         let _: fn(*mut StringList) = boxed_free::<StringList>;
         let _: fn(&glib::Value, glib::Type) -> bool = g_value_holds;
+        let _ = list_find::<gio::SimpleAction, fn(&gio::SimpleAction) -> bool>;
+    }
+
+    /// PORTS: `ext.zig:34` `listFind` behaviour. Non-display: `gio::SimpleAction`
+    /// needs no initialized main thread (unlike a widget), so this runs in the
+    /// normal gate. Builds a typed `glib::List`, finds a matching element, and
+    /// checks the miss case returns `None` — the two branches of the oracle's
+    /// `findCustom` callback (`ext.zig:43` `if (func(v)) 0 else 1`).
+    #[test]
+    fn list_find_matches_and_misses() {
+        use gio::prelude::ActionExt;
+
+        let alpha = gio::SimpleAction::new("alpha", None);
+        let beta = gio::SimpleAction::new("beta", None);
+        let list: glib::List<gio::SimpleAction> =
+            [alpha.clone(), beta.clone()].into_iter().collect();
+
+        let found = list_find(&list, |a| a.name() == "beta");
+        assert_eq!(found.map(|a| a.name().to_string()).as_deref(), Some("beta"));
+
+        let missing = list_find(&list, |a| a.name() == "gamma");
+        assert!(missing.is_none());
     }
 }
