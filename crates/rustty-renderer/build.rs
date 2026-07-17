@@ -17,11 +17,14 @@
 //! identical pixels without the toolchain (GPU_RD_BLUEPRINT §3). Non-macOS is a
 //! no-op for the same reason.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The Metal shader source we compile / embed.
 const SHADER_SRC: &str = "src/shaders/shaders.metal";
+
+/// The directory holding the verbatim-vendored GLSL assets (Linux/OpenGL).
+const GLSL_DIR: &str = "src/shaders/glsl";
 
 fn main() {
     // Declare the cfg we may set so `--check-cfg` (CI's `-D warnings`) does not
@@ -30,6 +33,14 @@ fn main() {
 
     // Recompile the metallib when the shader source changes.
     println!("cargo::rerun-if-changed={SHADER_SRC}");
+
+    // Linux/OpenGL: pre-resolve the GLSL `#include`s and stage the results in
+    // `$OUT_DIR/glsl/` for `opengl::shaders` to `include_bytes!`. This ports
+    // ghostty's comptime `loadShaderCode`/`processIncludes`
+    // (`src/renderer/opengl/shaders.zig:341-376`) to build time.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        resolve_glsl_includes();
+    }
 
     // Metal shader compilation is macOS-only; elsewhere the source-compile
     // fallback covers it.
@@ -87,4 +98,97 @@ fn metal_toolchain_available() -> bool {
 /// missing) is treated as failure (→ skip), never a panic.
 fn run(cmd: &mut Command) -> bool {
     cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
+/// Ports ghostty's comptime `loadShaderCode` (`opengl/shaders.zig:347-376`) to
+/// build time: for every vendored `src/shaders/glsl/*.glsl`, inline its
+/// `#include "…"` directives (only `common.glsl` is ever included) and write the
+/// resolved, NUL-terminated result to `$OUT_DIR/glsl/*.glsl`. `opengl::shaders`
+/// then `include_bytes!`s those as the `[:0]const u8` GLSL sources.
+///
+/// The trailing NUL makes each output a valid C string (the reference's
+/// `[:0]const u8`); the vendored SOURCE files stay pure (NUL-free) so the
+/// byte-for-byte reference-diff test compares clean bytes.
+fn resolve_glsl_includes() {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let src_dir = manifest.join(GLSL_DIR);
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
+    let dst_dir = out_dir.join("glsl");
+    std::fs::create_dir_all(&dst_dir).expect("create $OUT_DIR/glsl");
+
+    // Rebuild when any asset changes.
+    println!("cargo::rerun-if-changed={GLSL_DIR}");
+
+    let entries = std::fs::read_dir(&src_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", src_dir.display()));
+    for entry in entries {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("glsl") {
+            continue;
+        }
+        let name = path.file_name().expect("file name");
+        println!("cargo::rerun-if-changed={}", path.display());
+
+        let contents =
+            std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        let mut resolved = process_includes(&contents, &src_dir);
+        resolved.push(0); // NUL terminator (the reference's `[:0]const u8`).
+        std::fs::write(dst_dir.join(name), &resolved)
+            .unwrap_or_else(|e| panic!("writing resolved {}: {e}", name.to_string_lossy()));
+    }
+}
+
+/// Ports `processIncludes` (`opengl/shaders.zig:352-376`) byte-for-byte: walk the
+/// source, and at the first line-leading `#include "<file>"`, splice in the RAW
+/// bytes of `<basedir>/<file>` (never re-processed — matching the reference's
+/// `@embedFile` of the include), then recurse over the tail. `#` tokens that are
+/// not line-leading (e.g. `common.glsl`'s in-comment mention) are skipped exactly
+/// as the reference's `"\n#"` scan skips them.
+fn process_includes(contents: &[u8], basedir: &Path) -> Vec<u8> {
+    const NEEDLE: &[u8] = b"#include \"";
+    let mut i = 0usize;
+    loop {
+        if contents[i..].starts_with(b"#include") {
+            // The reference asserts the well-formed `#include "` shape.
+            assert!(
+                contents[i..].starts_with(NEEDLE),
+                "malformed #include directive (expected `#include \"`)",
+            );
+            let start = i + NEEDLE.len();
+            let end = start
+                + contents[start..]
+                    .iter()
+                    .position(|&b| b == b'"')
+                    .expect("unterminated #include path");
+            let inc_name = std::str::from_utf8(&contents[start..end]).expect("include path utf8");
+            let inc_path = basedir.join(inc_name);
+            let included = std::fs::read(&inc_path)
+                .unwrap_or_else(|e| panic!("reading include {}: {e}", inc_path.display()));
+
+            let mut out = Vec::with_capacity(contents.len() + included.len());
+            out.extend_from_slice(&contents[0..i]);
+            out.extend_from_slice(&included);
+            out.extend_from_slice(&process_includes(&contents[end + 1..], basedir));
+            return out;
+        }
+        // Advance to the next line-leading `#`, mirroring `indexOfPos(contents, i,
+        // "\n#")` (`shaders.zig:369-374`).
+        match find_subslice(contents, i, b"\n#") {
+            Some(j) => i = j + 1,
+            None => break,
+        }
+    }
+    contents.to_vec()
+}
+
+/// `std.mem.indexOfPos(u8, haystack, from, needle)` — the byte offset of the first
+/// `needle` at or after `from`, if any.
+fn find_subslice(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    if from > haystack.len() {
+        return None;
+    }
+    haystack[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| from + p)
 }

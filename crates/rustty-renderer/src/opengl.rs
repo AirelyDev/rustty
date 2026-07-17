@@ -39,6 +39,16 @@ pub mod pipeline;
 pub mod render_pass;
 pub mod target;
 
+// PORT STATUS (L4 Task 7): the GLSL shader assets + the OpenGL-ABI POD structs +
+// the `Shaders` container that compiles/links the reused-verbatim GLSL into the 5
+// render pipelines. These are the OpenGL twins of `metal/{gpu_abi,shaders}.rs`.
+//   * `gpu_abi` — ports `src/renderer/opengl/shaders.zig:163-300` (the FRESH
+//                 OpenGL byte layouts; NOT copied from `metal::gpu_abi`)
+//   * `shaders` — ports `src/renderer/opengl/shaders.zig:1-160,302-376` (the
+//                 pipeline collection over the verbatim `src/shaders/glsl/*.glsl`)
+pub mod gpu_abi;
+pub mod shaders;
+
 // RUSTTY-ONLY smoke tests for the Task-5 leaves — same framing as `metal.rs`'s
 // `creates_buffer_texture_sampler_without_panic`: the reference has NO `test{}`
 // block over `renderer/opengl/{buffer,Texture,Sampler}.zig`, so there is no parity
