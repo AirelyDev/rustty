@@ -91,7 +91,12 @@
 //! the full derivation and the open plan:96 reconciliation.
 
 pub mod adw_version;
+pub mod class;
+pub mod ext;
 pub mod gtk_version;
+pub mod weak_ref;
+
+pub use weak_ref::WeakRef;
 
 #[cfg(test)]
 mod tests {
