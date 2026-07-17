@@ -986,6 +986,131 @@ impl Renderer {
         self.shaders.deinit();
     }
 
+    /// Called by the GTK apprt (via `glareaRealize`) after the surface is
+    /// reinitialized due to any of the events mentioned in the doc comment for
+    /// [`Renderer::display_unrealized`]. It tells the renderer the GL context
+    /// became available again so it can rebuild its GL-context-bound resources.
+    //
+    // PORTS: generic.zig:935-962 `displayRealized`.
+    //
+    // ```zig
+    // pub fn displayRealized(self: *Self) !void {
+    //     if (@hasDecl(GraphicsAPI, "displayRealized")) self.api.displayRealized();
+    //     self.draw_mutex.lock();
+    //     defer self.draw_mutex.unlock();
+    //     assert(self.swap_chain.defunct);
+    //     try self.initShaders();
+    //     self.swap_chain = try SwapChain.init(self.api, self.has_custom_shaders);
+    //     self.reinitialize_shaders = false;
+    //     self.target_config_modified = 1;
+    // }
+    // ```
+    //
+    // # Errors
+    // [`Error`] if `init_shaders` or `SwapChain::init` fails while rebuilding the
+    // GL-context-bound resources (the reference `try` sites).
+    pub fn display_realized(&mut self) -> Result<(), Error> {
+        // if (@hasDecl(GraphicsAPI, "displayRealized")) self.api.displayRealized();
+        //   (generic.zig:939-942)
+        //
+        // OpenGL DOES declare `displayRealized` (OpenGL.zig:237-250), whose body is
+        // the GTK arm's `prepareContext(null)` — reload glad over the context GDK
+        // just made current on (re-)realize. That api-level hook is L5-owned: it
+        // needs the GDK/epoxy proc-address loader decision and is deliberately NOT
+        // ported this tier (see the `opengl/opengl_impl.rs` module doc, lines 40-43).
+        // For the offscreen path it would also be a no-op — the owned
+        // `OffscreenContext` is prepared once in `OpenGL::init_offscreen` and is
+        // NEVER torn down by `display_unrealized` (which frees only the swap chain +
+        // shaders, generic.zig:982-983), so it stays current across the
+        // unrealize/realize cycle and needs no reload. Documented elision (R1), not
+        // fabricated behavior.
+
+        // self.draw_mutex.lock(); defer self.draw_mutex.unlock(); (generic.zig:946-947)
+        //
+        // The ported `Mutex` is bare lock/unlock with no RAII guard, and the body
+        // reborrows `&mut self` (`init_shaders`, field writes), so a scope guard
+        // holding `&self.draw_mutex` would conflict. `defer` is replicated by
+        // explicit unlock-before-`?` on every early return plus the unlock at the
+        // natural end — the exact idiom used by `generic.rs::change_config`.
+        self.draw_mutex.lock();
+
+        // We assume that the swap chain was deinited in `display_unrealized`, in
+        // which case it should be marked defunct. If not, we have a problem.
+        // assert(self.swap_chain.defunct); (generic.zig:952)
+        assert!(self.swap_chain.defunct);
+
+        // We reinitialize our shaders and our swap chain.
+        // try self.initShaders(); (generic.zig:955)
+        if let Err(e) = self.init_shaders() {
+            self.draw_mutex.unlock();
+            return Err(e);
+        }
+        // self.swap_chain = try SwapChain.init(self.api, self.has_custom_shaders);
+        //   (generic.zig:956-959). The old (defunct) swap chain is overwritten; its
+        // frames' GL objects were already freed by `display_unrealized` and
+        // `FrameState`/`SwapChain` have no `Drop`, so the overwrite cannot
+        // double-free.
+        match SwapChain::init(&self.api, self.has_custom_shaders) {
+            Ok(sc) => self.swap_chain = sc,
+            Err(e) => {
+                self.draw_mutex.unlock();
+                return Err(e);
+            }
+        }
+        // self.reinitialize_shaders = false; (generic.zig:960)
+        self.reinitialize_shaders = false;
+        // self.target_config_modified = 1; (generic.zig:961)
+        self.target_config_modified = 1;
+
+        self.draw_mutex.unlock();
+        Ok(())
+    }
+
+    /// Called by the GTK apprt (via `glareaUnrealize`) when the surface is being
+    /// destroyed. This can happen because the surface is being closed but also when
+    /// moving the window between displays or splitting. It tears down the
+    /// GL-context-bound resources (marking them defunct) before the context goes
+    /// away.
+    //
+    // PORTS: generic.zig:964-984 `displayUnrealized`.
+    //
+    // ```zig
+    // pub fn displayUnrealized(self: *Self) void {
+    //     if (@hasDecl(GraphicsAPI, "displayUnrealized")) self.api.displayUnrealized();
+    //     self.draw_mutex.lock();
+    //     defer self.draw_mutex.unlock();
+    //     self.swap_chain.deinit();
+    //     self.shaders.deinit(self.alloc);
+    // }
+    // ```
+    pub fn display_unrealized(&mut self) {
+        // if (@hasDecl(GraphicsAPI, "displayUnrealized")) self.api.displayUnrealized();
+        //   (generic.zig:969-971)
+        //
+        // OpenGL does NOT declare `displayUnrealized` — it exists only on the generic
+        // renderer (grep of `src/renderer` finds no `OpenGL.displayUnrealized`), so
+        // the `@hasDecl` guard is statically FALSE and there is no api call. Faithful
+        // elision (R1).
+
+        // self.draw_mutex.lock(); defer self.draw_mutex.unlock(); (generic.zig:975-976)
+        //
+        // The body is infallible (no `?`), so the `defer` collapses to a plain lock
+        // + unlock at the natural end — no early-return unlock needed.
+        self.draw_mutex.lock();
+
+        // We deinit our swap chain and shaders. This will mark them as defunct so
+        // that they can't be double-freed or used in draw calls.
+        // self.swap_chain.deinit(); (generic.zig:982)
+        self.swap_chain.deinit();
+        // self.shaders.deinit(self.alloc); (generic.zig:983) — the Rust `Shaders`
+        // frees its GL pipelines with no allocator arg (see `deinit_shaders`); it is
+        // `defunct`-guarded, so the later `Renderer::deinit`/`init_shaders` won't
+        // double-free.
+        self.shaders.deinit();
+
+        self.draw_mutex.unlock();
+    }
+
     /// Update uniforms that are based on the font grid.
     // PORTS: generic.zig `updateFontGridUniforms`; macos_impl generic.rs:4811-4816.
     pub fn update_font_grid_uniforms(&mut self) {
@@ -3508,6 +3633,71 @@ mod tests {
 
         // The teardown must not panic/leak: leaf GL objects freed first (context
         // still current), then the context (via `api`'s drop after `deinit`).
+        r.deinit();
+    }
+
+    /// L5 prerequisite KAT: the GLArea re-realize cycle —
+    /// [`Renderer::display_unrealized`] then [`Renderer::display_realized`]. Proves
+    /// unrealize marks the swap chain + shaders defunct (freeing their GL objects
+    /// while the context is current) and that realize rebuilds them from the
+    /// defunct state, resetting the frame-config flags exactly as the reference
+    /// `displayRealized` does (generic.zig:952-961).
+    ///
+    /// The offscreen `OffscreenContext` is owned and stays current across the whole
+    /// cycle (the api-level `displayRealized`/`prepareContext` reload is L5-owned and
+    /// not exercised here), so this validates the generic renderer's GPU-resource
+    /// rebuild in isolation. Clean-skips (never panics/fabricates) when the host
+    /// cannot give a 4.3-core context — runs for real under `LIBGL_ALWAYS_SOFTWARE=1`
+    /// (llvmpipe ⇒ GL 4.5 core). Holds the process-wide `test_support::gl_lock` for
+    /// the whole context lifetime, `_guard` first so it drops last (after `deinit`).
+    #[test]
+    fn linux_opengl_display_unrealize_then_realize_rebuilds() {
+        let _guard = test_support::gl_lock();
+
+        let (font_grid, size) = test_font_grid_and_size(10, 3);
+        let opts = Options {
+            config: derived_config_for_test(),
+            font_grid,
+            size,
+        };
+        let mut r = match Renderer::init(Global, opts) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "no headless OpenGL 4.3 core context ({e}); skipping \
+                     linux_opengl_display_unrealize_then_realize_rebuilds"
+                );
+                return;
+            }
+        };
+
+        // Fresh renderer: live GL resources.
+        assert!(!r.swap_chain.defunct);
+        assert!(!r.shaders.defunct);
+
+        // Unrealize: frees + marks the GL-context-bound resources defunct
+        // (generic.zig:982-983).
+        r.display_unrealized();
+        assert!(r.swap_chain.defunct);
+        assert!(r.shaders.defunct);
+
+        // Realize: rebuilds from the defunct state (asserts swap_chain.defunct
+        // internally) and resets the frame-config flags (generic.zig:952-961).
+        r.display_realized().expect("display_realized rebuild");
+        assert!(!r.swap_chain.defunct);
+        assert!(!r.shaders.defunct);
+        assert!(!r.reinitialize_shaders);
+        assert_eq!(r.target_config_modified, 1);
+
+        // A second cycle proves the rebuilt resources are themselves re-tearable
+        // (no double-free on the fresh swap chain / shaders).
+        r.display_unrealized();
+        assert!(r.swap_chain.defunct);
+        r.display_realized()
+            .expect("display_realized second rebuild");
+        assert!(!r.swap_chain.defunct);
+
+        // Teardown must not panic/leak after the re-realize cycle.
         r.deinit();
     }
 
