@@ -30,6 +30,8 @@ use std::fmt;
 
 use khronos_egl as egl;
 
+use super::{draw, errors};
+
 /// PORTS: `OpenGL.zig:36-38`.
 ///
 /// ```zig
@@ -95,10 +97,13 @@ pub enum Error {
     /// than a host that merely lacks 4.3 — which is why the offscreen test FAILS
     /// on it instead of skipping.
     MissingGlEntryPoint(&'static str),
-    /// A GL call reported an error. PORT NOTE: stands in for
-    /// `pkg/opengl/errors.zig`'s `Error` set, which lands with the rest of
-    /// `pkg/opengl` in Tasks 2-4.
-    Gl(u32),
+    /// A GL call reported an error.
+    ///
+    /// PORT NOTE: carried `u32` (a raw `glGetError` code) while Task 1 was the
+    /// only landed slice of `pkg/opengl`; now that the real
+    /// [`errors::Error`] set exists (Task 2, the `pkg/opengl/errors.zig` port),
+    /// it carries that.
+    Gl(errors::Error),
 }
 
 impl fmt::Display for Error {
@@ -117,7 +122,7 @@ impl fmt::Display for Error {
             Self::MissingGlEntryPoint(name) => {
                 write!(f, "the GL context did not provide {name}")
             }
-            Self::Gl(code) => write!(f, "OpenGL error {code:#x}"),
+            Self::Gl(err) => write!(f, "OpenGL error: {err}"),
         }
     }
 }
@@ -127,6 +132,12 @@ impl std::error::Error for Error {}
 impl From<egl::Error> for Error {
     fn from(err: egl::Error) -> Self {
         Self::Egl(err)
+    }
+}
+
+impl From<errors::Error> for Error {
+    fn from(err: errors::Error) -> Self {
+        Self::Gl(err)
     }
 }
 
@@ -381,7 +392,17 @@ pub fn prepare_context(
 
     // Enable debug output for the context.
     // try gl.enable(gl.c.GL_DEBUG_OUTPUT);
-    enable(gl::DEBUG_OUTPUT)?;
+    //
+    // PORT NOTE: `gl.enable` IS `pkg/opengl/draw.zig`'s `enable`, which Task 2
+    // ported — so this now calls the real thing. Task 1 carried a private
+    // stand-in here (it needed `enable` before `draw.rs` existed) and left a note
+    // asking Tasks 2-4 to delete it and route here; done. The stand-in's
+    // `is_loaded()` guards on `glEnable`/`glGetError` went with it, which loses
+    // nothing: both are core GL 1.0, the reference force-unwraps both glad slots
+    // (`.?`), and `draw::enable` reproduces that force-unwrap exactly (the `gl`
+    // crate panics on an unloaded entry point). Any context that got far enough to
+    // answer `glGetString(GL_VERSION)` above has them.
+    draw::enable(gl::DEBUG_OUTPUT)?;
 
     // Register our debug message callback with the OpenGL context.
     // gl.glad.context.DebugMessageCallback.?(glDebugMessageCallback, null);
@@ -400,7 +421,7 @@ pub fn prepare_context(
 
     // Enable SRGB framebuffer for linear blending support.
     // try gl.enable(gl.c.GL_FRAMEBUFFER_SRGB);
-    enable(gl::FRAMEBUFFER_SRGB)?;
+    draw::enable(gl::FRAMEBUFFER_SRGB)?;
 
     Ok((major, minor))
 }
@@ -424,38 +445,6 @@ pub fn prepare_context(
 /// gate is the only thing standing between an old driver and a wall of GL errors.
 fn version_is_outdated(major: u32, minor: u32) -> bool {
     major < MIN_VERSION_MAJOR || (major == MIN_VERSION_MAJOR && minor < MIN_VERSION_MINOR)
-}
-
-/// PORTS: `pkg/opengl/draw.zig:56-59` + `pkg/opengl/errors.zig:17-27`.
-///
-/// ```zig
-/// pub fn enable(cap: c.GLenum) !void {
-///     glad.context.Enable.?(cap);
-///     try errors.getError();
-/// }
-/// ```
-///
-/// PORT NOTE: private and minimal. `pkg/opengl`'s real `draw.zig`/`errors.zig`
-/// twins (with the full `errors.Error` set) land in Tasks 2-4; `prepareContext`
-/// needs `enable` NOW, so this is the smallest faithful stand-in. Tasks 2-4
-/// should delete it and route [`prepare_context`] at the real `opengl::gl::draw::
-/// enable`.
-fn enable(cap: gl::types::GLenum) -> Result<(), Error> {
-    if !gl::Enable::is_loaded() {
-        return Err(Error::MissingGlEntryPoint("glEnable"));
-    }
-    if !gl::GetError::is_loaded() {
-        return Err(Error::MissingGlEntryPoint("glGetError"));
-    }
-    // SAFETY: both entry points were just confirmed loaded; `cap` is a GL
-    // capability enum.
-    unsafe {
-        gl::Enable(cap);
-        match gl::GetError() {
-            gl::NO_ERROR => Ok(()),
-            code => Err(Error::Gl(code)),
-        }
-    }
 }
 
 /// Reads `GL_VERSION` and parses out `(major, minor)`.
@@ -572,6 +561,7 @@ extern "system" fn gl_debug_message_callback(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support;
     use super::{
         has_extension, load_gl, parse_gl_version, version_is_outdated, Error, OffscreenContext,
         MIN_VERSION_MAJOR, MIN_VERSION_MINOR,
@@ -616,6 +606,21 @@ mod tests {
     /// not lift that ceiling; a different driver is what lifts it.
     #[test]
     fn offscreen_egl_context_reaches_gl43_core() {
+        // The [`Drop`] CAVEAT above is no longer hypothetical: Task 2 added a
+        // SECOND GL test (`opengl::gl::tests::gl_buffer_vertex_array_smoke`), and
+        // the Rust harness runs tests as parallel threads — so two
+        // `OffscreenContext`s would share one `EGLDisplay` and the first drop
+        // would `eglTerminate` it out from under the other. Every GL test in this
+        // crate holds this lock for its context's whole lifetime; see
+        // `test_support::gl_lock` for the full rationale (it also covers
+        // `gl::load_with`'s process-global statics).
+        //
+        // This test takes the lock DIRECTLY instead of going through
+        // `test_support::offscreen_gl` because it asserts on WHICH `load_gl`
+        // error it got (the narrow-skip arms below), which that helper collapses
+        // into `None`.
+        let _gl_lock = test_support::gl_lock();
+
         let ctx = match OffscreenContext::init() {
             Ok(ctx) => ctx,
             Err(err) => {
