@@ -31,6 +31,20 @@
 // `rustty-apprt-api` (break #8); this crate carries the concrete backends.
 pub mod browser;
 pub mod embedded;
+// PORT NOTE (R5): the reference re-exports `gtk` unconditionally (`apprt.zig:17`
+// `pub const gtk = @import("apprt/gtk.zig");`) and lets the comptime `runtime`
+// switch pick it (`apprt.zig:45` `.gtk => gtk,`). In rustty the selector is a
+// `cfg` instead: the GTK backend is a NATIVE gtk4-rs apprt (AD-1) — a sibling of
+// `embedded`/`none` that `impl`s the `rustty_apprt_api` seam directly against
+// GObject widgets, NOT an app over the libghostty C ABI (that is the
+// macOS/Swift path, `rustty-apprt-c`, which this leaves untouched).
+//
+// The gtk4-rs deps are BOTH Linux-target-gated and `gtk`-feature-optional
+// (`Cargo.toml`), so the macOS/embedded build is byte-behavior-identical whether
+// or not the feature is named. `Runtime::Gtk` is already the Linux default
+// (`rustty-build-config/src/apprt.rs:30`); the `rustty` bin binds it in L5.5.
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+pub mod gtk;
 pub mod none;
 
 /// Error returned by [`init`] (the global-state bootstrap).
