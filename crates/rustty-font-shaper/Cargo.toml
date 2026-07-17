@@ -68,6 +68,15 @@ allocator-api2 = { workspace = true }
 freetype-sys = { path = "../../crates-sys/freetype-sys" }
 harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
 
+# Fontconfig 2.14.2 (font discovery/matching) for the FreeType/Fontconfig
+# discovery backend — the SAME C library the reference links (R3), consumed by
+# the `fc` module (the port of `pkg/fontconfig/*.zig`). Gated to match `fc`'s
+# `cfg(not(any(target_os = "macos", target_arch = "wasm32")))`: macOS discovers
+# fonts via CoreText and never links fontconfig, and freestanding wasm has no C
+# deps. Referenced by path (the `-sys` crates are not in `[workspace.dependencies]`).
+[target.'cfg(not(any(target_os = "macos", target_arch = "wasm32")))'.dependencies]
+fontconfig-sys = { path = "../../crates-sys/fontconfig-sys" }
+
 # macOS: the CoreText backend (font discovery + rendering + shaping) and its
 # CoreGraphics rasterization surface. R3/objc2: the crates.io objc2 framework
 # crates REPLACE ghostty's `pkg/macos` bindings — `macos.text.*` -> objc2-core-text

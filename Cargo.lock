@@ -1249,6 +1249,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "cc",
+ "fontconfig-sys",
  "freetype-sys",
  "harfbuzz-sys",
  "objc2-core-foundation",
