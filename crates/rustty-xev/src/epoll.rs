@@ -1601,6 +1601,198 @@ unsafe fn getsockopt_error(socket: socket_t) -> core::result::Result<(), Connect
 }
 
 // ---------------------------------------------------------------------------
+// Async (watcher/async.zig `AsyncEventFd`) — the cross-thread loop wakeup,
+// INSIDE this backend (mirroring io_uring.rs). `Async(xev)` selects
+// `AsyncEventFd` for the io_uring AND epoll backends alike (async.zig:14-16),
+// and its `wait` is the `waitPoll` arm for both (async.zig:86) — this watcher is
+// byte-identical between the two Linux backends; only the module-local
+// `Loop`/`Completion`/`Operation`/`Result` types it names differ.
+//
+// PORT NOTE (SCOPE, task L1 LT7): Tasks 3/4 did not port this watcher (the epoll
+// `Loop` embeds a bare `linux::eventfd::Eventfd` for its own internal wakeup
+// instead), but `dynamic.rs` must union `epoll::Async` with `io_uring::Async` —
+// `Async(Dynamic)` is `AsyncDynamic` over BOTH candidates (async.zig:9-10 +
+// dynamic.zig:82). It lands here, additively, so both Linux backends expose the
+// same watcher surface.
+// ---------------------------------------------------------------------------
+
+/// "Wake up" an event loop from any thread using an async completion.
+//
+// PORT NOTE: `AsyncEventFd(xev)` monomorphized for epoll. `#[derive(Clone,
+// Copy)]`: the reference `wait`/`notify` take `self: Self` by value (a trivially
+// copyable fd handle), exactly like `linux::eventfd::Eventfd`.
+//
+// PORT NOTE: the reference's `fd: posix.fd_t` + inline `posix.eventfd`/`read`/
+// `write` calls are expressed through the crate's already-ported
+// `linux::eventfd::Eventfd` primitive (Task 2), which IS that fd plus the very
+// same `eventfd(0, EFD_CLOEXEC|EFD_NONBLOCK)` / `write(1u64)` /
+// `EAGAIN => success` surface. The FreeBSD `extern "c" fn eventfd` arm is
+// comptime-dead here (this module is Linux-only).
+#[derive(Clone, Copy)]
+pub struct Async {
+    /// eventfd file descriptor
+    ev: Eventfd,
+}
+
+impl Async {
+    /// Create a new async. An async can be assigned to exactly one loop
+    /// to be woken up. The completion must be allocated in advance.
+    pub fn init() -> core::result::Result<Async, Error> {
+        match Eventfd::init() {
+            Ok(ev) => Ok(Async { ev }),
+            Err(_) => Err(Error),
+        }
+    }
+
+    /// Clean up the async. This will forcibly deinitialize any resources
+    /// and may result in erroneous wait callbacks to be fired.
+    pub fn deinit(&self) {
+        self.ev.deinit();
+    }
+
+    /// The underlying eventfd. Exposed so a caller can poll/register it directly.
+    pub fn fd(&self) -> fd_t {
+        self.ev.fd
+    }
+
+    /// Wait for a message on this async. Note that async messages may be
+    /// coalesced (or they may not be) so you should not expect a 1:1 mapping
+    /// between send and wait.
+    ///
+    /// Just like the rest of libxev, the wait must be re-queued if you want
+    /// to continue to be notified of async events.
+    ///
+    /// You should NOT register an async with multiple loops (the same loop
+    /// is fine -- but unnecessary). The behavior when waiting on multiple
+    /// loops is undefined.
+    //
+    // PORT NOTE: `pub const wait = switch (xev.backend) { .io_uring, .epoll =>
+    // waitPoll, ... }` — this IS `waitPoll`; the `waitRead` (kqueue) arm is
+    // comptime-dead for epoll.
+    //
+    // PORT NOTE (§2.2): the reference `comptime Userdata` + `comptime cb`
+    // monomorphize to `wait::<UD, CB>` where `CB` is the callback's ZST
+    // fn-item/non-capturing-closure TYPE. `WaitError = xev.ReadError`.
+    ///
+    /// # Safety
+    /// `c`/`loop_` must be valid, stable pointers held raw by the loop.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn wait<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                core::result::Result<(), ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "Async::wait cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            // PORT NOTE (verbatim from the reference): We use a poll operation
+            // instead of a read operation because in Kernel 6.15.4, read was
+            // regressed for io_uring on eventfd/timerfd and would block forever.
+            // However, poll works fine.
+            //
+            // PORT NOTE: `waitPoll` spells the mask `posix.POLL.IN` for BOTH the
+            // io_uring and epoll arms (async.zig:145) even though this backend's
+            // `Operation::Poll.events` is documented as EPOLL events. That is
+            // benign upstream and here: `POLLIN == EPOLLIN == 0x1`. Kept as the
+            // reference spells it rather than "fixed" to `EPOLLIN`.
+            *c = Completion::new_op(
+                Operation::Poll {
+                    fd: self.ev.fd,
+                    events: libc::POLLIN as u32,
+                },
+                userdata.cast::<c_void>(),
+                Self::wait_trampoline::<UD, CB>,
+            );
+            (*loop_).add(c);
+        }
+    }
+
+    fn wait_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                core::result::Result<(), ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let mapped: core::result::Result<(), ReadError> = match r {
+            Result::Poll(res) => res.map_err(|e| match e {
+                // PORT NOTE: `WaitError = xev.ReadError`, but the epoll `poll` op
+                // yields a `PollError`. The reference's `if (r.poll) |_| {} else
+                // |err| err` relies on Zig's error-set COERCION: this backend's
+                // `PollError` (`{Unexpected}`) is a subset of its `ReadError`
+                // (`{EOF, Unexpected}`), so the coercion is total. Rust has no
+                // error-set subtyping, so the same total mapping is spelled out.
+                PollError::Unexpected => ReadError::Unexpected,
+            }),
+            _ => unreachable!(),
+        };
+
+        if mapped.is_ok() {
+            // PORT NOTE (verbatim): We need to read so that we can consume the
+            // eventfd value. We only read 8 bytes because we only write up to 8
+            // bytes and we own the fd. We ignore errors here because we expect the
+            // read to succeed given we just polled it.
+            let fd = match unsafe { &(*c_inner).op } {
+                Operation::Poll { fd, .. } => *fd,
+                _ => unreachable!(),
+            };
+            let mut buf = [0u8; 8];
+            // SAFETY: an 8-byte read into a live local buffer off our own eventfd.
+            // The result is discarded exactly as the reference's `_ = posix.read(
+            // c_inner.op.poll.fd, &buf) catch {}` discards it.
+            let _ = unsafe { libc::read(fd, buf.as_mut_ptr().cast::<c_void>(), buf.len()) };
+        }
+
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        cb(userdata_value::<UD>(ud), l_inner, c_inner, mapped)
+    }
+
+    /// Notify a loop to wake up synchronously. This should never block forever
+    /// (it will always EVENTUALLY succeed regardless of if the loop is currently
+    /// ticking or not).
+    ///
+    /// The "c" value is the completion associated with the "wait".
+    ///
+    /// Internal details subject to change but if you're relying on these
+    /// details then you may want to consider using a lower level interface
+    /// using the loop directly:
+    ///
+    ///   - linux+io_uring: eventfd is used. If the eventfd write would block
+    ///     (EAGAIN) then we assume success because the eventfd is full.
+    pub fn notify(&self) -> core::result::Result<(), Error> {
+        // `Eventfd::notify` IS the reference's `write(fd, &@bitCast(@as(u64, 1)))`
+        // plus its `error.WouldBlock => return` arm.
+        self.ev.notify().map_err(|_| Error)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Timer (heap node) (epoll.zig:1235).
 // ---------------------------------------------------------------------------
 
@@ -3323,6 +3515,83 @@ mod tests {
         assert!(write_queue.empty());
 
         pty.deinit();
+        loop_.deinit();
+    }
+
+    // KAT — Async (eventfd) wakeup: wait on an `Async`, notify it from a spawned
+    // thread, and confirm the loop's `run(until_done)` returns with the wait
+    // callback fired. Proves the eventfd poll + drain on the live epoll loop.
+    //
+    // PORT NOTE: the reference's `AsyncTests` (`watcher/async.zig`) are generic over
+    // the backend; this is the "async: notify" shape monomorphized for epoll (the
+    // twin of `io_uring_async_notify`).
+    #[test]
+    fn epoll_async_notify() {
+        let mut loop_ = Loop::init().unwrap();
+        let notifier = Async::init().unwrap();
+
+        let mut wake = false;
+        let mut c_wait = Completion::default();
+        let cb = |ud: *mut bool,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<(), ReadError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            notifier.wait(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_wait),
+                ptr::addr_of_mut!(wake),
+                cb,
+            );
+        }
+
+        // Not woken up before the notify.
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(!wake);
+
+        // Notify from ANOTHER thread WHILE this one is BLOCKED inside the loop —
+        // the whole point of `Async`. `run(until_done)` parks in `epoll_wait`
+        // until the eventfd goes readable, so this asserts the real wakeup path.
+        // Not racy: if the notify lands first the poll simply completes at once.
+        let n = notifier; // `Async` is Copy (an fd handle) and Send (a plain i32).
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            n.notify().unwrap();
+        });
+
+        // Blocks here until the spawned thread notifies. A hang is a real bug.
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(wake);
+        t.join().unwrap();
+
+        // The eventfd counter was drained by the wait callback, so a second wait
+        // does NOT fire spuriously.
+        let mut wake2 = false;
+        let mut c_wait2 = Completion::default();
+        let cb2 = |ud: *mut bool,
+                   _l: *mut Loop,
+                   _c: *mut Completion,
+                   r: core::result::Result<(), ReadError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            notifier.wait(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_wait2),
+                ptr::addr_of_mut!(wake2),
+                cb2,
+            );
+        }
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(!wake2);
+
+        notifier.deinit();
         loop_.deinit();
     }
 
