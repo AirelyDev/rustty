@@ -25,15 +25,15 @@
 //! The window template instantiates `$GhosttyDebugWarning` and casts through
 //! `$GhosttyTab`/`$GhosttySurface` (`window.blp:50,153`), and `Class.init`
 //! `ensureType`s [`DebugWarning`]/[`SplitTree`]/[`Surface`]/[`Tab`]
-//! (`window.zig:2097-2100`). [`Tab`]/[`SplitTree`]/[`DebugWarning`] are
-//! registered-GType placeholders (L5.3 T20 → T21/T23). The window's tab-*creation*
-//! and surface-tree-*iteration* paths (`newTabPage`, `connectSurfaceHandlers`,
-//! `surfaceInit`) name the real [`Tab::new`]/[`SplitTree`] model and
-//! [`Surface::get_default_size`] that land with T21/T13; until then those bodies
-//! are INHABITED leaves. Likewise the command-palette (`toggleCommandPalette`),
-//! inspector (`toggleInspector`, L6), and `CloseConfirmationDialog` confirm paths
-//! (T23) are INHABITED leaves. Every leaf is unreachable on the window's
-//! open/present/dispose path — the two KATs below exercise the live surface.
+//! (`window.zig:2097-2100`). The window's tab-*creation* and
+//! surface-tree-*iteration* paths (`newTabPage`, `connectSurfaceHandlers`/
+//! `disconnectSurfaceHandlers`, `tabViewPageAttached`/`Detached`,
+//! `tabSplitTreeChanged`, the surface signal handlers, `surfaceInit`) are LIVE
+//! against the real [`Tab::new`]/[`SplitTree`] model (T21): `new_window`/
+//! `new_tab` host a running terminal in this window. Remaining INHABITED
+//! leaves: the command-palette (`toggleCommandPalette`), inspector
+//! (`toggleInspector`, L6), the `CloseConfirmationDialog` confirm paths (T23),
+//! and the title-prompt (T23) — all off the create/host/render path.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
@@ -48,9 +48,10 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use libadwaita::subclass::prelude::*;
 
+use rustty_apprt_api::{Clipboard, NewSurfaceContext};
 use rustty_config::value_types::{
-    Fullscreen, GtkTabsLocation, GtkTitlebarStyle, GtkToolbarStyle, WindowShowTabBar,
-    WindowSubtitle, WindowTheme,
+    Fullscreen, GtkTabsLocation, GtkTitlebarStyle, GtkToolbarStyle, WindowNewTabPosition,
+    WindowShowTabBar, WindowSubtitle, WindowTheme,
 };
 use rustty_input::binding;
 
@@ -62,7 +63,7 @@ use super::config::Config;
 use super::debug_warning::DebugWarning;
 use super::split_tree::{SplitTree, Tree};
 use super::surface::Surface;
-use super::tab::Tab;
+use super::tab::{Tab, TabOverrides};
 
 // `GtkTitlebarStyle` is carried as its `#[repr(C)]` discriminant across the
 // `titlebar-style` GObject property boundary (`.native == 0`, `.tabs == 1`).
@@ -176,6 +177,22 @@ mod imp {
         /// PORTS: `window.zig:260` `context_menu_page` — the tab page the context
         /// menu was opened for (owned by `tab_view`; set by `setup-menu`).
         pub context_menu_page: RefCell<Option<adw::TabPage>>,
+
+        /// PORT DIVERGENCE (documented; same mechanism as `split_tree.rs`
+        /// `surface_handlers`): the reference disconnects a surface's window-level
+        /// handlers via `signalHandlersDisconnectMatched(surface, .{.data=true},
+        /// …, self)` (`window.zig:775-784,845-857`) — match-by-userdata. gtk4-rs
+        /// closures don't register `self` as C userdata, so the window tracks the
+        /// `(surface, id)` pairs it connects and disconnects exactly those. The
+        /// closures hold only a WEAK window ref (no cycle); the strong `Surface`
+        /// refs here drop at finalize.
+        pub surface_handlers: RefCell<Vec<(Surface, glib::SignalHandlerId)>>,
+
+        /// PORT DIVERGENCE (documented; see `surface_handlers`): the tab
+        /// `close-request` handlers the reference disconnects by userdata in
+        /// `tabViewPageDetached` (`window.zig:1574-1582`), tracked as
+        /// `(tab, id)` pairs instead.
+        pub tab_handlers: RefCell<Vec<(Tab, glib::SignalHandlerId)>>,
 
         /// Guards [`WidgetImpl`]'s `dispose_template` against a second call.
         /// GObject `dispose` is contractually idempotent and may run more than once
@@ -754,32 +771,337 @@ mod imp {
             self.sync_appearance();
         }
 
-        // ---- Tab creation / surface tree — INHABITED leaves (T21) ----------
-        /// PORTS: `window.zig:419-507` `newTabPage`. **INHABITED leaf (T21):** this
-        /// constructs a [`Tab`], parents it, inserts it into `tab_view`, and wires
-        /// the split-tree `changed` signal — all against the real [`Tab::new`] and
-        /// [`SplitTree`] model that lands with T21. Unreachable on the window's
-        /// open/present path (no tab is created until `performAction` NewTab/T22).
-        #[allow(unused_variables)]
-        pub(super) fn new_tab_page(&self, parent: Option<*mut super::CoreSurface>) -> adw::TabPage {
-            unimplemented!("Window::newTabPage — Tab + SplitTree model (L5.3 T21)")
+        // ---- Tab creation / surface tree (window.zig:419-507, 766-859) ------
+        /// PORTS: `window.zig:419-507` `newTabPage`. Creates a [`Tab`] (hosting a
+        /// [`SplitTree`] with its initial [`Surface`]), parents it per `parent` +
+        /// `context`, inserts it into `tab_view` at the configured position, binds
+        /// the page's `title`/`tooltip`, wires the split-tree `changed` signal, and
+        /// selects the page.
+        pub(super) fn new_tab_page(
+            &self,
+            parent: Option<*mut super::CoreSurface>,
+            context: NewSurfaceContext,
+            overrides: TabOverrides,
+        ) -> adw::TabPage {
+            let tab_view = &self.tab_view;
+
+            // Create our new tab object (`:434-441`). The same SHARED config is
+            // read again below for the insert position (`:452-457`).
+            let config = self.config.borrow().clone();
+            let tab = Tab::new(config.as_ref(), overrides);
+
+            if let Some(p) = parent {
+                // For a new window's first tab, inherit the parent's initial size
+                // hints (`:445-448`): `surfaceInit(p.rt_surface.gobj(), self)`.
+                if context == NewSurfaceContext::Window {
+                    // SAFETY: `p` is a live core surface (the callers' contract,
+                    // as in `perform_binding_action`); its `rt_surface` points at
+                    // the pinned apprt surface embedded in the parent widget's
+                    // GObject private (memory `mirihar-surface-pin`).
+                    if let Some(parent_widget) = unsafe { (*(*p).rt_surface).widget() } {
+                        self.handle_surface_init(&parent_widget);
+                    }
+                }
+                // `tab.setParentWithContext(p, context)` (`:449`).
+                // SAFETY: `p` is a live core surface (callers' contract).
+                unsafe { tab.set_parent_with_context(p, context) };
+            }
+
+            // Get the position that we should insert the new tab at (`:452-466`).
+            let Some(config) = config else {
+                // No config: just append at the end. Should never happen (`:453-457`).
+                return tab_view.append(&tab);
+            };
+            let position = match config.get().window_new_tab_position {
+                WindowNewTabPosition::Current => match tab_view.selected_page() {
+                    Some(selected) => tab_view.page_position(&selected) + 1,
+                    None => tab_view.n_pages(),
+                },
+                WindowNewTabPosition::End => tab_view.n_pages(),
+            };
+
+            // Add the page and select it (`:469-470`). NOTE: `insert` fires the
+            // bound `page_attached` callback, which connects the tab's
+            // `close-request` + the tree's surface handlers a first time; the
+            // `changed` replay below re-runs `connect_surface_handlers`, whose
+            // pre-disconnect dedupes (the reference's disconnect-matched shape).
+            let page = tab_view.insert(&tab, position);
+            tab_view.set_selected_page(&page);
+
+            // Create some property bindings (`:473-485`).
+            tab.bind_property("title", &page, "title")
+                .sync_create()
+                .build();
+            tab.bind_property("tooltip", &page, "tooltip")
+                .sync_create()
+                .build();
+
+            // Bind signals (`:487-495`): the split-tree `changed` → `tabSplitTreeChanged`.
+            let split_tree = tab.get_split_tree();
+            let this_weak = self.obj().downgrade();
+            split_tree.connect_local("changed", false, move |args| {
+                let old: Option<Tree> = args[1].get().expect("changed old tree is a boxed Tree");
+                let new: Option<Tree> = args[2].get().expect("changed new tree is a boxed Tree");
+                if let Some(win) = this_weak.upgrade() {
+                    win.imp().tab_split_tree_changed(old.as_ref(), new.as_ref());
+                }
+                None
+            });
+
+            // Run an initial notification for the surface tree so we can setup
+            // initial state (`:497-504`).
+            self.tab_split_tree_changed(None, split_tree.get_tree().as_ref());
+
+            page
         }
 
-        /// PORTS: `window.zig:766-837` `connectSurfaceHandlers`. **INHABITED leaf
-        /// (T21):** iterates the [`Tree`] model, wiring each surface's signals.
-        /// Reached only with a live surface tree, which requires T21. `dead_code`:
-        /// its callers (`tabViewPageAttached`, `tabSplitTreeChanged`) are also T21
-        /// leaves, so nothing calls it yet.
-        #[allow(unused_variables, dead_code)]
+        /// PORTS: `window.zig:1775-1788` `tabSplitTreeChanged` — the split-tree
+        /// `changed` reaction: drop the old tree's handlers, wire the new tree's.
+        pub(super) fn tab_split_tree_changed(
+            &self,
+            old_tree: Option<&Tree>,
+            new_tree: Option<&Tree>,
+        ) {
+            if let Some(tree) = old_tree {
+                self.disconnect_surface_handlers(tree);
+            }
+            if let Some(tree) = new_tree {
+                self.connect_surface_handlers(tree);
+            }
+        }
+
+        /// PORTS: `window.zig:766-837` `connectSurfaceHandlers`. Iterates the
+        /// [`Tree`] (the reference's `Surface.Tree` iterator, `:771-772`), wiring
+        /// each surface's window-level signals. Each surface is first
+        /// pre-disconnected (`:774-784` `signalHandlersDisconnectMatched`) so we
+        /// never stack duplicate handlers; rustty's tracked-pairs mechanism (see
+        /// the `surface_handlers` field) replaces the match-by-userdata call.
         pub(super) fn connect_surface_handlers(&self, tree: &Tree) {
-            unimplemented!("Window::connectSurfaceHandlers — Surface.Tree iterator (L5.3 T21)")
+            let obj = self.obj();
+            for surface in tree_surfaces(tree) {
+                // Before adding any new signal handlers, disconnect any that we
+                // may have added before (`:773-784`).
+                self.disconnect_handlers_for_surface(&surface);
+
+                let mut ids: Vec<glib::SignalHandlerId> = Vec::new();
+
+                // `present-request` → `surfacePresentRequest` (`:786-791`).
+                let this_weak = obj.downgrade();
+                ids.push(
+                    surface.connect_local("present-request", false, move |args| {
+                        let s: Surface =
+                            args[0].get().expect("present-request emitter is a Surface");
+                        if let Some(win) = this_weak.upgrade() {
+                            win.imp().surface_present_request(&s);
+                        }
+                        None
+                    }),
+                );
+
+                // `clipboard-write` → `surfaceClipboardWrite` (`:793-798`).
+                let this_weak = obj.downgrade();
+                ids.push(
+                    surface.connect_local("clipboard-write", false, move |args| {
+                        let clipboard_type: i32 =
+                            args[1].get().expect("clipboard-write type is an i32");
+                        let text: String = args[2].get().expect("clipboard-write text is a string");
+                        if let Some(win) = this_weak.upgrade() {
+                            win.imp().surface_clipboard_write(clipboard_type, &text);
+                        }
+                        None
+                    }),
+                );
+
+                // `menu` → `surfaceMenu` (`:800-805`).
+                let this_weak = obj.downgrade();
+                ids.push(surface.connect_local("menu", false, move |_args| {
+                    if let Some(win) = this_weak.upgrade() {
+                        win.imp().sync_actions();
+                    }
+                    None
+                }));
+
+                // `toggle-fullscreen` → `surfaceToggleFullscreen` (`:807-812`).
+                let this_weak = obj.downgrade();
+                ids.push(
+                    surface.connect_local("toggle-fullscreen", false, move |_args| {
+                        if let Some(win) = this_weak.upgrade() {
+                            win.imp().surface_toggle_fullscreen();
+                        }
+                        None
+                    }),
+                );
+
+                // `toggle-maximize` → `surfaceToggleMaximize` (`:814-819`).
+                let this_weak = obj.downgrade();
+                ids.push(
+                    surface.connect_local("toggle-maximize", false, move |_args| {
+                        if let Some(win) = this_weak.upgrade() {
+                            win.imp().surface_toggle_maximize();
+                        }
+                        None
+                    }),
+                );
+
+                // `init` → `surfaceInit` — only registered while no surface has
+                // initialized yet (`:821-833`; the handler re-checks the flag).
+                if !self.surface_init.get() {
+                    let this_weak = obj.downgrade();
+                    ids.push(surface.connect_local("init", false, move |args| {
+                        let s: Surface = args[0].get().expect("init emitter is a Surface");
+                        if let Some(win) = this_weak.upgrade() {
+                            win.imp().handle_surface_init(&s);
+                        }
+                        None
+                    }));
+                }
+
+                let mut store = self.surface_handlers.borrow_mut();
+                for id in ids {
+                    store.push((surface.clone(), id));
+                }
+            }
         }
 
-        /// PORTS: `window.zig:842-859` `disconnectSurfaceHandlers`. **INHABITED leaf
-        /// (T21):** see [`Self::connect_surface_handlers`].
-        #[allow(unused_variables, dead_code)]
+        /// PORTS: `window.zig:842-859` `disconnectSurfaceHandlers`. Called whenever
+        /// a tree is no longer present in the window (tab detached / tree changed).
         pub(super) fn disconnect_surface_handlers(&self, tree: &Tree) {
-            unimplemented!("Window::disconnectSurfaceHandlers — Surface.Tree iterator (L5.3 T21)")
+            for surface in tree_surfaces(tree) {
+                self.disconnect_handlers_for_surface(&surface);
+            }
+        }
+
+        /// The rustty analogue of one `signalHandlersDisconnectMatched(surface,
+        /// .{.data=true}, …, self)` call (`window.zig:775-784,852-857`): drain +
+        /// disconnect every tracked handler pair for `surface`.
+        fn disconnect_handlers_for_surface(&self, surface: &Surface) {
+            let matched: Vec<(Surface, glib::SignalHandlerId)> = {
+                let mut store = self.surface_handlers.borrow_mut();
+                let mut matched = Vec::new();
+                let mut i = 0;
+                while i < store.len() {
+                    if store[i].0 == *surface {
+                        matched.push(store.swap_remove(i));
+                    } else {
+                        i += 1;
+                    }
+                }
+                matched
+            };
+            for (s, id) in matched {
+                s.disconnect(id);
+            }
+        }
+
+        // ---- Surface signal handlers (window.zig:1645-1773) -----------------
+        /// PORTS: `window.zig:1645-1666` `surfaceClipboardWrite`. Toast on a
+        /// standard-clipboard write, when configured.
+        fn surface_clipboard_write(&self, clipboard_type: i32, text: &str) {
+            // We only toast for the standard clipboard (`:1652`).
+            if clipboard_type != Clipboard::Standard as i32 {
+                return;
+            }
+            // We only toast if configured to (`:1654-1660`).
+            let title = {
+                let cfg = self.config.borrow();
+                let Some(config) = cfg.as_ref() else {
+                    return;
+                };
+                if !config.get().app_notifications.clipboard_copy {
+                    return;
+                }
+                // (`:1662-1665`; untranslated literals, see `add_toast`.)
+                if text.is_empty() {
+                    "Cleared clipboard"
+                } else {
+                    "Copied to clipboard"
+                }
+            };
+            self.add_toast(title);
+        }
+
+        /// PORTS: `window.zig:1675-1719` `surfacePresentRequest`. Select the
+        /// surface's tab, focus it, and raise the window.
+        fn surface_present_request(&self, surface: &Surface) {
+            let obj = self.obj();
+
+            // Verify that this surface is actually in this window (`:1679-1697`).
+            match ext::ancestor::<super::Window>(surface) {
+                None => {
+                    eprintln!("warn(gtk): present request called for non-existent surface");
+                    return;
+                }
+                Some(win) if win != *obj => {
+                    eprintln!("warn(gtk): present request called for surface in different window");
+                    return;
+                }
+                Some(_) => {}
+            }
+
+            // Get the tab for this surface (`:1699-1706`).
+            let Some(tab) = ext::ancestor::<Tab>(surface) else {
+                eprintln!("warn(gtk): present request surface not found");
+                return;
+            };
+
+            // Get the page that contains this tab and select it (`:1708-1712`).
+            let page = self.tab_view.page(&tab);
+            self.tab_view.set_selected_page(&page);
+
+            // Grab focus (`:1714-1715`).
+            surface.grab_focus();
+
+            // Bring the window to the front (`:1717-1718`).
+            obj.present();
+        }
+
+        /// PORTS: `window.zig:1722-1734` `surfaceToggleFullscreen`. The change is
+        /// reacted to in the bound `propFullscreened` callback.
+        fn surface_toggle_fullscreen(&self) {
+            let obj = self.obj();
+            if obj.is_fullscreen() {
+                obj.unfullscreen();
+            } else {
+                obj.fullscreen();
+            }
+        }
+
+        /// PORTS: `window.zig:1736-1748` `surfaceToggleMaximize`. The change is
+        /// reacted to in the bound `propMaximized` callback.
+        fn surface_toggle_maximize(&self) {
+            let obj = self.obj();
+            if obj.is_maximized() {
+                obj.unmaximize();
+            } else {
+                obj.maximize();
+            }
+        }
+
+        /// PORTS: `window.zig:1750-1773` `surfaceInit`. On the FIRST surface init,
+        /// adopt the surface's default/min size as the window's.
+        pub(super) fn handle_surface_init(&self, surface: &Surface) {
+            // Make sure we init only once (`:1756-1758`).
+            if self.surface_init.get() {
+                return;
+            }
+            self.surface_init.set(true);
+
+            let obj = self.obj();
+            // Setup our default and minimum size (`:1760-1772`).
+            if let Some(size) = surface.default_size() {
+                obj.set_default_size(size.width as i32, size.height as i32);
+            }
+            if let Some(size) = surface.min_size() {
+                obj.set_size_request(size.width as i32, size.height as i32);
+            }
+        }
+
+        /// PORTS: `window.zig:1610-1617` `tabCloseRequest`. The reference notes:
+        /// "TODO: connect close page handler to tab to check for confirmation" —
+        /// the confirmation check runs in the bound `close_page` callback.
+        pub(super) fn tab_close_request(&self, tab: &Tab) {
+            let page = self.tab_view.page(tab);
+            self.tab_view.close_page(&page);
         }
 
         // ---- Command palette / inspector — INHABITED leaves ----------------
@@ -879,6 +1201,20 @@ mod imp {
         );
     }
 
+    /// Snapshot the surfaces of a [`Tree`] — the reference's `tree.iterator()`
+    /// walk (`window.zig:771-772,849-850`), collected up front so no tree borrow
+    /// is held while handlers connect/disconnect (which may re-enter).
+    fn tree_surfaces(tree: &Tree) -> Vec<Surface> {
+        let mut out = Vec::new();
+        let mut it = tree.0.iterator();
+        while let Some(entry) = it.next() {
+            // SAFETY: leaf `view` pointers are live tree-owned boxes holding one
+            // strong GObject ref each (the `View` impl in `split_tree.rs`).
+            out.push(unsafe { &*entry.view }.clone());
+        }
+        out
+    }
+
     /// Removes a glib source id in `dispose`, warning (not panicking) on failure —
     /// the faithful shape of the reference's `if (glib.Source.remove(id) == 0)
     /// log.warn(...)` (`window.zig:1261-1263`, **invariant 11**). `SourceId`'s own
@@ -964,9 +1300,21 @@ impl Window {
         self.imp().toggle_window_decorations();
     }
 
-    /// PORTS: `window.zig:393-395` `newTab`. **INHABITED leaf (T21).**
+    /// PORTS: `window.zig:393-395` `newTab`. Create a new tab with the given
+    /// parent, inserted at the `window-new-tab-position` and selected.
     pub fn new_tab(&self, parent: Option<*mut CoreSurface>) {
-        let _ = self.imp().new_tab_page(parent);
+        let _ = self
+            .imp()
+            .new_tab_page(parent, NewSurfaceContext::Tab, TabOverrides::default());
+    }
+
+    /// PORTS: `window.zig:397-417` `newTabForWindow`. The first tab of a new
+    /// window (`.window` context: inherits the parent's initial size hints and
+    /// window-context working-directory inheritance).
+    pub fn new_tab_for_window(&self, parent: Option<*mut CoreSurface>, overrides: TabOverrides) {
+        let _ = self
+            .imp()
+            .new_tab_page(parent, NewSurfaceContext::Window, overrides);
     }
 
     /// PORTS: `window.zig:607-612` `toggleTabOverview`.
@@ -995,12 +1343,14 @@ impl Window {
         this.imp().perform_binding_action(binding::Action::NewTab);
     }
 
-    /// PORTS: `window.zig:1344-1349` `tabOverviewCreateTab`. **INHABITED leaf
-    /// (T21):** creates a fresh tab page for the overview's "new tab" button.
+    /// PORTS: `window.zig:1344-1349` `tabOverviewCreateTab`. Creates a fresh tab
+    /// page for the overview's "new tab" button — `newTabPage(active.core(),
+    /// .tab, .none)`.
     #[template_callback(name = "overview_create_tab")]
     fn on_overview_create_tab(_overview: &adw::TabOverview, this: &Window) -> adw::TabPage {
         let parent = this.get_active_surface().and_then(|s| s.core());
-        this.imp().new_tab_page(parent)
+        this.imp()
+            .new_tab_page(parent, NewSurfaceContext::Tab, TabOverrides::default())
     }
 
     /// PORTS: `window.zig:1351-1381` `tabOverviewOpen`. On overview CLOSE, arm a
@@ -1070,27 +1420,77 @@ impl Window {
         unimplemented!("Window::tabViewClosePage confirm — CloseConfirmationDialog (L5.3 T23)")
     }
 
-    /// PORTS: `window.zig:1522-1563` `tabViewPageAttached`. **INHABITED leaf
-    /// (T21):** connects the tab's `close-request` + its surfaces' signals.
+    /// PORTS: `window.zig:1522-1563` `tabViewPageAttached`. Connects the tab's
+    /// `close-request` + its surface tree's window-level signals.
     #[template_callback(name = "page_attached")]
     fn on_page_attached(
         _tab_view: &adw::TabView,
-        _page: &adw::TabPage,
+        page: &adw::TabPage,
         _position: i32,
-        _this: &Window,
+        this: &Window,
     ) {
-        unimplemented!("Window::tabViewPageAttached — Tab/Surface signal wiring (L5.3 T21)")
+        let imp = this.imp();
+        // The attached page must be a Tab object (`:1529-1530`).
+        let Ok(tab) = page.child().downcast::<Tab>() else {
+            return;
+        };
+
+        // Attach listeners for the tab (`:1532-1539`): `close-request` →
+        // `tabCloseRequest`, tracked as a `(tab, id)` pair (see `tab_handlers`).
+        let this_weak = this.downgrade();
+        let id = tab.connect_local("close-request", false, move |args| {
+            let t: Tab = args[0].get().expect("close-request emitter is a Tab");
+            if let Some(win) = this_weak.upgrade() {
+                win.imp().tab_close_request(&t);
+            }
+            None
+        });
+        imp.tab_handlers.borrow_mut().push((tab.clone(), id));
+
+        // Attach listeners for the surfaces (`:1541-1562`).
+        if let Some(tree) = tab.get_surface_tree() {
+            imp.connect_surface_handlers(&tree);
+        }
     }
 
-    /// PORTS: `window.zig:1565-1588` `tabViewPageDetached`. **INHABITED leaf (T21).**
+    /// PORTS: `window.zig:1565-1588` `tabViewPageDetached`. Disconnects the tab's
+    /// handlers + its surface tree's window-level handlers.
     #[template_callback(name = "page_detached")]
     fn on_page_detached(
         _tab_view: &adw::TabView,
-        _page: &adw::TabPage,
+        page: &adw::TabPage,
         _position: i32,
-        _this: &Window,
+        this: &Window,
     ) {
-        unimplemented!("Window::tabViewPageDetached — Tab/Surface signal wiring (L5.3 T21)")
+        let imp = this.imp();
+        // We need the tab to disconnect the signals (`:1571-1573`).
+        let Ok(tab) = page.child().downcast::<Tab>() else {
+            return;
+        };
+
+        // `signalHandlersDisconnectMatched(tab, .{.data=true}, …, self)`
+        // (`:1574-1582`) — drain + disconnect the tracked pairs for this tab.
+        let matched: Vec<(Tab, glib::SignalHandlerId)> = {
+            let mut store = imp.tab_handlers.borrow_mut();
+            let mut matched = Vec::new();
+            let mut i = 0;
+            while i < store.len() {
+                if store[i].0 == tab {
+                    matched.push(store.swap_remove(i));
+                } else {
+                    i += 1;
+                }
+            }
+            matched
+        };
+        for (t, id) in matched {
+            t.disconnect(id);
+        }
+
+        // Remove the tree handlers (`:1584-1587`).
+        if let Some(tree) = tab.get_surface_tree() {
+            imp.disconnect_surface_handlers(&tree);
+        }
     }
 
     /// PORTS: `window.zig:1637-1643` `setupTabMenu`. Records the page the context

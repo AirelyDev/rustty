@@ -255,11 +255,12 @@ fn perform_action_unimplemented_returns_false() {
     }
 }
 
-/// Regression guard (review finding, T22): the window-chrome milestone path
-/// `activate -> new_window` (`Target::App`, no parent) must NOT panic. `new_window`
-/// is an INHABITED placeholder — it creates + presents a `Window` and defers the
-/// first-tab leaf ([`Window::new_tab_page`], a T21 deferral) rather than dispatching
-/// into the `unimplemented!` leaf. The arm returns `Ok(true)` (a window was opened).
+/// Regression guard (review finding, T22; un-deferred by the window-tab-surface
+/// wire): the window-chrome milestone path `activate -> new_window` (`Target::App`,
+/// no parent) must NOT panic. `new_window` creates + config-binds a `Window`, opens
+/// its first tab (`Window::new_tab_for_window` -> `new_tab_page`, the live Tab +
+/// SplitTree model), and presents. The arm returns `Ok(true)` (a window was opened).
+/// The full live-terminal proof is `gtk_window_live.rs`.
 #[test]
 #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk \
             --test gtk_perform_action -- --ignored --exact"]

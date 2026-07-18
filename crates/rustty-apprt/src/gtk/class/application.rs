@@ -2034,7 +2034,7 @@ mod action {
 
     use super::super::split_tree::SplitTree;
     use super::super::surface::Surface as GhosttySurface;
-    use super::super::tab::Tab;
+    use super::super::tab::{Tab, TabOverrides};
     use super::super::window::Window;
     use super::{ext, Application, Config, CoreConfig};
     use crate::gtk::surface::Surface as ApprtSurface;
@@ -2378,10 +2378,8 @@ mod action {
     }
 
     /// `pub fn newTab(target) bool` (`:2228-2251`). Reaches the enclosing [`Window`]
-    /// with the target's core surface as the parent (`window.rs:968`). INHABITED
-    /// placeholder: the terminal [`Window::new_tab`] leaf ([`Window::new_tab_page`],
-    /// the Tab + SplitTree model) is a T21 deferral, so this reaches the window and
-    /// defers the tab creation rather than dispatching into the unimplemented leaf.
+    /// and calls [`Window::new_tab`] with the target's core surface as the parent
+    /// (`window.rs` `new_tab` → `new_tab_page`, the Tab + SplitTree model).
     pub(super) fn new_tab<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
         match target {
             Target::App => {
@@ -2394,23 +2392,17 @@ mod action {
                     eprintln!("warn(gtk): surface is not in a window, ignoring new_tab");
                     return false;
                 };
-                // INHABITED placeholder: reference `window.newTab(core)` (`:2245`) with the
-                // parent core surface for font/dir inheritance. The terminal `Window::new_tab`
-                // leaf is `Window::new_tab_page` (the Tab + SplitTree model), a T21 deferral
-                // (`window.rs:764`, `unimplemented!`). Reach the window + read the parent core
-                // off the widget to keep the shape live; defer the tab creation until that leaf
-                // lands (returning `false` — not-yet-handled — rather than panicking).
-                let _ = (window, w.core());
-                false
+                // `window.newTab(core)` (`:2245`) — the parent core surface for font/dir
+                // inheritance, read off the widget (its `core()`), not the generic handle.
+                window.new_tab(w.core());
+                true
             }
         }
     }
 
-    /// `pub fn newWindow(self, parent, overrides) !void` (`:2253-2331`). Creates a
-    /// [`Window`], binds its `config` to the app's, and presents. INHABITED placeholder:
-    /// the first tab ([`Window::new_tab`] -> [`Window::new_tab_page`], the Tab + SplitTree
-    /// model) is a T21 deferral, so the window opens without its initial Surface tab until
-    /// that leaf lands (the path no longer panics).
+    /// `pub fn newWindow(self, parent, overrides) !void` (`:2253-2331`, folding in
+    /// `initAndShowWindow` `:2285-2328`). Creates a [`Window`], binds its `config` to
+    /// the app's, opens its first tab (`.window` context), and presents.
     pub(super) fn new_window<C: CoreSurfaceHandle>(
         app: &Application,
         target: Target<'_, C>,
@@ -2433,21 +2425,25 @@ mod action {
         // Keep the window config in sync with the app config (`:2295-2301`).
         app.bind_property("config", &win, "config").build();
 
-        // INHABITED placeholder: reference creates the first tab here
-        // (`:2304`, `win.newTabForWindow(parent, ...)` -> `Window::new_tab`). That leaf is
-        // `Window::new_tab_page` (the Tab + SplitTree model), a T21 deferral (`window.rs:764`,
-        // `unimplemented!`). The window itself is created, config-bound, and presented (shape
-        // live); the first tab is deferred until that leaf lands, so this path no longer
-        // panics. `parent` (the parent core surface, target-derived above) is read to keep the
-        // shape and threads into the deferred `Window::new_tab(parent)` call.
-        let _ = parent;
+        // Create the first tab with window context (`:2308-2313`,
+        // `win.newTabForWindow(parent, ...)` — overrides are `.none` on the
+        // performAction path, `:717`).
+        win.new_tab_for_window(parent, TabOverrides::default());
 
-        // INHABITED placeholder: reference estimates the initial size before presenting
-        // (`:2308-2317`, `surface.estimateInitialSize()` + `getDefaultSize()`). Those
-        // surface-widget sizing methods land with the sizing completion; the window is
-        // presented at its default size until then.
+        // Estimate the initial window size before presenting so the window manager
+        // can position it correctly (`:2315-2325`). INHABITED leaf (sizing):
+        // `surface.estimateInitialSize()` (the font-grid cell estimate,
+        // `surface.zig:2095-2138`) is unported, so `default-size` is unset here and
+        // the read below is a faithful no-op until a default size is published; the
+        // `surfaceInit` window handler (`window.rs` `handle_surface_init`) applies
+        // the size once the surface initializes.
+        if let Some(surface) = win.get_active_surface() {
+            if let Some(size) = surface.default_size() {
+                win.set_default_size(size.width as i32, size.height as i32);
+            }
+        }
 
-        // Show the window (`:2320`).
+        // Show the window (`:2327`).
         win.upcast_ref::<gtk4::Window>().present();
         Ok(())
     }
