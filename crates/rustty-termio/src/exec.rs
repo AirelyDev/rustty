@@ -1668,6 +1668,17 @@ pub struct Config {
 //
 // PORT NOTE: reference file-private; `pub` because it appears in the `Exec`
 // field shape (Zig-private widening rule).
+// [DOUBLE-FREE FIX] Ownership of the arena-collapsed C-string storage (`args`,
+// `cwd`; `env` too) mirrors the reference `Subprocess` (Exec.zig:877-884): the
+// storage is freed EXACTLY ONCE, inside `deinit` (the reference's
+// `arena.deinit()`), and `deinit` then leaves every owned field EMPTY (the
+// Rust-safe analogue of `self.* = undefined`). Freeing in `deinit` — rather
+// than deferring to the value's Drop — is what keeps the free single even when a
+// caller both `deinit()`s the value AND later drops it (an apprt surface
+// finalize freeing its heap box by dropping it). This pairs with the in-place
+// (`&mut self`) `Termio::deinit`, so deinit operates on the SAME object that is
+// later dropped (never a bitwise `ptr::read` duplicate, which would defeat the
+// empty-after-deinit invariant).
 pub struct Subprocess {
     // const c = @cImport({
     //     @cInclude("errno.h");
@@ -2206,15 +2217,38 @@ impl Subprocess {
         // self.stop();
         self.stop();
         // if (self.pty) |*pty| pty.deinit();
-        if let Some(pty) = &mut self.pty {
+        // (PORT NOTE: `take()` — the reference's `self.* = undefined` after this
+        // clears `pty`; nulling it here makes deinit idempotent, so a double
+        // deinit cannot double-CLOSE the pty master fd. `Pty::deinit` closes the
+        // master.)
+        if let Some(mut pty) = self.pty.take() {
             pty.deinit();
         }
         // if (self.env) |*env| env.deinit();
         self.env = None;
         // self.arena.deinit();
+        //
+        // (PORT NOTE: the reference's arena backs the collapsed owned fields —
+        // the `args: Vec<CString>` and `cwd: Option<CString>` C-string storage
+        // (and `env`, freed just above). `arena.deinit()` frees ALL of it HERE,
+        // inside deinit. The port must free them IN PLACE too — NOT defer to the
+        // value's Drop — so the C strings are freed exactly ONCE at deinit,
+        // regardless of whether/how the value is later dropped. `mem::take`
+        // moves each owned buffer out into a temporary that drops at the end of
+        // the statement (the free); the fields are left EMPTY.)
+        let _ = std::mem::take(&mut self.args);
+        self.cwd = None;
         // self.* = undefined;
-        // (PORT NOTE: the arena's memory is the owned fields, freed with the value;
-        // the poison is Rust's "must not reuse after deinit" contract.)
+        //
+        // (PORT NOTE: after the frees above every owned field is empty
+        // (`args == &[]`, `cwd == None`, `env == None`, `pty` freed), so a
+        // subsequent Drop of this Subprocess is a genuine no-op — dropping an
+        // empty `Vec`/`None` touches no allocation. This is the Rust-safe
+        // analogue of the reference's `self.* = undefined` poison: it makes
+        // deinit idempotent AND makes the value safe to drop after deinit, so a
+        // caller that both `deinit()`s and later drops (e.g. an apprt finalize
+        // that frees the surface box by dropping it) cannot double-free the
+        // C-string storage. See the [DOUBLE-FREE FIX] note on `Subprocess`.)
     }
 
     // PORTED (xev B1, 0 reference tests — R1-safe): the spawn body is now live.
