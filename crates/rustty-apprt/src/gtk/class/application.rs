@@ -1556,6 +1556,22 @@ impl Application {
             })));
     }
 
+    /// Binds the `rt_app` BACKREF — the apprt `App`'s stable address — into the
+    /// singleton, the DEFERRED half of [`Application::new`] (which stores it null,
+    /// see [`crate::gtk::App::init`]'s PORT NOTE). The reference passes `self` (the
+    /// App's already-stable address) as `rt_app` at construction (`App.zig:43`); in
+    /// rustty the apprt `App` is returned by value from `init`, so its final address
+    /// is not known until the caller places it — the run leg ([`crate::gtk::App::run`])
+    /// binds it here at that stable-address site, exactly as the `activate`/run-loop
+    /// tests drive `rt_app.set` manually.
+    ///
+    /// Must run BEFORE [`Application::bind_core_app`], which captures the `rt_app`
+    /// pointer into the tick / confirm-quit thunks. No-op semantics: a null `rt_app`
+    /// clears the cell.
+    pub fn bind_rt_app(&self, rt_app: *mut c_void) {
+        self.imp().rt_app.set(NonNull::new(rt_app));
+    }
+
     /// PORTS: the active windowing-protocol tag the reference reads via
     /// `@tagName(priv.winproto)` when it logs the selected protocol
     /// (`application.zig:358`). Reports which [`winproto`] backend

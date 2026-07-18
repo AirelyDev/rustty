@@ -82,9 +82,30 @@ impl App {
         Ok(App { app })
     }
 
+    /// The owned [`Application`] GObject (`App.zig:32` `app: *Application`). The
+    /// run leg and the first-light KAT reach the singleton through this to bind the
+    /// backrefs and parent the initial window.
+    #[must_use]
+    pub fn application(&self) -> &Application {
+        &self.app
+    }
+
     /// PORTS: `App.zig:49-51` `run`. Enters the hand-rolled event loop
     /// (`class/application.zig:474-592`).
     pub fn run(&self) -> Result<(), RunError> {
+        // Bind the `rt_app` BACKREF to THIS pinned `App` and monomorphize the
+        // core-app thunks — the DEFERRED half of `init` (`App.zig:43` passes `self`
+        // as `rt_app`; the reference binds `core_app` at comptime). This is the
+        // App's stable-address site: `&self` is live for the whole `run`, and the
+        // surface renderer/io threads that read `rt_app` are torn down (in
+        // `terminate`/`destroy`, after `run` returns) before it drops. Without this
+        // the run loop's `tick` thunk is unbound (the core never ticks) and every
+        // `Surface::init` bails at the unbound-`rt_app` guard — the wiring the
+        // first-light KAT exposes.
+        self.app
+            .bind_rt_app(std::ptr::from_ref(self).cast_mut().cast::<c_void>());
+        self.app.bind_core_app::<App>();
+
         // `try self.app.run();` (`App.zig:50`).
         self.app.run()
     }
