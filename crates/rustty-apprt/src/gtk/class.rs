@@ -46,9 +46,11 @@
 //! here for every class port to check against.
 
 pub mod application;
+pub mod close_confirmation_dialog;
 pub mod command_palette;
 pub mod config;
 pub mod debug_warning;
+pub mod dialog;
 pub mod key_state_overlay;
 pub mod resize_overlay;
 pub mod search_overlay;

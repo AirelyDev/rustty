@@ -40,6 +40,7 @@ use rustty_apprt_api::NewSurfaceContext;
 use super::surface::{Surface, SurfaceOverrides};
 use super::surface_scrolled_window::SurfaceScrolledWindow;
 use crate::gtk::class::application::Application;
+use crate::gtk::class::close_confirmation_dialog::{CloseConfirmationDialog, Target};
 use crate::gtk::ext;
 use crate::gtk::weak_ref::WeakRef;
 
@@ -676,12 +677,18 @@ impl SplitTree {
             return;
         }
 
-        // **INHABITED leaf (T23):** show a `CloseConfirmationDialog` (`:729-738`).
-        // Reachable only when a surface needs quit confirmation; the dialog class
-        // lands with L5.3 T23 (mirrors `window.zig`'s close-request leaf).
-        unimplemented!(
-            "SplitTree::surfaceCloseRequest confirm — CloseConfirmationDialog (L5.3 T23)"
-        )
+        // Show a confirmation dialog (`split_tree.zig:729-738`). The
+        // `close-request` signal → `closeConfirmationClose` (implemented below).
+        let dialog = CloseConfirmationDialog::new(Target::Surface);
+        let weak = self.downgrade();
+        dialog.connect_local("close-request", false, move |_args| {
+            if let Some(this) = weak.upgrade() {
+                this.close_confirmation_close();
+            }
+            None
+        });
+        // Present keeps the dialog referenced by GTK until dismissed.
+        dialog.present(Some(self.upcast_ref::<gtk4::Widget>()));
     }
 
     /// PORTS: `split_tree.zig:741-782` `closeConfirmationClose`.

@@ -58,6 +58,7 @@ use rustty_input::binding;
 use crate::gtk::{ext, gtk_version, winproto, WeakRef};
 
 use super::application::Application;
+use super::close_confirmation_dialog::{CloseConfirmationDialog, Target};
 use super::command_palette::CommandPalette;
 use super::config::Config;
 use super::debug_warning::DebugWarning;
@@ -1389,12 +1390,20 @@ impl Window {
     #[template_callback(name = "close_request")]
     fn on_close_request(_window: &gtk4::Window, this: &Window) -> glib::Propagation {
         if this.imp().get_needs_confirm_quit() {
-            // **INHABITED leaf (T23):** show a `CloseConfirmationDialog`. Reachable
-            // only with a tab that needs confirmation, which requires the real
-            // `Tab`/surface model (T21) + the dialog (T23).
-            unimplemented!(
-                "Window::windowCloseRequest confirm — CloseConfirmationDialog (L5.3 T23)"
-            )
+            // Show a confirmation dialog (`window.zig:1404-1417`). The
+            // `close-request` signal → `closeConfirmationClose` (`:1424-1429`),
+            // which destroys the window.
+            let dialog = CloseConfirmationDialog::new(Target::Window);
+            let this_weak = this.downgrade();
+            dialog.connect_local("close-request", false, move |_args| {
+                if let Some(win) = this_weak.upgrade() {
+                    win.destroy();
+                }
+                None
+            });
+            // Present keeps the dialog referenced by GTK until dismissed.
+            dialog.present(Some(this.upcast_ref::<gtk4::Widget>()));
+            return glib::Propagation::Stop;
         }
         this.destroy();
         glib::Propagation::Proceed
@@ -1416,8 +1425,28 @@ impl Window {
             imp.tab_view.close_page_finish(page, true);
             return glib::Propagation::Stop;
         }
-        // **INHABITED leaf (T23):** the confirmation-dialog branch.
-        unimplemented!("Window::tabViewClosePage confirm — CloseConfirmationDialog (L5.3 T23)")
+
+        // Show a confirmation dialog (`window.zig:1476-1494`). `close-request` →
+        // `closeConfirmationCloseTab` and `cancel` → `closeConfirmationCancelTab`
+        // (`:1431-1457`) — both call `closePageFinish(page, …)`. The reference
+        // re-resolves the tab_view via `getAncestor(page.child())`; we already
+        // have it as `imp.tab_view`, so we clone it into the closures.
+        let dialog = CloseConfirmationDialog::new(Target::Tab);
+        let tab_view = imp.tab_view.get();
+        let page_close = page.clone();
+        let tab_view_close = tab_view.clone();
+        dialog.connect_local("close-request", false, move |_args| {
+            tab_view_close.close_page_finish(&page_close, true);
+            None
+        });
+        let page_cancel = page.clone();
+        dialog.connect_local("cancel", false, move |_args| {
+            tab_view.close_page_finish(&page_cancel, false);
+            None
+        });
+        // Present keeps the dialog referenced by GTK until dismissed.
+        dialog.present(Some(&page.child()));
+        glib::Propagation::Stop
     }
 
     /// PORTS: `window.zig:1522-1563` `tabViewPageAttached`. Connects the tab's
