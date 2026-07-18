@@ -135,6 +135,36 @@ fn placeholder_overlays_do_not_capture_input() {
          prevent the GLArea from ever becoming the focus widget"
     );
 
+    // (3) Fire the context-menu `closed` and child-exited `close-request` signals.
+    //     These template callbacks were unimplemented!()/wrong-signature placeholders
+    //     that ABORTED the process (non-unwinding panic across gtk4-rs's trampoline)
+    //     on ordinary interaction — right-clicking then dismissing the menu, or
+    //     clicking the child-exit banner's close button. If a callback's signature is
+    //     wrong (e.g. `&self` instead of the non-swapped `(emitter, this)`), or its
+    //     body is unimplemented, the trampoline aborts HERE and kills this test
+    //     process — so reaching the end of the test is the pass condition.
+    let mut popovers = Vec::new();
+    find_by_type(&surface_widget, "GtkPopoverMenu", &mut popovers);
+    assert!(
+        !popovers.is_empty(),
+        "the surface template must contain the context-menu PopoverMenu"
+    );
+    for p in &popovers {
+        p.emit_by_name::<()>("closed", &[]);
+    }
+    let mut child_exits = Vec::new();
+    find_by_type(&surface_widget, "GhosttySurfaceChildExited", &mut child_exits);
+    assert!(
+        !child_exits.is_empty(),
+        "the surface template must contain the child-exited overlay"
+    );
+    for w in &child_exits {
+        w.emit_by_name::<()>("close-request", &[]);
+    }
+    for _ in 0..10 {
+        ctx.iteration(true);
+    }
+
     {
         let app_weak = application.downgrade();
         glib::timeout_add_local_once(Duration::from_millis(150), move || {

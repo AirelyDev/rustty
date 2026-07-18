@@ -1193,6 +1193,16 @@ impl Surface {
         self.emit_by_name::<()>("close-request", &[]);
     }
 
+    /// PORTS: `surface.zig:1742-1745` `grabFocus`. Focus the input part of the
+    /// surface — the inner `GLArea`, NOT the outer `adw::Bin`. The owner tiers
+    /// (`window.rs`, `split_tree.rs`, `application.rs`) call `surface.grab_focus()`;
+    /// this inherent method shadows `WidgetExt::grab_focus` so those calls target the
+    /// GLArea explicitly, exactly as the reference does (rather than relying on
+    /// `adw::Bin`'s implicit focus-descent).
+    pub fn grab_focus(&self) {
+        let _ = self.imp().gl_area.upcast_ref::<gtk4::Widget>().grab_focus();
+    }
+
     /// PORTS: `surface.zig:1532-1576` `getContentScale`. The GTK widget scale
     /// factor multiplied by the `gtk-xft-dpi` font-DPI scale.
     #[must_use]
@@ -2512,12 +2522,19 @@ impl Surface {
 
     // -- child-exited / context menu ---------------------------------------
     #[template_callback]
-    fn child_exited_close(&self) {
-        unimplemented!("gtk::class::Surface::child_exited_close lands in L5.2 T16/T17")
+    fn child_exited_close(_child_exited: &SurfaceChildExited, this: &Surface) {
+        // PORTS: `surface.zig:2600-2603` `childExitedClose(_: *ChildExited, self)`.
+        // Closes the surface with no confirmation. NON-swapped signal: the emitting
+        // ChildExited overlay is arg 0, `this: &Surface` is last (PORT NOTE above).
+        this.close();
     }
     #[template_callback]
-    fn context_menu_closed(&self) {
-        unimplemented!("gtk::class::Surface::context_menu_closed lands in L5.2 T16/T17")
+    fn context_menu_closed(_popover: &gtk4::PopoverMenu, this: &Surface) {
+        // PORTS: `surface.zig:2608-2618` `contextMenuClosed(_: *gtk.PopoverMenu, self)`.
+        // When the context menu closes, GTK moves focus back to the tab bar if there
+        // are tabs — not what we want; grab it back on the surface (the GLArea).
+        // NON-swapped signal: the emitting PopoverMenu is arg 0, `this: &Surface` last.
+        this.grab_focus();
     }
 
     // -- notify:: property handlers (surface.blp:235-240) ------------------
