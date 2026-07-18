@@ -236,10 +236,37 @@ impl Tab {
         self.set_title_override(title.filter(|t| !t.is_empty()).map(str::to_owned));
     }
 
-    /// PORTS: `tab.zig:271-283` `promptTabTitle`. **INHABITED leaf (T23):** the
-    /// `TitleDialog` class lands with L5.3 T23.
+    /// PORTS: `tab.zig:271-283` `promptTabTitle` + `titleDialogSet` (`:263-270`).
+    /// The initial value is `title_override orelse title` (`tab.zig:273`); on the
+    /// dialog's `set` signal, apply the empty-string → `None` normalization.
     pub fn prompt_tab_title(&self) {
-        unimplemented!("Tab::promptTabTitle — TitleDialog (L5.3 T23)")
+        use super::title_dialog::{Target, TitleDialog};
+
+        // PORTS: `tab.zig:273` `priv.title_override orelse priv.title`.
+        let initial = self.title_override().or_else(|| self.title());
+        let dialog = TitleDialog::new(Target::Tab, initial.as_deref());
+
+        // PORTS: `tab.zig:274-280` — connect `titleDialogSet` to `set`.
+        dialog.connect_local(
+            "set",
+            false,
+            glib::clone!(
+                #[weak(rename_to = this)]
+                self,
+                #[upgrade_or]
+                None,
+                move |args| {
+                    // arg 0 is the emitter; arg 1 is the string param.
+                    let title: String = args[1].get().expect("set arg is a string");
+                    // PORTS: `tab.zig:268-269` `titleDialogSet`.
+                    this.set_title_override(if title.is_empty() { None } else { Some(title) });
+                    None
+                }
+            ),
+        );
+
+        // PORTS: `tab.zig:282`.
+        dialog.present(self.upcast_ref::<gtk4::Widget>());
     }
 
     /// PORTS: `tab.zig:287-289` `getActiveSurface`. Does not add a ref beyond the

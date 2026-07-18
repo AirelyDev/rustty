@@ -1785,11 +1785,8 @@ fn action_prompt_context_tab_title(
     let Ok(tab) = page.child().downcast::<Tab>() else {
         return;
     };
-    // **INHABITED leaf (T21):** `tab.promptTabTitle()`. The context menu that
-    // sets `context_menu_page` requires a live tab (T21), so this is unreachable
-    // on the window's open/present path.
-    let _ = tab;
-    eprintln!("warn(gtk): prompt tab title not yet implemented (L5.3 T21)");
+    // PORTS: `window.zig:1896` `tab.promptTabTitle()`.
+    tab.prompt_tab_title();
 }
 
 /// PORTS: `window.zig:1899-1905` `actionPromptSurfaceTitle`.

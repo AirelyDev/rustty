@@ -59,6 +59,7 @@ pub mod surface;
 pub mod surface_child_exited;
 pub mod surface_scrolled_window;
 pub mod tab;
+pub mod title_dialog;
 pub mod window;
 
 /// One row of the `class.zig` → gtk4-rs porter's map. Live, test-checked data so
