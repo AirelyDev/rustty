@@ -153,6 +153,16 @@ pub use message::Message;
 #[cfg(target_os = "macos")]
 pub use generic::Renderer;
 
+// L4 SWAP (first light): the Linux renderer is `GenericRenderer(OpenGL)` — the
+// monomorphic `generic::linux_impl::Renderer` (renderer.zig:38's `.opengl` arm),
+// re-exported by `generic`'s own `#[cfg(target_os = "linux")] pub use
+// linux_impl::*;` (generic.rs:7565). This mirrors the macOS line above (the
+// `.metal` arm) so `rustty_renderer::Renderer` resolves on Linux; core's
+// `renderer_seam::Renderer` newtype now forwards to the REAL renderer on both
+// targets. Additive Linux `pub use` — the macOS export is unchanged.
+#[cfg(target_os = "linux")]
+pub use generic::Renderer;
+
 // The `renderer.Renderer.DerivedConfig` nested config, named by the cross-thread
 // message surface (`Message::ChangeConfig`). It names no Metal type (its 9
 // config-typed fields use inhabited placeholders — GPU_RD_CHUNK3A_DESIGN §B.1), so

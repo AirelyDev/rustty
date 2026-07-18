@@ -957,6 +957,295 @@ impl Renderer {
         self.has_custom_shaders
     }
 
+    // =======================================================================
+    // L4 SWAP (first light): the renderer-thread lifecycle + mailbox-driven
+    // setter surface that core's `renderer_seam::Thread<A>` forwards to through
+    // `(*self.renderer).0`. Copy-adapted from `macos_impl` (generic.rs) with the
+    // Metal leaf swapped for the OpenGL leaf and `DisplayLink` collapsed: on Linux
+    // `generic.zig:39-42`'s `DisplayLink` is `void` (macOS-only CVDisplayLink), so
+    // every `if (comptime DisplayLink != void)` block degenerates (GTK drives the
+    // frame clock, not a CVDisplayLink). Each `@hasDecl(GraphicsAPI, …)` probe is
+    // resolved against the concrete `OpenGL` leaf (OpenGL.zig), cited per method.
+    // =======================================================================
+
+    /// This is called early right after surface creation.
+    //
+    // PORTS: generic.zig:864-869 `surfaceInit`; macos_impl generic.rs:2193-2196.
+    // `@hasDecl(GraphicsAPI, "surfaceInit")` is TRUE for `OpenGL` (OpenGL.zig:162),
+    // whose GTK-arm body is `prepareContext(null)` — reload the GL loader over the
+    // context. That api-level GL-loader hook is L5-owned (the GDK/epoxy proc-address
+    // loader decision — see `opengl/opengl_impl.rs` module doc), and for the
+    // offscreen path it is a no-op: the owned `OffscreenContext` is prepared once in
+    // `OpenGL::init_offscreen` and stays current (never torn down here). Documented
+    // elision (R1) — the exact rationale as `display_realized`'s api-level hook.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error> {
+        let _ = rt_surface;
+        Ok(())
+    }
+
+    /// This is called just prior to spinning up the renderer thread for final
+    /// main-thread setup requirements.
+    //
+    // PORTS: generic.zig:873-878 `finalizeSurfaceInit`; macos_impl
+    // generic.rs:2206-2209. `OpenGL::finalizeSurfaceInit` (OpenGL.zig:191-195) is a
+    // no-op (`_ = self; _ = surface;`), so this is a faithful no-op.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error> {
+        let _ = rt_surface;
+        Ok(())
+    }
+
+    /// Callback called by `renderer.Thread` when it begins.
+    //
+    // PORTS: generic.zig:881-886 `threadEnter`; macos_impl generic.rs:2252-2255.
+    // `OpenGL::threadEnter` (OpenGL.zig:197-218) is a no-op for GTK: "GTK doesn't
+    // support threaded OpenGL operations … we don't do anything here" — all draws +
+    // texture syncs run on the main thread (this is why `MUST_DRAW_FROM_APP_THREAD`).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn thread_enter<S>(&self, rt_surface: *mut S) -> Result<(), Error> {
+        let _ = rt_surface;
+        Ok(())
+    }
+
+    /// Callback called by `renderer.Thread` when it exits.
+    //
+    // PORTS: generic.zig:889-894 `threadExit`; macos_impl generic.rs:2261.
+    // `OpenGL::threadExit` (OpenGL.zig:220-234) is a no-op for GTK ("we may be
+    // sharing the global bindings with other windows").
+    pub fn thread_exit(&self) {}
+
+    /// Run our loop start callback if the renderer cares.
+    //
+    // PORTS: generic.zig:897-916 `loopEnter`; macos_impl generic.rs:2274-2291.
+    // `@hasDecl(OpenGL, "loopEnter")` is FALSE (OpenGL declares no `loopEnter`), so
+    // there is no api call; and `if (comptime DisplayLink == void) return;` fires
+    // immediately on Linux. The `draw_now: Async` arg (the reference `thr.draw_now`
+    // fed to the CVDisplayLink output callback) is unused with no display link.
+    pub fn loop_enter(&mut self, draw_now: rustty_xev::Async) -> Result<(), Error> {
+        let _ = draw_now;
+        // `if (comptime DisplayLink == void) return;` — Linux: DisplayLink is void.
+        Ok(())
+    }
+
+    /// Run our loop end callback if the renderer cares.
+    //
+    // PORTS: generic.zig:919-933 `loopExit`; macos_impl generic.rs:2301-2305.
+    // `@hasDecl(OpenGL, "loopExit")` is FALSE ⇒ no api call; `DisplayLink == void` ⇒
+    // no link to stop. Faithful no-op.
+    pub fn loop_exit(&self) {}
+
+    /// PORTS: generic.zig:1001-1009 `setMacOSDisplayID`; macos_impl
+    /// generic.rs:2325-2334. `if (comptime DisplayLink == void) return;` fires
+    /// immediately on Linux — there is no display link to retarget. Kept because
+    /// core's `Thread<A>` drains the `.macos_display_id` mailbox message
+    /// unconditionally (the reference's own shape); a no-op here.
+    pub fn set_macos_display_id(&self, id: u32) -> Result<(), Error> {
+        let _ = id;
+        Ok(())
+    }
+
+    /// PORTS: generic.zig:1017-1024 `hasVsync`; macos_impl generic.rs:2342-2347.
+    /// `if (comptime DisplayLink == void) return false;` — Linux has no
+    /// CVDisplayLink-managed vsync, so the renderer never self-manages the frame
+    /// clock; core's `drawFrame` therefore always draws when asked.
+    pub fn has_vsync(&self) -> bool {
+        false
+    }
+
+    /// PORTS: generic.zig:1029-1048 `setFocus`; macos_impl generic.rs:2360-2372.
+    /// Keeps the reference `assert(self.focused != focus)` + the custom-shader flag.
+    /// The `if (comptime DisplayLink != void)` link start/stop block is elided on
+    /// Linux (DisplayLink is void).
+    pub fn set_focus(&mut self, focus: bool) -> Result<(), Error> {
+        assert!(self.focused != focus);
+        self.focused = focus;
+        self.custom_shader_focused_changed = true;
+        // `if (comptime DisplayLink != void) link: { … }` — Linux: no display link.
+        Ok(())
+    }
+
+    /// PORTS: generic.zig:1053-1065 `setVisible`; macos_impl generic.rs:2382-2390.
+    /// The whole body is inside `if (comptime DisplayLink != void)`, so on Linux
+    /// (DisplayLink void) it is a faithful no-op.
+    pub fn set_visible(&self, visible: bool) {
+        let _ = visible;
+    }
+
+    /// Mark the full screen as dirty so that we redraw everything.
+    //
+    // Zig: `pub inline fn markDirty(self: *Self) void { self.terminal_state.dirty
+    // = .full; }`; macos_impl generic.rs:2397-2399.
+    pub fn mark_dirty(&mut self) {
+        self.terminal_state.dirty = Dirty::Full;
+    }
+
+    /// Set the new font grid. Must be called on the render thread.
+    //
+    // PORTS: generic.zig `setFontGrid`; macos_impl generic.rs:2410-2463. Fully
+    // graphics-API-agnostic (no DisplayLink / Metal), so this is a straight
+    // copy-adapt. `defer self.draw_mutex.unlock()`: the body is INFALLIBLE (no `?`),
+    // so the single unlock at the natural end is reached on every non-panic path.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn set_font_grid(&mut self, grid: *mut SharedGrid) {
+        self.draw_mutex.lock();
+
+        // Update our grid.
+        self.font_grid = grid;
+
+        // Update all our textures so that they sync on the next frame. We can
+        // modify this without a lock because the GPU does not touch this data.
+        for frame in &mut self.swap_chain.frames {
+            frame.grayscale_modified = 0;
+            frame.color_modified = 0;
+        }
+
+        // Get our metrics from the grid. This doesn't require a lock because the
+        // metrics are never recalculated.
+        //
+        // SAFETY: `grid` is the external `*mut SharedGrid` handle (not reborrowed
+        // from `&mut self`); `(*grid).metrics` is a shared read through a raw pointer
+        // with no `&mut` alias to `*grid` (§4.4 — the shared-grid handle).
+        let metrics = unsafe { (*grid).metrics };
+        self.grid_metrics = metrics;
+
+        // Reset our shaper cache. If our font changed (not just the size) then the
+        // cached data may be invalid, so we always clear the cache just in case.
+        let font_shaper_cache = ShaperCache::init();
+        self.font_shaper_cache.deinit();
+        self.font_shaper_cache = font_shaper_cache;
+
+        // Update cell size.
+        self.size.cell = CellSize {
+            width: metrics.cell_width,
+            height: metrics.cell_height,
+        };
+
+        // Update relevant uniforms.
+        self.update_font_grid_uniforms();
+
+        // Force a full rebuild, because cached rows may still reference an outdated
+        // atlas from the old grid and this can cause garbage to be rendered.
+        self.mark_dirty();
+
+        self.draw_mutex.unlock();
+    }
+
+    /// Resize the screen.
+    //
+    // PORTS: generic.zig `setScreenSize`; macos_impl generic.rs:2468-2482.
+    // Graphics-API-agnostic. INFALLIBLE body ⇒ end-unlock reached on every non-panic
+    // path (as in `set_font_grid`).
+    pub fn set_screen_size(&mut self, size: Size) {
+        self.draw_mutex.lock();
+
+        // We only actually need the padding from this, everything else is derived
+        // elsewhere.
+        self.size.padding = size.padding;
+
+        self.update_screen_size_uniforms();
+
+        self.draw_mutex.unlock();
+    }
+
+    /// Update the configuration.
+    //
+    // PORTS: generic.zig:... `changeConfig`; macos_impl generic.rs:2501-2622.
+    // By-value ownership transfer (`DerivedConfig` is non-`Copy`): the caller's
+    // `Message::ChangeConfig` payload holds a `Box<DerivedConfig>`, so ownership is
+    // moved in (the reference `v.impl.deinit()` collapses into the old-config drop).
+    //
+    // MILESTONE-CUT (matching `init` generic.zig:795 / linux_impl `init` line 897):
+    // the reference `bg_image_changed` branch calls `prepBackgroundImage()` to decode
+    // a new bg-image path via `crate::image` (macOS-only) — `linux_impl` has no
+    // `images`/`bg_image` field, so that decode branch is OMITTED. The
+    // `bg_image_config_changed` → `update_bg_image_buffer` path (the vertex-buffer
+    // config, graphics-API-agnostic) is KEPT.
+    //
+    // `defer self.draw_mutex.unlock()` FIDELITY: the ported `Mutex` is bare
+    // lock/unlock with NO RAII guard, so `defer` is replicated by explicit unlock on
+    // every early return (unlock-before-`?`) plus the unlock at the natural end.
+    pub fn change_config(&mut self, config: DerivedConfig) -> Result<(), Error> {
+        self.draw_mutex.lock();
+
+        // We always redo the font shaper in case font features changed. Easier and
+        // rare enough to not cause performance issues. unlock-before-`?`.
+        {
+            let font_shaper = match Shaper::init(shape::Options {
+                features: config
+                    .font_features
+                    .iter()
+                    .map(|c| c.as_bytes().to_vec())
+                    .collect(),
+            }) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.draw_mutex.unlock();
+                    return Err(e.into());
+                }
+            };
+            self.font_shaper.deinit();
+            self.font_shaper = font_shaper;
+        }
+
+        // Reset the shaper cache so info from the previous font isn't reused.
+        let font_shaper_cache = ShaperCache::init();
+        self.font_shaper_cache.deinit();
+        self.font_shaper_cache = font_shaper_cache;
+
+        // Set our new minimum contrast.
+        self.uniforms.min_contrast = config.min_contrast;
+
+        // Set our new color space and blending.
+        self.uniforms.bools.use_display_p3 = config.colorspace == WindowColorspace::DisplayP3;
+        self.uniforms.bools.use_linear_blending = config.blending.is_linear();
+        self.uniforms.bools.use_linear_correction =
+            config.blending == AlphaBlending::LinearCorrected;
+
+        let bg_image_config_changed = self.config.bg_image_fit != config.bg_image_fit
+            || self.config.bg_image_position != config.bg_image_position
+            || self.config.bg_image_repeat != config.bg_image_repeat
+            || self.config.bg_image_opacity != config.bg_image_opacity;
+
+        // (MILESTONE-CUT) the reference `bg_image_changed` / `prepBackgroundImage`
+        // branch is omitted — no `bg_image` decode field on `linux_impl`.
+
+        let old_blending = self.config.blending;
+        let custom_shaders_changed = self.config.custom_shaders != config.custom_shaders;
+
+        // `self.config.deinit(); self.config = config.*;` — replace the config
+        // (moving the new one in), then `deinit` + drop the old one.
+        let mut old = mem::replace(&mut self.config, config);
+        old.deinit();
+
+        // If our background image config changed, update the vertex buffer.
+        if bg_image_config_changed {
+            self.update_bg_image_buffer();
+        }
+
+        // Reset our viewport to force a rebuild, in case of a font change.
+        self.mark_dirty();
+
+        let blending_changed = old_blending != self.config.blending;
+
+        if blending_changed {
+            // We update our API's blending mode.
+            self.api.blending = self.config.blending;
+            // And indicate that we need to reinitialize our shaders.
+            self.reinitialize_shaders = true;
+            // And that our swap-chain targets need re-creation for the new blending
+            // mode. Zig `+%=` -> `wrapping_add`.
+            self.target_config_modified = self.target_config_modified.wrapping_add(1);
+        }
+
+        if custom_shaders_changed {
+            self.reinitialize_shaders = true;
+        }
+
+        self.draw_mutex.unlock();
+        Ok(())
+    }
+
     // PORTS: generic.zig:836-... `initShaders`; macos_impl generic.rs:5231-5272.
     fn init_shaders(&mut self) -> Result<(), Error> {
         // Load our custom shaders. The reference arena is subsumed by owned
