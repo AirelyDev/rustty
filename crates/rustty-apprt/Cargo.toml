@@ -270,3 +270,23 @@ gio = { version = "0.22" }
 # edge; this resolves to the SAME `glib` 0.22 instance so the GType registry and
 # the process-global `GApplication` default are shared with the library.
 glib = { version = "0.22" }
+# The widget-layer bindings the FIRST-LIGHT KAT (`tests/gtk_first_light.rs`) needs
+# directly: it hosts the real `class::Surface` in an `adw::ApplicationWindow`
+# (`libadwaita`), sets it as the window content + unparents it at teardown, and reads
+# the widget tree via the `gtk4` prelude. Integration tests reach only
+# dev-dependencies (not the lib's optional gtk4-rs edges), so the same versions +
+# features as the library's `[dependencies]` are declared here so cargo unifies to
+# ONE instance of each — the GType registry / GApplication default the KAT shares
+# with the library. Linux-target-gated like `gio`/`glib` above; the test file is
+# `#[cfg(all(target_os = "linux", feature = "gtk"))]`, so a non-gtk build compiles
+# none of it.
+gtk4 = { version = "0.11", features = ["v4_14"] }
+libadwaita = { version = "0.9", features = ["v1_5"] }
+# `rustty-termio` in scope so the KAT can name `rustty_termio::Backend::Exec` when
+# it reaches the live surface's pty master fd (`io.backend` → `Exec.subprocess.pty`)
+# to write `echo rustty-first-light\n` into the shell — the `live_shell.rs`
+# round-trip shape. rustty-apprt does not depend on rustty-termio in `[dependencies]`
+# (it reaches termio only transitively through `rustty_core::surface::Surface`), so
+# the KAT's direct `Backend` match needs this dev edge; it resolves to the same
+# rustty-termio instance as the transitive one.
+rustty-termio = { workspace = true }
