@@ -14,6 +14,7 @@
 //! property (`:38-56`).
 
 use glib::prelude::*;
+use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use libadwaita::subclass::prelude::*;
 
@@ -45,6 +46,17 @@ mod imp {
 
     #[glib::derived_properties]
     impl ObjectImpl for SearchOverlay {
+        // PORTS the placeholder's default-hidden state from the reference
+        // `search-overlay.blp:6` (`visible: bind template.active`, which defaults to
+        // inactive/false). Without it, a bare `adw::Bin` overlay child defaults to
+        // visible + FILL + can-target, so GtkOverlay allocates it the FULL terminal
+        // rectangle and it swallows every pointer/keyboard event before the GLArea's
+        // controllers see it. T24 replaces this with the real revealed-on-search template.
+        fn constructed(&self) {
+            self.parent_constructed();
+            self.obj().set_visible(false);
+        }
+
         /// PORTS: `search_overlay.zig:157-204` `signals`. The four the surface
         /// template connects (`surface.blp:192-195`).
         fn signals() -> &'static [glib::subclass::Signal] {

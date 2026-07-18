@@ -14,6 +14,7 @@
 //! and those two nullable boxed-`StringList` properties.
 
 use glib::prelude::*;
+use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use libadwaita::subclass::prelude::*;
 
@@ -52,7 +53,18 @@ mod imp {
     }
 
     #[glib::derived_properties]
-    impl ObjectImpl for KeyStateOverlay {}
+    impl ObjectImpl for KeyStateOverlay {
+        // PORTS the placeholder's default-hidden state from the reference
+        // `key-state-overlay.blp:5` (`visible: bind $has_state(...)`, which defaults to
+        // no-state/false). Without it, a bare `adw::Bin` overlay child defaults to
+        // visible + FILL + can-target, so GtkOverlay allocates it the FULL terminal
+        // rectangle and it swallows every pointer/keyboard event before the GLArea's
+        // controllers see it. T24 replaces this with the real key-state template.
+        fn constructed(&self) {
+            self.parent_constructed();
+            self.obj().set_visible(false);
+        }
+    }
     impl WidgetImpl for KeyStateOverlay {}
     impl BinImpl for KeyStateOverlay {}
 }

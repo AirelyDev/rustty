@@ -12,6 +12,7 @@
 //! subclass registered under the exact reference GType name. T24 ports the label,
 //! the `duration`/`first-delay`/`overlay-{h,v}align` properties, and the timers.
 
+use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use libadwaita::subclass::prelude::*;
 
@@ -33,7 +34,21 @@ mod imp {
         type ParentType = libadwaita::Bin;
     }
 
-    impl ObjectImpl for ResizeOverlay {}
+    impl ObjectImpl for ResizeOverlay {
+        // PORTS the placeholder's default state from the reference
+        // `resize-overlay.blp:6,8` (`visible: false; can-target: false;`). Without
+        // this, a bare `adw::Bin` overlay child defaults to visible + FILL + can-target,
+        // so GtkOverlay allocates it the FULL terminal rectangle and it swallows every
+        // pointer event before the GLArea's own gesture/key controllers see it — a
+        // freshly-opened terminal then ignores all mouse and keyboard input. T24 replaces
+        // this with the real template (a label revealed only during resize).
+        fn constructed(&self) {
+            self.parent_constructed();
+            let widget = self.obj();
+            widget.set_visible(false);
+            widget.set_can_target(false);
+        }
+    }
     impl WidgetImpl for ResizeOverlay {}
     impl BinImpl for ResizeOverlay {}
 }
