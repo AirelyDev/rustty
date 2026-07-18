@@ -65,7 +65,7 @@ use std::ptr::NonNull;
 
 use glib::prelude::*;
 use glib::subclass::prelude::*;
-use rustty_apprt_api::{CoreSurfaceHandle, Target};
+use rustty_apprt_api::{Action, ApprtError, CoreSurfaceHandle, Target};
 use rustty_config::Config as CoreConfig;
 
 use super::config::Config;
@@ -1815,13 +1815,1196 @@ impl Application {
         self.imp().running.set(false);
     }
 
-    /// PORTS: `application.zig:668-...` `performAction`. Dispatches an apprt action
-    /// on a target. **Task 23 fills this.** PORT NOTE: the skeleton has no
-    /// parameters; Task 23 re-types it to take the `apprt` `Target`/`Action` once the
-    /// action dispatch surface is wired.
-    #[must_use]
-    pub fn perform_action(&self) -> bool {
-        unimplemented!("Application::perform_action lands in L5.1 Task 23 (application.zig:668)")
+    /// PORTS: `application.zig:668-799` `performAction`. Dispatches an apprt action
+    /// on a target through the [`action`] namespace (`application.zig:1909-2843`).
+    ///
+    /// The `match` is EXHAUSTIVE over every [`Action`] variant — Rust's
+    /// exhaustiveness check is the faithful analogue of the reference's exhaustive
+    /// `switch (action)`: a new action key is a compile error, never a silent
+    /// fallthrough (`:796-798` "The unhandled case must be explicit in the switch
+    /// above"). The `apprt` seam is GENERIC over the surface-handle `C`, not `dyn`
+    /// (`seam.rs:11-16`), so the switch is a monomorphized `match` here.
+    ///
+    /// Returns whether the action was handled (reference `!bool`). The void-returning
+    /// arms fall through to the trailing `Ok(true)` ("Assume it was handled",
+    /// `:796-798`); the bool-returning arms return their result; the Unimplemented
+    /// block warns and returns `Ok(false)` (`:777-793`).
+    pub fn perform_action<C: CoreSurfaceHandle>(
+        &self,
+        target: Target<'_, C>,
+        action: Action<'_>,
+    ) -> Result<bool, ApprtError> {
+        match action {
+            // `.close_tab => return Action.closeTab(target, value)` (`:674`).
+            Action::CloseTab(mode) => return Ok(action::close_tab(target, mode)),
+            // `.close_window => return Action.closeWindow(target)` (`:675`).
+            Action::CloseWindow => return Ok(action::close_window(target)),
+
+            // `.copy_title_to_clipboard => return ...` (`:677`).
+            Action::CopyTitleToClipboard => return Ok(action::copy_title_to_clipboard(target)),
+
+            // `.config_change => try Action.configChange(self, target, value.config)` (`:679`).
+            Action::ConfigChange(v) => action::config_change(self, target, v.config)?,
+
+            // `.desktop_notification => Action.desktopNotification(self, target, value)` (`:685`).
+            Action::DesktopNotification(v) => action::desktop_notification(self, target, v),
+
+            // `.equalize_splits => return Action.equalizeSplits(target)` (`:687`).
+            Action::EqualizeSplits => return Ok(action::equalize_splits(target)),
+
+            // `.goto_split => return Action.gotoSplit(target, value)` (`:689`).
+            Action::GotoSplit(v) => return Ok(action::goto_split(target, v)),
+            // `.goto_window => return Action.gotoWindow(value)` (`:691`).
+            Action::GotoWindow(v) => return Ok(action::goto_window(v)),
+            // `.goto_tab => return Action.gotoTab(target, value)` (`:693`).
+            Action::GotoTab(v) => return Ok(action::goto_tab(target, v)),
+
+            // `.initial_size => return Action.initialSize(target, value)` (`:695`).
+            Action::InitialSize(v) => return Ok(action::initial_size(target, v)),
+
+            // `.inspector => return Action.controlInspector(target, value)` (`:697`).
+            Action::Inspector(v) => return Ok(action::control_inspector(target, v)),
+
+            // `.key_sequence => return Action.keySequence(target, value)` (`:699`).
+            Action::KeySequence(v) => return Ok(action::key_sequence(target, v)),
+            // `.key_table => return Action.keyTable(target, value)` (`:700`).
+            Action::KeyTable(v) => return Ok(action::key_table(target, v)),
+
+            // `.mouse_over_link => Action.mouseOverLink(target, value)` (`:702`).
+            Action::MouseOverLink(v) => action::mouse_over_link(target, v),
+            // `.mouse_shape => Action.mouseShape(target, value)` (`:703`).
+            Action::MouseShape(v) => action::mouse_shape(target, v),
+            // `.mouse_visibility => Action.mouseVisibility(target, value)` (`:704`).
+            Action::MouseVisibility(v) => action::mouse_visibility(target, v),
+
+            // `.move_tab => return Action.moveTab(target, value)` (`:706`).
+            Action::MoveTab(v) => return Ok(action::move_tab(target, v)),
+
+            // `.new_split => return Action.newSplit(target, value)` (`:708`).
+            Action::NewSplit(v) => return Ok(action::new_split(target, v)),
+
+            // `.new_tab => return Action.newTab(target)` (`:710`).
+            Action::NewTab => return Ok(action::new_tab(target)),
+
+            // `.new_window => try Action.newWindow(self, <parent>, .none)` (`:712-719`).
+            Action::NewWindow => action::new_window(self, target)?,
+
+            // `.open_config => return Action.openConfig(self)` (`:721`).
+            Action::OpenConfig => return Ok(action::open_config(self)),
+
+            // `.open_url => Action.openUrl(self, value)` (`:723`).
+            Action::OpenUrl(v) => action::open_url(self, v),
+
+            // `.pwd => Action.pwd(target, value)` (`:725`).
+            Action::Pwd(v) => action::pwd(target, v),
+
+            // `.present_terminal => return Action.presentTerminal(target)` (`:727`).
+            Action::PresentTerminal => return Ok(action::present_terminal(target)),
+
+            // `.progress_report => return Action.progressReport(target, value)` (`:729`).
+            Action::ProgressReport(v) => return Ok(action::progress_report(target, v)),
+
+            // `.prompt_title => return Action.promptTitle(target, value)` (`:731`).
+            Action::PromptTitle(v) => return Ok(action::prompt_title(target, v)),
+
+            // `.quit => self.quit()` (`:733`).
+            Action::Quit => self.quit(),
+
+            // `.quit_timer => try Action.quitTimer(self, value)` (`:735`).
+            Action::QuitTimer(v) => action::quit_timer(self, v),
+
+            // `.reload_config => try Action.reloadConfig(self, target, value)` (`:737`).
+            Action::ReloadConfig(v) => action::reload_config(self, target, v)?,
+
+            // `.render => Action.render(target)` (`:740`).
+            Action::Render => action_render(target),
+
+            // `.resize_split => return Action.resizeSplit(target, value)` (`:742`).
+            Action::ResizeSplit(v) => return Ok(action::resize_split(target, v)),
+
+            // `.ring_bell => Action.ringBell(target)` (`:744`).
+            Action::RingBell => action::ring_bell(target),
+
+            // GTK has no accessibility consumer for this yet (`:746-747`). A HANDLED
+            // no-op — falls through to the trailing `Ok(true)`.
+            Action::SelectionChanged => {}
+
+            // `.scrollbar => Action.scrollbar(target, value)` (`:749`).
+            Action::Scrollbar(v) => action::scrollbar(target, v),
+
+            // `.set_title => Action.setTitle(target, value)` (`:751`).
+            Action::SetTitle(v) => action::set_title(target, v),
+            // `.set_tab_title => return Action.setTabTitle(target, value)` (`:752`).
+            Action::SetTabTitle(v) => return Ok(action::set_tab_title(target, v)),
+
+            // `.show_child_exited => return Action.showChildExited(target, value)` (`:754`).
+            Action::ShowChildExited(v) => return Ok(action::show_child_exited(target, v)),
+
+            // `.show_gtk_inspector => Action.showGtkInspector()` (`:756`).
+            Action::ShowGtkInspector => action::show_gtk_inspector(),
+
+            // `.size_limit => return Action.sizeLimit(target, value)` (`:758`).
+            Action::SizeLimit(v) => return Ok(action::size_limit(target, v)),
+
+            // `.toggle_maximize => Action.toggleMaximize(target)` (`:760`).
+            Action::ToggleMaximize => action::toggle_maximize(target),
+            // `.toggle_fullscreen => Action.toggleFullscreen(target)` (`:761`).
+            Action::ToggleFullscreen(_) => action::toggle_fullscreen(target),
+            // `.toggle_quick_terminal => return Action.toggleQuickTerminal(self)` (`:762`).
+            Action::ToggleQuickTerminal => return Ok(action::toggle_quick_terminal(self)),
+            // `.toggle_tab_overview => return Action.toggleTabOverview(target)` (`:763`).
+            Action::ToggleTabOverview => return Ok(action::toggle_tab_overview(target)),
+            // `.toggle_window_decorations => return ...` (`:764`).
+            Action::ToggleWindowDecorations => {
+                return Ok(action::toggle_window_decorations(target))
+            }
+            // `.toggle_command_palette => return Action.toggleCommandPalette(target)` (`:765`).
+            Action::ToggleCommandPalette => return Ok(action::toggle_command_palette(target)),
+            // `.toggle_split_zoom => return Action.toggleSplitZoom(target)` (`:766`).
+            Action::ToggleSplitZoom => return Ok(action::toggle_split_zoom(target)),
+            // `.show_on_screen_keyboard => return ...` (`:767`).
+            Action::ShowOnScreenKeyboard => return Ok(action::show_on_screen_keyboard(target)),
+            // `.command_finished => return Action.commandFinished(target, value)` (`:768`).
+            Action::CommandFinished(v) => return Ok(action::command_finished(target, v)),
+            // `.readonly => return Action.setReadonly(target, value)` (`:769`).
+            Action::Readonly(v) => return Ok(action::set_readonly(target, v)),
+
+            // `.start_search => Action.startSearch(target, value)` (`:771`).
+            Action::StartSearch(v) => action::start_search(target, v),
+            // `.end_search => Action.endSearch(target)` (`:772`).
+            Action::EndSearch => action::end_search(target),
+            // `.search_total => Action.searchTotal(target, value)` (`:773`).
+            Action::SearchTotal(v) => action::search_total(target, v),
+            // `.search_selected => Action.searchSelected(target, value)` (`:774`).
+            Action::SearchSelected(v) => action::search_selected(target, v),
+
+            // Unimplemented (`:777-793`): warn + `return false`. One arm per
+            // reference line.
+            Action::SecureInput(_)
+            | Action::CloseAllWindows
+            | Action::FloatWindow(_)
+            | Action::ToggleVisibility
+            | Action::ToggleBackgroundOpacity
+            | Action::CellSize(_)
+            | Action::RenderInspector
+            | Action::RendererHealth(_)
+            | Action::ColorChange(_)
+            | Action::ResetWindowSize
+            | Action::CheckForUpdates
+            | Action::Undo
+            | Action::Redo => {
+                // `log.warn("unimplemented action={}", .{action})` (`:791`).
+                eprintln!("warn(gtk): unimplemented action");
+                return Ok(false);
+            }
+        }
+
+        // "Assume it was handled. The unhandled case must be explicit in the switch
+        // above." (`:796-798`).
+        Ok(true)
+    }
+}
+
+/// PORTS: `application.zig:1909-2843` `const Action = struct { ... }` — the
+/// namespace of per-action handlers that [`Application::perform_action`] dispatches
+/// into. Each function reproduces the reference's `target` switch and its return
+/// value one-for-one.
+///
+/// # INHABITED placeholders (the class family lands incrementally)
+///
+/// Many handlers dispatch into `GhosttySurface`/`Window`/`Tab` methods that land
+/// with later L5.3 tasks (the surface-widget content methods, the dialog family
+/// T23, overlays T24, the command palette T25) or with the L6 inspector. Where the
+/// leaf method is not yet available, the handler still reproduces the reference's
+/// `target` switch and reaches the widget/target (keeping the shape live), then
+/// DEFERS the specific leaf call with a PORT NOTE and returns the reference's
+/// static result. Where the leaf already exists (the `activate_action` widget
+/// actions installed by T20/T21, `Window`/`Tab`/`SplitTree` navigation, the render
+/// contract), the handler is fully wired.
+mod action {
+    use glib::prelude::*;
+    use glib::subclass::prelude::*;
+    use gtk4::prelude::*;
+    use rustty_apprt_api::action::{
+        CloseTabMode, GotoSplit, GotoTab, GotoWindow, PromptTitle, ResizeSplitDirection,
+        SplitDirection,
+    };
+    use rustty_apprt_api::{ApprtError, CoreSurfaceHandle, Target};
+    use rustty_datastruct::split_tree::{Direction, Goto, SpatialDirection};
+
+    use super::super::split_tree::SplitTree;
+    use super::super::surface::Surface as GhosttySurface;
+    use super::super::tab::Tab;
+    use super::super::window::Window;
+    use super::{ext, Application, Config, CoreConfig};
+    use crate::gtk::surface::Surface as ApprtSurface;
+
+    /// Reach the [`GhosttySurface`] widget for a `.surface` target — the reference's
+    /// `v.rt_surface.surface` / `v.rt_surface.gobj()`. Returns `None` if the backref
+    /// is not yet wired (pre-`constructed`). Same liveness contract as
+    /// [`action_render`](super::action_render): the widget is alive during the
+    /// synchronous app-thread dispatch.
+    fn widget<C: CoreSurfaceHandle>(v: &C) -> Option<GhosttySurface> {
+        let rt = v.rt_surface_ptr().cast::<ApprtSurface>();
+        if rt.is_null() {
+            return None;
+        }
+        // SAFETY: for a `.surface` action the core app hands the LIVE core surface
+        // whose `rt_surface` points at the pinned apprt `Surface` embedded in the
+        // widget's private (memory `mirihar-surface-pin`), read on the app thread.
+        unsafe { (*rt).widget() }
+    }
+
+    /// `pub fn closeTab(target, value) bool` (`:1910-1923`). Activates the
+    /// `tab.close` widget action (installed by `Tab::init_action_map`, `tab.rs:200`)
+    /// with the mode tag-name string.
+    pub(super) fn close_tab<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: CloseTabMode,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let mode = match value {
+                    CloseTabMode::This => "this",
+                    CloseTabMode::Other => "other",
+                    CloseTabMode::Right => "right",
+                };
+                w.activate_action("tab.close", Some(&mode.to_variant()))
+                    .is_ok()
+            }
+        }
+    }
+
+    /// `pub fn closeWindow(target) bool` (`:1925-1933`). Activates `win.close`
+    /// (`window.rs:660`).
+    pub(super) fn close_window<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                w.activate_action("win.close", None).is_ok()
+            }
+        }
+    }
+
+    /// `pub fn copyTitleToClipboard(target) bool` (`:1935-1941`).
+    pub(super) fn copy_title_to_clipboard<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.gobj().copyTitleToClipboard()`.
+                // The `GhosttySurface` clipboard-of-title method lands with the surface
+                // widget's clipboard/title completion; reach the widget to keep the shape.
+                match widget(v) {
+                    Some(_w) => false,
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn configChange(self, target, new_config) !void` (`:1943-1957`). Wraps
+    /// the config in a [`Config`] GObject (which clones it) and applies it to the
+    /// target.
+    pub(super) fn config_change<C: CoreSurfaceHandle>(
+        app: &Application,
+        target: Target<'_, C>,
+        new_config: &CoreConfig,
+    ) -> Result<(), ApprtError> {
+        // Wrap our config in a GObject. This clones it (`:1949-1951`).
+        let config_obj = Config::new(new_config);
+        match target {
+            // INHABITED placeholder: reference `core.rt_surface.surface.setConfig(config_obj)`
+            // / `self.setConfig(config_obj)`. `Surface::set_config` / `Application::set_config`
+            // (the `config` property setter path) land with the surface-widget + config
+            // property completion. The wrapped clone is dropped here until then.
+            Target::Surface(v) => {
+                let _ = widget(v);
+                let _ = config_obj;
+            }
+            Target::App => {
+                let _ = app;
+                let _ = config_obj;
+            }
+        }
+        Ok(())
+    }
+
+    /// `pub fn desktopNotification(self, target, n) void` (`:1959-2001`).
+    pub(super) fn desktop_notification<C: CoreSurfaceHandle>(
+        app: &Application,
+        target: Target<'_, C>,
+        _n: rustty_apprt_api::action::DesktopNotification<'_>,
+    ) {
+        // INHABITED placeholder: reference sends a `gio.Notification` (app arm) or
+        // `v.rt_surface.gobj().sendDesktopNotification(...)` (surface arm). The GTK
+        // notification wiring + the surface widget's `sendDesktopNotification` land
+        // with the surface-widget notification completion.
+        match target {
+            Target::App => {
+                let _ = app;
+            }
+            Target::Surface(v) => {
+                let _ = widget(v);
+            }
+        }
+    }
+
+    /// `pub fn equalizeSplits(target) bool` (`:2003-2015`). Activates
+    /// `split-tree.equalize` (`split_tree.rs:307`).
+    pub(super) fn equalize_splits<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): equalize splits to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                w.activate_action("split-tree.equalize", None).is_ok()
+            }
+        }
+    }
+
+    /// `pub fn gotoSplit(target, to) bool` (`:2017-2039`). Reaches the enclosing
+    /// [`SplitTree`] and calls [`SplitTree::goto`], mapping the apprt direction to a
+    /// tree [`Goto`] exactly as the reference does (`:2028-2036`).
+    pub(super) fn goto_split<C: CoreSurfaceHandle>(target: Target<'_, C>, to: GotoSplit) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(tree) = ext::ancestor::<SplitTree>(&w) else {
+                    eprintln!("warn(gtk): surface is not in a split tree, ignoring goto_split");
+                    return false;
+                };
+                tree.goto(match to {
+                    GotoSplit::Previous => Goto::PreviousWrapped,
+                    GotoSplit::Next => Goto::NextWrapped,
+                    GotoSplit::Up => Goto::Spatial(SpatialDirection::Up),
+                    GotoSplit::Down => Goto::Spatial(SpatialDirection::Down),
+                    GotoSplit::Left => Goto::Spatial(SpatialDirection::Left),
+                    GotoSplit::Right => Goto::Spatial(SpatialDirection::Right),
+                })
+            }
+        }
+    }
+
+    /// `pub fn gotoTab(target, tab) bool` (`:2049-2064`).
+    pub(super) fn goto_tab<C: CoreSurfaceHandle>(target: Target<'_, C>, tab: GotoTab) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(window) = ext::ancestor::<Window>(&w) else {
+                    eprintln!("warn(gtk): surface is not in a window, ignoring goto_tab");
+                    return false;
+                };
+                // INHABITED placeholder: reference `window.selectTab(...)`. `Window::select_tab`
+                // lands with the Window tab-navigation completion; reach the window + read the
+                // requested tab to keep the shape.
+                let _ = (window, tab);
+                false
+            }
+        }
+    }
+
+    /// `pub fn gotoWindow(direction) bool` (`:2067-2101`). Iterates our toplevel
+    /// windows forward/backward (wrapping) and presents+focuses the first visible,
+    /// non-active `Window`. Behavioral port of the `glib.List` prev/next walk.
+    pub(super) fn goto_window(direction: GotoWindow) -> bool {
+        // Collect our own `Window` toplevels in toplevel order.
+        let windows: Vec<Window> = gtk4::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk4::Window>().ok())
+            .filter_map(|w| w.downcast::<Window>().ok())
+            .collect();
+        if windows.is_empty() {
+            return false;
+        }
+
+        // The window we start from is the active one (else the list head, `:2073-2075`).
+        let start = windows
+            .iter()
+            .position(|w| w.upcast_ref::<gtk4::Window>().is_active())
+            .unwrap_or(0);
+
+        let n = windows.len();
+        // Walk forward/backward once around the ring (skipping the start slot).
+        for step in 1..=n {
+            let idx = match direction {
+                GotoWindow::Next => (start + step) % n,
+                GotoWindow::Previous => (start + n - (step % n)) % n,
+            };
+            if idx == start {
+                continue;
+            }
+            if goto_window_maybe(&windows[idx]) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `fn gotoWindowMaybe(gtk_window) bool` (`:2103-2119`). Presents + focuses the
+    /// active surface of a visible, non-active `Window`.
+    fn goto_window_maybe(window: &Window) -> bool {
+        let gtk_window = window.upcast_ref::<gtk4::Window>();
+        if gtk_window.is_active() {
+            return false;
+        }
+        if !window.is_visible() {
+            return false;
+        }
+        let Some(surface) = window.get_active_surface() else {
+            return false;
+        };
+        gtk_window.present();
+        surface.grab_focus();
+        true
+    }
+
+    /// `pub fn initialSize(target, value) bool` (`:2121-2135`).
+    pub(super) fn initial_size<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::InitialSize,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `surface.setDefaultSize(.{ width, height })`
+                // (the `GhosttySurface` default-size property). Lands with the surface-widget
+                // sizing completion; reach the widget + read the requested size to keep shape.
+                match widget(v) {
+                    Some(_w) => {
+                        let _ = value;
+                        true
+                    }
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn mouseOverLink(target, value) void` (`:2138-2148`).
+    pub(super) fn mouse_over_link<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::MouseOverLink<'_>,
+    ) {
+        match target {
+            Target::App => eprintln!("warn(gtk): mouse over link to app is unexpected"),
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setMouseHoverUrl(url or null)` (the
+                // `mouse-hover-url` surface property). Lands with the surface-widget URL
+                // completion.
+                let _ = (widget(v), value);
+            }
+        }
+    }
+
+    /// `pub fn mouseShape(target, shape) void` (`:2150-2159`).
+    pub(super) fn mouse_shape<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        shape: rustty_vt::mouse::Shape,
+    ) {
+        match target {
+            Target::App => eprintln!("warn(gtk): mouse shape to app is unexpected"),
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setMouseShape(shape)` (`mouse-shape` prop).
+                let _ = (widget(v), shape);
+            }
+        }
+    }
+
+    /// `pub fn mouseVisibility(target, visibility) void` (`:2161-2172`).
+    pub(super) fn mouse_visibility<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        visibility: rustty_apprt_api::action::MouseVisibility,
+    ) {
+        match target {
+            Target::App => eprintln!("warn(gtk): mouse visibility to app is unexpected"),
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setMouseHidden(visibility == .hidden)`.
+                let _ = (widget(v), visibility);
+            }
+        }
+    }
+
+    /// `pub fn moveTab(target, value) bool` (`:2173-2196`).
+    pub(super) fn move_tab<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::MoveTab,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(window) = ext::ancestor::<Window>(&w) else {
+                    eprintln!("warn(gtk): surface is not in a window, ignoring move_tab");
+                    return false;
+                };
+                // INHABITED placeholder: reference `window.moveTab(surface, amount)`.
+                // `Window::move_tab` lands with the Window tab-navigation completion.
+                let _ = (window, value);
+                false
+            }
+        }
+    }
+
+    /// `pub fn newSplit(target, direction) bool` (`:2205-2226`). Activates
+    /// `split-tree.new-split` with the direction tag-name (`split_tree.rs:306`).
+    pub(super) fn new_split<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        direction: SplitDirection,
+    ) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): new split to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let dir = match direction {
+                    SplitDirection::Right => "right",
+                    SplitDirection::Down => "down",
+                    SplitDirection::Left => "left",
+                    SplitDirection::Up => "up",
+                };
+                w.activate_action("split-tree.new-split", Some(&dir.to_variant()))
+                    .is_ok()
+            }
+        }
+    }
+
+    /// `pub fn newTab(target) bool` (`:2228-2251`). Reaches the enclosing [`Window`]
+    /// and calls [`Window::new_tab`] with the target's core surface as the parent
+    /// (`window.rs:968`).
+    pub(super) fn new_tab<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): new tab to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(window) = ext::ancestor::<Window>(&w) else {
+                    eprintln!("warn(gtk): surface is not in a window, ignoring new_tab");
+                    return false;
+                };
+                // `window.newTab(core)` — the parent core surface for font/dir inheritance,
+                // read off the widget (its `core()`), not the generic handle.
+                window.new_tab(w.core());
+                true
+            }
+        }
+    }
+
+    /// `pub fn newWindow(self, parent, overrides) !void` (`:2253-2331`). Creates a
+    /// [`Window`], binds its `config` to the app's, opens its first tab, and presents.
+    pub(super) fn new_window<C: CoreSurfaceHandle>(
+        app: &Application,
+        target: Target<'_, C>,
+        // overrides are `.none` at the switch callsite (`:717`).
+    ) -> Result<(), ApprtError> {
+        // Note that we've requested a window at least once (`:2262`). Used to trigger
+        // quit-on-no-windows.
+        app.imp().requested_window.set(true);
+
+        // The parent core surface (target-dependent): `.app => null`, `.surface => v`
+        // (`:714-717`), read off the widget for the surface arm. The type is unified by
+        // the `win.new_tab` callsite below (`Window::new_tab` takes `Option<*mut CoreSurface>`).
+        let parent = match target {
+            Target::App => None,
+            Target::Surface(v) => widget(v).and_then(|w| w.core()),
+        };
+
+        let win = Window::new(app, None);
+
+        // Keep the window config in sync with the app config (`:2295-2301`).
+        app.bind_property("config", &win, "config").build();
+
+        // Create the first tab in the new window (`:2304`).
+        win.new_tab(parent);
+
+        // INHABITED placeholder: reference estimates the initial size before presenting
+        // (`:2308-2317`, `surface.estimateInitialSize()` + `getDefaultSize()`). Those
+        // surface-widget sizing methods land with the sizing completion; the window is
+        // presented at its default size until then.
+
+        // Show the window (`:2320`).
+        win.upcast_ref::<gtk4::Window>().present();
+        Ok(())
+    }
+
+    /// `pub fn openConfig(self) bool` (`:2333-2347`).
+    pub(super) fn open_config(app: &Application) -> bool {
+        // INHABITED placeholder: reference resolves the config path (`configpkg.edit.openPath`)
+        // then `openUrl(self, .{ .kind = .text, .url = path })`. The config-edit path resolver
+        // + `openUrl` os-open path land with the config-editor completion.
+        let _ = app;
+        false
+    }
+
+    /// `pub fn openUrl(self, value) void` (`:2349-2367`).
+    pub(super) fn open_url(app: &Application, value: rustty_apprt_api::action::OpenUrl<'_>) {
+        // INHABITED placeholder: reference dispatches to `openUri().start(value)` (an
+        // `xdg-open`/portal launcher) with a `/`-and-`file://` fallback. The URI-launcher
+        // lands with the os-open completion.
+        let _ = (app, value);
+    }
+
+    /// `pub fn pwd(target, value) void` (`:2369-2378`).
+    pub(super) fn pwd<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::Pwd<'_>,
+    ) {
+        match target {
+            Target::App => eprintln!("warn(gtk): pwd to app is unexpected"),
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setPwd(value.pwd)` (`pwd` surface prop).
+                let _ = (widget(v), value);
+            }
+        }
+    }
+
+    /// `pub fn quitTimer(self, mode) !void` (`:2379-2388`). Starts/stops the app's
+    /// quit timer (`application.rs` `start_quit_timer`/`stop_quit_timer`).
+    pub(super) fn quit_timer(app: &Application, mode: rustty_apprt_api::action::QuitTimer) {
+        use rustty_apprt_api::action::QuitTimer;
+        match mode {
+            QuitTimer::Start => app.imp().start_quit_timer(),
+            QuitTimer::Stop => app.imp().stop_quit_timer(),
+        }
+    }
+
+    /// `pub fn presentTerminal(target) bool` (`:2389-2400`).
+    pub(super) fn present_terminal<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.surface.present()` (the
+                // surface widget's present-me-in-my-window path). Lands with the surface-widget
+                // present completion.
+                match widget(v) {
+                    Some(_w) => true,
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn progressReport(target, value) bool` (`:2401-2412`).
+    pub(super) fn progress_report<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_vt::osc::ProgressReport,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setProgressReport(value)` (the
+                // `progress-bar-overlay` surface path). Lands with the overlay completion (T24).
+                match widget(v) {
+                    Some(_w) => {
+                        let _ = value;
+                        true
+                    }
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn promptTitle(target, value) bool` (`:2414-2441`). The `.tab` arm reaches
+    /// the enclosing [`Tab`] and prompts (`tab.rs:241`); the `.surface` arm defers.
+    pub(super) fn prompt_title<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: PromptTitle,
+    ) -> bool {
+        match value {
+            PromptTitle::Surface => match target {
+                Target::App => false,
+                Target::Surface(v) => {
+                    // INHABITED placeholder: reference `v.rt_surface.surface.promptTitle()`.
+                    // The surface-title prompt dialog lands with the dialog family (T23).
+                    match widget(v) {
+                        Some(_w) => true,
+                        None => false,
+                    }
+                }
+            },
+            PromptTitle::Tab => match target {
+                Target::App => false,
+                Target::Surface(v) => {
+                    let Some(w) = widget(v) else { return false };
+                    let Some(tab) = ext::ancestor::<Tab>(&w) else {
+                        eprintln!("warn(gtk): surface is not in a tab, ignoring prompt_tab_title");
+                        return false;
+                    };
+                    tab.prompt_tab_title();
+                    true
+                }
+            },
+        }
+    }
+
+    /// `pub fn reloadConfig(self, target, opts) !void` (`:2443-2482`).
+    pub(super) fn reload_config<C: CoreSurfaceHandle>(
+        app: &Application,
+        target: Target<'_, C>,
+        opts: rustty_apprt_api::action::ReloadConfig,
+    ) -> Result<(), ApprtError> {
+        // INHABITED placeholder: reference (soft) re-refs the current config or (hard)
+        // `CoreConfig.load`s a new one, then `core().updateConfig(...)` / `core.updateConfig(...)`.
+        // The `Application::core().update_config` seam + systemd reload notify land with the
+        // config-reload completion.
+        match target {
+            Target::App => {
+                let _ = app;
+            }
+            Target::Surface(v) => {
+                let _ = widget(v);
+            }
+        }
+        let _ = opts;
+        Ok(())
+    }
+
+    /// `pub fn resizeSplit(target, value) bool` (`:2489-2519`). Reaches the enclosing
+    /// [`SplitTree`], no-ops if the tree has no split (so the key passes through), then
+    /// calls [`SplitTree::resize`].
+    pub(super) fn resize_split<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::ResizeSplit,
+    ) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): resize_split to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(tree) = ext::ancestor::<SplitTree>(&w) else {
+                    eprintln!("warn(gtk): surface is not in a split tree, ignoring resize_split");
+                    return false;
+                };
+                // If the tree has no splits (one leaf), the action is not performable
+                // (`:2500-2501`).
+                if !tree.property::<bool>("is-split") {
+                    return false;
+                }
+                let dir = match value.direction {
+                    ResizeSplitDirection::Up => Direction::Up,
+                    ResizeSplitDirection::Down => Direction::Down,
+                    ResizeSplitDirection::Left => Direction::Left,
+                    ResizeSplitDirection::Right => Direction::Right,
+                };
+                match tree.resize(dir, value.amount) {
+                    Ok(handled) => handled,
+                    Err(_) => {
+                        eprintln!("warn(gtk): unable to resize split");
+                        false
+                    }
+                }
+            }
+        }
+    }
+
+    /// `pub fn ringBell(target) void` (`:2521-2526`).
+    pub(super) fn ring_bell<C: CoreSurfaceHandle>(target: Target<'_, C>) {
+        match target {
+            Target::App => {}
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setBellRinging(true)` (`bell-ringing` prop).
+                let _ = widget(v);
+            }
+        }
+    }
+
+    /// `pub fn scrollbar(target, value) void` (`:2528-2536`).
+    pub(super) fn scrollbar<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_vt::pagelist::grow::Scrollbar,
+    ) {
+        match target {
+            Target::App => {}
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setScrollbar(value)` (`scrollbar` prop).
+                let _ = (widget(v), value);
+            }
+        }
+    }
+
+    /// `pub fn startSearch(target, value) void` (`:2538-2543`).
+    pub(super) fn start_search<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::StartSearch<'_>,
+    ) {
+        match target {
+            Target::App => {}
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setSearchActive(true, value.needle)` (the
+                // `search-overlay` path). Lands with the overlay completion (T24).
+                let _ = (widget(v), value);
+            }
+        }
+    }
+
+    /// `pub fn endSearch(target) void` (`:2545-2550`).
+    pub(super) fn end_search<C: CoreSurfaceHandle>(target: Target<'_, C>) {
+        match target {
+            Target::App => {}
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setSearchActive(false, "")`.
+                let _ = widget(v);
+            }
+        }
+    }
+
+    /// `pub fn searchTotal(target, value) void` (`:2552-2557`).
+    pub(super) fn search_total<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::SearchTotal,
+    ) {
+        match target {
+            Target::App => {}
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setSearchTotal(value.total)`.
+                let _ = (widget(v), value);
+            }
+        }
+    }
+
+    /// `pub fn searchSelected(target, value) void` (`:2559-2564`).
+    pub(super) fn search_selected<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::SearchSelected,
+    ) {
+        match target {
+            Target::App => {}
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setSearchSelected(value.selected)`.
+                let _ = (widget(v), value);
+            }
+        }
+    }
+
+    /// `pub fn setTitle(target, value) void` (`:2566-2574`).
+    pub(super) fn set_title<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::SetTitle<'_>,
+    ) {
+        match target {
+            Target::App => eprintln!("warn(gtk): set_title to app is unexpected"),
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `setTitle(value.title)` (`title` prop).
+                let _ = (widget(v), value);
+            }
+        }
+    }
+
+    /// `pub fn setTabTitle(target, value) bool` (`:2576-2597`). Reaches the enclosing
+    /// [`Tab`] and applies the title override (`tab.rs:235`).
+    pub(super) fn set_tab_title<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::SetTitle<'_>,
+    ) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): set_tab_title to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(tab) = ext::ancestor::<Tab>(&w) else {
+                    eprintln!("warn(gtk): surface is not in a tab, ignoring set_tab_title");
+                    return false;
+                };
+                // `setTitleOverride(if len==0 null else title)` (`:2594`).
+                let title = if value.title.is_empty() {
+                    None
+                } else {
+                    Some(String::from_utf8_lossy(value.title).into_owned())
+                };
+                tab.apply_title_override(title.as_deref());
+                true
+            }
+        }
+    }
+
+    /// `pub fn showChildExited(target, value) bool` (`:2600-2608`).
+    pub(super) fn show_child_exited<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::surface::ChildExited,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.surface.childExited(value)`
+                // (the `child-exited-overlay`). Lands with the overlay completion (T24).
+                match widget(v) {
+                    Some(_w) => {
+                        let _ = value;
+                        false
+                    }
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn showGtkInspector() void` (`:2610-2612`).
+    pub(super) fn show_gtk_inspector() {
+        gtk4::Window::set_interactive_debugging(true);
+    }
+
+    /// `pub fn sizeLimit(target, value) bool` (`:2614-2632`).
+    pub(super) fn size_limit<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::SizeLimit,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `surface.setMinSize(.{ min_width, min_height })`
+                // (max is ignored). The surface-widget min-size path lands with the sizing
+                // completion; read the requested min to keep shape.
+                match widget(v) {
+                    Some(_w) => {
+                        let _ = value;
+                        true
+                    }
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn toggleFullscreen(target) void` (`:2634-2639`).
+    pub(super) fn toggle_fullscreen<C: CoreSurfaceHandle>(target: Target<'_, C>) {
+        match target {
+            Target::App => {}
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.surface.toggleFullscreen()`.
+                let _ = widget(v);
+            }
+        }
+    }
+
+    /// `pub fn toggleQuickTerminal(self) bool` (`:2641-2652`).
+    pub(super) fn toggle_quick_terminal(app: &Application) -> bool {
+        // INHABITED placeholder: reference toggles an existing quick-terminal window or,
+        // if the winproto supports it, creates one (`Window{ quick-terminal = true }`) and
+        // shows it. The quick-terminal window path lands with L5.4 (winproto) + the
+        // quick-terminal window completion.
+        let _ = app;
+        false
+    }
+
+    /// `pub fn toggleSplitZoom(target) bool` (`:2654-2680`). Reaches the enclosing
+    /// [`SplitTree`], no-ops if unsplit, then activates `split-tree.zoom`
+    /// (`split_tree.rs:308`).
+    pub(super) fn toggle_split_zoom<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): toggle_split_zoom to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(tree) = ext::ancestor::<SplitTree>(&w) else {
+                    eprintln!(
+                        "warn(gtk): surface is not in a split tree, ignoring toggle_split_zoom"
+                    );
+                    return false;
+                };
+                if !tree.property::<bool>("is-split") {
+                    return false;
+                }
+                w.activate_action("split-tree.zoom", None).is_ok()
+            }
+        }
+    }
+
+    /// `pub fn toggleMaximize(target) void` (`:2725-2730`).
+    pub(super) fn toggle_maximize<C: CoreSurfaceHandle>(target: Target<'_, C>) {
+        match target {
+            Target::App => {}
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.surface.toggleMaximize()`.
+                let _ = widget(v);
+            }
+        }
+    }
+
+    /// `pub fn toggleTabOverview(target) bool` (`:2732-2749`). Reaches the enclosing
+    /// [`Window`] and toggles its tab overview (`window.rs:973`).
+    pub(super) fn toggle_tab_overview<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(window) = ext::ancestor::<Window>(&w) else {
+                    eprintln!(
+                        "warn(gtk): surface is not in a window, ignoring toggle_tab_overview"
+                    );
+                    return false;
+                };
+                window.toggle_tab_overview();
+                true
+            }
+        }
+    }
+
+    /// `pub fn toggleWindowDecorations(target) bool` (`:2751-2768`). Reaches the
+    /// enclosing [`Window`] and toggles its decorations (`window.rs:963`).
+    pub(super) fn toggle_window_decorations<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(window) = ext::ancestor::<Window>(&w) else {
+                    eprintln!(
+                        "warn(gtk): surface is not in a window, ignoring toggle_window_decorations"
+                    );
+                    return false;
+                };
+                window.toggle_window_decorations();
+                true
+            }
+        }
+    }
+
+    /// `pub fn toggleCommandPalette(target) bool` (`:2770-2777`).
+    pub(super) fn toggle_command_palette<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.gobj().toggleCommandPalette()`
+                // (the surface widget's command-palette toggle). Lands with the command
+                // palette completion (T25).
+                match widget(v) {
+                    Some(_w) => false,
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn controlInspector(target, value) bool` (`:2779-2786`).
+    pub(super) fn control_inspector<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::Inspector,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.gobj().controlInspector(value)`.
+                // Reaches the L6 inspector; lands with the inspector completion.
+                match widget(v) {
+                    Some(_w) => {
+                        let _ = value;
+                        false
+                    }
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn commandFinished(target, value) bool` (`:2788-2795`).
+    pub(super) fn command_finished<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::CommandFinished,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.gobj().commandFinished(value)`.
+                match widget(v) {
+                    Some(_w) => {
+                        let _ = value;
+                        false
+                    }
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn setReadonly(target, value) bool` (`:2797-2804`).
+    pub(super) fn set_readonly<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::Readonly,
+    ) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.gobj().setReadonly(value)`
+                // (`readonly` prop). Lands with the surface-widget readonly completion.
+                match widget(v) {
+                    Some(_w) => {
+                        let _ = value;
+                        false
+                    }
+                    None => false,
+                }
+            }
+        }
+    }
+
+    /// `pub fn keySequence(target, value) bool` (`:2806-2820`).
+    pub(super) fn key_sequence<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::KeySequence,
+    ) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): key_sequence action to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.gobj().keySequenceAction(value)`
+                // (the `key-state-overlay`). Lands with the overlay completion (T24). Reference
+                // returns true unconditionally (errors only log).
+                let _ = (widget(v), value);
+                true
+            }
+        }
+    }
+
+    /// `pub fn keyTable(target, value) bool` (`:2822-2836`).
+    pub(super) fn key_table<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::KeyTable<'_>,
+    ) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): key_table action to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                // INHABITED placeholder: reference `v.rt_surface.gobj().keyTableAction(value)`.
+                // Lands with the key-table completion. Reference returns true unconditionally.
+                let _ = (widget(v), value);
+                true
+            }
+        }
+    }
+
+    /// `pub fn showOnScreenKeyboard(target) bool` (`:2699-2712`). Forwards to the
+    /// surface widget's on-screen-keyboard request (`surface.rs:1334`).
+    pub(super) fn show_on_screen_keyboard<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => {
+                eprintln!("warn(gtk): show_on_screen_keyboard to app is unexpected");
+                false
+            }
+            Target::Surface(v) => match widget(v) {
+                Some(w) => w.show_on_screen_keyboard(None),
+                None => false,
+            },
+        }
     }
 }
 

@@ -89,6 +89,17 @@ impl Surface {
         let obj: glib::Object = unsafe { glib::translate::from_glib_none(ptr) };
         obj.downcast::<GhosttySurface>().ok()
     }
+
+    /// The owning [`GhosttySurface`] widget, or `None` before `constructed` wires
+    /// the backref. This is the crate-visible form of [`Surface::gobj`] — the
+    /// reference's `rt_surface.surface` / `rt_surface.gobj()` accessor that the
+    /// `Application` `performAction` `Action` namespace (`application.zig:1909-2843`)
+    /// reads to reach the widget for a `.surface` target. Same liveness contract as
+    /// [`Surface::gobj`]: only call while the widget is fully alive (refcount > 0),
+    /// which is exactly the case during synchronous app-thread action dispatch.
+    pub(crate) fn widget(&self) -> Option<GhosttySurface> {
+        self.gobj()
+    }
 }
 
 impl ApprtSurface for Surface {
