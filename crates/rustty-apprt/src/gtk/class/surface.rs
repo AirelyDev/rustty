@@ -752,12 +752,33 @@ mod imp {
                     // SAFETY: `!ptr.is_null()` implies a fully-initialized surface
                     // (a successful `Surface::init` published this box via
                     // `Box::into_raw`); we reconstitute the SAME box exactly once.
-                    // `deinit`'s contract is met; `CoreSurface` has no `Drop`, so
-                    // dropping the `Box` frees the heap slot WITHOUT re-running
-                    // teardown — the faithful `alloc.destroy`.
+                    //
+                    // [DOUBLE-FREE FIX] `CoreSurface::deinit`'s contract
+                    // (Surface.zig:1922-1988 finalize; rustty-core
+                    // `Surface::deinit` doc) is the reference `alloc.destroy`:
+                    // after deinit the pointee "must NOT be used OR DROPPED; the
+                    // owner must free the allocation WITHOUT dropping." deinit
+                    // frees the owned rows via CONSUMING (`ptr::read`) receivers
+                    // — including the termio `Subprocess.args` `Vec<CString>`,
+                    // freed via the read-out Termio copy's teardown. The previous
+                    // `drop(boxed)` VIOLATED the contract: it ran the surface's
+                    // field-Drop glue, which re-freed those SAME `ptr::read`'d
+                    // rows (the argv `Vec<CString>`, the mailbox queue, the
+                    // terminal), aborting with glibc `free(): invalid size`. Free
+                    // the heap SLOT without running Drop — exactly what the
+                    // init-error path (`Surface::initErrdefers` + caller
+                    // free-without-drop) already does.
                     let mut boxed = unsafe { Box::from_raw(ptr) };
                     unsafe { boxed.deinit() };
-                    drop(boxed);
+                    // Free the box's backing allocation WITHOUT dropping its
+                    // contents (deinit already tore every field down).
+                    let raw: *mut CoreSurface = Box::into_raw(boxed);
+                    unsafe {
+                        std::alloc::dealloc(
+                            raw.cast::<u8>(),
+                            std::alloc::Layout::new::<CoreSurface>(),
+                        );
+                    }
                     // Clear the pointer LAST (`Release`), after the join+free — the
                     // reference's `priv.core_surface = null` (`surface.zig:1939`).
                     self.core_surface
