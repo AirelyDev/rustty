@@ -654,14 +654,78 @@ mod imp {
         /// `syncActionAccelerator`. Re-derives every menu accelerator from the
         /// current keybind set.
         fn sync_action_accelerators(&self) {
-            // PORT NOTE (placeholder-leaf): each `syncActionAccelerator` maps a GTK
-            // action name to `config.keybind.set.getTrigger(action)` and installs
-            // the accelerator via `gtk_app.setAccelsForAction`
-            // (`:1169-1199`). That reaches the `input.Binding.Action`
-            // trigger→accelerator surface (`key.accelFromTrigger`), which the
-            // action-dispatch tier lands (Task 23); the ~24 concrete action rows
-            // (`:1150-1166`) come online with the Window/Surface actions they name.
-            // Wired here (called on every `notify::config`) so the body drops in.
+            // PORTS: `application.zig:1142-1167` `syncActionAccelerators`. Maps each
+            // menu GTK action to the `input.Binding.Action` it performs, so the
+            // accelerator GTK renders next to the menu item is re-derived from the
+            // current keybind set on every `notify::config`.
+            use rustty_input::binding::{
+                Action, CloseTabMode, CopyToClipboard, InspectorMode, SplitDirection,
+            };
+            self.sync_action_accelerator("app.quit", &Action::Quit);
+            self.sync_action_accelerator("app.open-config", &Action::OpenConfig);
+            self.sync_action_accelerator("app.reload-config", &Action::ReloadConfig);
+            self.sync_action_accelerator(
+                "win.toggle-inspector",
+                &Action::Inspector(InspectorMode::Toggle),
+            );
+            self.sync_action_accelerator("app.show-gtk-inspector", &Action::ShowGtkInspector);
+            self.sync_action_accelerator("win.toggle-command-palette", &Action::ToggleCommandPalette);
+            self.sync_action_accelerator("win.close", &Action::CloseWindow);
+            self.sync_action_accelerator("win.new-window", &Action::NewWindow);
+            self.sync_action_accelerator("win.new-tab", &Action::NewTab);
+            self.sync_action_accelerator("win.close-tab::this", &Action::CloseTab(CloseTabMode::This));
+            self.sync_action_accelerator("tab.close::this", &Action::CloseTab(CloseTabMode::This));
+            self.sync_action_accelerator("win.split-right", &Action::NewSplit(SplitDirection::Right));
+            self.sync_action_accelerator("win.split-down", &Action::NewSplit(SplitDirection::Down));
+            self.sync_action_accelerator("win.split-left", &Action::NewSplit(SplitDirection::Left));
+            self.sync_action_accelerator("win.split-up", &Action::NewSplit(SplitDirection::Up));
+            self.sync_action_accelerator("win.copy", &Action::CopyToClipboard(CopyToClipboard::Mixed));
+            self.sync_action_accelerator("win.paste", &Action::PasteFromClipboard);
+            self.sync_action_accelerator("win.reset", &Action::Reset);
+            self.sync_action_accelerator("win.clear", &Action::ClearScreen);
+            self.sync_action_accelerator("win.prompt-title", &Action::PromptSurfaceTitle);
+            self.sync_action_accelerator(
+                "split-tree.new-split::left",
+                &Action::NewSplit(SplitDirection::Left),
+            );
+            self.sync_action_accelerator(
+                "split-tree.new-split::right",
+                &Action::NewSplit(SplitDirection::Right),
+            );
+            self.sync_action_accelerator(
+                "split-tree.new-split::up",
+                &Action::NewSplit(SplitDirection::Up),
+            );
+            self.sync_action_accelerator(
+                "split-tree.new-split::down",
+                &Action::NewSplit(SplitDirection::Down),
+            );
+        }
+
+        /// PORTS: `application.zig:1169-1200` `syncActionAccelerator`. Resets the GTK
+        /// action's accelerators, then installs the one derived from the current
+        /// keybind trigger for `action` (if any) via `gtk.Application.setAccelsForAction`.
+        fn sync_action_accelerator(&self, gtk_action: &str, action: &rustty_input::binding::Action) {
+            use gtk4::prelude::*;
+            let obj = self.obj();
+            let gtk_app = obj.upcast_ref::<gtk4::Application>();
+
+            // Reset it initially (`:1169-1170`).
+            gtk_app.set_accels_for_action(gtk_action, &[]);
+
+            let config = self.config.borrow();
+            let Some(config) = config.as_ref() else {
+                return;
+            };
+            // First trigger bound to this action, if any (`:1174-1175`).
+            let Some(trigger) = config.get().keybind.set.get_trigger(action) else {
+                return;
+            };
+            // Trigger → GTK accelerator string (`:1176-1193`).
+            let Some(accel) = crate::gtk::key::accel_from_trigger(trigger) else {
+                return;
+            };
+            gtk_app.set_accels_for_action(gtk_action, &[accel.as_str()]);
         }
 
         /// PORTS: `application.zig` `loadRuntimeCss`. Regenerates the app-level CSS
