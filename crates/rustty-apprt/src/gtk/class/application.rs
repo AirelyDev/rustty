@@ -2378,8 +2378,10 @@ mod action {
     }
 
     /// `pub fn newTab(target) bool` (`:2228-2251`). Reaches the enclosing [`Window`]
-    /// and calls [`Window::new_tab`] with the target's core surface as the parent
-    /// (`window.rs:968`).
+    /// with the target's core surface as the parent (`window.rs:968`). INHABITED
+    /// placeholder: the terminal [`Window::new_tab`] leaf ([`Window::new_tab_page`],
+    /// the Tab + SplitTree model) is a T21 deferral, so this reaches the window and
+    /// defers the tab creation rather than dispatching into the unimplemented leaf.
     pub(super) fn new_tab<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
         match target {
             Target::App => {
@@ -2392,16 +2394,23 @@ mod action {
                     eprintln!("warn(gtk): surface is not in a window, ignoring new_tab");
                     return false;
                 };
-                // `window.newTab(core)` — the parent core surface for font/dir inheritance,
-                // read off the widget (its `core()`), not the generic handle.
-                window.new_tab(w.core());
-                true
+                // INHABITED placeholder: reference `window.newTab(core)` (`:2245`) with the
+                // parent core surface for font/dir inheritance. The terminal `Window::new_tab`
+                // leaf is `Window::new_tab_page` (the Tab + SplitTree model), a T21 deferral
+                // (`window.rs:764`, `unimplemented!`). Reach the window + read the parent core
+                // off the widget to keep the shape live; defer the tab creation until that leaf
+                // lands (returning `false` — not-yet-handled — rather than panicking).
+                let _ = (window, w.core());
+                false
             }
         }
     }
 
     /// `pub fn newWindow(self, parent, overrides) !void` (`:2253-2331`). Creates a
-    /// [`Window`], binds its `config` to the app's, opens its first tab, and presents.
+    /// [`Window`], binds its `config` to the app's, and presents. INHABITED placeholder:
+    /// the first tab ([`Window::new_tab`] -> [`Window::new_tab_page`], the Tab + SplitTree
+    /// model) is a T21 deferral, so the window opens without its initial Surface tab until
+    /// that leaf lands (the path no longer panics).
     pub(super) fn new_window<C: CoreSurfaceHandle>(
         app: &Application,
         target: Target<'_, C>,
@@ -2424,8 +2433,14 @@ mod action {
         // Keep the window config in sync with the app config (`:2295-2301`).
         app.bind_property("config", &win, "config").build();
 
-        // Create the first tab in the new window (`:2304`).
-        win.new_tab(parent);
+        // INHABITED placeholder: reference creates the first tab here
+        // (`:2304`, `win.newTabForWindow(parent, ...)` -> `Window::new_tab`). That leaf is
+        // `Window::new_tab_page` (the Tab + SplitTree model), a T21 deferral (`window.rs:764`,
+        // `unimplemented!`). The window itself is created, config-bound, and presented (shape
+        // live); the first tab is deferred until that leaf lands, so this path no longer
+        // panics. `parent` (the parent core surface, target-derived above) is read to keep the
+        // shape and threads into the deferred `Window::new_tab(parent)` call.
+        let _ = parent;
 
         // INHABITED placeholder: reference estimates the initial size before presenting
         // (`:2308-2317`, `surface.estimateInitialSize()` + `getDefaultSize()`). Those

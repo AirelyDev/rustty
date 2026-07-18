@@ -255,6 +255,25 @@ fn perform_action_unimplemented_returns_false() {
     }
 }
 
+/// Regression guard (review finding, T22): the window-chrome milestone path
+/// `activate -> new_window` (`Target::App`, no parent) must NOT panic. `new_window`
+/// is an INHABITED placeholder — it creates + presents a `Window` and defers the
+/// first-tab leaf ([`Window::new_tab_page`], a T21 deferral) rather than dispatching
+/// into the `unimplemented!` leaf. The arm returns `Ok(true)` (a window was opened).
+#[test]
+#[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk \
+            --test gtk_perform_action -- --ignored --exact"]
+fn perform_action_new_window_app_does_not_panic() {
+    let Some(h) = display_application() else {
+        return;
+    };
+    let handled = h
+        .application
+        .perform_action(Target::<NullHandle>::App, Action::NewWindow)
+        .expect("new_window dispatch does not error");
+    assert!(handled, ".new_window opens a window (returns true)");
+}
+
 /// `.selection_changed` is a HANDLED no-op that returns `Ok(true)`
 /// ("GTK has no accessibility consumer for this yet", `application.zig:746-747`).
 #[test]
