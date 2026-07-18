@@ -46,12 +46,17 @@
 //! here for every class port to check against.
 
 pub mod application;
+pub mod command_palette;
 pub mod config;
+pub mod debug_warning;
 pub mod key_state_overlay;
 pub mod resize_overlay;
 pub mod search_overlay;
+pub mod split_tree;
 pub mod surface;
 pub mod surface_child_exited;
+pub mod tab;
+pub mod window;
 
 /// One row of the `class.zig` → gtk4-rs porter's map. Live, test-checked data so
 /// the mapping cannot silently rot as the 22 classes are ported (L5.1+): the map

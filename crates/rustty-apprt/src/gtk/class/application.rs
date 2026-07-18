@@ -1582,6 +1582,26 @@ impl Application {
         self.imp().winproto.borrow().protocol()
     }
 
+    /// PORTS: `application.zig:468-472` `winproto` — the app-level windowing
+    /// protocol accessor the reference returns as `*winprotopkg.App`. rustty holds
+    /// it in a [`RefCell`]; the shared-borrow view is what
+    /// [`crate::gtk::class::window::Window`]'s `windowRealize` (`window.zig:1305-1309`)
+    /// threads into [`winproto::Window::init`].
+    ///
+    /// [`RefCell`]: std::cell::RefCell
+    #[must_use]
+    pub fn winproto(&self) -> std::cell::Ref<'_, winproto::App> {
+        self.imp().winproto.borrow()
+    }
+
+    /// The mutable counterpart of [`Application::winproto`] — the reference's
+    /// `*winprotopkg.App` where the callee mutates (e.g. `initQuickTerminal`,
+    /// `window.zig:1204`).
+    #[must_use]
+    pub fn winproto_mut(&self) -> std::cell::RefMut<'_, winproto::App> {
+        self.imp().winproto.borrow_mut()
+    }
+
     /// PORTS: `application.zig:474-592` `run`. A hand-rolled replacement for
     /// `gio.Application.run` (**AD-7**, the plan's defining structural choice) so
     /// the event loop can be interleaved with libghostty's core: after every

@@ -180,6 +180,25 @@ impl App {
             App::X11(v) => v.supports_quick_terminal(),
         }
     }
+
+    /// PORTS: `winproto.zig:71-81` `App.initQuickTerminal`. Dispatch to the active
+    /// arm — [`class::window::Window`]'s `propQuickTerminal` (`window.zig:1204`)
+    /// initializes the quick terminal at the app layer. On a noop-only build this
+    /// is a no-op.
+    ///
+    /// [`class::window::Window`]: crate::gtk::class::window::Window
+    pub fn init_quick_terminal(
+        &mut self,
+        window: &impl gtk4::prelude::IsA<gtk4::Window>,
+    ) -> Result<(), WinprotoError> {
+        match self {
+            App::None(v) => v.init_quick_terminal(window),
+            #[cfg(feature = "wayland")]
+            App::Wayland(v) => v.init_quick_terminal(window),
+            #[cfg(feature = "x11")]
+            App::X11(v) => v.init_quick_terminal(window),
+        }
+    }
 }
 
 /// PORTS: `winproto.zig:83-155` `Window` — the per-window windowing state. In
@@ -196,7 +215,9 @@ impl App {
 /// this union and to [`noop::Window`] when that consumer exists.
 #[derive(Debug)]
 pub enum Window {
-    /// `none: noop.Window` (`winproto.zig:90`).
+    /// `none: noop.Window` (`winproto.zig:90`). The default arm — a fresh window
+    /// begins on `.none` before it is realized (`window.zig:312` `priv.winproto =
+    /// .none`).
     None(noop::Window),
     /// `wayland: wayland.Window` (`winproto.zig:91`).
     #[cfg(feature = "wayland")]
@@ -206,7 +227,37 @@ pub enum Window {
     X11(x11::Window),
 }
 
+impl Default for Window {
+    /// A fresh window begins on the `.none` arm before it is realized
+    /// (`window.zig:312` `priv.winproto = .none`). Manual (not derived) because the
+    /// `None` arm carries a payload.
+    fn default() -> Self {
+        Window::None(noop::Window)
+    }
+}
+
 impl Window {
+    /// PORTS: `winproto.zig:95-118` `Window.init`. Select the per-window backend
+    /// matching the active app-level [`App`] arm. The reference's `inline for` over
+    /// the union fields becomes an explicit match (Rust has no field reflection);
+    /// on a noop-only build only the `.none` arm exists, so this always builds a
+    /// [`noop::Window`]. `window` is the realizing [`class::window::Window`]
+    /// (`window.zig:1301-1314`).
+    ///
+    /// [`class::window::Window`]: crate::gtk::class::window::Window
+    pub fn init(
+        app: &App,
+        window: &impl gtk4::prelude::IsA<gtk4::Window>,
+    ) -> Result<Window, WinprotoError> {
+        match app {
+            App::None(a) => Ok(Window::None(noop::Window::init(a, window)?)),
+            #[cfg(feature = "wayland")]
+            App::Wayland(a) => Ok(Window::Wayland(wayland::Window::init(a, window)?)),
+            #[cfg(feature = "x11")]
+            App::X11(a) => Ok(Window::X11(x11::Window::init(a, window)?)),
+        }
+    }
+
     /// PORTS: `winproto.zig:120-124` `Window.deinit`. Dispatch to the active arm.
     pub fn deinit(&mut self) {
         match self {
@@ -228,6 +279,44 @@ impl Window {
             Window::Wayland(v) => v.client_side_decoration_enabled(),
             #[cfg(feature = "x11")]
             Window::X11(v) => v.client_side_decoration_enabled(),
+        }
+    }
+
+    /// PORTS: `winproto.zig` `Window.resizeEvent`. Dispatch to the active arm
+    /// ([`class::window::Window`]'s `propGdkSurfaceDims`, `window.zig:1151`).
+    ///
+    /// [`class::window::Window`]: crate::gtk::class::window::Window
+    pub fn resize_event(&mut self) -> Result<(), WinprotoError> {
+        match self {
+            Window::None(v) => v.resize_event(),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(v) => v.resize_event(),
+            #[cfg(feature = "x11")]
+            Window::X11(v) => v.resize_event(),
+        }
+    }
+
+    /// PORTS: `winproto.zig` `Window.syncAppearance`. Dispatch to the active arm
+    /// (`window.zig:707,1220`).
+    pub fn sync_appearance(&mut self) -> Result<(), WinprotoError> {
+        match self {
+            Window::None(v) => v.sync_appearance(),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(v) => v.sync_appearance(),
+            #[cfg(feature = "x11")]
+            Window::X11(v) => v.sync_appearance(),
+        }
+    }
+
+    /// PORTS: `winproto.zig` `Window.setUrgent`. Dispatch to the active arm
+    /// (`window.zig:884,2000`).
+    pub fn set_urgent(&mut self, urgent: bool) -> Result<(), WinprotoError> {
+        match self {
+            Window::None(v) => v.set_urgent(urgent),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(v) => v.set_urgent(urgent),
+            #[cfg(feature = "x11")]
+            Window::X11(v) => v.set_urgent(urgent),
         }
     }
 }

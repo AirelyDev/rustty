@@ -68,6 +68,21 @@ impl App {
         false
     }
 
+    /// PORTS: `noop.zig:37` `App.initQuickTerminal`. The no-op backend has no
+    /// quick-terminal support, so this is a no-op — [`class::window::Window`]'s
+    /// `propQuickTerminal` (`window.zig:1204`) calls it on this arm and it does
+    /// nothing (the reference's empty body). The `window` param mirrors the
+    /// reference's `*ApprtWindow`; it is unused here.
+    ///
+    /// [`class::window::Window`]: crate::gtk::class::window::Window
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub fn init_quick_terminal(
+        &mut self,
+        _window: &impl gtk4::prelude::IsA<gtk4::Window>,
+    ) -> Result<(), WinprotoError> {
+        Ok(())
+    }
+
     // PORT NOTE: the reference's `eventMods` (`noop.zig:26-32`),
     // `initQuickTerminal` (`noop.zig:37`), and the `Window`-parameterized methods
     // reference `input.Mods`, `*gdk.Device`, and `class/window.zig` (`ApprtWindow`)
@@ -84,9 +99,40 @@ impl App {
 pub struct Window;
 
 impl Window {
+    /// PORTS: `noop.zig:41-47` `Window.init`. Always succeeds with the empty
+    /// per-window state — the no-op backend needs nothing from the app-level
+    /// state or the window. The reference threads `(Allocator, *App, *ApprtWindow)`
+    /// for signature parity with the protocol arms; here `app`/`window` are unused
+    /// on the noop path (the `Allocator` is dropped tier-wide, PREPORT_GTK §2).
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn init(
+        _app: &App,
+        _window: &impl gtk4::prelude::IsA<gtk4::Window>,
+    ) -> Result<Window, WinprotoError> {
+        Ok(Window)
+    }
+
     /// PORTS: `noop.zig:49-51` `Window.deinit`. Nothing to release.
     #[allow(clippy::unused_self)]
     pub fn deinit(&mut self) {}
+
+    /// PORTS: `noop.zig:56` `Window.resizeEvent`. No-op for the no-op backend.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub fn resize_event(&mut self) -> Result<(), WinprotoError> {
+        Ok(())
+    }
+
+    /// PORTS: `noop.zig:58` `Window.syncAppearance`. No-op for the no-op backend.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub fn sync_appearance(&mut self) -> Result<(), WinprotoError> {
+        Ok(())
+    }
+
+    /// PORTS: `noop.zig:72` `Window.setUrgent`. No-op for the no-op backend.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub fn set_urgent(&mut self, _urgent: bool) -> Result<(), WinprotoError> {
+        Ok(())
+    }
 
     /// PORTS: `noop.zig:62-68` `Window.clientSideDecorationEnabled`. Returns
     /// `true` — the no-op backend always reports client-side decorations enabled.
