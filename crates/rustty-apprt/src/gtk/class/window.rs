@@ -1284,13 +1284,19 @@ impl Window {
 /// PORTS: `window.zig:1790-1832` `actionAbout`.
 fn action_about(_action: &gio::SimpleAction, _param: Option<&glib::Variant>, this: &Window) {
     // AD-3: `adw_version.supportsDialogs()` collapses to the modern `adw` arm.
-    // PORT NOTE (R2): name/website use rustty identity, not the reference's
-    // hardcoded "Ghostty"/ghostty.org.
+    // PORT NOTE (R2): name/icon/developer/version are sourced from
+    // `rustty_identity`, NOT the reference's hardcoded "Ghostty" /
+    // "Ghostty Developers" / `build_config.version_string`. The reference's
+    // `website` ("https://ghostty.org") and `issue-url` (the ghostty GitHub
+    // issues page) are DROPPED: `rustty_identity` carries no homepage/issue-url
+    // constant, and emitting ghostty.org would leak the upstream identity into a
+    // user-visible shipped dialog (R2 forbids this).
+    let developer_name = format!("{} Developers", rustty_identity::APP_NAME_TITLECASE);
     let dialog = adw::AboutDialog::builder()
-        .application_name("Rustty")
+        .application_name(rustty_identity::APP_NAME_TITLECASE)
         .application_icon(rustty_identity::BUNDLE_ID)
-        .developer_name("Rustty Developers")
-        .website("https://ghostty.org")
+        .developer_name(developer_name)
+        .version(rustty_identity::VERSION)
         .build();
     dialog.present(Some(this.upcast_ref::<gtk4::Widget>()));
 }
