@@ -33,9 +33,9 @@
 //!
 //! # The invariants this skeleton is measured against (PREPORT_GTK §2)
 //!
-//! * **(3) `core_surface` realize ordering** — `core_surface` starts `None` and is
+//! * **(3) `core_surface` realize ordering** — `core_surface` starts null and is
 //!   NOT constructed here; it is lazily built on the first GLArea resize (T15).
-//!   [`Surface::core`] returns the `Option` unchanged.
+//!   [`Surface::core`] returns `Some`/`None` from the raw pointer (null => `None`).
 //! * **(9) IME buffer consistency** — `in_keyevent`/`im_composing`/`im_buf`/`im_len`
 //!   are kept as ONE [`ImeState`] struct, never scattered.
 //! * **(10) `action_group` self-reference** — `init_action_map` installs the group
@@ -46,6 +46,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::time::Duration;
 
 use glib::prelude::*;
@@ -345,9 +346,30 @@ mod imp {
         pub rt_surface: ApprtSurface,
 
         /// PORTS: `surface.zig:650` `core_surface: ?*CoreSurface` — the ONE OWNED
-        /// libghostty-core object. **Invariant 3**: `None` until the first GLArea
-        /// resize (T15); free-site (`deinit` + destroy) in T14/T15.
-        pub core_surface: RefCell<Option<Box<CoreSurface>>>,
+        /// libghostty-core object. **Invariant 3**: null until the first GLArea
+        /// resize (T15); free-site (`deinit` + destroy) in the finalize `Drop`.
+        ///
+        /// # Storage & thread-affinity (soundness)
+        ///
+        /// Stored as an [`AtomicPtr<CoreSurface>`] — the faithful Rust analogue of
+        /// the reference's RAW optional pointer `?*CoreSurface` (`surface.zig:650`),
+        /// NOT a `RefCell`. This is load-bearing for SOUNDNESS: the RENDER/IO
+        /// threads read this field cross-thread (apprt `gtk::Surface::core()` →
+        /// widget [`super::Surface::core`] → this field), while the MAIN/finalize
+        /// thread also reads and writes it. A `RefCell` is single-threaded — a
+        /// concurrent borrow from the render thread is unsound. An atomic pointer
+        /// read/write is sound cross-thread with no locking (matching the
+        /// reference's lock-free raw-pointer read; a `Mutex` here would change the
+        /// locking model and could deadlock the render thread).
+        ///
+        /// OWNERSHIP: the heap allocation is a stable `Box` (the self-referential
+        /// pin — `CoreSurface` is heap-boxed and never moves after `init`, so the
+        /// pointers the renderer/io threads hold stay valid). At [`super::Surface::init_surface`]
+        /// the box is published via `Box::into_raw` + a `Release` store; at finalize
+        /// it is reclaimed via `Box::from_raw` + `deinit` (which JOINS the threads)
+        /// and only THEN cleared to null (**invariant 5** ordering) — so no thread
+        /// ever reads a cleared/freed pointer (the join-before-clear invariant).
+        pub core_surface: AtomicPtr<CoreSurface>,
 
         /// PORTS: `surface.zig:653` `size: apprt.SurfaceSize` — cached metrics.
         pub size: Cell<SurfaceSize>,
@@ -464,7 +486,7 @@ mod imp {
                 drop_target: TemplateChild::default(),
                 im_context: TemplateChild::default(),
                 rt_surface: ApprtSurface::default(),
-                core_surface: RefCell::new(None),
+                core_surface: AtomicPtr::new(std::ptr::null_mut()),
                 size: Cell::new(SurfaceSize {
                     width: 0,
                     height: 0,
@@ -708,25 +730,38 @@ mod imp {
             // NOTE: We must deinit the surface in the finalize (this `Drop`) and
             // NOT in `dispose`, because the inspector widget relies on this behavior
             // with a weakRef to properly deactivate (`surface.zig:1931-1933`).
-            let present = self.core_surface.borrow().is_some();
+            // Load the raw pointer WITHOUT clearing it (`Acquire` pairs with the
+            // `Release` publish in `init_surface`). **Invariant 5** — the pointer
+            // MUST stay published until the render/io threads are joined (below),
+            // so a still-running render thread's `core()` read never sees a cleared
+            // pointer (the panic this hardens against).
+            let ptr = self.core_surface.load(Ordering::Acquire);
             super::finalize_core_surface(
-                present,
+                !ptr.is_null(),
                 // Remove ourselves from the list of known surfaces in the app. We
                 // do this before deinit in case a callback triggers searching for
                 // this surface (`surface.zig:1926-1929`).
                 || super::delete_surface_from_app(std::ptr::from_ref(&self.rt_surface).cast_mut()),
                 || {
-                    if let Some(mut boxed) = self.core_surface.borrow_mut().take() {
-                        // `v.deinit(); alloc.destroy(v)` (**invariant 2**,
-                        // `surface.zig:1936-1937`). `CoreSurface` has no `Drop`, so
-                        // dropping the `Box` frees the heap slot WITHOUT re-running
-                        // teardown — the faithful `alloc.destroy`.
-                        //
-                        // SAFETY: `present` implies a fully-initialized surface (a
-                        // successful `Surface::init`); `deinit`'s contract is met and
-                        // the slot is freed without being used again.
-                        unsafe { boxed.deinit() };
-                    }
+                    // `v.deinit(); alloc.destroy(v); priv.core_surface = null`
+                    // (**invariants 2 & 5**, `surface.zig:1936-1939`) — IN THAT
+                    // ORDER. `deinit` stops+JOINS the renderer/io threads FIRST;
+                    // only after the join do we free the heap slot and clear the
+                    // pointer, so no thread can read a cleared/dangling pointer.
+                    //
+                    // SAFETY: `!ptr.is_null()` implies a fully-initialized surface
+                    // (a successful `Surface::init` published this box via
+                    // `Box::into_raw`); we reconstitute the SAME box exactly once.
+                    // `deinit`'s contract is met; `CoreSurface` has no `Drop`, so
+                    // dropping the `Box` frees the heap slot WITHOUT re-running
+                    // teardown — the faithful `alloc.destroy`.
+                    let mut boxed = unsafe { Box::from_raw(ptr) };
+                    unsafe { boxed.deinit() };
+                    drop(boxed);
+                    // Clear the pointer LAST (`Release`), after the join+free — the
+                    // reference's `priv.core_surface = null` (`surface.zig:1939`).
+                    self.core_surface
+                        .store(std::ptr::null_mut(), Ordering::Release);
                 },
             );
 
@@ -772,10 +807,16 @@ mod imp {
         /// PORTS: `surface.zig:1197-1201` `getReadonly`. `false` before realize
         /// (`core_surface == null`, **invariant 3**); otherwise the core's flag.
         fn readonly_prop(&self) -> bool {
-            self.core_surface
-                .borrow()
-                .as_ref()
-                .is_some_and(|core| core.readonly)
+            let ptr = self.core_surface.load(Ordering::Acquire);
+            if ptr.is_null() {
+                return false;
+            }
+            // SAFETY: a non-null pointer is a live, heap-stable `CoreSurface` (the
+            // pin; published by `init_surface`, cleared only after the render/io
+            // threads are joined in finalize). This getter runs on the main thread;
+            // the `readonly` field is a plain bool read (the reference reads
+            // `priv.core_surface.?` fields the same way, unsynchronized).
+            unsafe { (*ptr).readonly }
         }
     }
 
@@ -979,16 +1020,58 @@ impl Surface {
         obj
     }
 
-    /// PORTS: `surface.zig:766-769` `core`. The core surface backing this widget,
-    /// or `None` before the first GLArea resize (**invariant 3**). The returned
-    /// pointer is valid only while `core_surface` stays `Some`.
+    /// PORTS: `surface.zig:766-769` `core` — `return priv.core_surface` (a raw
+    /// `?*CoreSurface`). The core surface backing this widget, or `None` before the
+    /// first GLArea resize (**invariant 3**). The returned pointer is valid only
+    /// while `core_surface` stays published (non-null).
+    ///
+    /// SOUNDNESS: this is a cross-thread read — the render/io threads reach it via
+    /// the apprt seam (`gtk::Surface::core()`). It is a single atomic pointer load
+    /// (`Acquire`, pairing with `init_surface`'s `Release` publish), which is sound
+    /// cross-thread and lock-free, matching the reference's raw-pointer read. The
+    /// heap slot is pinned; the pointer is cleared only after the render/io threads
+    /// are joined (finalize, **invariant 5**), so a non-null result is always live.
     #[must_use]
     pub fn core(&self) -> Option<*mut CoreSurface> {
-        self.imp()
-            .core_surface
-            .borrow_mut()
-            .as_mut()
-            .map(|boxed| std::ptr::from_mut::<CoreSurface>(boxed))
+        let ptr = self.imp().core_surface.load(Ordering::Acquire);
+        if ptr.is_null() {
+            None
+        } else {
+            Some(ptr)
+        }
+    }
+
+    /// Read `core_surface` from a RAW `GhosttySurface` instance pointer, WITHOUT
+    /// reconstructing a refcounting GObject wrapper — the faithful analogue of the
+    /// reference reading `priv.core_surface` through the raw `*Surface`
+    /// (`surface.zig:645-648,767-769`).
+    ///
+    /// This is the ONLY finalize-safe way for the apprt seam's `core()`
+    /// ([`crate::gtk::surface::Surface::core`]) to read the pointer: `deleteSurface`
+    /// calls it during the widget's own finalize (`surface.zig:1929`), when the
+    /// instance refcount is already 0 — where the wrapper reconstitution
+    /// (`from_glib_none`/`from_glib_borrow`) aborts on glib's `ref_count != 0`
+    /// debug assertion. A bare instance-struct borrow + atomic load touches no
+    /// refcount, so it is sound both live (render thread) and mid-finalize.
+    ///
+    /// # Safety
+    /// `obj` must be a live `GhosttySurface` instance pointer — its GObject header
+    /// and private data allocated (true even mid-finalize, before the instance slot
+    /// is freed).
+    #[must_use]
+    pub(crate) unsafe fn core_surface_ptr(
+        obj: *mut glib::gobject_ffi::GObject,
+    ) -> *mut CoreSurface {
+        // The `GhosttySurface` instance struct (its GObject header is the first
+        // field, so the cast from `*mut GObject` is layout-valid).
+        let instance = obj.cast::<<imp::Surface as ObjectSubclass>::Instance>();
+        // SAFETY: `instance` is a live `GhosttySurface` instance; `imp()` borrows
+        // its embedded private `imp::Surface` (a plain field of the C instance
+        // struct — NO GObject refcount). The `&imp::Surface` is used only to load
+        // the atomic pointer (`Acquire`, pairing with `init_surface`'s `Release`
+        // publish) and is not retained past this read.
+        let imp: &imp::Surface = unsafe { (*instance).imp() };
+        imp.core_surface.load(Ordering::Acquire)
     }
 
     /// PORTS: `surface.zig:771-774` `rt`. The embedded apprt `Surface` backref.
@@ -1008,7 +1091,7 @@ impl Surface {
         let imp = self.imp();
 
         // "We can only set a parent before surface realization." (`:788-793`).
-        if imp.core_surface.borrow().is_some() {
+        if !imp.core_surface.load(Ordering::Acquire).is_null() {
             eprintln!("setParent called after surface is already realized");
             return;
         }
@@ -1569,7 +1652,7 @@ impl Surface {
     /// land with that task; until then this only honors the early-return guards.
     fn resize_overlay_schedule(&self) {
         // `const surface = priv.core_surface orelse return` (`:3493`).
-        if self.imp().core_surface.borrow().is_some() {
+        if !self.imp().core_surface.load(Ordering::Acquire).is_null() {
             // PORT NOTE (placeholder-leaf, T16): only with a live core surface —
             // format the grid size into the overlay label and schedule an idle
             // show (`:3495-3519`).
@@ -1586,7 +1669,7 @@ impl Surface {
         let imp = self.imp();
         // `assert(priv.core_surface == null)` (`:3413`).
         assert!(
-            imp.core_surface.borrow().is_none(),
+            imp.core_surface.load(Ordering::Acquire).is_null(),
             "initSurface called with a core surface already present"
         );
 
@@ -1667,6 +1750,22 @@ impl Surface {
             config.working_directory = Some(wd_val);
         }
 
+        // PRE-PUBLISH the stable slot pointer BEFORE `CoreSurface::init` spawns the
+        // renderer/io threads (**startup soundness**). This is a rustty-specific
+        // necessity, NOT in the reference: the reference's renderer thread reads its
+        // surface from `renderer.surface_mailbox.surface` (set at renderer
+        // construction), but rustty dropped `surface_mailbox`, so the renderer
+        // thread's FIRST action (`renderer_seam.rs` `threadMain_`, crash-sentry
+        // setup) calls `apprt::Surface::core()` — which reads THIS field. Publishing
+        // after `init` (the reference's `:3477`) would race: the just-spawned render
+        // thread could read a null `core_surface` and hit the non-null assert. We
+        // publish the (stable, about-to-be-initialized) slot address now; the render
+        // thread's startup read only STORES the pointer as crash metadata and never
+        // dereferences it before `init` completes and sends the first wakeup, so the
+        // brief "published but not yet constructed" window is sound. `Release` pairs
+        // with the `Acquire` loads in `core()`.
+        imp.core_surface.store(surface_ptr, Ordering::Release);
+
         // Initialize the surface (`:3465-3474`). `config`'s Drop is the reference's
         // `defer config.deinit()`.
         // SAFETY: `surface_ptr` is a stable, uninitialized `CoreSurface` slot;
@@ -1678,6 +1777,11 @@ impl Surface {
 
         if init_res.is_err() {
             eprintln!("warn(gtk): failed to initialize surface");
+            // Un-publish the slot before freeing it — `init` failed, so no live
+            // `CoreSurface` backs the pointer (and any late startup read must see
+            // null again, restoring **invariant 3**).
+            imp.core_surface
+                .store(std::ptr::null_mut(), Ordering::Release);
             // `errdefer app.core().deleteSurface(self.rt())` (`:3435`).
             // SAFETY: `core_app` is live; `rt_surface` still points at our pinned
             // embedded apprt surface.
@@ -1688,14 +1792,23 @@ impl Surface {
         }
 
         // Store it! (`:3477-3478`). Rebuild the `Box` over the SAME heap allocation
-        // (now initialized), so `surface_ptr` (held by core's renderer/io threads)
-        // stays valid — the pin.
+        // (now initialized) and LEAK it back into the atomic field, transferring
+        // ownership of the stable heap slot to `core_surface` (reclaimed by
+        // `Box::from_raw` in finalize). The published pointer is unchanged (the box
+        // is the same `surface_ptr` address, already visible to the threads); this
+        // step exists to move OWNERSHIP out of the local `slot`/`boxed` so it is not
+        // freed at scope end.
         // SAFETY: `init_res` is `Ok`, so the slot's payload is fully initialized;
         // the raw pointer came from `Box::into_raw` and is reconstituted exactly
         // once as `Box<CoreSurface>` (layout-identical to `Box<MaybeUninit<_>>`).
         let boxed: Box<CoreSurface> =
             unsafe { Box::from_raw(Box::into_raw(slot).cast::<CoreSurface>()) };
-        imp.core_surface.replace(Some(boxed));
+        let boxed_ptr = Box::into_raw(boxed);
+        debug_assert_eq!(
+            boxed_ptr, surface_ptr,
+            "the initialized box is the same pinned slot we pre-published"
+        );
+        imp.core_surface.store(boxed_ptr, Ordering::Release);
 
         // Emit the signal that we initialized the surface (`:3481-3486`).
         self.emit_by_name::<()>("init", &[]);
@@ -2970,6 +3083,79 @@ mod tests {
         assert!(
             order.borrow().is_empty(),
             "no teardown when core surface absent"
+        );
+    }
+
+    /// **Cross-thread SOUNDNESS regression — the render-thread panic (invariant 5).**
+    ///
+    /// Reproduces, DETERMINISTICALLY and without a live GL renderer, the exact
+    /// teardown hazard the [`AtomicPtr<CoreSurface>`] storage + join-before-clear
+    /// finalize ordering (this file's imp `Drop`) prevents. A background "renderer
+    /// thread" hammers a published `core_surface` pointer — the widget [`Surface::core`]
+    /// cross-thread read is a single atomic load, feeding the apprt seam's non-null
+    /// assert (`crate::gtk::surface::Surface::core`, `Surface.zig:24-28`). The main
+    /// thread runs the finalize sequence: the `deinit_and_destroy` closure must STOP +
+    /// JOIN the reader (as `CoreSurface::deinit` joins the render/io threads) BEFORE
+    /// clearing the pointer to null.
+    ///
+    /// The ORIGINAL bug cleared first: `self.core_surface.borrow_mut().take()` (→
+    /// `None`) and only THEN `boxed.deinit()` (the join) — so the still-running
+    /// renderer thread saw a cleared pointer and hit
+    /// `expect("...uninitialized surface")` (the `thread 'renderer' panicked` line).
+    /// Here the reader records whether it EVER observed null; with the corrected
+    /// order it never does. Reversing the two lines of the closure below makes this
+    /// test fail — it is a live regression guard, not a tautology.
+    #[test]
+    fn finalize_joins_threads_before_clearing_core_surface() {
+        use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        // A non-null sentinel standing in for the published, heap-stable core surface
+        // pointer. NEVER dereferenced — the reader only null-checks it, exactly as the
+        // widget `core()` atomic load feeds the apprt seam's non-null assert.
+        let sentinel: *mut CoreSurface = std::ptr::NonNull::<CoreSurface>::dangling().as_ptr();
+        let core_surface = Arc::new(AtomicPtr::new(sentinel));
+        let stop = Arc::new(AtomicBool::new(false));
+        let saw_null = Arc::new(AtomicBool::new(false));
+
+        let reader = {
+            let core_surface = Arc::clone(&core_surface);
+            let stop = Arc::clone(&stop);
+            let saw_null = Arc::clone(&saw_null);
+            std::thread::spawn(move || {
+                // The renderer thread's loop: read `core()` continuously until it is
+                // told to stop and joined (mirroring `renderer_thr.join()`).
+                while !stop.load(Ordering::Acquire) {
+                    if core_surface.load(Ordering::Acquire).is_null() {
+                        saw_null.store(true, Ordering::Release);
+                    }
+                }
+            })
+        };
+
+        // Let the reader spin on the published pointer before teardown starts.
+        std::thread::sleep(Duration::from_millis(20));
+
+        // The finalize ordering under test (mirrors the imp `Drop` deinit closure):
+        // JOIN the reader FIRST, THEN clear the pointer.
+        finalize_core_surface(
+            !core_surface.load(Ordering::Acquire).is_null(),
+            || { /* `deleteSurface`: reads core() (still non-null); no clear */ },
+            || {
+                // `CoreSurface::deinit`: stop + JOIN the render thread FIRST …
+                stop.store(true, Ordering::Release);
+                reader.join().unwrap();
+                // … and ONLY NOW clear the pointer (`alloc.destroy` +
+                // `priv.core_surface = null`, `surface.zig:1937-1939`).
+                core_surface.store(std::ptr::null_mut(), Ordering::Release);
+            },
+        );
+
+        assert!(
+            !saw_null.load(Ordering::Acquire),
+            "renderer thread observed a cleared core_surface before being joined — \
+             the teardown cleared the pointer before joining (invariant 5 violated)"
         );
     }
 }

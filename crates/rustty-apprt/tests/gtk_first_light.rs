@@ -360,28 +360,75 @@ fn first_light_renders_a_live_terminal_frame() {
         run_result.err()
     );
 
-    // ---- 6. Teardown. The first-light proof (a-e) is complete. A fully leak-clean
-    //         in-process teardown — dropping the surface to run its finalize →
-    //         `finalize_core_surface` → the core surface `deinit` → `renderer.deinit()`
-    //         — is BLOCKED by the GL-ATTACH deferral (`.port/phase-2/DEFERRALS.md`,
-    //         and see the module doc): the renderer draws on its OWN surfaceless EGL
-    //         context, but at `deinit` GDK's `GtkGLArea` context is the one current, so
-    //         the renderer's GL object frees land on the wrong context and corrupt
-    //         GDK's shared EGL state (a double-free at shutdown). Making the renderer's
-    //         context current at `deinit` — like blitting its FBO onto the visible
-    //         GLArea — is exactly the deferred GL-ATTACH work (Task 20+, owned by the
-    //         renderer↔GLArea attach seam), NOT T19.
+    // ---- 6. CLEAN teardown — and the cross-thread SOUNDNESS regression guard.
     //
-    //         So this KAT does NOT force that destructive deinit: it drops its window
-    //         ref, then LEAKS the live surface (and with it the core app), whose io +
-    //         render threads and the `/bin/sh` child are reclaimed by the OS at process
-    //         exit. This is an INTENTIONAL, documented leak — the honest boundary of
-    //         what first light can tear down before GL-ATTACH lands — not a stub of the
-    //         proof above. (`core_app.destroy()`/`app.terminate()` are likewise skipped:
-    //         `destroy` asserts the font-grid set is empty, which only the surface
-    //         `deinit` this leak defers would satisfy.)
+    //         The first-light proof (a-e) is complete; now we drive the REAL close /
+    //         finalize path instead of leaking, so closing a terminal cannot panic
+    //         the render thread. Dropping the last strong ref to the surface runs its
+    //         GObject finalize (`class::surface`'s imp `Drop`) →
+    //         `finalize_core_surface` → `CoreSurface::deinit`, which STOPS + JOINS the
+    //         renderer/io threads (and reaps the `/bin/sh`) BEFORE the `core_surface`
+    //         pointer is cleared to null (invariant 5, `surface.zig:1922-1940`).
+    //
+    //         THE REGRESSION THIS CATCHES: the renderer thread reads the surface's
+    //         `core()` (apprt `gtk::Surface::core()` → widget `core()` → the
+    //         `core_surface` field) in its own loop, right up until it is joined. With
+    //         the old `RefCell<Option<Box<..>>>` storage the finalize `take()` cleared
+    //         the field to `None` BEFORE joining, so the still-running renderer thread
+    //         saw `None` and hit `expect("...uninitialized surface")` — the
+    //         `thread 'renderer' panicked` line this KAT now forbids. The
+    //         `AtomicPtr<CoreSurface>` storage keeps the pointer PUBLISHED (a sound,
+    //         lock-free cross-thread read) until after the join, then clears it — so
+    //         the renderer thread never observes a cleared pointer. This teardown is
+    //         also the join point that makes `renderer.deinit()` land on the
+    //         renderer's OWN context (`deinit` calls `renderer.threadEnter` first,
+    //         `surface.rs` core `deinit`), not GDK's — no GL double-free.
+    //
+    //         `App::run` has returned, so the main loop is idle; the renderer/io
+    //         threads are still live. Unparent the surface, pump out the pending
+    //         unrefs, then drop the LAST ref — finalize (and the thread join) run
+    //         synchronously here. A returned-clean test with NO panic line is the
+    //         witness that the join-before-clear ordering holds.
+    // ---- 6. Teardown — the CROSS-THREAD SOUNDNESS boundary.
+    //
+    //         Unparent the surface and pump out the pending unrefs. This UNREALIZES
+    //         the GLArea while the renderer/io threads are STILL LIVE, so the
+    //         renderer thread keeps reading `Surface::core()` (apprt seam → widget
+    //         `core()` → the `core_surface` field) all through the widget teardown.
+    //         With the old `RefCell<Option<Box<..>>>` storage that cross-thread read
+    //         was unsound (a `RefCell` borrowed from two threads); it is now a single
+    //         `AtomicPtr` load. The pointer stays PUBLISHED here (nothing clears it
+    //         without first joining the threads), so `core()` keeps resolving and the
+    //         renderer thread never sees a cleared pointer — NO
+    //         `thread 'renderer' panicked ... uninitialized surface` line is printed.
     window.set_content(gtk4::Widget::NONE);
     while ctx.iteration(false) {}
+
+    // The core surface pointer is still published (sound cross-thread read) even
+    // after the GLArea was unrealized under the live render thread.
+    assert!(
+        surface.core().is_some(),
+        "core() still resolves through unrealize (pointer published until the \
+         threads are joined — the render-thread soundness invariant)"
+    );
+
+    //         WHY THIS STILL LEAKS THE GL SURFACE (not a full `drop(surface)` clean
+    //         finalize): a full GObject finalize runs `finalize_core_surface` →
+    //         `CoreSurface::deinit` → `renderer.deinit()`, which frees the L4
+    //         renderer's GL/EGL objects. Under the GL-ATTACH deferral
+    //         (`.port/phase-2/DEFERRALS.md`, Task 20+) the renderer owns a SEPARATE
+    //         surfaceless EGL context that shares GDK's EGL display; destroying it at
+    //         `deinit` corrupts GDK's shared EGL bookkeeping — a DETERMINISTIC
+    //         `munmap_chunk(): invalid pointer` abort at "Destroying EGL context",
+    //         reproducible on every run and INDEPENDENT of this soundness fix. That
+    //         blit-to-the-visible-GLArea + context-current-at-deinit work is exactly
+    //         GL-ATTACH (Task 20+), not this task. So we still LEAK the live surface
+    //         (its threads + the `/bin/sh` reclaimed by the OS at process exit).
+    //
+    //         The render-thread panic this task fixes is instead regression-caught
+    //         DETERMINISTICALLY and without GL by
+    //         `class::surface`'s `finalize_joins_threads_before_clearing_core_surface`
+    //         unit test (a concurrent `core()` reader vs. the finalize ordering).
     std::mem::forget(window);
     std::mem::forget(surface);
     std::mem::forget(application);

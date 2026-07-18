@@ -73,6 +73,11 @@ impl Surface {
     /// before `constructed` wires it. Returns a temporary strong ref (dropped at
     /// the caller's scope end); the widget is owned by the GObject tree so this
     /// is never the last ref.
+    ///
+    /// NOTE: only used by the forwards that run while the widget is fully alive
+    /// (refcount > 0). The [`ApprtSurface::core`] read is on the TEARDOWN path
+    /// (`deleteSurface` calls it during the widget's own finalize, refcount 0), so
+    /// it must NOT go through this refcounting reconstitution — see there.
     fn gobj(&self) -> Option<GhosttySurface> {
         let ptr = self.surface.get();
         if ptr.is_null() {
@@ -97,11 +102,33 @@ impl ApprtSurface for Surface {
     type Core = rustty_core::surface::Surface<App>;
 
     fn core(&self) -> *mut Self::Core {
-        // PORTS: `Surface.zig:24-28`. "This asserts the non-optional because
-        // libghostty should only be calling this for initialized surfaces."
-        self.gobj()
-            .and_then(|s| s.core())
-            .expect("gtk::Surface::core called on an uninitialized surface")
+        // PORTS: `Surface.zig:24-28` `return self.surface.core().?` — a RAW read
+        // through the `*Surface` backref, asserting non-null "because libghostty
+        // should only be calling this for initialized surfaces".
+        //
+        // SOUNDNESS / TEARDOWN: this must NOT reconstruct a refcounting GObject
+        // wrapper (`gobj`), because it is called on the widget's own finalize path
+        // (`deleteSurface` compares `focused == rt_surface.core()`, app.rs), when
+        // the instance refcount is already 0 — where `from_glib_none`/`_borrow`
+        // trip glib's `ref_count != 0` debug assertion. Instead we read the
+        // widget's `core_surface` directly from the raw instance pointer (the
+        // reference's raw `*Surface` deref), which touches no refcount and is sound
+        // both live (render thread) and during finalize (main thread).
+        let ptr = self.surface.get();
+        assert!(
+            !ptr.is_null(),
+            "gtk::Surface::core called on an uninitialized surface"
+        );
+        // SAFETY: `ptr` is a live `GhosttySurface` instance (set by `set_widget`
+        // from `constructed`; its GObject header + private data are allocated even
+        // mid-finalize). `core_surface_ptr` performs only a plain C-struct borrow +
+        // an atomic load — no refcount, no wrapper resurrection.
+        let core = unsafe { GhosttySurface::core_surface_ptr(ptr) };
+        assert!(
+            !core.is_null(),
+            "gtk::Surface::core called on an uninitialized surface"
+        );
+        core
     }
 
     fn rt_app(&self) -> *mut Self::App {
