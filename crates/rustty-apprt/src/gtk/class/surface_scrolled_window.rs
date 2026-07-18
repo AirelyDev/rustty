@@ -1,0 +1,238 @@
+//! rustty-apprt::gtk::class::surface_scrolled_window
+//!
+//! PORTS: ghostty `src/apprt/gtk/class/surface_scrolled_window.zig`
+//! (`GhostttySurfaceScrolledWindow`).
+//!
+//! A wrapper widget that embeds a [`Surface`] inside a `GtkScrolledWindow`,
+//! providing scrollbar functionality for the terminal surface. The `surface`
+//! property can be set at construction (`buildTree`'s `.initNew`,
+//! `split_tree.zig:967-970`) or changed dynamically.
+//!
+//! PREPORT_GTK §1.8 lifetimes: `config` SHARED (`RefCell<Option<Config>>`,
+//! unref'd in dispose), `config_binding` OWNED (`RefCell<Option<glib::Binding>>`,
+//! our ref released in `dispose`/`propSurface`), `surface` BORROW_FIELD (the
+//! surface is owned by the split tree; this field is a non-owning-by-intent
+//! clone that dispose drops), `scrolled_window` TEMPLATE_CHILD (released en
+//! masse by `dispose_template`).
+
+use std::cell::RefCell;
+
+use gtk4::glib::Properties;
+use gtk4::prelude::*;
+use gtk4::subclass::prelude::*;
+use gtk4::CompositeTemplate;
+use libadwaita::subclass::prelude::*;
+
+use super::config::Config;
+use super::surface::Surface;
+use crate::gtk::gtk_version;
+
+mod imp {
+    use super::*;
+
+    /// PORTS: `surface_scrolled_window.zig:59` `SurfaceScrolledWindow.Private`.
+    #[derive(CompositeTemplate, Properties)]
+    #[template(resource = "/io/airely/rustty/ui/1.5/surface-scrolled-window.ui")]
+    #[properties(wrapper_type = super::SurfaceScrolledWindow)]
+    pub struct SurfaceScrolledWindow {
+        /// PORTS: `surface_scrolled_window.zig:31-41,60` `config` (`?*Config`,
+        /// SHARED; obj accessor).
+        #[property(get, set, nullable)]
+        pub config: RefCell<Option<Config>>,
+
+        /// PORTS: `surface_scrolled_window.zig:61` `config_binding`. OWNED: our
+        /// ref on the `GBinding` created by `bindProperty`, released (dropped) in
+        /// `propSurface`/`dispose`.
+        pub config_binding: RefCell<Option<glib::Binding>>,
+
+        /// PORTS: `surface_scrolled_window.zig:43-56,62` `surface`. Custom
+        /// getter/setter (see [`SurfaceScrolledWindow::get_surface_value`] /
+        /// `set_surface_value`).
+        #[property(name = "surface", get = Self::get_surface_value, set = Self::set_surface_value, nullable, explicit_notify)]
+        pub surface: RefCell<Option<Surface>>,
+
+        /// PORTS: `surface_scrolled_window.zig:63` `scrolled_window` template
+        /// child.
+        #[template_child]
+        pub scrolled_window: TemplateChild<gtk4::ScrolledWindow>,
+    }
+
+    impl Default for SurfaceScrolledWindow {
+        fn default() -> Self {
+            Self {
+                config: RefCell::new(None),
+                config_binding: RefCell::new(None),
+                surface: RefCell::new(None),
+                scrolled_window: TemplateChild::default(),
+            }
+        }
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for SurfaceScrolledWindow {
+        // PORTS: `surface_scrolled_window.zig:23` `.name`. NOTE: the reference
+        // name has a three-`t` typo ("GhostttySurfaceScrolledWindow"); the
+        // vendored `surface-scrolled-window.blp` template uses the identical
+        // spelling, so it is preserved verbatim (parity — the GType name must
+        // match the `.ui` `template` class).
+        const NAME: &'static str = "GhostttySurfaceScrolledWindow";
+        type Type = super::SurfaceScrolledWindow;
+        type ParentType = libadwaita::Bin;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.bind_template();
+            klass.bind_template_instance_callbacks();
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
+        }
+    }
+
+    #[glib::derived_properties]
+    impl ObjectImpl for SurfaceScrolledWindow {
+        /// PORTS: `surface_scrolled_window.zig:67-70` `init`.
+        fn constructed(&self) {
+            self.parent_constructed();
+            // Until gtk 4.20.1 trackpads have kinetic scrolling behavior
+            // regardless of `Gtk.ScrolledWindow.kinetic_scrolling`
+            // (`:69,72-85`).
+            if gtk_version::runtime_until(4, 20, 1) {
+                self.obj().disable_kinetic_scroll();
+            }
+        }
+
+        /// PORTS: `surface_scrolled_window.zig:88-110` `dispose`.
+        fn dispose(&self) {
+            // Release our ref on the config binding (`:91-94`).
+            self.config_binding.borrow_mut().take();
+            // Unref the config (`:96-99`).
+            self.config.borrow_mut().take();
+            self.dispose_template();
+        }
+    }
+
+    impl WidgetImpl for SurfaceScrolledWindow {}
+    impl BinImpl for SurfaceScrolledWindow {}
+
+    impl SurfaceScrolledWindow {
+        /// PORTS: `surface_scrolled_window.zig:119-124` `getSurfaceValue`.
+        fn get_surface_value(&self) -> Option<Surface> {
+            self.surface.borrow().clone()
+        }
+
+        /// PORTS: `surface_scrolled_window.zig:126-131` `setSurfaceValue`.
+        fn set_surface_value(&self, surface: Option<Surface>) {
+            self.obj().set_surface_inner(surface.as_ref());
+        }
+    }
+}
+
+glib::wrapper! {
+    /// PORTS: `surface_scrolled_window.zig:18` `pub const SurfaceScrolledWindow`.
+    pub struct SurfaceScrolledWindow(ObjectSubclass<imp::SurfaceScrolledWindow>)
+        @extends libadwaita::Bin, gtk4::Widget,
+        @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget;
+}
+
+#[gtk4::template_callbacks]
+impl SurfaceScrolledWindow {
+    /// PORTS: `surface_scrolled_window.zig:133-135` `getSurface`. This does not
+    /// add a ref beyond the property clone.
+    #[must_use]
+    pub fn get_surface(&self) -> Option<Surface> {
+        self.imp().surface.borrow().clone()
+    }
+
+    /// PORTS: `surface_scrolled_window.zig:137-147` `setSurface`. (Named
+    /// `_inner` to avoid clashing with the generated `surface` property setter,
+    /// which forwards here via `set_surface_value`.)
+    pub fn set_surface_inner(&self, surface: Option<&Surface>) {
+        let imp = self.imp();
+
+        // If unchanged, do nothing (`:140`).
+        {
+            let cur = imp.surface.borrow();
+            if cur.as_ref() == surface {
+                return;
+            }
+        }
+
+        // The reference notifies BEFORE assigning and relies on freeze/thaw
+        // batching so `propSurface` (the notify handler) observes the *new*
+        // value once thaw flushes (`:142-146`). We reproduce that exactly.
+        let guard = self.freeze_notify();
+        self.notify("surface");
+        *imp.surface.borrow_mut() = surface.cloned();
+        drop(guard);
+    }
+
+    /// PORTS: `surface_scrolled_window.zig:72-86` `disableKineticScroll`.
+    /// Disable `EventControllerScroll.kinetic` on the scrolled window's
+    /// controllers as a workaround for the pre-4.20.1 trackpad behavior.
+    fn disable_kinetic_scroll(&self) {
+        let controllers = self.imp().scrolled_window.observe_controllers();
+        let mut i = 0u32;
+        while let Some(obj) = controllers.item(i) {
+            i += 1;
+            if let Ok(controller) = obj.downcast::<gtk4::EventControllerScroll>() {
+                let mut flags = controller.flags();
+                flags.remove(gtk4::EventControllerScrollFlags::KINETIC);
+                controller.set_flags(flags);
+            }
+        }
+    }
+
+    /// PORTS: `surface_scrolled_window.zig:149-158` `closureScrollbarPolicy`.
+    /// Bound in the template (`surface-scrolled-window.blp:13`). The template
+    /// scope passes the instance first.
+    #[template_callback(name = "scrollbar_policy")]
+    fn closure_scrollbar_policy(
+        _this: &SurfaceScrolledWindow,
+        config: Option<Config>,
+    ) -> gtk4::PolicyType {
+        let Some(config) = config else {
+            return gtk4::PolicyType::Automatic;
+        };
+        match config.get().scrollbar {
+            rustty_config::value_types::Scrollbar::Never => gtk4::PolicyType::Never,
+            rustty_config::value_types::Scrollbar::System => gtk4::PolicyType::Automatic,
+        }
+    }
+
+    /// PORTS: `surface_scrolled_window.zig:160-184` `propSurface`. Reparents the
+    /// surface into the scrolled window and (re)binds `config` from the surface.
+    #[template_callback(name = "notify_surface")]
+    fn on_notify_surface(
+        _emitter: &libadwaita::Bin,
+        _pspec: &glib::ParamSpec,
+        this: &SurfaceScrolledWindow,
+    ) {
+        let imp = this.imp();
+
+        // Move the surface into the scrolled window (`:166-167`).
+        let surface = imp.surface.borrow().clone();
+        imp.scrolled_window
+            .set_child(surface.as_ref().map(|s| s.upcast_ref::<gtk4::Widget>()));
+
+        // Unbind the old config binding if any (`:170-173`). We release our ref
+        // (drop) without calling `unbind`, matching the reference's bare
+        // `binding.unref()`.
+        imp.config_binding.borrow_mut().take();
+
+        // Bind config from the surface to our config property (`:176-183`).
+        if let Some(surface) = surface {
+            let binding = surface
+                .bind_property("config", this, "config")
+                .sync_create()
+                .build();
+            *imp.config_binding.borrow_mut() = Some(binding);
+        }
+    }
+}
+
+impl Default for SurfaceScrolledWindow {
+    fn default() -> Self {
+        glib::Object::new()
+    }
+}

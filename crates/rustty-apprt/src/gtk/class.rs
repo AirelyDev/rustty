@@ -55,6 +55,7 @@ pub mod search_overlay;
 pub mod split_tree;
 pub mod surface;
 pub mod surface_child_exited;
+pub mod surface_scrolled_window;
 pub mod tab;
 pub mod window;
 
