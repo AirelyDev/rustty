@@ -149,6 +149,25 @@ impl App {
         }
     }
 
+    /// PORTS: `winproto.zig:55-63` `App.eventMods`. Dispatch to the active arm's
+    /// `eventMods`; when it returns `None` (always, for the noop arm), fall back
+    /// to [`crate::gtk::key::translate_mods`] (`winproto.zig:62`).
+    #[must_use]
+    pub fn event_mods(
+        &self,
+        device: Option<&gdk4::Device>,
+        gtk_mods: gdk4::ModifierType,
+    ) -> rustty_vt::input::key_mods::Mods {
+        let arm = match self {
+            App::None(v) => v.event_mods(device, gtk_mods),
+            #[cfg(feature = "wayland")]
+            App::Wayland(v) => v.event_mods(device, gtk_mods),
+            #[cfg(feature = "x11")]
+            App::X11(v) => v.event_mods(device, gtk_mods),
+        };
+        arm.unwrap_or_else(|| crate::gtk::key::translate_mods(gtk_mods))
+    }
+
     /// PORTS: `winproto.zig:65-69` `App.supportsQuickTerminal`. Dispatch to the
     /// active arm.
     #[must_use]

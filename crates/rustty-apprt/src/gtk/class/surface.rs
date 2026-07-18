@@ -46,6 +46,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
+use std::time::Duration;
 
 use glib::prelude::*;
 use gtk4::prelude::*;
@@ -60,12 +61,17 @@ use rustty_apprt_api::{
 };
 use rustty_config::command::Command;
 use rustty_config::value_types::WorkingDirectory;
+use rustty_core::surface::InputEffect;
 use rustty_font_shaper::face::DesiredSize;
+use rustty_vt::input::key::{Action, Key, KeyEvent};
+use rustty_vt::input::key_mods::Mods;
+use rustty_vt::input::mouse::{Button, ButtonState, ScrollMods};
 use rustty_vt::mouse::Shape as MouseShape;
 
 use crate::gtk::app::App;
 use crate::gtk::ext;
 use crate::gtk::gsettings;
+use crate::gtk::key;
 use crate::gtk::surface::Surface as ApprtSurface;
 
 use super::application::Application;
@@ -821,6 +827,49 @@ fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
     }
 }
 
+/// PORTS: the `defer priv.im_len = 0` at `surface.zig:1349` — resets the IME
+/// buffer length to 0 on EVERY exit of [`Surface::key_event`] past the IM block.
+/// A RAII guard reproduces the reference's function-scoped `defer` exactly
+/// (fires on the fall-through, the error return, and the effect-arm returns),
+/// **invariant 9**.
+struct ImLenReset<'a>(&'a RefCell<ImeState>);
+
+impl Drop for ImLenReset<'_> {
+    fn drop(&mut self) {
+        self.0.borrow_mut().im_len = 0;
+    }
+}
+
+/// PORTS: `surface.zig:3740-3755` `translateMouseButton`. Maps a GTK button
+/// number (1 = left, 2 = middle, 3 = right, …) to rustty's [`Button`].
+fn translate_mouse_button(button: u32) -> Button {
+    match button {
+        1 => Button::Left,
+        2 => Button::Middle,
+        3 => Button::Right,
+        4 => Button::Four,
+        5 => Button::Five,
+        6 => Button::Six,
+        7 => Button::Seven,
+        8 => Button::Eight,
+        9 => Button::Nine,
+        10 => Button::Ten,
+        11 => Button::Eleven,
+        _ => Button::Unknown,
+    }
+}
+
+/// PORTS: `surface.zig:4116-4120` `computeFraction`. Computes a fraction in
+/// `[0.0, 1.0]` from the supplied progress, clamped to `[0, 100]`.
+///
+/// PORT NOTE: consumed by the progress-bar handler (`setProgressReport`), which
+/// lands with the progress-bar task (T16); ported here with its KAT per the T18
+/// brief.
+#[allow(dead_code)]
+fn compute_fraction(progress: u8) -> f64 {
+    f64::from(progress.min(100)) / 100.0
+}
+
 /// PORTS: the **invariant 5** ordering of `finalize`'s core-surface teardown
 /// (`surface.zig:1925-1940`): `deleteSurface` MUST run before `deinit` ("in case
 /// a callback triggers searching for this surface", `:1926-1929`).
@@ -1175,6 +1224,280 @@ impl Surface {
         env
     }
 
+    /// PORTS: `surface.zig:983-986` `showOnScreenKeyboard`. Activates the
+    /// on-screen keyboard through the IME context for the given event.
+    #[must_use]
+    pub fn show_on_screen_keyboard(&self, event: Option<&gdk4::Event>) -> bool {
+        self.imp().im_context.activate_osk(event)
+    }
+
+    /// PORTS: `surface.zig:1481-1495` `scaledCoordinates`. Scales `x`/`y` by the
+    /// GDK device (widget) scale factor.
+    fn scaled_coordinates(&self, x: f64, y: f64) -> (f64, f64) {
+        let scale_factor = f64::from(
+            self.imp()
+                .gl_area
+                .upcast_ref::<gtk4::Widget>()
+                .scale_factor(),
+        );
+        (x * scale_factor, y * scale_factor)
+    }
+
+    /// PORTS: `surface.zig:1240-1463` `keyEvent` — the tier's subtlest function.
+    /// A GTK key event (press/repeat/release) is passed FIRST through the input
+    /// method (`filterKeypress`), then — depending on the composition state —
+    /// either consumed by the IME or encoded into a core `keyCallback`.
+    ///
+    /// **Invariant 9**: the whole IME state group ([`ImeState`]) is read/written
+    /// coherently here. Port the whole IM block including its comments verbatim.
+    ///
+    /// PORT NOTE ([`ImKeyEvent`] naming): the reference's `IMKeyEvent` enum is
+    /// `{ .false, .composing, .not_composing }`. rustty's [`ImKeyEvent`] (defined
+    /// in T13) spells `not_composing` as [`ImKeyEvent::True`]; the mapping used
+    /// throughout is `False ⇔ .false`, `Composing ⇔ .composing`, `True ⇔
+    /// .not_composing`.
+    fn key_event(
+        &self,
+        action: Action,
+        ec_key: &gtk4::EventControllerKey,
+        keyval: u32,
+        keycode: u32,
+        gtk_mods: gdk4::ModifierType,
+    ) -> bool {
+        let imp = self.imp();
+
+        // `getCurrentEvent()` + cast to a `gdk.KeyEvent` (`:1249-1250`).
+        let Some(event) = ec_key.current_event() else {
+            return false;
+        };
+        let Some(key_event) = event.downcast_ref::<gdk4::KeyEvent>() else {
+            return false;
+        };
+
+        // The block below is all related to input method handling. See the
+        // function comment for high level details and the comments within the
+        // block for specifics (`:1253-1343`).
+        {
+            // This can trigger an input method so we need to notify the im
+            // context where the cursor is so it can render the dropdowns in the
+            // correct place (`:1257-1268`).
+            if let Some(core) = self.core() {
+                // SAFETY: `core` is the widget's boxed, initialized core surface.
+                let ime_point = unsafe { (*core).imePoint() };
+                imp.im_context.set_cursor_location(&gdk4::Rectangle::new(
+                    ime_point.x as i32,
+                    ime_point.y as i32,
+                    1,
+                    1,
+                ));
+            }
+
+            // We note that we're in a keypress because we want some logic to
+            // depend on this. For example, we don't want to send character
+            // events like "a" via the input "commit" event if we're actively
+            // processing a keypress because we'd lose access to the keycode
+            // information.
+            //
+            // We have to maintain some additional state here of whether we were
+            // composing because different input methods call the callbacks in
+            // different orders. For example, ibus calls commit THEN preedit end
+            // but simple calls preedit end THEN commit.
+            //
+            // `priv.in_keyevent = if (priv.im_composing) .composing else
+            // .not_composing` (`:1279`); the `defer priv.in_keyevent = .false`
+            // (`:1280`) is reproduced by the explicit reset after the IM block.
+            {
+                let mut ime = imp.ime.borrow_mut();
+                ime.in_keyevent = if ime.im_composing {
+                    ImKeyEvent::Composing
+                } else {
+                    ImKeyEvent::True
+                };
+            }
+
+            // Pass the event through the input method which returns true if
+            // handled. Confusingly, not all events handled by the input method
+            // result in this returning true so we have to maintain some
+            // additional state about whether we were composing or not to
+            // determine if we should proceed with key encoding.
+            //
+            // Cases where the input method does not mark the event as handled:
+            //
+            // - If we change the input method via keypress while we have preedit
+            //   text, the input method will commit the pending text but will not
+            //   mark it as handled. We use the `.composing` state to detect this
+            //   case.
+            //
+            // - If we switch input methods (i.e. via ctrl+shift with fcitx), the
+            //   input method will handle the key release event but will not mark
+            //   it as handled. I don't know any way to detect this case so it
+            //   will result in a key event being sent to the key callback. For
+            //   Kitty text encoding, this will result in modifiers being
+            //   triggered despite being technically consumed. At the time of
+            //   writing, both Kitty and Alacritty have the same behavior. I know
+            //   of no way to fix this (`:1282-1302`).
+            let im_handled = imp.im_context.filter_keypress(&event);
+
+            // Read the (possibly IME-mutated) state, then reset `in_keyevent` to
+            // `.false` — the block-scoped `defer` at `:1280`, which fires AFTER
+            // the early-return arms below read `in_keyevent`.
+            let (im_composing, in_keyevent, im_len) = {
+                let ime = imp.ime.borrow();
+                (ime.im_composing, ime.in_keyevent, ime.im_len)
+            };
+            imp.ime.borrow_mut().in_keyevent = ImKeyEvent::False;
+
+            // If the input method handled the event, you would think we would
+            // never proceed with key encoding for Ghostty but that is not the
+            // case. Input methods will handle basic character encoding like
+            // typing "a" and we want to associate that with the key event. So we
+            // have to check additional state to determine if we exit
+            // (`:1310-1336`).
+            if im_handled {
+                // If we are composing then we're in a preedit state and do not
+                // want to encode any keys. For example: type a deadkey such as
+                // single quote on a US international keyboard layout (`:1316-1319`).
+                if im_composing {
+                    return true;
+                }
+
+                // If we were composing and now we're not, it means that we
+                // committed the text. We also don't want to encode a key event
+                // for this. Example: enable Japanese input method, press "konn"
+                // and then press enter. The final enter should not be encoded and
+                // "konn" (in hiragana) should be written as "こん" (`:1321-1326`).
+                if in_keyevent == ImKeyEvent::Composing {
+                    return true;
+                }
+
+                // Not composing and our input method buffer is empty. This could
+                // mean that the input method reacted to this event by activating
+                // an onscreen keyboard or something equivalent. We don't know.
+                // But the input method handled it and didn't give us text so we
+                // will just assume we should not encode this. This handles a real
+                // scenario when ibus starts the emoji input method (super+.)
+                // (`:1328-1335`).
+                if im_len == 0 {
+                    return true;
+                }
+            }
+
+            // At this point, for the sake of explanation of internal state: it is
+            // possible that im_len > 0 and im_composing == false. This means that
+            // we received a commit event from the input method that we want
+            // associated with the key event. This is common: its how basic
+            // character translation for simple inputs like "a" work (`:1338-1342`).
+        }
+
+        // We always reset the length of the im buffer. There's only one scenario
+        // we reach this point with im_len > 0 and that's if we received a commit
+        // event from the input method. We don't want to keep that state around
+        // since we've handled it here. `defer priv.im_len = 0` (`:1349`) — the
+        // guard resets on every return past this point.
+        let _im_len_reset = ImLenReset(&imp.ime);
+
+        // Get the keyvals for this event (`:1352-1357`).
+        let keyval_unicode = key::keyval_to_unicode(keyval);
+        let keyval_unicode_unshifted = key::keyval_unicode_unshifted(
+            imp.gl_area.upcast_ref::<gtk4::Widget>(),
+            key_event,
+            keycode,
+        );
+
+        // We want to get the physical unmapped key to process physical keybinds
+        // (`:1359-1379`).
+        let physical_key = key::physical_key(keycode, keyval);
+
+        // Get our modifier for the event (`:1381-1388`).
+        let mods = {
+            let app = Application::default();
+            let wp = app.imp().winproto.borrow();
+            key::event_mods(&event, physical_key, gtk_mods, action, &wp)
+        };
+
+        // Get our consumed modifiers (`:1390-1398`).
+        let consumed_mods = {
+            let masked =
+                key_event.consumed_modifiers().bits() & (gdk4::ffi::GDK_MODIFIER_MASK as u32);
+            key::translate_mods(gdk4::ModifierType::from_bits_truncate(masked))
+        };
+
+        // If we have no UTF-8 text, we try to convert our keyval to a text value.
+        // We have to do this because GTK will not process "Ctrl+Shift+1" (on US
+        // keyboards) as "Ctrl+!" but instead as "". But the keyval is set
+        // correctly so we can at least extract that (`:1409-1424`).
+        {
+            let mut ime = imp.ime.borrow_mut();
+            if ime.im_len == 0 && keyval_unicode > 0 {
+                if let Some(cp) = char::from_u32(keyval_unicode) {
+                    // We don't want to send control characters as IM text.
+                    // Control characters are handled already by the encoder
+                    // directly (`:1415-1418`).
+                    if (cp as u32) >= 0x20 {
+                        let mut buf = [0u8; 4];
+                        let encoded = cp.encode_utf8(&mut buf);
+                        let bytes = encoded.as_bytes();
+                        ime.im_buf[..bytes.len()].copy_from_slice(bytes);
+                        ime.im_len = bytes.len() as u8;
+                    }
+                }
+            }
+        }
+
+        // Invoke the core Ghostty logic to handle this input (`:1426-1439`).
+        let Some(core) = self.core() else {
+            return false;
+        };
+        let (utf8, composing) = {
+            let ime = imp.ime.borrow();
+            (ime.im_buf[..ime.im_len as usize].to_vec(), ime.im_composing)
+        };
+        let core_event = KeyEvent {
+            action,
+            key: physical_key,
+            mods,
+            consumed_mods,
+            composing,
+            utf8,
+            unshifted_codepoint: keyval_unicode_unshifted,
+        };
+        // SAFETY: `core` is the widget's boxed, initialized core surface; called
+        // on the app/main thread from the key controller.
+        let effect = match unsafe { (*core).keyCallback(core_event) } {
+            Ok(effect) => effect,
+            Err(_err) => {
+                eprintln!("warn(gtk): error in key callback");
+                return false;
+            }
+        };
+
+        match effect {
+            InputEffect::Closed => true,
+            InputEffect::Ignored => false,
+            InputEffect::Consumed => {
+                if action == Action::Press || action == Action::Repeat {
+                    // If we were in the composing state then we reset our context.
+                    // We do NOT want to reset if we're not in the composing state
+                    // because there is other IME state that we want to preserve,
+                    // such as quotation mark ordering for Chinese input
+                    // (`:1444-1452`).
+                    if imp.ime.borrow().im_composing {
+                        imp.im_context.reset();
+                        // SAFETY: `core` is the initialized core surface.
+                        let _ = unsafe { (*core).preeditCallback(None) };
+                    }
+
+                    // Bell stops ringing when any key is pressed that is used by
+                    // the core in any way (`:1454-1456`).
+                    self.set_bell_ringing(false);
+
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
     /// PORTS: `surface.zig:2754-2766` `updateFocus`. Records focus, drives the IME
     /// focus, schedules the (idle) core focus callback, notifies, and stops the
     /// bell on focus gain.
@@ -1417,61 +1740,318 @@ fn action_notify_on_next_command_finish(
 #[gtk4::template_callbacks]
 impl Surface {
     // -- EventControllerFocus (surface.blp:47-50) --------------------------
+    // PORT NOTE (arg order): these controllers are connected NON-swapped in the
+    // blueprint (unlike the `swapped` `gl_*` GLArea callbacks), so gtk4-rs
+    // delivers the vector `[emitter, ...signal_args, this]` — the EMITTING
+    // controller first and the template instance (`this: &Surface`) LAST. This
+    // matches the reference's Zig callback signatures exactly (e.g.
+    // `ecKeyPressed(ec_key, keyval, keycode, gtk_mods, self)`).
+    /// PORTS: `surface.zig:2746-2748` `ecFocusEnter`.
     #[template_callback]
-    fn focus_enter(&self) {
-        unimplemented!("gtk::class::Surface::focus_enter lands in L5.2 T16/T17")
+    fn focus_enter(_ec: &gtk4::EventControllerFocus, this: &Surface) {
+        this.update_focus(true);
     }
+    /// PORTS: `surface.zig:2750-2752` `ecFocusLeave`.
     #[template_callback]
-    fn focus_leave(&self) {
-        unimplemented!("gtk::class::Surface::focus_leave lands in L5.2 T16/T17")
+    fn focus_leave(_ec: &gtk4::EventControllerFocus, this: &Surface) {
+        this.update_focus(false);
     }
 
     // -- EventControllerKey (surface.blp:52-55) ----------------------------
+    /// PORTS: `surface.zig:2714-2728` `ecKeyPressed`.
     #[template_callback]
-    fn key_pressed(&self) -> bool {
-        unimplemented!("gtk::class::Surface::key_pressed lands in L5.2 T16/T17")
+    fn key_pressed(
+        ec_key: &gtk4::EventControllerKey,
+        keyval: u32,
+        keycode: u32,
+        gtk_mods: gdk4::ModifierType,
+        this: &Surface,
+    ) -> bool {
+        this.key_event(Action::Press, ec_key, keyval, keycode, gtk_mods)
     }
+    /// PORTS: `surface.zig:2730-2744` `ecKeyReleased`.
     #[template_callback]
-    fn key_released(&self) {
-        unimplemented!("gtk::class::Surface::key_released lands in L5.2 T16/T17")
+    fn key_released(
+        ec_key: &gtk4::EventControllerKey,
+        keyval: u32,
+        keycode: u32,
+        state: gdk4::ModifierType,
+        this: &Surface,
+    ) {
+        let _ = this.key_event(Action::Release, ec_key, keyval, keycode, state);
     }
 
     // -- GestureClick (surface.blp:74-78) ----------------------------------
+    /// PORTS: `surface.zig:2785-2857` `gcMouseDown`.
     #[template_callback]
-    fn mouse_down(&self) {
-        unimplemented!("gtk::class::Surface::mouse_down lands in L5.2 T16/T17")
+    fn mouse_down(gesture: &gtk4::GestureClick, _n_press: i32, x: f64, y: f64, this: &Surface) {
+        let imp = this.imp();
+        let Some(event) = gesture.current_event() else {
+            return;
+        };
+
+        // Bell stops ringing if any mouse button is pressed (`:2794-2795`).
+        this.set_bell_ringing(false);
+
+        // Get our surface. If we don't have one, ignore this (`:2797-2799`).
+        let Some(core) = this.core() else {
+            return;
+        };
+
+        // If we don't have focus, grab it (`:2801-2806`).
+        let gl_area_widget = imp.gl_area.upcast_ref::<gtk4::Widget>();
+        let had_focus = gl_area_widget.has_focus();
+        if !had_focus {
+            gl_area_widget.grab_focus();
+        }
+
+        // Report the event (`:2808-2809`).
+        let button = translate_mouse_button(gesture.current_button());
+
+        // If this click is only transitioning split focus, suppress it so it
+        // doesn't get forwarded to the terminal as a mouse event (`:2811-2816`).
+        if !had_focus && button == Button::Left {
+            imp.suppress_left_mouse_release.set(true);
+            return;
+        }
+
+        if button == Button::Middle && !imp.gtk_enable_primary_paste.get() {
+            return;
+        }
+
+        let mods = key::translate_mods(event.modifier_state());
+        // SAFETY: `core` is the widget's boxed, initialized core surface.
+        let consumed =
+            match unsafe { (*core).mouseButtonCallback(ButtonState::Press, button, mods) } {
+                Ok(consumed) => consumed,
+                Err(_err) => {
+                    eprintln!("warn(gtk): error in mouse button callback");
+                    false
+                }
+            };
+
+        // If a right click isn't consumed, mouseButtonCallback selects the
+        // hovered word and returns false. We can use this to handle the context
+        // menu opening under normal scenarios (`:2835-2856`).
+        if !consumed && button == Button::Right {
+            this.emit_by_name::<()>("menu", &[]);
+
+            let rect = gdk4::Rectangle::new(x as i32, y as i32, 1, 1);
+            imp.context_menu.set_pointing_to(Some(&rect));
+            imp.context_menu.popup();
+        }
     }
+    /// PORTS: `surface.zig:2859-2902` `gcMouseUp`.
     #[template_callback]
-    fn mouse_up(&self) {
-        unimplemented!("gtk::class::Surface::mouse_up lands in L5.2 T16/T17")
+    fn mouse_up(gesture: &gtk4::GestureClick, _n_press: i32, _x: f64, _y: f64, this: &Surface) {
+        let imp = this.imp();
+        let Some(event) = gesture.current_event() else {
+            return;
+        };
+        let Some(core) = this.core() else {
+            return;
+        };
+        let button = translate_mouse_button(gesture.current_button());
+
+        if button == Button::Left && imp.suppress_left_mouse_release.get() {
+            imp.suppress_left_mouse_release.set(false);
+            return;
+        }
+
+        if button == Button::Middle && !imp.gtk_enable_primary_paste.get() {
+            return;
+        }
+
+        let mods = key::translate_mods(event.modifier_state());
+        // SAFETY: `core` is the widget's boxed, initialized core surface.
+        let consumed =
+            match unsafe { (*core).mouseButtonCallback(ButtonState::Release, button, mods) } {
+                Ok(consumed) => consumed,
+                Err(_err) => {
+                    eprintln!("warn(gtk): error in mouse button callback");
+                    return;
+                }
+            };
+
+        // Trigger the on-screen keyboard if we have no selection, and the mouse
+        // event hasn't been intercepted by the callback. It's better to do this
+        // here rather than within the core callback since we have direct access
+        // to the underlying gdk.Event here (`:2892-2901`).
+        // SAFETY: `core` is the initialized core surface.
+        if !consumed
+            && button == Button::Left
+            && !unsafe { (*core).hasSelection() }
+            && !this.show_on_screen_keyboard(Some(&event))
+        {
+            eprintln!("warn(gtk): failed to activate the on-screen keyboard");
+        }
     }
 
     // -- EventControllerMotion (surface.blp:69-72) -------------------------
+    /// PORTS: `surface.zig:2904-2953` `ecMouseMotion`.
     #[template_callback]
-    fn mouse_motion(&self) {
-        unimplemented!("gtk::class::Surface::mouse_motion lands in L5.2 T16/T17")
+    fn mouse_motion(ec: &gtk4::EventControllerMotion, x: f64, y: f64, this: &Surface) {
+        let imp = this.imp();
+        let Some(event) = ec.current_event() else {
+            return;
+        };
+
+        let (sx, sy) = this.scaled_coordinates(x, y);
+        let pos = CursorPos {
+            x: sx as f32,
+            y: sy as f32,
+        };
+
+        // There seem to be at least two cases where GTK issues a mouse motion
+        // event without the cursor actually moving (GLArea resized under the
+        // mouse; window title update). To prevent incorrect behavior, we'll only
+        // grab focus and continue with callback logic if the cursor has actually
+        // moved (`:2919-2930`).
+        let cur = imp.cursor_pos.get();
+        let is_cursor_still = (cur.x - pos.x).abs() < 1.0 && (cur.y - pos.y).abs() < 1.0;
+        if is_cursor_still {
+            return;
+        }
+
+        // If we don't have focus, and we want it, grab it (`:2932-2940`).
+        {
+            let cfg = imp.config.borrow();
+            if let Some(config) = cfg.as_ref() {
+                let gl_area_widget = imp.gl_area.upcast_ref::<gtk4::Widget>();
+                if !gl_area_widget.has_focus() && config.get().focus_follows_mouse {
+                    gl_area_widget.grab_focus();
+                }
+            }
+        }
+
+        // Our pos changed, update (`:2942-2943`).
+        imp.cursor_pos.set(pos);
+
+        // Notify the callback (`:2945-2952`).
+        if let Some(core) = this.core() {
+            let mods = key::translate_mods(event.modifier_state());
+            // SAFETY: `core` is the widget's boxed, initialized core surface.
+            if unsafe { (*core).cursorPosCallback(pos, Some(mods)) }.is_err() {
+                eprintln!("warn(gtk): error in cursor pos callback");
+            }
+        }
     }
+    /// PORTS: `surface.zig:2955-2976` `ecMouseLeave`.
     #[template_callback]
-    fn mouse_leave(&self) {
-        unimplemented!("gtk::class::Surface::mouse_leave lands in L5.2 T16/T17")
+    fn mouse_leave(ec_motion: &gtk4::EventControllerMotion, this: &Surface) {
+        let Some(event) = ec_motion.current_event() else {
+            return;
+        };
+
+        // If we have a core surface then we can send the cursor pos callback with
+        // an invalid position to indicate the mouse left (`:2962-2975`).
+        if let Some(core) = this.core() {
+            let mods = key::translate_mods(event.modifier_state());
+            let pos = CursorPos { x: -1.0, y: -1.0 };
+            // SAFETY: `core` is the widget's boxed, initialized core surface.
+            if unsafe { (*core).cursorPosCallback(pos, Some(mods)) }.is_err() {
+                eprintln!("warn(gtk): error in cursor pos callback");
+            }
+        }
     }
 
     // -- EventControllerScroll (surface.blp:57-67) -------------------------
+    /// PORTS: `surface.zig:2992-3023` `ecMouseScrollVertical`.
     #[template_callback]
-    fn scroll_vertical(&self) -> bool {
-        unimplemented!("gtk::class::Surface::scroll_vertical lands in L5.2 T16/T17")
+    fn scroll_vertical(_ec: &gtk4::EventControllerScroll, x: f64, y: f64, this: &Surface) -> bool {
+        let imp = this.imp();
+        let Some(core) = this.core() else {
+            return false;
+        };
+
+        // Multiply precision scrolls by 10 to get a better response from touchpad
+        // scrolling (`:3001-3006`).
+        let precision = imp.precision_scroll.get();
+        let multiplier: f64 = if precision { 10.0 } else { 1.0 };
+        let scroll_mods = ScrollMods {
+            precision,
+            ..ScrollMods::default()
+        };
+
+        let (sx, sy) = this.scaled_coordinates(x, y);
+        // We invert (`* -1`) because we apply natural scrolling to the values
+        // (`:3009-3016`); written `-x * m` to satisfy clippy::neg_multiply.
+        // SAFETY: `core` is the widget's boxed, initialized core surface.
+        if unsafe { (*core).scrollCallback(-sx * multiplier, -sy * multiplier, scroll_mods) }
+            .is_err()
+        {
+            eprintln!("warn(gtk): error in scroll callback");
+            return false;
+        }
+
+        true
     }
+    /// PORTS: `surface.zig:2978-2983` `ecMouseScrollVerticalPrecisionBegin`.
     #[template_callback]
-    fn scroll_vertical_begin(&self) {
-        unimplemented!("gtk::class::Surface::scroll_vertical_begin lands in L5.2 T16/T17")
+    fn scroll_vertical_begin(_ec: &gtk4::EventControllerScroll, this: &Surface) {
+        this.imp().precision_scroll.set(true);
     }
+    /// PORTS: `surface.zig:2985-2990` `ecMouseScrollVerticalPrecisionEnd`.
     #[template_callback]
-    fn scroll_vertical_end(&self) {
-        unimplemented!("gtk::class::Surface::scroll_vertical_end lands in L5.2 T16/T17")
+    fn scroll_vertical_end(_ec: &gtk4::EventControllerScroll, this: &Surface) {
+        this.imp().precision_scroll.set(false);
     }
+    /// PORTS: `surface.zig:3025-3066` `ecMouseScrollHorizontal`.
     #[template_callback]
-    fn scroll_horizontal(&self) -> bool {
-        unimplemented!("gtk::class::Surface::scroll_horizontal lands in L5.2 T16/T17")
+    fn scroll_horizontal(
+        ec: &gtk4::EventControllerScroll,
+        x: f64,
+        _y: f64,
+        this: &Surface,
+    ) -> bool {
+        let imp = this.imp();
+
+        match ec.unit() {
+            gdk4::ScrollUnit::Surface => {}
+            _ => return false,
+        }
+
+        let pending = imp.pending_horizontal_scroll.get() + x;
+        imp.pending_horizontal_scroll.set(pending);
+
+        if pending.abs() < 120.0 {
+            remove_source_id(
+                imp.pending_horizontal_scroll_reset.take(),
+                "pending horizontal scroll reset source",
+            );
+
+            // The reset source clears the accumulator after 500ms of inactivity
+            // (`:3046`). A weak backref keeps the reference's non-owning semantics
+            // (the source is removed in `dispose`, **invariant 11**).
+            let weak = this.downgrade();
+            let id = glib::timeout_add_local(Duration::from_millis(500), move || {
+                if let Some(this) = weak.upgrade() {
+                    let imp = this.imp();
+                    imp.pending_horizontal_scroll.set(0.0);
+                    imp.pending_horizontal_scroll_reset.replace(None);
+                }
+                glib::ControlFlow::Break
+            });
+            imp.pending_horizontal_scroll_reset.replace(Some(id));
+            return true;
+        }
+
+        let action_name = if pending < 0.0 {
+            "tab.next-page"
+        } else {
+            "tab.previous-page"
+        };
+        let _ = this
+            .upcast_ref::<gtk4::Widget>()
+            .activate_action(action_name, None);
+
+        remove_source_id(
+            imp.pending_horizontal_scroll_reset.take(),
+            "pending horizontal scroll reset source",
+        );
+        imp.pending_horizontal_scroll.set(0.0);
+
+        true
     }
 
     // -- DropTarget (surface.blp:224-227) ----------------------------------
@@ -1656,21 +2236,134 @@ impl Surface {
     }
 
     // -- IMMulticontext (surface.blp:253-256) ------------------------------
+    /// PORTS: `surface.zig:3076-3087` `imPreeditStart`.
     #[template_callback]
-    fn im_preedit_start(&self) {
-        unimplemented!("gtk::class::Surface::im_preedit_start lands in L5.2 T16/T17")
+    fn im_preedit_start(_ctx: &gtk4::IMMulticontext, this: &Surface) {
+        // Start our composing state for the input method and reset our input
+        // buffer to empty (`:3082-3086`).
+        let mut ime = this.imp().ime.borrow_mut();
+        ime.im_composing = true;
+        ime.im_len = 0;
     }
+    /// PORTS: `surface.zig:3089-3126` `imPreeditChanged`.
     #[template_callback]
-    fn im_preedit_changed(&self) {
-        unimplemented!("gtk::class::Surface::im_preedit_changed lands in L5.2 T16/T17")
+    fn im_preedit_changed(ctx: &gtk4::IMMulticontext, this: &Surface) {
+        // Any preedit change should mark that we're composing (`:3095-3101`).
+        this.imp().ime.borrow_mut().im_composing = true;
+
+        // We can't set our preedit on our surface unless we're realized. We do
+        // this now because we want to still keep our input method state coherent
+        // (`:3103-3106`).
+        let Some(core) = this.core() else {
+            return;
+        };
+
+        // Get our pre-edit string that we'll use to show the user (`:3108-3116`).
+        let (preedit, _attrs, _pos) = ctx.preedit_string();
+
+        // Update our preedit state in Ghostty core (`:3118-3125`).
+        // SAFETY: `core` is the widget's boxed, initialized core surface.
+        if unsafe { (*core).preeditCallback(Some(preedit.as_bytes())) }.is_err() {
+            eprintln!("warn(gtk): error in preedit callback");
+        }
     }
+    /// PORTS: `surface.zig:3128-3143` `imPreeditEnd`.
     #[template_callback]
-    fn im_preedit_end(&self) {
-        unimplemented!("gtk::class::Surface::im_preedit_end lands in L5.2 T16/T17")
+    fn im_preedit_end(_ctx: &gtk4::IMMulticontext, this: &Surface) {
+        // End our composing state for GTK, allowing us to commit the text
+        // (`:3134-3136`).
+        this.imp().ime.borrow_mut().im_composing = false;
+
+        // End our preedit state in Ghostty core (`:3138-3142`).
+        let Some(core) = this.core() else {
+            return;
+        };
+        // SAFETY: `core` is the widget's boxed, initialized core surface.
+        if unsafe { (*core).preeditCallback(None) }.is_err() {
+            eprintln!("warn(gtk): error in preedit callback");
+        }
     }
+    /// PORTS: `surface.zig:3145-3226` `imCommit`. **Invariant 9**: how a commit
+    /// event is handled depends on the current `in_keyevent` state — during a
+    /// keypress a simple commit (e.g. "a") is BUFFERED for the key encoder rather
+    /// than committed as IME text.
     #[template_callback]
-    fn im_commit(&self) {
-        unimplemented!("gtk::class::Surface::im_commit lands in L5.2 T16/T17")
+    fn im_commit(_ctx: &gtk4::IMMulticontext, bytes: &str, this: &Surface) {
+        let imp = this.imp();
+        let str_bytes = bytes.as_bytes();
+
+        // We need to handle commit specially if we're in a key event.
+        // Specifically, GTK will send us a commit event for basic key encodings
+        // like "a" (on a US layout keyboard). We don't want to treat this as IME
+        // committed text because we want to associate it with a key event
+        // (`:3159-3192`).
+        let in_keyevent = imp.ime.borrow().in_keyevent;
+        match in_keyevent {
+            // If we're not in a key event then this commit is from some other
+            // source (i.e. on-screen keyboard, tablet, etc.) and we want to
+            // commit the text to the core surface (`:3165-3168`).
+            ImKeyEvent::False => {}
+
+            // If we're in a composing state and in a key event then this key
+            // event is resulting in a commit of multiple keypresses and we don't
+            // want to encode it alongside the keypress (`:3170-3173`).
+            ImKeyEvent::Composing => {}
+
+            // If we're not composing then this commit is just a normal key
+            // encoding and we want our key event to handle it so that Ghostty can
+            // be aware of the key event alongside the text (`:3175-3191`,
+            // `.not_composing`). See the [`ImKeyEvent`] naming note in `key_event`.
+            ImKeyEvent::True => {
+                let mut ime = imp.ime.borrow_mut();
+                if str_bytes.len() > ime.im_buf.len() {
+                    eprintln!("warn(gtk): not enough buffer space for input method commit");
+                    return;
+                }
+
+                // Copy our committed text to the buffer (`:3185-3187`).
+                ime.im_buf[..str_bytes.len()].copy_from_slice(str_bytes);
+                // **Invariant 9**: `im_len ≤ 128` (the reference's `u7` bound).
+                debug_assert!(str_bytes.len() <= ime.im_buf.len());
+                ime.im_len = str_bytes.len() as u8;
+
+                return;
+            }
+        }
+
+        // If we reach this point from above it means we're composing OR not in a
+        // keypress. In either case, we want to commit the text given to us
+        // because that's what GTK is asking us to do (`:3194-3198`).
+
+        // Committing ends composing state (`:3200-3201`).
+        imp.ime.borrow_mut().im_composing = false;
+
+        // We can't set our preedit on our surface unless we're realized
+        // (`:3203-3225`).
+        if let Some(core) = this.core() {
+            // End our preedit state. Well-behaved input methods do this for us by
+            // triggering a preedit-end event but some do not (ibus 1.5.29)
+            // (`:3207-3211`).
+            // SAFETY: `core` is the widget's boxed, initialized core surface.
+            if unsafe { (*core).preeditCallback(None) }.is_err() {
+                eprintln!("warn(gtk): error in preedit callback");
+            }
+
+            // Send the text to the core surface, associated with no key (an
+            // invalid key, which should produce no PTY encoding) (`:3213-3224`).
+            let event = KeyEvent {
+                action: Action::Press,
+                key: Key::Unidentified,
+                mods: Mods::default(),
+                consumed_mods: Mods::default(),
+                composing: false,
+                utf8: str_bytes.to_vec(),
+                unshifted_codepoint: 0,
+            };
+            // SAFETY: `core` is the widget's boxed, initialized core surface.
+            if unsafe { (*core).keyCallback(event) }.is_err() {
+                eprintln!("warn(gtk): error in key callback");
+            }
+        }
     }
 
     // -- URL hover (surface.blp:171-174) -----------------------------------
@@ -1851,6 +2544,58 @@ mod tests {
         // `gl_area` is a GLArea (the render context source).
         let gl_area: &gtk4::GLArea = &imp.gl_area;
         assert_eq!(gl_area.type_(), gtk4::GLArea::static_type());
+    }
+
+    /// PORTS: `surface.zig:4122-4127` `test "computeFraction"`. Display-free.
+    #[test]
+    fn surface_compute_fraction() {
+        assert_eq!(compute_fraction(100), 1.0);
+        assert_eq!(compute_fraction(255), 1.0);
+        assert_eq!(compute_fraction(0), 0.0);
+        assert_eq!(compute_fraction(50), 0.5);
+    }
+
+    /// **Invariant 9 KAT** — a key event routes through the IM context FIRST, and a
+    /// simple commit that arrives DURING a keypress (`in_keyevent == .not_composing`,
+    /// spelled [`ImKeyEvent::True`]) is BUFFERED for the key encoder rather than
+    /// committed as IME text (`surface.zig:1303,3159-3191`). This is the ordering
+    /// contract at the heart of `keyEvent`: `filterKeypress` runs before any core
+    /// `keyCallback`, and its re-entrant `commit` associates the text with the key
+    /// event. Display-gated for the real `IMMulticontext`; core surface is `None`
+    /// so the non-keyevent path is a safe no-op.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn key_press_routes_through_im_context_first() {
+        let Some(surface) = display_surface() else {
+            return;
+        };
+        let imp = surface.imp();
+
+        // During a keypress that is NOT composing, a simple IM commit ("a") is
+        // buffered for the key encoder — NOT sent to the core surface — so the
+        // key event can carry the text alongside the keycode.
+        imp.ime.borrow_mut().in_keyevent = ImKeyEvent::True;
+        Surface::im_commit(&imp.im_context, "a", &surface);
+        {
+            let ime = imp.ime.borrow();
+            assert_eq!(
+                ime.im_len, 1,
+                "commit buffered exactly one byte during keyevent"
+            );
+            assert_eq!(&ime.im_buf[..1], b"a", "buffered the committed text");
+        }
+
+        // Outside a keypress the same commit is NOT buffered (it would be routed
+        // to the core surface, which is `None` here, so it is a no-op): the buffer
+        // length stays 0.
+        imp.ime.borrow_mut().im_len = 0;
+        imp.ime.borrow_mut().in_keyevent = ImKeyEvent::False;
+        Surface::im_commit(&imp.im_context, "b", &surface);
+        assert_eq!(
+            imp.ime.borrow().im_len,
+            0,
+            "a commit outside a keyevent is not buffered for the encoder"
+        );
     }
 
     /// Sets up GTK + a default `GhosttyApplication` and returns a fresh `Surface`.

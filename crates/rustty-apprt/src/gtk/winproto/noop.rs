@@ -47,6 +47,19 @@ impl App {
     #[allow(clippy::unused_self)]
     pub fn deinit(&mut self) {}
 
+    /// PORTS: `noop.zig:26-32` `App.eventMods`. The no-op backend has no
+    /// protocol-specific modifier read, so it always returns `None` — the
+    /// [`super::App::event_mods`] fallback then uses [`crate::gtk::key::translate_mods`].
+    #[allow(clippy::unused_self)]
+    #[must_use]
+    pub fn event_mods(
+        &self,
+        _device: Option<&gdk4::Device>,
+        _gtk_mods: gdk4::ModifierType,
+    ) -> Option<rustty_vt::input::key_mods::Mods> {
+        None
+    }
+
     /// PORTS: `noop.zig:34-36` `App.supportsQuickTerminal`. The no-op backend
     /// never supports the quick terminal.
     #[allow(clippy::unused_self)]
