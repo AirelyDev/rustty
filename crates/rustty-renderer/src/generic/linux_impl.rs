@@ -715,33 +715,44 @@ impl From<shape::harfbuzz::Error> for RebuildRowError {
 /// it in, so — unlike Metal, which inspects an `MTLCommandBuffer` here — this only has
 /// to run the present-if-healthy + `frameCompleted` tail (`opengl/Frame.zig:62-70`).
 //
-// MILESTONE-SCOPE-CUT (GL-ATTACH, DEFERRALS.md): the reference tail is
+// GL-ATTACH (LANDED): the reference tail is
 //   `if (health == .healthy) self.renderer.api.present(self.target.*) catch …;`
 //   `self.renderer.frameCompleted(health);`
-// `OpenGL::present` blits the target FBO to the DEFAULT framebuffer, which exists only
-// under a live windowing host (L5's GtkGLArea). Offscreen there is no default
-// framebuffer, and the golden reads the target back via `Target::read_rgba` instead —
-// so `present` is "ported (Task 8) but never exercised" per the brief's GL-ATTACH
-// deferral. It is also unavailable to call from here: `present` consumes `Target` BY
-// VALUE (Rust `Target` is move-only, no `Drop`), but `target` is a raw pointer into
-// the frame that the renderer still owns, so there is nothing to move. The present
-// call is therefore cut with this note (matching the file's honesty bar); the
-// `frameCompleted(health)` half runs UNCONDITIONALLY, faithful to the reference.
+// `present_to_default` blits the frame's target FBO into the CURRENTLY BOUND draw
+// framebuffer — under a live GTK GLArea that is the GLArea's (non-zero) framebuffer,
+// which GDK binds before emitting `render` — so this is what makes the terminal
+// VISIBLE on the window. It runs ONLY on the WINDOWED path (`!api.owns_context()` —
+// GDK owns the context); the OFFSCREEN golden (`api.owns_context()`, its own
+// surfaceless context) has no host-bound framebuffer and reads its target back via
+// `Target::read_rgba` directly, so present is skipped there — the one honest
+// rustty-only divergence from the always-present reference.
+//
+// It calls [`OpenGL::present_to_default`] (present-by-reference) rather than the
+// value-consuming [`OpenGL::present`]: `target` is a raw pointer into the frame the
+// renderer still owns (Rust `Target` is move-only), so there is nothing to move; the
+// blit only READS the target FBO. Failures are logged-and-swallowed exactly as the
+// reference `catch |err| log.err(...)` does — a present failure never fails the frame.
 //
 // PORT NOTE (raw-ptr re-entry, `rust-mut-args-strongly-protected`): the renderer is
 // recovered as a RAW `*mut Renderer` (never `&mut`) and deref'd HERE — inside
 // `Frame::complete`, which runs inside `draw_frame_raw` while its `self_ptr` raw root
-// is live. `frame_completed(&self)` reborrows only `&self` (narrow, `AtomicHealth`
-// store + the no-op mailbox + `swap_chain.release_frame`), matching the Metal lane's
-// proven-clean shape.
+// is live. Both `present_to_default(&self)` and `frame_completed(&self)` reborrow only
+// `&self` (narrow), matching the Metal lane's proven-clean shape.
 //
 // # Safety
 // `renderer` must be a live, whole-`Renderer`-provenance `*mut ()` (the `self_ptr`
-// `begin_frame` was handed); single-threaded on this path (we just blocked on
-// `gl.finish()`).
-unsafe fn opengl_frame_completed(renderer: *mut (), _target: *mut Target, health: crate::Health) {
+// `begin_frame` was handed); `target` a live `*mut Target` into that renderer's frame;
+// single-threaded on this path (we just blocked on `gl.finish()`).
+unsafe fn opengl_frame_completed(renderer: *mut (), target: *mut Target, health: crate::Health) {
     let renderer = renderer as *mut Renderer;
-    // (present cut — see the MILESTONE-SCOPE-CUT note above.)
+    // if (health == .healthy) self.renderer.api.present(self.target.*) catch |err| { log.err(...) };
+    // WINDOWED only: GDK owns the context ⇒ FBO 0 is the GLArea framebuffer.
+    if health == crate::Health::Healthy && !unsafe { (*renderer).api.owns_context() } {
+        if let Err(_err) = unsafe { (*renderer).api.present_to_default(&*target) } {
+            // log.err("Failed to present render target: err={}", .{err});
+            // (no logging facade wired; swallow — the reference `catch` logs + swallows.)
+        }
+    }
     // block.renderer.frameCompleted(health);
     unsafe { (*renderer).frame_completed(health) };
 }
@@ -749,11 +760,11 @@ unsafe fn opengl_frame_completed(renderer: *mut (), _target: *mut Target, health
 impl Renderer {
     // PORTS: generic.zig:658-799 `Renderer.init`; macos_impl generic.rs:1831-2076.
     //
-    // OFFSCREEN-ONLY path (Task 9). Like `macos_impl::init`, this builds `api` via
-    // the offscreen-portable ctor (`OpenGL::init_offscreen`) rather than the
-    // live-surface `GraphicsAPI.init` — `Options` carries no `rt_surface` (R4), and
-    // the windowed present / GLArea attach ("GL-ATTACH") is the deferred stub
-    // matching Task 8's `present` deferral. The macOS `display_link`/vsync branch
+    // OFFSCREEN path (Task 9 / golden). Builds `api` via the offscreen-portable ctor
+    // (`OpenGL::init_offscreen`, which OWNS a surfaceless EGL/GL context), then runs
+    // the shared [`Self::init_with_api`] body. Used by the golden + the renderer's
+    // own unit tests, which provide no windowing host. The WINDOWED sibling is
+    // [`Self::init_windowed`]. The macOS `display_link`/vsync branch
     // (generic.zig:692-698 `else => null`) and the `images`/`bg_image` fields (the
     // macOS-only `crate::image` module) are omitted — see the module docs.
     pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
@@ -764,7 +775,38 @@ impl Renderer {
             options.size.screen.width,
             options.size.screen.height,
         )?;
+        Self::init_with_api(alloc, options, api)
+    }
 
+    /// GL-ATTACH (LANDED) — the WINDOWED renderer constructor. This is the FAITHFUL
+    /// `Renderer.init` path: it builds `api` via the reference `OpenGL::init` (which
+    /// creates + owns NO GL context — GDK's GLArea owns it), then runs the same shared
+    /// [`Self::init_with_api`] body. Core's `Surface::init` calls it (through the
+    /// renderer seam) on the GTK path.
+    ///
+    /// # Preconditions
+    /// GDK's GLArea context MUST be current and GL MUST already be loaded
+    /// (`Renderer::surface_init` → `sys::prepare_context_windowed` ran) before this
+    /// is called, because [`Self::init_with_api`]'s `SwapChain::init` / `init_shaders`
+    /// create GL objects against that current context. Core guarantees this ordering:
+    /// `gl_area.make_current()` → `surfaceInit` → `init_windowed`.
+    ///
+    /// Because `api` owns no context, the resulting `Renderer` eglTerminates nothing
+    /// on `deinit` — this is the GL-ATTACH teardown-double-free fix.
+    pub fn init_windowed(alloc: Global, options: Options) -> Result<Self, Error> {
+        // Zig: var api = try GraphicsAPI.init(alloc, options); the OpenGL reference
+        // `init` creates no context (OpenGL.zig:51-56) — GDK owns it.
+        let api = OpenGL::init(options.config.blending);
+        Self::init_with_api(alloc, options, api)
+    }
+
+    /// Shared body of [`Self::init`] (offscreen) and [`Self::init_windowed`]
+    /// (windowed): everything after the `GraphicsAPI.init` step of the reference
+    /// `Renderer.init` (generic.zig:658-799). The only difference between the two
+    /// paths is whether `api` owns a GL context, so it is built by the caller and
+    /// handed in here; the swap chain / shaders / font shaper / uniform setup below
+    /// is identical.
+    fn init_with_api(alloc: Global, options: Options, api: OpenGL) -> Result<Self, Error> {
         // const has_custom_shaders = options.config.custom_shaders.value.items.len > 0;
         let has_custom_shaders = !options.config.custom_shaders.value.is_empty();
 
@@ -972,15 +1014,25 @@ impl Renderer {
     //
     // PORTS: generic.zig:864-869 `surfaceInit`; macos_impl generic.rs:2193-2196.
     // `@hasDecl(GraphicsAPI, "surfaceInit")` is TRUE for `OpenGL` (OpenGL.zig:162),
-    // whose GTK-arm body is `prepareContext(null)` — reload the GL loader over the
-    // context. That api-level GL-loader hook is L5-owned (the GDK/epoxy proc-address
-    // loader decision — see `opengl/opengl_impl.rs` module doc), and for the
-    // offscreen path it is a no-op: the owned `OffscreenContext` is prepared once in
-    // `OpenGL::init_offscreen` and stays current (never torn down here). Documented
-    // elision (R1) — the exact rationale as `display_realized`'s api-level hook.
+    // whose GTK-arm body is `prepareContext(null)` (OpenGL.zig:169-170) — load the GL
+    // loader over the context GDK has already made current.
+    //
+    // GL-ATTACH (LANDED): this is the WINDOWED GL-loader hook. The GTK apprt calls it
+    // (via core's `Surface::init`) right after `gl_area.make_current()`, so GDK's
+    // GLArea context IS current here; `sys::prepare_context_windowed` binds the `gl`
+    // crate's entry points to it (via `eglGetProcAddress`) + runs the reference's
+    // version gate / debug-output / GL_FRAMEBUFFER_SRGB setup. It is a type-level fn
+    // (no self / no api yet — the api is built by `init_windowed`, AFTER this), so it
+    // loads the process-global GL dispatch that `init_windowed`'s `SwapChain::init`
+    // then uses. The OFFSCREEN golden never reaches here (it calls `Renderer::init`
+    // directly, whose owned `OffscreenContext` self-loads GL) — see `init` vs
+    // `init_windowed`.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error> {
         let _ = rt_surface;
+        // try prepareContext(null); (OpenGL.zig:170) — load GL against GDK's current
+        // GLArea context. A version-gate / GL failure folds to `Error::GlFailed`.
+        crate::opengl::gl::sys::prepare_context_windowed().map_err(|_| Error::GlFailed)?;
         Ok(())
     }
 
@@ -1303,16 +1355,25 @@ impl Renderer {
         //   (generic.zig:939-942)
         //
         // OpenGL DOES declare `displayRealized` (OpenGL.zig:237-250), whose body is
-        // the GTK arm's `prepareContext(null)` — reload glad over the context GDK
-        // just made current on (re-)realize. That api-level hook is L5-owned: it
-        // needs the GDK/epoxy proc-address loader decision and is deliberately NOT
-        // ported this tier (see the `opengl/opengl_impl.rs` module doc, lines 40-43).
-        // For the offscreen path it would also be a no-op — the owned
-        // `OffscreenContext` is prepared once in `OpenGL::init_offscreen` and is
-        // NEVER torn down by `display_unrealized` (which frees only the swap chain +
-        // shaders, generic.zig:982-983), so it stays current across the
-        // unrealize/realize cycle and needs no reload. Documented elision (R1), not
-        // fabricated behavior.
+        // the GTK arm's `prepareContext(null)` — reload the GL loader over the context
+        // GDK just made current on (re-)realize.
+        //
+        // GL-ATTACH (LANDED): on the WINDOWED path (`!api.owns_context()` — GDK owns
+        // the context) we reload GL via `sys::prepare_context_windowed`, because a
+        // re-realize (e.g. moving the window between displays / a split) can hand us a
+        // FRESH GDK context whose entry points must be re-bound; the GTK apprt calls
+        // this right after `gl_area.make_current()` (surface.rs `gl_realize`), so that
+        // context is current here. On the OFFSCREEN path (`api.owns_context()`) it is
+        // a no-op: the owned `OffscreenContext` is prepared once in
+        // `OpenGL::init_offscreen` and is NEVER torn down by `display_unrealized`
+        // (which frees only the swap chain + shaders, generic.zig:982-983), so it
+        // stays current across the unrealize/realize cycle and needs no reload — this
+        // is what keeps the offscreen re-realize unit test valid.
+        // (This runs BEFORE `draw_mutex.lock()` below — reference order
+        // generic.zig:939-947 — so an early return here holds no lock.)
+        if !self.api.owns_context() && crate::opengl::gl::sys::prepare_context_windowed().is_err() {
+            return Err(Error::GlFailed);
+        }
 
         // self.draw_mutex.lock(); defer self.draw_mutex.unlock(); (generic.zig:946-947)
         //

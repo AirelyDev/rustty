@@ -327,6 +327,40 @@ pub fn load_gl(ctx: &OffscreenContext) -> Result<(u32, u32), Error> {
     prepare_context(|symbol| ctx.get_proc_address(symbol))
 }
 
+/// GL-ATTACH — the WINDOWED flavour of [`prepare_context`], i.e. the reference's
+/// `apprt.gtk => try prepareContext(null)` arm (`OpenGL.zig:169-170`, reached from
+/// `surfaceInit`/`displayRealized`). Ghostty passes `null` because GDK has already
+/// made its GLArea context CURRENT before this runs; glad then loads GL from the
+/// platform's default loader against that current context. The Rust `gl` crate has
+/// no null-loader equivalent, so we bind `getProcAddress` to `eglGetProcAddress`,
+/// which — per EGL 1.5, and as libglvnd guarantees — resolves the (vendor-neutral)
+/// GL dispatch entry points that route to whatever context is current on the
+/// calling thread. It creates NO display and NO context (GDK owns those); it only
+/// dlopen's `libEGL.so.1` for its `eglGetProcAddress`.
+///
+/// The `DynamicInstance` is leaked (`Box::leak`) so `libEGL.so.1` stays mapped for
+/// the process lifetime — the loaded GL pointers live in libglvnd's dispatch (kept
+/// alive by GDK) but keeping libEGL resident is the belt-and-braces cheap option
+/// (one small one-time leak, mirroring how the process-global `gl::load_with`
+/// statics are themselves never torn down).
+///
+/// # Errors
+/// [`Error::EglUnavailable`] if `libEGL.so.1` cannot be loaded, or any
+/// [`prepare_context`] error (version-gate / GL failure) against the current
+/// context.
+pub fn prepare_context_windowed() -> Result<(u32, u32), Error> {
+    // SAFETY: `load_required` dlopen's libEGL.so.1 and resolves the core entry
+    // points; unsafe only because it trusts the shared object to be EGL.
+    let egl = unsafe { egl::DynamicInstance::<egl::EGL1_5>::load_required() }
+        .map_err(|err| Error::EglUnavailable(err.to_string()))?;
+    let egl: &'static egl::DynamicInstance<egl::EGL1_5> = Box::leak(Box::new(egl));
+
+    prepare_context(|symbol| match egl.get_proc_address(symbol) {
+        Some(f) => f as *const c_void,
+        None => std::ptr::null(),
+    })
+}
+
 /// Prepares the provided GL context, loading it with the `gl` bindings.
 ///
 /// PORTS: `OpenGL.zig:132-159`.

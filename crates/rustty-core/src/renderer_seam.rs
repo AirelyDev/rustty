@@ -293,7 +293,15 @@ impl Renderer {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let inner = rustty_renderer::Renderer::init(
+            // GL-ATTACH (LANDED): the WINDOWED constructor. Core's `Surface::init`
+            // reaches this on the GTK path AFTER `gl_area.make_current()` +
+            // `Renderer::surfaceInit` (which ran `prepare_context_windowed` against
+            // GDK's current GLArea context), so `init_windowed` builds an `OpenGL`
+            // that borrows GDK's context (owns none — no teardown double-free) and
+            // creates its swap-chain / shader GL objects on that context. (The
+            // offscreen `Renderer::init` is used only by the renderer crate's own
+            // golden / unit tests, which stand up their own context.)
+            let inner = rustty_renderer::Renderer::init_windowed(
                 alloc,
                 rustty_renderer::generic::Options {
                     config,

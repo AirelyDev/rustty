@@ -210,6 +210,46 @@ impl OpenGL {
         })
     }
 
+    /// WINDOWED constructor (GL-ATTACH) — the FAITHFUL port of the reference
+    /// `OpenGL.init` (`OpenGL.zig:51-56`), which creates NO GL context: ghostty's
+    /// OpenGL graphics API never owns a context — GDK's GLArea owns it, and the
+    /// GL loader is bound out-of-band by `surfaceInit`/`displayRealized`
+    /// (`prepareContext(null)`, reached here via [`sys::prepare_context_windowed`]).
+    /// So this merely stores `blending`; `context` is `None` (GDK owns lifetime),
+    /// and `surface_size` reads the live `GL_VIEWPORT` GDK set (the `None` arm).
+    ///
+    /// Unlike [`Self::init_offscreen`] it does NOT stand up an `OffscreenContext`,
+    /// does NOT load GL (the windowing host already did via
+    /// `sys::prepare_context_windowed`), and does NOT set a viewport (GDK sets it
+    /// on the GLArea `resize`/`render`). The caller MUST have made a GL context
+    /// current and run `prepare_context_windowed` before any GL-touching method
+    /// (`init_shaders`/`init_target`/`present_to_default`) is reached.
+    pub fn init(blending: AlphaBlending) -> OpenGL {
+        OpenGL {
+            blending,
+            last_target: None,
+            // GDK owns the context; the renderer does NOT eglTerminate anything on
+            // drop — this is the fix for the GL-ATTACH teardown double-free.
+            context: None,
+            // Unused on the windowed path (`surface_size` reads GL_VIEWPORT while
+            // `context` is `None`); zeroed for parity with the offscreen stub.
+            offscreen_size: SurfaceSize {
+                width: 0,
+                height: 0,
+            },
+        }
+    }
+
+    /// GL-ATTACH: whether this `OpenGL` OWNS its GL context (the offscreen golden
+    /// path, [`Self::init_offscreen`]) or borrows the currently-current one (the
+    /// windowed path, [`Self::init`], where GDK owns it). The renderer's frame
+    /// completion uses this to decide whether to `present` to the default
+    /// framebuffer (windowed only — offscreen has no complete FBO 0), and it is the
+    /// same discriminant `surface_size` already switches on.
+    pub fn owns_context(&self) -> bool {
+        self.context.is_some()
+    }
+
     /// PORTS: `OpenGL.zig:58-60`.
     ///
     /// ```zig
@@ -391,6 +431,101 @@ impl OpenGL {
         } else {
             Ok(())
         }
+    }
+
+    /// GL-ATTACH — the WINDOWED present: blit `target`'s FBO into the CURRENTLY
+    /// BOUND draw framebuffer, which under a live GTK GLArea IS the GLArea's
+    /// framebuffer (GDK binds it — a non-zero FBO — before emitting `render`). This
+    /// IS the reference `present` body (`OpenGL.zig:298-331`): it binds `target` as
+    /// the READ framebuffer and `glBlitFramebuffer`s into the current DRAW binding,
+    /// which the reference calls "the default framebuffer" (from the renderer's
+    /// view — whatever the windowing host bound). It NEVER binds a draw framebuffer
+    /// itself, so the pixels land wherever the host directed them — that is what
+    /// makes the terminal VISIBLE on the window. It differs from [`Self::present`]
+    /// only in taking `target` by SHARED REFERENCE rather than by value: on the
+    /// windowed path the frame's `Target` is still owned by the swap chain (the
+    /// renderer's completion trampoline holds a raw `*mut Target` into it), so there
+    /// is nothing to move into `last_target` — the blit only READS the target's FBO.
+    /// `Framebuffer` is a `Copy` GL handle, so binding it for read needs no ownership.
+    ///
+    /// # Errors
+    /// [`Error::Gl`] if the `disable`/`bind`/re-`enable` GL calls fail (mirrors the
+    /// reference `present`'s `try` sites).
+    pub fn present_to_default(&self, target: &Target) -> Result<(), Error> {
+        // We disable GL_FRAMEBUFFER_SRGB while doing this blit (see `present`).
+        draw::disable(gl::FRAMEBUFFER_SRGB)?;
+
+        // Mirror the reference `defer`: always re-enable GL_FRAMEBUFFER_SRGB, even
+        // on the blit-bind error path, and never let a re-enable failure mask the
+        // blit result (OpenGL.zig:307-309).
+        let blit = (|| -> Result<(), errors::Error> {
+            // Bind the target for reading; `bind(.read)` SAVES the current
+            // GL_FRAMEBUFFER_BINDING (the host's draw framebuffer) and restores it on
+            // `unbind`, so the blit's DRAW target stays the host framebuffer.
+            let fbobind = target.framebuffer.bind(framebuffer::Target::READ)?;
+            // SAFETY: a valid READ framebuffer is bound (`fbobind`); the default
+            // (draw) framebuffer is FBO 0; core GL 3.0. Dims fit GLint.
+            unsafe {
+                gl::BlitFramebuffer(
+                    0,
+                    0,
+                    target.width as gl::types::GLint,
+                    target.height as gl::types::GLint,
+                    0,
+                    0,
+                    target.width as gl::types::GLint,
+                    target.height as gl::types::GLint,
+                    gl::COLOR_BUFFER_BIT,
+                    gl::NEAREST,
+                );
+            }
+            fbobind.unbind();
+            Ok(())
+        })();
+
+        if draw::enable(gl::FRAMEBUFFER_SRGB).is_err() {
+            // (no logging facade wired; swallow as the reference `defer` does.)
+        }
+
+        blit?;
+        Ok(())
+    }
+
+    /// GL-ATTACH proof helper (RUSTTY-ONLY, no ghostty analogue): read the CURRENTLY
+    /// BOUND draw framebuffer — the WINDOWING HOST's framebuffer — back into a tight
+    /// `width*height*4` RGBA buffer. Under a GTK GLArea this is the GLArea's own
+    /// (NON-zero) framebuffer, which GDK binds before emitting `render` (or which
+    /// `gtk_gl_area_attach_buffers` binds), and which [`Self::present_to_default`]
+    /// blits the frame into. The visible-render KAT calls this to assert the terminal
+    /// frame landed in the WINDOW's framebuffer (NOT the renderer's offscreen target
+    /// FBO). It reads the current `GL_FRAMEBUFFER_BINDING` (the draw alias), NOT the
+    /// literal FBO 0, precisely because GtkGLArea's default framebuffer is a non-zero
+    /// FBO. MUST be called with a GL context current and the host framebuffer bound.
+    pub fn read_bound_framebuffer_rgba(&self, width: usize, height: usize) -> Vec<u8> {
+        let mut out = vec![0u8; width * height * 4];
+        let w = width as gl::types::GLsizei;
+        let h = height as gl::types::GLsizei;
+
+        // Read whatever framebuffer is currently bound as the draw target (the host's
+        // GLArea framebuffer), NOT FBO 0 — GtkGLArea's default framebuffer is a
+        // non-zero FBO.
+        // SAFETY: `GL_FRAMEBUFFER_BINDING` is single-valued; the read is `w*h*4` bytes
+        // at the default pack alignment of 4 (row stride `w*4` is a multiple of 4).
+        unsafe {
+            let mut bound: gl::types::GLint = 0;
+            gl::GetIntegerv(gl::FRAMEBUFFER_BINDING, &mut bound);
+            gl::BindFramebuffer(gl::READ_FRAMEBUFFER, bound as gl::types::GLuint);
+            gl::ReadPixels(
+                0,
+                0,
+                w,
+                h,
+                gl::RGBA,
+                gl::UNSIGNED_BYTE,
+                out.as_mut_ptr().cast::<std::ffi::c_void>(),
+            );
+        }
+        out
     }
 
     /// Returns the options to use when constructing buffers.
