@@ -2352,7 +2352,7 @@ mod action {
     use rustty_datastruct::split_tree::{Direction, Goto, SpatialDirection};
 
     use super::super::split_tree::SplitTree;
-    use super::super::surface::{Size, Surface as GhosttySurface};
+    use super::super::surface::{CoreSurface, Size, Surface as GhosttySurface};
     use super::super::tab::{Tab, TabOverrides};
     use super::super::window::{SelectTab, Window};
     use super::{ext, Application, Config, CoreConfig};
@@ -2802,13 +2802,32 @@ mod action {
 
         // `Window.new(self, .{ .title = overrides.title })` (`:2270-2272`) — the window
         // title override is applied up front; it also flows to the first surface via
-        // `new_tab_for_window` below (`:2309-2313`).
+        // `new_tab_for_window` in the shared helper (`:2309-2313`).
         let win = Window::new(app, overrides.title.as_deref());
 
-        // Keep the window config in sync with the app config (`:2295-2301`).
-        app.bind_property("config", &win, "config").build();
+        // Bind config, create the first tab, size, and present (`:2285-2329`).
+        init_and_show_window(app, &win, parent, overrides);
+        Ok(())
+    }
 
-        // Create the first tab with window context (`:2308-2313`,
+    /// PORTS: `application.zig:2285-2329` `initAndShowWindow`. The shared init-and-show
+    /// path invoked on an already-constructed [`Window`] — binds the app config to the
+    /// window, creates the first tab with window context, estimates the initial size,
+    /// and presents. rustty folded this into [`new_window`]; it is split back out here
+    /// so [`toggle_quick_terminal`] can drive it with a pre-built quick-terminal window
+    /// (the reference's `initAndShowWindow(self, win, null, .none)`, `:2667`).
+    pub(super) fn init_and_show_window(
+        app: &Application,
+        win: &Window,
+        parent: Option<*mut CoreSurface>,
+        overrides: TabOverrides,
+    ) {
+        // Setup a binding so that whenever our config changes so does the window.
+        // There's never a time when the window config should be out of sync with the
+        // application config (`:2295-2306`).
+        app.bind_property("config", win, "config").build();
+
+        // Create a new tab with window context (first tab in new window) (`:2308-2313`,
         // `win.newTabForWindow(parent, ...)`), applying the argv override.
         win.new_tab_for_window(parent, overrides);
 
@@ -2827,7 +2846,6 @@ mod action {
 
         // Show the window (`:2327`).
         win.upcast_ref::<gtk4::Window>().present();
-        Ok(())
     }
 
     /// `pub fn openConfig(self) bool` (`:2333-2347`).
@@ -3321,14 +3339,42 @@ mod action {
         }
     }
 
-    /// `pub fn toggleQuickTerminal(self) bool` (`:2641-2652`).
+    /// `pub fn toggleQuickTerminal(self) bool` (`:2649-2669`).
     pub(super) fn toggle_quick_terminal(app: &Application) -> bool {
-        // INHABITED placeholder: reference toggles an existing quick-terminal window or,
-        // if the winproto supports it, creates one (`Window{ quick-terminal = true }`) and
-        // shows it. The quick-terminal window path lands with L5.4 (winproto) + the
-        // quick-terminal window completion.
-        let _ = app;
-        false
+        // If we already have a quick terminal window, we just toggle the
+        // visibility of it (`:2650-2655`).
+        if let Some(win) = get_quick_terminal_window() {
+            win.toggle_visibility();
+            return true;
+        }
+
+        // If we don't support quick terminals then we do nothing (`:2657-2659`).
+        if !app.winproto().supports_quick_terminal() {
+            return false;
+        }
+
+        // Create our new window as a quick terminal (`:2661-2665`,
+        // `gobject.ext.newInstance(Window, .{ .application, .@"quick-terminal" = true })`).
+        let win: Window = glib::Object::builder()
+            .property("application", app)
+            .property("quick-terminal", true)
+            .build();
+        assert!(win.is_quick_terminal());
+
+        // Bind config, create the first tab, size, and present (`:2667`,
+        // `initAndShowWindow(self, win, null, .none)`).
+        init_and_show_window(app, &win, None, TabOverrides::default());
+        true
+    }
+
+    /// `fn getQuickTerminalWindow() ?*Window` (`:2713-2731`). Finds a quick terminal
+    /// window: scans the toplevels and returns the first that downcasts to our
+    /// [`Window`] subclass with `is_quick_terminal()` set.
+    fn get_quick_terminal_window() -> Option<Window> {
+        gtk4::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<Window>().ok())
+            .find(Window::is_quick_terminal)
     }
 
     /// `pub fn toggleSplitZoom(target) bool` (`:2654-2680`). Reaches the enclosing
