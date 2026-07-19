@@ -2537,8 +2537,12 @@ mod action {
         match target {
             Target::App => eprintln!("warn(gtk): pwd to app is unexpected"),
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setPwd(value.pwd)` (`pwd` surface prop).
-                let _ = (widget(v), value);
+                // PORTS: `application.zig:2372` `surface.rt_surface.gobj().setPwd(value.pwd)`
+                // — set the surface widget's `pwd` property (the tab tooltip + the window
+                // subtitle bind to active-surface `pwd`, tab.blp:12 / window.blp:50).
+                if let Some(w) = widget(v) {
+                    w.set_pwd(Some(String::from_utf8_lossy(value.pwd).into_owned()));
+                }
             }
         }
     }
@@ -2772,8 +2776,13 @@ mod action {
         match target {
             Target::App => eprintln!("warn(gtk): set_title to app is unexpected"),
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setTitle(value.title)` (`title` prop).
-                let _ = (widget(v), value);
+                // PORTS: `application.zig:2576-2583` `setTitle` — set the surface widget's
+                // `title` property. The tab's `computed_title` binds this active-surface
+                // `title` as the `terminal` title (tab.blp:11), which flows to the tab
+                // title and, via the window's tab BindingGroup, to the window title.
+                if let Some(w) = widget(v) {
+                    w.set_title(Some(String::from_utf8_lossy(value.title).into_owned()));
+                }
             }
         }
     }
