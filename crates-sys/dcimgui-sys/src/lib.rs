@@ -240,6 +240,46 @@ extern "C" {
     pub fn ImGui_ImplMetal_DestroyDeviceObjects();
 }
 
+// --- OpenGL3 backend (non-macOS / Linux+GTK) --------------------------------
+//
+// The GTK apprt renders the inspector with the OpenGL3 ImGui backend instead
+// of Metal. These are the `ImGui_ImplOpenGL3_*` entry points from the vendored
+// `imgui_impl_opengl3.cpp` (compiled by build.rs on non-macOS), mirroring the
+// Metal block above. Like the Metal names, they are stable and are called
+// directly by the GTK inspector's realize/render/unrealize glue.
+//
+// The per-frame draw data (never stored — see PREPORT_INSPECTOR §1) crosses as
+// `*mut ImDrawData`, already in scope above.
+#[cfg(not(target_os = "macos"))]
+extern "C" {
+    /// Initialize the OpenGL3 backend for the current ImGui context.
+    /// `glsl_version` is a NUL-terminated `#version` string, or NULL to let the
+    /// backend pick a default. Returns false on failure.
+    /// (imgui_impl_opengl3.h — `ImGui_ImplOpenGL3_Init(const char* glsl_version)`.)
+    pub fn ImGui_ImplOpenGL3_Init(glsl_version: *const core::ffi::c_char) -> bool;
+
+    /// Tear down the OpenGL3 backend global state.
+    /// (imgui_impl_opengl3.h — `ImGui_ImplOpenGL3_Shutdown()`.)
+    pub fn ImGui_ImplOpenGL3_Shutdown();
+
+    /// Begin a new OpenGL3 frame (lazily creates device objects).
+    /// (imgui_impl_opengl3.h — `ImGui_ImplOpenGL3_NewFrame()`.)
+    pub fn ImGui_ImplOpenGL3_NewFrame();
+
+    /// Render the accumulated ImGui draw data with the current GL context.
+    /// `draw_data` is the per-frame `*ImDrawData` returned by
+    /// `ImGui_GetDrawData()`.
+    /// (imgui_impl_opengl3.h — `ImGui_ImplOpenGL3_RenderDrawData(ImDrawData*)`.)
+    pub fn ImGui_ImplOpenGL3_RenderDrawData(draw_data: *mut ImDrawData);
+
+    /// Shut down the OpenGL3 backend and additionally unload the GL function
+    /// loader (the `imgui_impl_opengl3_loader.h` dynamic loader). Used by the
+    /// GTK inspector's `unrealize` path so the loader is re-resolved against a
+    /// fresh GL context on the next realize. (ext.cpp:44 shim, auto-activated by
+    /// `ZIGPKG_IMGUI_ENABLE_OPENGL3`.)
+    pub fn ImGui_ImplOpenGL3_ShutdownWithLoaderCleanup();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +364,30 @@ mod tests {
             ImGui_ImplMetal_RenderDrawData as *const (),
             ImGui_ImplMetal_CreateDeviceObjects as *const (),
             ImGui_ImplMetal_DestroyDeviceObjects as *const (),
+        ];
+        for sym in symbols {
+            // black_box keeps the reference (and thus the link dependency)
+            // from being elided; a resolved symbol is never null.
+            assert!(!std::hint::black_box(sym).is_null());
+        }
+    }
+
+    /// Link test for the `ImGui_ImplOpenGL3_*` FFI surface used by the GTK
+    /// inspector's OpenGL3 backend — same shape as `link_imgui_impl_metal_ffi`
+    /// above. Takes the address of each of the 5 entry points so a missing
+    /// export from the compiled `imgui_impl_opengl3.cpp` TU is a *link* error
+    /// at test-binary build time; no GL context is needed to force the link.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn opengl3_symbols_link() {
+        // Coerce each `extern "C"` fn item to an opaque address; the linker
+        // must resolve every symbol to build this test binary.
+        let symbols: [*const (); 5] = [
+            ImGui_ImplOpenGL3_Init as *const (),
+            ImGui_ImplOpenGL3_Shutdown as *const (),
+            ImGui_ImplOpenGL3_NewFrame as *const (),
+            ImGui_ImplOpenGL3_RenderDrawData as *const (),
+            ImGui_ImplOpenGL3_ShutdownWithLoaderCleanup as *const (),
         ];
         for sym in symbols {
             // black_box keeps the reference (and thus the link dependency)
