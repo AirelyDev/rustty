@@ -75,7 +75,7 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use rustty_config::value_types::{
     BackgroundBlur, QuickTerminalKeyboardInteractivity, QuickTerminalLayer, QuickTerminalPosition,
-    QuickTerminalScreen, WindowDecoration,
+    QuickTerminalScreen, QuickTerminalSizeDimensions, WindowDecoration,
 };
 use rustty_config::Config as CoreConfig;
 
@@ -469,8 +469,19 @@ impl Window {
             .ext_background_effect()
             .map(|mgr| mgr.get_background_effect(&surface, &qh, ()));
 
-        // PORT NOTE: `wayland.zig:169-177` connects `enter_monitor` for the quick
-        // terminal only; DEFERRED with the quick-terminal arm.
+        // `wayland.zig:169-177`: for the quick terminal only, connect the GDK
+        // surface `enter-monitor` signal so the window is (re)sized to the monitor
+        // it lands on. The callback reads the primary output through the App
+        // accessor via `apprt_window.application().winproto()`, so we hand it a weak
+        // ref to the apprt window (avoiding a surface->closure->window ref cycle).
+        if apprt.is_some_and(|w| w.is_quick_terminal()) {
+            let apprt_weak = apprt.map(ObjectExt::downgrade).unwrap_or_default();
+            gdk_surface.connect_enter_monitor(move |surface, monitor| {
+                if let Some(apprt_window) = apprt_weak.upgrade() {
+                    entered_monitor(surface, monitor, &apprt_window);
+                }
+            });
+        }
 
         Ok(Window {
             apprt_window: apprt.map(ObjectExt::downgrade).unwrap_or_default(),
@@ -760,6 +771,41 @@ impl Window {
 
         Ok(())
     }
+}
+
+/// Update the size of the quick terminal based on monitor dimensions.
+///
+/// PORTS: `wayland.zig:392-421` `Window.enteredMonitor` (the GDK `enter_monitor`
+/// signal callback). Divergence: the reference reaches the globals through
+/// `apprt_window.winproto().wayland.globals`; rustty resolves the primary output
+/// via [`quick_terminal_primary_output_name`] (`apprt_window.application().winproto()`).
+fn entered_monitor(_surface: &gdk4::Surface, monitor: &gdk4::Monitor, apprt_window: &ApprtWindow) {
+    let window: &gtk4::Window = apprt_window.upcast_ref();
+    let Some(config) = apprt_window.get_config() else {
+        return;
+    };
+    let config = config.get();
+
+    let primary_output_name = quick_terminal_primary_output_name(apprt_window);
+    let resolved_monitor =
+        resolve_quick_terminal_monitor(primary_output_name.as_deref(), apprt_window);
+    // The reference unrefs the resolved monitor at scope end; the owned
+    // `gdk::Monitor` is dropped (unref'd) when this function returns.
+
+    // Use the configured monitor for sizing if not in mouse mode.
+    let size_monitor = resolved_monitor.as_ref().unwrap_or(monitor);
+
+    let monitor_size = size_monitor.geometry();
+
+    let dims = config.quick_terminal_size.calculate(
+        config.quick_terminal_position,
+        QuickTerminalSizeDimensions {
+            width: monitor_size.width() as u32,
+            height: monitor_size.height() as u32,
+        },
+    );
+
+    window.set_default_size(dims.width as i32, dims.height as i32);
 }
 
 /// Resolve the `Globals.state.primary_output_name` for the quick terminal by
