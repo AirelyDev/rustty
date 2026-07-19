@@ -371,23 +371,58 @@ mod tests {
         const { assert!(<App as ApprtApp>::MUST_DRAW_FROM_APP_THREAD) };
     }
 
-    /// Both IPC actions report "not performed" (`false`) — the INHABITED L6 `ipc/`
-    /// placeholder (`App.zig:86-89`). Non-display: pure dispatch, no GTK runtime.
-    /// (`ipc::Errors` is not `PartialEq`/`Debug`, so match on the `Ok` arm rather
-    /// than `assert_eq!`.)
+    /// With no running instance on the session bus, both IPC actions must fail
+    /// with `IPCFailed` — the PORTED behavior (`ipc/DBus.zig:170-183`: ghostty's
+    /// `.detect` target does NO NameHasOwner pre-check; `send()` calls
+    /// `org.gtk.Actions.Activate` on the app id and maps any D-Bus error to
+    /// `error.IPCFailed` after logging it). This replaced the stale L6
+    /// placeholder pin (`Ok(false)`) that predated the real IPC port.
+    ///
+    /// Environment-sensitive by nature (it talks to the real session bus), so it
+    /// SKIPS when a live rustty currently owns the bus name (the call would then
+    /// legitimately succeed with `Ok(true)`).
     #[test]
-    fn perform_ipc_reports_not_performed() {
+    fn perform_ipc_no_instance_fails_with_ipc_failed() {
+        use glib::prelude::ToVariant;
+        // Skip if a live instance owns the name (dev instance running).
+        if let Ok(conn) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
+            let owned = conn
+                .call_sync(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    "NameHasOwner",
+                    Some(&(crate::gtk::build_info::APPLICATION_ID,).to_variant()),
+                    None,
+                    gio::DBusCallFlags::NONE,
+                    -1,
+                    gio::Cancellable::NONE,
+                )
+                .ok()
+                .and_then(|v| v.child_value(0).get::<bool>())
+                .unwrap_or(false);
+            if owned {
+                eprintln!("skip: a live rustty owns the bus name — IPC would succeed");
+                return;
+            }
+        }
+
         let new_window = ipc::Action::NewWindow(ipc::NewWindow { arguments: None });
         assert!(
-            matches!(App::perform_ipc(ipc::Target::Detect, new_window), Ok(false)),
-            "new-window IPC is the L6 placeholder: not performed"
+            matches!(
+                App::perform_ipc(ipc::Target::Detect, new_window),
+                Err(ipc::Errors::IPCFailed)
+            ),
+            "new-window IPC with no running instance must map the D-Bus error to \
+             IPCFailed (ipc/DBus.zig:182)"
         );
         assert!(
             matches!(
                 App::perform_ipc(ipc::Target::Detect, ipc::Action::ToggleQuickTerminal),
-                Ok(false)
+                Err(ipc::Errors::IPCFailed)
             ),
-            "toggle-quick-terminal IPC is the L6 placeholder: not performed"
+            "toggle-quick-terminal IPC with no running instance must map the D-Bus \
+             error to IPCFailed (ipc/DBus.zig:182)"
         );
     }
 }
