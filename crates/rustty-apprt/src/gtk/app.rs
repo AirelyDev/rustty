@@ -140,7 +140,7 @@ impl App {
         match action {
             // `.new_window => return try ipcNewWindow(alloc, target, value)`
             // (`App.zig:87`).
-            ipc::Action::NewWindow(_) => ipc_new_window(target),
+            ipc::Action::NewWindow(v) => ipc_new_window(target, v),
             // `.toggle_quick_terminal => return try ipcToggleQuickTerminal(alloc,
             // target)` (`App.zig:88`).
             ipc::Action::ToggleQuickTerminal => ipc_toggle_quick_terminal(target),
@@ -148,19 +148,101 @@ impl App {
     }
 }
 
-/// PORTS: `ipc/new_window.zig` `newWindow` — the `new-window` D-Bus IPC. **L6
-/// `ipc/` INHABITED placeholder** (`App.zig:15,87`): the D-Bus activation surface
-/// lands with the L6 `ipc/` tier; until then this reports "not performed"
-/// (`false`), a tracked deferral (`.port/phase-2/DEFERRALS.md`, "gtk ipc/").
-fn ipc_new_window(_target: ipc::Target<'_>) -> Result<bool, ipc::Errors> {
-    Ok(false)
+/// Resolve the `(bus_name, object_path)` for an IPC target and validate them.
+/// PORTS: `ipc/DBus.zig` `init`'s target switch: `.detect` uses the build-info app
+/// id / object path; `.class` derives the object path from the class name
+/// (`"/" + class`, then `.`→`/` and `-`→`_`).
+fn ipc_bus_target(target: &ipc::Target<'_>) -> Result<(String, String), ipc::Errors> {
+    let (bus_name, object_path) = match target {
+        ipc::Target::Detect => (
+            super::build_info::APPLICATION_ID.to_string(),
+            super::build_info::OBJECT_PATH.to_string(),
+        ),
+        ipc::Target::Class(class) => {
+            let class = String::from_utf8_lossy(class).into_owned();
+            let object_path = format!("/{class}").replace('.', "/").replace('-', "_");
+            (class, object_path)
+        }
+    };
+    if !gio::Application::id_is_valid(&bus_name) {
+        eprintln!("D-Bus bus name is not valid: {bus_name}");
+        return Err(ipc::Errors::IPCFailed);
+    }
+    if !glib::Variant::is_object_path(&object_path) {
+        eprintln!("D-Bus object path is not valid: {object_path}");
+        return Err(ipc::Errors::IPCFailed);
+    }
+    Ok((bus_name, object_path))
+}
+
+/// Send an `org.gtk.Actions.Activate` D-Bus call to the running instance.
+/// PORTS: `ipc/DBus.zig` `send` — builds the `(sava{sv})` payload (action name,
+/// an `av` of parameters, empty `a{sv}` platform data) and `callSync`s it.
+fn ipc_send(
+    target: &ipc::Target<'_>,
+    action: &str,
+    args: Option<&[&[u8]]>,
+) -> Result<bool, ipc::Errors> {
+    use gio::prelude::*;
+    let (bus_name, object_path) = ipc_bus_target(target)?;
+
+    let conn = match gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!("Unable to establish connection to D-Bus session bus: {err}");
+            return Err(ipc::Errors::IPCFailed);
+        }
+    };
+
+    // parameters: `av`. For `new-window-command`, a single element that is the
+    // `as` array of CLI arguments (`ipc/new_window.zig:33-59`).
+    let params: Vec<glib::Variant> = match args {
+        Some(args) => {
+            let arg_strings: Vec<String> = args
+                .iter()
+                .map(|a| String::from_utf8_lossy(a).into_owned())
+                .collect();
+            let as_variant = arg_strings.to_variant();
+            vec![glib::Variant::from_variant(&as_variant)]
+        }
+        None => vec![],
+    };
+    let params_v = glib::Variant::array_from_iter_with_type(glib::VariantTy::VARIANT, params);
+    let platform_v = std::collections::HashMap::<String, glib::Variant>::new().to_variant();
+    let payload = glib::Variant::tuple_from_iter([action.to_variant(), params_v, platform_v]);
+
+    if let Err(err) = conn.call_sync(
+        Some(&bus_name),
+        &object_path,
+        "org.gtk.Actions",
+        "Activate",
+        Some(&payload),
+        None,
+        gio::DBusCallFlags::NONE,
+        -1,
+        gio::Cancellable::NONE,
+    ) {
+        eprintln!("D-Bus method call returned an error err={err}");
+        return Err(ipc::Errors::IPCFailed);
+    }
+    Ok(true)
+}
+
+/// PORTS: `ipc/new_window.zig` `newWindow` — the `new-window` (or
+/// `new-window-command` when CLI args are present) D-Bus IPC.
+fn ipc_new_window(target: ipc::Target<'_>, value: ipc::NewWindow<'_>) -> Result<bool, ipc::Errors> {
+    let action = if value.arguments.is_none() {
+        "new-window"
+    } else {
+        "new-window-command"
+    };
+    ipc_send(&target, action, value.arguments)
 }
 
 /// PORTS: `ipc/toggle_quick_terminal.zig` `toggleQuickTerminal` — the
-/// `toggle-quick-terminal` D-Bus IPC. **L6 `ipc/` INHABITED placeholder**
-/// (`App.zig:16,88`): same deferral as [`ipc_new_window`].
-fn ipc_toggle_quick_terminal(_target: ipc::Target<'_>) -> Result<bool, ipc::Errors> {
-    Ok(false)
+/// `toggle-quick-terminal` D-Bus IPC.
+fn ipc_toggle_quick_terminal(target: ipc::Target<'_>) -> Result<bool, ipc::Errors> {
+    ipc_send(&target, "toggle-quick-terminal", None)
 }
 
 impl ApprtApp for App {

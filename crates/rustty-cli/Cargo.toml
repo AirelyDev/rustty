@@ -15,6 +15,11 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Route the IPC actions (+new-window / +toggle-quick-terminal) through the GTK
+# apprt's perform_ipc instead of the none backend when built for Linux/GTK.
+gtk = ["rustty-apprt/gtk"]
+
 [dependencies]
 rustty-config = { workspace = true }
 rustty-vt = { workspace = true }

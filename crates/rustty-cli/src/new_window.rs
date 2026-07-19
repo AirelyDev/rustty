@@ -21,7 +21,9 @@ use crate::rustty::{Action, Error};
 //   `apprt.runtime.App`; for the headless `rustty` CLI build that is `none.App`,
 //   whose `perform_ipc` always returns `Ok(false)`. The ipc value types come from
 //   `rustty-apprt-api` (rustty-apprt does not re-export them).
+#[cfg(not(all(target_os = "linux", feature = "gtk")))]
 use allocator_api2::alloc::Global;
+#[cfg(not(all(target_os = "linux", feature = "gtk")))]
 use rustty_apprt::none;
 use rustty_apprt_api::ipc;
 // const args = @import("args.zig");
@@ -469,7 +471,14 @@ where
             Some(&arg_refs)
         },
     };
-    match none::App::perform_ipc(Global, target, ipc::Action::NewWindow(new_window)) {
+    let ipc_action = ipc::Action::NewWindow(new_window);
+    // Route through the GTK apprt's D-Bus IPC on Linux/GTK; the headless CLI build
+    // falls back to the `none` backend (always "not performed").
+    #[cfg(all(target_os = "linux", feature = "gtk"))]
+    let ipc_result = rustty_apprt::gtk::App::perform_ipc(target, ipc_action);
+    #[cfg(not(all(target_os = "linux", feature = "gtk")))]
+    let ipc_result = none::App::perform_ipc(Global, target, ipc_action);
+    match ipc_result {
         // if (apprt.App.performIpc(...)) return 0;
         Ok(delivered) => {
             if delivered {

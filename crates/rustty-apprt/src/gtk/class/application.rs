@@ -1031,12 +1031,18 @@ extern "C" {
 fn action_new_window(
     _action: &gio::SimpleAction,
     _parameter: Option<&glib::Variant>,
-    _app: &Application,
+    app: &Application,
 ) {
-    eprintln!("debug(gtk): received new window action");
-    // PORT NOTE (placeholder-leaf): argv parsing (`-e`, `--command=`,
-    // `--working-directory=`, `--title=`) + `Action.newWindow(...)` (`:1716-1808`)
-    // land with the action-dispatch surface (Task 23).
+    // PORTS: `application.zig:1716-1808` `actionNewWindow` — open a new top-level
+    // window. The optional argv override (`-e`, `--command=`, `--working-directory=`,
+    // `--title=`, parsed from the `new-window-command` `as` parameter) remains a
+    // placeholder-leaf; the window itself is opened via the same monomorphized
+    // `new_window_thunk` that `activate` drives (which requests a `.new_window` on the
+    // bound core app). This is what makes `rustty +new-window` (the D-Bus IPC) and the
+    // `app.new-window` menu/keybind actually open a window.
+    if let Some(thunk) = app.imp().new_window_thunk.borrow().as_ref() {
+        thunk();
+    }
 }
 
 /// PORTS: `application.zig:1811-1817` `actionOpenConfig` (`open-config`).

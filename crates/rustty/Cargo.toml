@@ -33,7 +33,7 @@ path = "src/main.rs"
 # runtime takes the usage-banner path). `--no-default-features` yields the
 # headless / deferred-leaf build.
 default = ["gtk"]
-gtk = ["rustty-apprt/gtk", "dep:allocator-api2"]
+gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 
 [dependencies]
 # Entry points fan out only: cli, apprt, core.
