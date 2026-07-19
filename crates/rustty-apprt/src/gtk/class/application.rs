@@ -71,6 +71,7 @@ use rustty_config::Config as CoreConfig;
 use super::command_palette::ActionBoxed;
 use super::config::Config;
 use super::global_shortcuts::GlobalShortcuts;
+use super::tab::TabOverrides;
 use crate::gtk::surface::Surface as ApprtSurface;
 use crate::gtk::{build_info, ext, winproto, WeakRef};
 
@@ -1030,18 +1031,104 @@ extern "C" {
 /// new window.
 fn action_new_window(
     _action: &gio::SimpleAction,
-    _parameter: Option<&glib::Variant>,
+    parameter: Option<&glib::Variant>,
     app: &Application,
 ) {
-    // PORTS: `application.zig:1716-1808` `actionNewWindow` — open a new top-level
-    // window. The optional argv override (`-e`, `--command=`, `--working-directory=`,
-    // `--title=`, parsed from the `new-window-command` `as` parameter) remains a
-    // placeholder-leaf; the window itself is opened via the same monomorphized
-    // `new_window_thunk` that `activate` drives (which requests a `.new_window` on the
-    // bound core app). This is what makes `rustty +new-window` (the D-Bus IPC) and the
-    // `app.new-window` menu/keybind actually open a window.
-    if let Some(thunk) = app.imp().new_window_thunk.borrow().as_ref() {
-        thunk();
+    use rustty_config::command::Command;
+
+    // `log.debug("received new window action")` (`:1704`).
+
+    // The parsed argv override (`-e`, `--command=`, `--working-directory=`, `--title=`)
+    // applied to the received `new-window-command` action (`:1711-1795`). `command` may
+    // also be built from the collected `-e` args below (`:1797-1801`).
+    let mut working_directory: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut command: Option<Command> = None;
+    let mut args: Vec<Vec<u8>> = Vec::new();
+
+    // `overrides:` block (`:1711-1796`) — parse the optional `as` parameter.
+    'overrides: {
+        // Were we given a parameter? (`:1713`.)
+        let Some(parameter) = parameter else {
+            break 'overrides;
+        };
+
+        // Ensure that the supplied parameter is an array of strings (`:1719-1728`).
+        if !parameter.is_type(glib::VariantTy::STRING_ARRAY) {
+            eprintln!(
+                "warn(gtk): parameter is of type '{}', not 'as'",
+                parameter.type_().as_str(),
+            );
+            break 'overrides;
+        }
+
+        // `var e_seen: bool = false;` (`:1738`.)
+        let mut e_seen = false;
+
+        // `while (it.nextValue()) |value|` (`:1741`) — iterate the array elements.
+        for (i, value) in parameter.iter().enumerate() {
+            // Just to be sure it's a string (`:1745`).
+            let Some(str) = value.str() else {
+                continue;
+            };
+
+            // `log.debug("new-window argument: {d} {s}", .{ i, str });` (`:1751`).
+            let _ = i;
+
+            if e_seen {
+                // `args.append(alloc, duplicated)` (`:1753-1763`) — everything after
+                // `-e` is a direct-exec argument.
+                args.push(str.as_bytes().to_vec());
+                continue;
+            }
+
+            // `if (std.mem.eql(u8, str, "-e"))` (`:1765-1768`).
+            if str == "-e" {
+                e_seen = true;
+                continue;
+            }
+
+            // `if (lib.cutPrefix(u8, str, "--command="))` (`:1770-1778`).
+            if let Some(v) = str.strip_prefix("--command=") {
+                let mut cmd = Command::Shell(Vec::new());
+                match cmd.parse_cli(Some(v.as_bytes())) {
+                    Ok(()) => command = Some(cmd),
+                    Err(err) => eprintln!("warn(gtk): unable to parse command: {err:?}"),
+                }
+                continue;
+            }
+            // `if (lib.cutPrefix(u8, str, "--working-directory="))` (`:1779-1785`).
+            if let Some(v) = str.strip_prefix("--working-directory=") {
+                working_directory = Some(v.trim().to_string());
+                continue;
+            }
+            // `if (lib.cutPrefix(u8, str, "--title="))` (`:1786-1792`).
+            if let Some(v) = str.strip_prefix("--title=") {
+                title = Some(v.trim().to_string());
+                continue;
+            }
+        }
+    }
+
+    // `if (args.items.len > 0) command = .{ .direct = args.items };` (`:1797-1801`).
+    if !args.is_empty() {
+        command = Some(Command::Direct(args));
+    }
+
+    // `Action.newWindow(self, null, .{ .command, .working_directory, .title })`
+    // (`:1802-1808`). Unlike `activate` (which queues a `.new_window` on the core
+    // mailbox), the received action opens the window directly so the overrides are
+    // honored; `parent` is null → `.app` target.
+    if let Err(err) = action::new_window(
+        app,
+        Target::<AppTargetHandle>::App,
+        TabOverrides {
+            command,
+            working_directory,
+            title,
+        },
+    ) {
+        eprintln!("warn(gtk): unable to create new window: {err:?}");
     }
 }
 
@@ -2119,7 +2206,7 @@ impl Application {
             Action::NewTab => return Ok(action::new_tab(target)),
 
             // `.new_window => try Action.newWindow(self, <parent>, .none)` (`:712-719`).
-            Action::NewWindow => action::new_window(self, target)?,
+            Action::NewWindow => action::new_window(self, target, TabOverrides::default())?,
 
             // `.open_config => return Action.openConfig(self)` (`:721`).
             Action::OpenConfig => return Ok(action::open_config(self)),
@@ -2692,10 +2779,14 @@ mod action {
     /// `pub fn newWindow(self, parent, overrides) !void` (`:2253-2331`, folding in
     /// `initAndShowWindow` `:2285-2328`). Creates a [`Window`], binds its `config` to
     /// the app's, opens its first tab (`.window` context), and presents.
+    ///
+    /// `overrides` carries the optional `command`/`working-directory`/`title` applied
+    /// to the first surface (`.none` on the `performAction` path, `:717`; parsed from
+    /// the `new-window-command` argv by [`super::action_new_window`], `:1802`).
     pub(super) fn new_window<C: CoreSurfaceHandle>(
         app: &Application,
         target: Target<'_, C>,
-        // overrides are `.none` at the switch callsite (`:717`).
+        overrides: TabOverrides,
     ) -> Result<(), ApprtError> {
         // Note that we've requested a window at least once (`:2262`). Used to trigger
         // quit-on-no-windows.
@@ -2709,15 +2800,17 @@ mod action {
             Target::Surface(v) => widget(v).and_then(|w| w.core()),
         };
 
-        let win = Window::new(app, None);
+        // `Window.new(self, .{ .title = overrides.title })` (`:2270-2272`) — the window
+        // title override is applied up front; it also flows to the first surface via
+        // `new_tab_for_window` below (`:2309-2313`).
+        let win = Window::new(app, overrides.title.as_deref());
 
         // Keep the window config in sync with the app config (`:2295-2301`).
         app.bind_property("config", &win, "config").build();
 
         // Create the first tab with window context (`:2308-2313`,
-        // `win.newTabForWindow(parent, ...)` — overrides are `.none` on the
-        // performAction path, `:717`).
-        win.new_tab_for_window(parent, TabOverrides::default());
+        // `win.newTabForWindow(parent, ...)`), applying the argv override.
+        win.new_tab_for_window(parent, overrides);
 
         // Estimate the initial window size before presenting so the window manager
         // can position it correctly (`:2315-2325`). INHABITED leaf (sizing):

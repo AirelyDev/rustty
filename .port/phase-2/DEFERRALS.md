@@ -4616,10 +4616,14 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
   `imgui`/dcimgui binding (off-by-default `imgui` cargo feature) + ~1.5k lines of inspector UI.
   Not a daily-use feature; the separate inspector-port plan (`docs/superpowers/plans/
   2026-07-14-inspector-port.md`) owns it.
-- **`+new-window -e <cmd>` argv override — placeholder-leaf.** The IPC delivery + plain
-  `+new-window` open a window (done); the `-e`/`--command`/`--working-directory`/`--title` argv
-  override on the received `new-window-command` action is not yet applied (opens a default window).
-  `application.zig:1716-1808` `actionNewWindow` argv parsing.
+- **`+new-window -e <cmd>` argv override — DONE [2026-07-19].** `action_new_window`
+  (`class/application.rs`) now parses the received `new-window-command` `as` parameter
+  (`-e`/`--command=`/`--working-directory=`/`--title=`) into a `TabOverrides` and opens the window
+  directly via `action::new_window(app, Target::App, overrides)` — mirroring `actionNewWindow`'s
+  direct `Application.newWindow(self, null, overrides)` call (`application.zig:1716-1808`), rather
+  than queuing a `.new_window` on the core mailbox (the `activate`/`.none` path). Runtime-verified:
+  `rustty +new-window -e /bin/sleep 987` against a single-instance primary spawned `/bin/sleep 987`
+  as a direct child of the primary (not the default `/bin/bash` shell).
 
 ### Wayland winproto — set_urgent async dispatch + duplicate-global nit [2026-07-19, grounding review]
 The wayland arm (feature `wayland`) is a FAITHFUL, runtime-verified port (App::init selects
