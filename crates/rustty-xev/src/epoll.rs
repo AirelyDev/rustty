@@ -843,6 +843,17 @@ impl Loop {
     // reborrow of the queue (or of the owning `Loop`) formed here would be UB
     // regardless of the atomics inside, AND would pop the queue's stub-pointer
     // lineage (mirrors kqueue.rs; mirihar `xthread_boxq`: CLEAN under SB + TB).
+    //
+    // The final wakeup applies the SAME invariant: the reference calls
+    // `self.wakeup()`, but autorefing `Loop::wakeup(&mut self)` on this pool
+    // worker would form a `&mut Loop` while the loop thread may concurrently
+    // hold one — two overlapping `&mut`, aliasing-model UB. This port instead
+    // reads the loop's `eventfd` out BY VALUE (it is a `Copy` fd wrapper) and
+    // notifies the copy, forming NO reference to `Loop` at all — precisely the
+    // channel the `unsafe impl Send for Loop` note (~:232) promises ("rides the
+    // `Eventfd` wakeup (a plain `Copy` fd), never a shared `&mut Loop`"). The
+    // kqueue.rs twin has the same dead-path `wakeup()` idiom; both are ledgered
+    // for a joint follow-up audit (.port/phase-2/DEFERRALS.md, 2026-07-19).
     fn thread_perform(t: *mut thread_pool::Task) {
         // const c: *Completion = @fieldParentPtr("task", t);
         let c: *mut Completion = unsafe {
@@ -855,9 +866,16 @@ impl Loop {
         // Add to our completion queue
         unsafe { TaskCompletionQueue::push((*(*c).task_loop).thread_pool_completions_ptr, c) };
 
-        // Wake up our main loop
+        // Wake up our main loop.
+        //
+        // We read the loop's eventfd out BY VALUE (it is a `Copy` fd wrapper)
+        // and notify the copy, forming NO reference — not even a shared one —
+        // to the owning `Loop`. Calling `Loop::wakeup(&mut self)` here would
+        // autoref a `&mut Loop` on this pool worker thread while the loop
+        // thread may concurrently hold `&mut Loop`; see the PORT NOTE above.
         unsafe {
-            let _ = (*(*c).task_loop).wakeup();
+            let efd = (*(*c).task_loop).eventfd;
+            let _ = efd.notify();
         }
     }
 
@@ -966,6 +984,12 @@ impl Loop {
             // registration; only the perform-side syscall differs (`posix.pread`
             // with the op's `offset`). File sets `threadpool = true` on pread
             // (file.zig:131), so in practice the pool path is always taken here.
+            // REFERENCE-QUIRK PORT NOTE: the oracle tags THIS start-arm's errors
+            // `.read` even though the op is `.pread` (epoll.zig:608 — an upstream
+            // tagged-union slip; the PERFORM side at epoll.zig:992 tags `.pread`
+            // correctly). We deliberately tag `Result::PRead` here: the strict
+            // pread trampoline matches on `Result::PRead` and would hit
+            // `unreachable!` on a `Result::Read`.
             Operation::PRead { .. } => {
                 if unsafe { (*completion).flags.threadpool } {
                     match unsafe { self.thread_schedule(completion) } {
@@ -1087,6 +1111,12 @@ impl Loop {
             // `.write` — the same threadpool gate then the same OUT registration;
             // only the perform-side syscall differs (`posix.pwrite` with `offset`).
             // File sets `threadpool = true` on pwrite (file.zig:302).
+            // REFERENCE-QUIRK PORT NOTE: the oracle tags THIS start-arm's errors
+            // `.write` even though the op is `.pwrite` (epoll.zig:652 — an upstream
+            // tagged-union slip; the PERFORM side tags `.pwrite` correctly). We
+            // deliberately tag `Result::PWrite` here: the strict pwrite trampoline
+            // matches on `Result::PWrite` and would hit `unreachable!` on a
+            // `Result::Write`.
             Operation::PWrite { .. } => {
                 if unsafe { (*completion).flags.threadpool } {
                     match unsafe { self.thread_schedule(completion) } {
@@ -5163,10 +5193,13 @@ impl File {
 
         unsafe {
             // req.* = .{};
-            *req = WriteRequest {
-                full_write_buffer: buf,
-                ..WriteRequest::default()
-            };
+            //
+            // Matches the oracle (file.zig:170) exactly: `queuePWrite` default-inits
+            // the whole `WriteRequest` and does NOT set `full_write_buffer` (unlike
+            // `queueWrite`, which needs it for the remainder-chaining trampoline).
+            // Behavior-neutral: `queue_pwrite_trampoline` reads only the op's buffer
+            // via `pwrite_result`, never `full_write_buffer` — so `default()` here.
+            *req = WriteRequest::default();
             self.pwrite_init(ptr::addr_of_mut!((*req).completion), buf, offset);
             (*req).completion.userdata = q as *mut c_void;
             (*req).completion.callback = Self::queue_pwrite_trampoline::<UD, CB>;
@@ -6756,6 +6789,13 @@ mod tests {
 
     // test "UDP: read/write" (udp.zig:914). Distinct port from the TCP/socket
     // tests so parallel cargo runs cannot cross-route datagrams (SO_REUSEPORT).
+    //
+    // Named in the const-registry style (mirrors io_uring.rs's `PORT_*` block)
+    // so the loopback port is greppable and non-colliding: 3131 is this module's
+    // `epoll_socket_roundtrip`; 3132-3134/3136 are io_uring.rs's; 3137/3138 are
+    // dynamic.rs's. 3135 is THIS test — was a bare literal, now registered here.
+    const PORT_UDP_READ_WRITE: u16 = 3135;
+
     #[test]
     fn epoll_udp_read_write() {
         use crate::thread_pool::{Config, ThreadPool};
@@ -6768,7 +6808,7 @@ mod tests {
         })
         .unwrap();
 
-        let address = net::Address::parse_ip4(b"127.0.0.1", 3135).unwrap();
+        let address = net::Address::parse_ip4(b"127.0.0.1", PORT_UDP_READ_WRITE).unwrap();
         let server = UDP::init(address).unwrap();
         let client = UDP::init(address).unwrap();
 

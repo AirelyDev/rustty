@@ -4469,6 +4469,14 @@ and proven, so when the §6 ThreadPool body lands it need only wire the queue (t
 SB/TB soundness of the completion-queue plumbing is already discharged); the
 harness `.port/phase-2/mirihar-xev-mpsc` remains the reproduction/regression proof.
 
+**Follow-up (open, low, [2026-07-19, `xev-libxev-completion` branch]):** worker-thread
+`&mut Loop`/`wakeup` aliasing — kqueue.rs twin + `task_loop` lineage audit. `epoll.rs`'s
+`thread_perform` no longer autorefs `Loop::wakeup(&mut self)` on a pool worker (it now
+notifies through a by-value `Copy` eventfd, forming no `&mut Loop`); `kqueue.rs` still
+carries the equivalent dead-path `self.wakeup()` idiom. Joint follow-up: apply the same
+copied-fd notify to the kqueue twin and audit the full `task_loop`-pointer lineage under
+SB/TB (mirihar) once the pool paths go live on both backends.
+
 ### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity (LOW, fidelity gap)
 
 The reference comptime-defaults the module-global to `&decodePngWuffs` for

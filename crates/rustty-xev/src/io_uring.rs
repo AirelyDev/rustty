@@ -5565,10 +5565,13 @@ impl File {
 
         unsafe {
             // req.* = .{};
-            *req = WriteRequest {
-                full_write_buffer: buf,
-                ..WriteRequest::default()
-            };
+            //
+            // Matches the oracle (file.zig:170) exactly: `queuePWrite` default-inits
+            // the whole `WriteRequest` and does NOT set `full_write_buffer` (unlike
+            // `queueWrite`, which needs it for the remainder-chaining trampoline).
+            // Behavior-neutral: `queue_pwrite_trampoline` reads only the op's buffer
+            // via `pwrite_result`, never `full_write_buffer` — so `default()` here.
+            *req = WriteRequest::default();
             self.pwrite_init(ptr::addr_of_mut!((*req).completion), buf, offset);
             (*req).completion.userdata = q as *mut c_void;
             (*req).completion.callback = Self::queue_pwrite_trampoline::<UD, CB>;

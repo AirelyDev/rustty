@@ -3732,6 +3732,14 @@ impl File {
     }
 
     /// Clean up any watcher resources. This does NOT close the file.
+    //
+    // DIVERGENCE PORT NOTE: the oracle's `FileDynamic` (file.zig:319-499) exposes
+    // NO `deinit` — it forwards only `close`/`poll`/`read`/`write`/`queueWrite`
+    // from the shared `Stream`, plus `pread`/`pwrite`/`init`/`initFd`. `deinit`
+    // lives on `FileStream` (file.zig:72) only. This method is a deliberate
+    // surface EXTENSION: it mirrors `FileStream.deinit` through the Dynamic seam
+    // (dispatch to the live backend arm's `deinit`) so the Dynamic `File` has the
+    // same teardown surface as the per-backend one.
     pub fn deinit(&self) {
         match self {
             File::IoUring(f) => f.deinit(),
@@ -4154,10 +4162,21 @@ impl File {
     /// Write to the file at the given offset. This queues the writes to ensure
     /// they remain in order.
     //
-    // PORT NOTE: `queuePWrite` (file.zig:151). Same `WriteRequest`-wholesale-init
-    // contract as `queue_write`; the reference does NOT `q.ensureTag` here (the
-    // completion lives inside the `WriteRequest`, fully re-initialized by
-    // `queuePWrite`). The `c` handed to `cb` MUST NOT be dereferenced.
+    // DIVERGENCE PORT NOTE: the oracle's `FileDynamic` (file.zig:319-499) exposes
+    // NO `queuePWrite` — it forwards only `close`/`poll`/`read`/`write`/
+    // `queueWrite` from the shared `Stream`, plus `pread`/`pwrite`/`init`/`initFd`.
+    // `queuePWrite` lives on `FileStream` (file.zig:151) only. This method is a
+    // deliberate surface EXTENSION: it mirrors `FileStream.queuePWrite` through the
+    // Dynamic seam (backend-dispatch + union-tag maintenance) so the Dynamic `File`
+    // has the same offset-write ergonomics as the per-backend one.
+    //
+    // PORT NOTE: models `FileStream.queuePWrite` (file.zig:151). Same
+    // `WriteRequest`-wholesale-init contract as `queue_write`. Unlike the Zig
+    // `FileStream` (whose `WriteQueue` is a single-backend concrete type), the
+    // Dynamic `WriteQueue` is a self-tagged union, so both arms MUST call
+    // `WriteQueue::ensure_tag_raw(q, tag)` before the union casts — required when
+    // the queue was default-tagged under the OTHER backend (same discipline as
+    // `queue_write` above). The `c` handed to `cb` MUST NOT be dereferenced.
     ///
     /// # Safety
     /// `loop_`/`q`/`req` valid+stable, outliving the queued write; the loop holds
@@ -5097,8 +5116,9 @@ mod tests {
     // on its `PORT_*` registry — Rust's whole-crate parallel test harness means
     // every fixed-port socket test (unlike the reference's serial `test{}` runner)
     // needs its OWN port so concurrent tests never race a bind/connect. This is
-    // the `dynamic.rs`-local twin of that registry (3131-3134/3136 are claimed by
-    // kqueue.rs/epoll.rs/io_uring.rs; 3137 by `dynamic_udp_read_write` below).
+    // the `dynamic.rs`-local twin of that registry (3131-3136 are claimed by
+    // kqueue.rs/epoll.rs/io_uring.rs — including epoll.rs's `PORT_UDP_READ_WRITE`
+    // = 3135; 3137 by `dynamic_udp_read_write` below).
     const PORT_DYNAMIC_TCP_ROUNDTRIP: u16 = 3138;
 
     // KAT — TCP accept/connect/send/recv/close round-trip through the Dynamic
