@@ -30,25 +30,34 @@
 //!   `wlr-layer-shell`, so ghostty disables it on GNOME anyway. rustty does not
 //!   pull `gtk4-layer-shell`; the [`Window`] keeps the `slide` field + destroy path
 //!   so the KDE slide arm drops in with the layer-shell work.
-//! * **Post-init async event delivery.** The registry [`Connection`] gets its own
-//!   libwayland event queue (`Backend::from_foreign_display` calls
-//!   `wl_display_create_queue`), which GDK's main loop does not dispatch. The
-//!   initial two-phase roundtrip in [`App::init`] captures all bind-time state
-//!   (default decoration mode, blur caps, output order); events that arrive LATER
-//!   (a compositor decoration-mode change, an `xdg_activation` token `done`) are
-//!   dispatched only if the queue is cranked. Integrating the queue fd into the
-//!   GLib main loop is the follow-up; requests we SEND (decoration mode, blur
-//!   region, activation commit) go out on the shared display fd via
-//!   [`Connection::flush`] and are unaffected.
+//! * **Post-init async event delivery — CRANKED via a GSource.** The registry
+//!   [`Connection`] gets its own libwayland event queue
+//!   (`Backend::from_foreign_display` calls `wl_display_create_queue`), which GDK's
+//!   main loop does not dispatch. The initial two-phase roundtrip in [`App::init`]
+//!   captures all bind-time state (default decoration mode, blur caps, output
+//!   order); events that arrive LATER (notably an `xdg_activation` token `done`,
+//!   the reply [`Window::set_urgent`] needs to flash the taskbar) are dispatched
+//!   only if the queue is cranked. [`queue_source::WlQueueSource`] integrates the
+//!   connection fd into the GLib main loop as a `GSource` so the queue is cranked
+//!   (`dispatch_pending` on readable) and `set_urgent` completes — the wayland-rs
+//!   analogue of the reference relying on GDK's default-queue dispatch
+//!   (`Globals.zig:82`). Requests we SEND still go out on the shared display fd via
+//!   [`Connection::flush`]. (A live compositor decoration-mode change would ALSO
+//!   crank now, but [`Window`] still snapshots the decoration mode at init — making
+//!   that read live is a separate, tracked deferral.)
 
 mod globals;
+mod queue_source;
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use gdk4::prelude::*;
 use gdk4_wayland::prelude::WaylandSurfaceExtManual;
 use gtk4::prelude::*;
 
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{Connection, EventQueue, QueueHandle};
+use wayland_client::{Connection, QueueHandle};
 use wayland_backend::client::ObjectId;
 use wayland_client::Proxy;
 
@@ -117,21 +126,28 @@ pub struct App {
     /// so the [`Connection`] backing it (inside `globals`) stays reachable.
     _display: wayland_client::protocol::wl_display::WlDisplay,
 
-    /// PORTS: `wayland.zig:29` `globals: *Globals`. Boxed for a stable address
-    /// (the reference heap-allocates for the same reason, `Globals.zig:72-80`).
-    globals: Box<Globals>,
+    /// PORTS: `wayland.zig:29` `globals: *Globals` + the private event queue. Held
+    /// in an `Rc<RefCell<..>>` shared with [`queue_source::WlQueueSource`]'s callback
+    /// so the main-loop `GSource` can crank the queue while [`Window::init`] still
+    /// reads the bound globals. `globals` stays boxed inside [`queue_source::Pump`]
+    /// for a stable address (`Globals.zig:72-80`).
+    pump: Rc<RefCell<queue_source::Pump>>,
 
-    /// The event queue the registry + globals dispatch into. Kept alive so the
-    /// [`Connection`]'s libwayland queue is not torn down; see the post-init
-    /// DEFERRAL in the module docs.
-    _event_queue: EventQueue<Globals>,
+    /// The `GSource` that cranks the private queue from the GLib main loop so
+    /// post-init events (e.g. the `xdg_activation` token `done` [`Window::set_urgent`]
+    /// awaits) are dispatched. Detaches on drop; see the module-level DEFERRAL.
+    _source: queue_source::WlQueueSource,
 }
 
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("wayland::App")
-            .field("globals", &self.globals)
-            .finish()
+        let mut s = f.debug_struct("wayland::App");
+        // May be borrowed by the queue GSource callback; avoid a Debug-time panic.
+        match self.pump.try_borrow() {
+            Ok(p) => s.field("globals", &p.globals),
+            Err(_) => s.field("globals", &"<borrowed>"),
+        }
+        .finish()
     }
 }
 
@@ -187,10 +203,21 @@ impl App {
                 .map_err(|_| Error::RoundtripFailed)?;
         }
 
+        // Hand the queue + globals to a shared Pump and attach the main-loop GSource
+        // that cranks it, so post-init events (the `xdg_activation` token `done` that
+        // `set_urgent` awaits) are dispatched. GDK does not dispatch this queue; the
+        // reference gets the same for free from GDK's default-queue dispatch
+        // (`Globals.zig:82`).
+        let pump = Rc::new(RefCell::new(queue_source::Pump {
+            event_queue,
+            globals: boxed,
+        }));
+        let source = queue_source::WlQueueSource::attach(&pump);
+
         Ok(Some(App {
             _display: display,
-            globals: boxed,
-            _event_queue: event_queue,
+            pump,
+            _source: source,
         }))
     }
 
@@ -330,12 +357,16 @@ impl Window {
         else {
             return Err(Error::NoWaylandSurface.into());
         };
-        let conn = app.globals.conn().clone();
+        // Read the bound globals through the shared Pump. Every value pulled out is
+        // an owned clone / Copy, so the borrow does not escape (and never nests with
+        // the queue GSource's `borrow_mut`, which runs only from the main loop).
+        let pump = app.pump.borrow();
+        let g = &pump.globals;
+        let conn = g.conn().clone();
         let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), ptr.as_ptr().cast()) }
             .map_err(|_| Error::NoWaylandSurface)?;
         let surface = WlSurface::from_id(&conn, id).map_err(|_| Error::NoWaylandSurface)?;
 
-        let g = &app.globals;
         let qh = g.qh().clone();
 
         // `mgr.create(wl_surface)` — the decoration object (`wayland.zig:141-153`).

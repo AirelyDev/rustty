@@ -4601,14 +4601,22 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
     (deliberately not pulled; mutter has no `wlr-layer-shell`). The `Window.slide`/`slide_manager`
     fields + KDE-slide destroy path are kept so the arm drops in with the layer-shell work.
     `wayland.zig:70-88,310-389`.
-  - **Post-init async event delivery.** The registry `Connection` gets its OWN libwayland event
-    queue (`Backend::from_foreign_display` -> `wl_display_create_queue`), which GDK's main loop
-    does not dispatch. The init two-phase roundtrip captures all bind-time state (default
-    decoration mode, blur caps, output order); events arriving LATER (a compositor decoration-mode
-    change, an `xdg_activation` token `done`) dispatch only if the queue is cranked. Requests we
-    SEND go out on the shared display fd via `Connection::flush` and are unaffected. Integrating
-    the queue fd into the GLib main loop is the follow-up. **NOT run on a live Wayland display** —
-    `App::init` on a real compositor is the human verification step.
+  - **Post-init async event delivery — RESOLVED [2026-07-19] via a GSource.** The registry
+    `Connection` gets its OWN libwayland event queue (`Backend::from_foreign_display` ->
+    `wl_display_create_queue`), which GDK's main loop does not dispatch. The init two-phase
+    roundtrip captures all bind-time state (default decoration mode, blur caps, output order);
+    events arriving LATER (a compositor decoration-mode change, an `xdg_activation` token `done`)
+    dispatch only if the queue is cranked. `winproto/wayland/queue_source.rs`
+    (`WlQueueSource`/`Pump`) now integrates the connection fd into the GLib main loop as a custom
+    `GSource` (prepare/check/dispatch over `g_source_add_unix_fd`, priority `G_PRIORITY_DEFAULT_IDLE`
+    so GDK reads the socket first): on readability it `dispatch_pending`s the private queue and
+    flushes — the wayland-rs analogue of the reference relying on GDK's default-queue dispatch
+    (`Globals.zig:82`). This makes `set_urgent` complete (see below). Requests we SEND go out on the
+    shared display fd via `Connection::flush`. Still-open coupled sub-item: `Window` snapshots the
+    decoration mode at init, so a LIVE compositor decoration-mode change (now cranked) is not
+    re-read — a separate tracked deferral. **GSource cranking NOT yet run on a live Wayland
+    display** — `App::init` + a backgrounded-window bell on a real compositor is the human
+    verification step.
 - **`gtk/class/inspector_*` + `imgui_widget` — the dcimgui terminal inspector (L6).** Already a
   port-wide tracked deferral (see the `dcimgui`/`imgui` entries above): the `.inspector`
   performAction arm + `Surface::control_inspector` are placeholder-leaves returning false; the
@@ -4630,16 +4638,19 @@ The wayland arm (feature `wayland`) is a FAITHFUL, runtime-verified port (App::i
 Protocol::Wayland on a live GNOME/Wayland session; blur/CSD/slide/ownership verified vs the
 protocol XML — the port even destroys a `wl_region` + the `activation_token` that ghostty leaks).
 Two known residuals (grounding-review):
-- **MATERIAL (deferred): `set_urgent` urgency has no visible effect.** The registry/globals live on
+- **RESOLVED [2026-07-19]: `set_urgent` urgency now dispatches.** The registry/globals live on
   a private libwayland event queue (`Connection::new_event_queue`) that GDK's main loop does not
-  dispatch; the port only `flush`es (outgoing). So `xdg_activation_token_v1.done` (the inbound reply
-  carrying the token) never dispatches → `xdg_activation_v1.activate(token, surface)` never fires →
-  a backgrounded terminal's bell does NOT flash the taskbar / request attention (works on ghostty,
-  which uses GDK's default `wl_display` queue, `Globals.zig:82`). CSD + blur are NOT affected (their
-  inputs are captured at the init two-phase roundtrip; their requests are outgoing). Fix: integrate
-  the wayland queue fd into the GLib main loop as a GSource (dispatch_pending on readable) — AND make
-  `Window` re-read `Globals` live rather than snapshotting at init (the two are coupled; see below).
-  Hard to verify on GNOME (needs a backgrounded window + bell + taskbar observation).
+  dispatch; the port previously only `flush`ed (outgoing), so `xdg_activation_token_v1.done` (the
+  inbound reply carrying the token) never dispatched → `xdg_activation_v1.activate(token, surface)`
+  never fired → a backgrounded terminal's bell did NOT flash the taskbar (works on ghostty, which
+  uses GDK's default `wl_display` queue, `Globals.zig:82`). Fixed by `winproto/wayland/queue_source.rs`
+  (`WlQueueSource`): a custom GLib `GSource` over the connection fd that `dispatch_pending`s the
+  private queue on readability (at `G_PRIORITY_DEFAULT_IDLE`, after GDK's socket read), so the token
+  `done` handler fires `activate` and the taskbar flashes. CSD + blur were never affected (their
+  inputs are captured at the init two-phase roundtrip; their requests are outgoing). Remaining
+  coupled follow-up: `Window` still snapshots the decoration mode at init rather than re-reading
+  `Globals` live (a compositor decoration-mode change now cranks but is not re-read). Hard to
+  runtime-verify on GNOME (needs a backgrounded window + bell + taskbar observation).
 - **LOW (pathological): duplicate global re-advertisement.** If a compositor re-advertises a singleton
   interface with a new `name`, `Globals::bind_global` overwrites the typed proxy but leaves the stale
   `name→tag` map entry, so a later `global_remove(old_name)` would unbind the live proxy. Compositors
