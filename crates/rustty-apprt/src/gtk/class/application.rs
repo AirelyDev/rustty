@@ -68,7 +68,9 @@ use glib::subclass::prelude::*;
 use rustty_apprt_api::{Action, ApprtError, CoreSurfaceHandle, Target};
 use rustty_config::Config as CoreConfig;
 
+use super::command_palette::ActionBoxed;
 use super::config::Config;
+use super::global_shortcuts::GlobalShortcuts;
 use crate::gtk::surface::Surface as ApprtSurface;
 use crate::gtk::{build_info, ext, winproto, WeakRef};
 
@@ -230,6 +232,20 @@ mod imp {
         #[allow(clippy::type_complexity)]
         pub needs_confirm_quit_thunk: RefCell<Option<Box<dyn Fn() -> bool>>>,
 
+        /// rustty-only seam carrying the monomorphized
+        /// `priv.core_app.updateConfig(rt_app, config)` call
+        /// (`application.zig:2473-2474`, the `.app` arm of `reloadConfig`). Same
+        /// type-erasure rationale as [`Self::tick_thunk`]: the non-generic
+        /// `Application` cannot name the concrete `rustty_core::app::App<A>` its
+        /// type-erased `core_app`/`rt_app` pointers refer to, so
+        /// [`super::Application::bind_core_app`] captures both here. Invoked by
+        /// [`super::Application::update_config_app`] (the `.app` reload target).
+        /// `None` until bound — the reload is then a no-op (faithful to a
+        /// not-yet-wired core, placeholder-leaf doctrine).
+        #[allow(clippy::type_complexity)]
+        pub update_config_thunk:
+            RefCell<Option<Box<dyn Fn(&rustty_config::Config) -> Result<(), rustty_core::app::Error>>>>,
+
         /// Test-only instrumentation: how many times the hand-rolled run loop has
         /// executed the inline core tick (`application.zig:552`). The
         /// `application_run_loop_ticks_then_quits` KAT asserts this is ≥ 1 to prove
@@ -389,6 +405,46 @@ mod imp {
         /// type is `?*Config`, so nullable is faithful).
         fn get_config(&self) -> Option<Config> {
             self.config.borrow().clone()
+        }
+
+        /// PORTS: `application.zig:1211-1226` `setConfig`. Sets the configuration for
+        /// this application: unref the prior, ref the new, emit `notify::config` (so
+        /// [`Self::prop_config`] re-applies CSS / accelerators), then show the config
+        /// errors dialog if the new config has diagnostics. The reference's explicit
+        /// `priv.config.unref()` + `priv.config = config.ref()` is the `RefCell`
+        /// `replace` (dropping the old `Config` GObject wrapper unrefs it; storing the
+        /// new one holds its ref); `notifyByPspec(config)` is `notify("config")`.
+        ///
+        /// Reached from [`super::action::config_change`]'s `.app` arm — the config
+        /// property setter path the reference's `configChange` takes
+        /// (`application.zig:1953`).
+        pub(super) fn set_config(&self, config: Config) {
+            // `priv.config.unref(); priv.config = config.ref();` (`:1224-1225`).
+            self.config.replace(Some(config));
+            // `self.as(gobject.Object).notifyByPspec(...config...)` (`:1226`).
+            self.obj().notify("config");
+            // `self.showConfigErrorsDialog()` (`:1229`).
+            self.show_config_errors_dialog();
+        }
+
+        /// PORTS: the `.app` arm of `reloadConfig` — `self.core().updateConfig(
+        /// self.rt(), config)` (`application.zig:2472-2475`). Drives the freshly
+        /// loaded config through the type-erased core app via
+        /// [`Self::update_config_thunk`], which iterates every surface's config and
+        /// (synchronously) re-dispatches the `.app` `config_change` action back into
+        /// [`Self::set_config`]. A `None` thunk (core not yet bound) is a no-op.
+        pub(super) fn update_config_app(
+            &self,
+            config: &rustty_config::Config,
+        ) -> Result<(), rustty_apprt_api::ApprtError> {
+            // Follow the `new_window_thunk` idiom: borrow-and-call the thunk inline.
+            if let Some(thunk) = self.update_config_thunk.borrow().as_ref() {
+                thunk(config).map_err(|err| {
+                    eprintln!("warn(gtk): error updating app config err={err:?}");
+                    rustty_apprt_api::ApprtError
+                })?;
+            }
+            Ok(())
         }
 
         /// PORTS: `application.zig:530-...` `propConfig` — the `notify::config`
@@ -613,15 +669,55 @@ mod imp {
         /// `GlobalShortcuts` object's dbus connection, the `config` property
         /// binding, and the `trigger` signal.
         fn startup_global_shortcuts(&self) {
-            // PORT NOTE (placeholder-leaf): the `GlobalShortcuts` GObject
-            // (`priv.global_shortcuts`) is created by Task 27, whose class also
-            // defines the `set_dbus_connection`, the `config` bind target, and the
-            // `trigger` signal (`:1436-1456`). Task 8's `new` leaves the field
-            // `None`, so there is nothing to bind yet; the three wire-ups land with
-            // that class. `global_shortcut_trigger` (`:1655-1663`) — the `trigger`
-            // handler that calls `core.performAllAction` — likewise defers to the
-            // action-dispatch surface (Task 23).
+            use gio::prelude::ApplicationExt as _;
+
+            let obj = self.obj();
+
+            // Create the `GlobalShortcuts` object (`application.zig:402`
+            // `newInstance(GlobalShortcuts)`; the reference builds it in `new` and
+            // holds the sole ref, freeing it at dispose — here the manually-held
+            // `global_shortcuts` field owns that ref, cleared in `deinit_private`).
+            let global_shortcuts = GlobalShortcuts::new();
+
+            // On startup, our dbus connection should be available (`:1435-1437`).
+            let dbus = obj.upcast_ref::<gio::Application>().dbus_connection();
+            global_shortcuts.set_dbus_connection(dbus.as_ref());
+
+            // Setup a binding so that the shortcut config always matches the app
+            // (`:1440-1447`).
+            obj.bind_property("config", &global_shortcuts, "config")
+                .sync_create()
+                .build();
+
+            // Setup the signal handler for global shortcut triggers
+            // (`:1450-1456`) → `globalShortcutTrigger` (`:1655-1663`).
+            let this_weak = obj.downgrade();
+            global_shortcuts.connect_local("trigger", false, move |args| {
+                // args[0] is the emitting `GlobalShortcuts`; args[1] is the action.
+                let boxed: ActionBoxed =
+                    args[1].get().expect("trigger action is an ActionBoxed");
+                if let Some(app) = this_weak.upgrade() {
+                    app.imp().global_shortcut_trigger(&boxed);
+                }
+                None
+            });
+
+            // Store the owned strong ref (Invariant 12: manually held, never
+            // parented; cleared to release).
+            self.global_shortcuts.replace(Some(global_shortcuts.upcast()));
         }
+
+        /// PORTS: `application.zig:1655-1663` `globalShortcutTrigger`. Perform the
+        /// activated global shortcut's action across all surfaces.
+        ///
+        /// PORT NOTE (placeholder-leaf): the reference calls
+        /// `self.core().performAllAction(self.rt(), action.*)` (`:1660`) — the
+        /// core "perform on every surface" dispatch, which lands with the
+        /// action-dispatch surface (Task 23). This handler is currently unreachable
+        /// regardless: the sole emitter of `trigger` is the XDG portal activation
+        /// path (`shortcutActivated`), deferred with the portal tier (L6), so no
+        /// global shortcut fires yet.
+        fn global_shortcut_trigger(&self, _action: &ActionBoxed) {}
 
         /// PORTS: `application.zig:1608-1653` `showConfigErrorsDialog`. Presents (or
         /// refreshes) the config-diagnostics dialog when the config has diagnostics.
@@ -857,13 +953,47 @@ mod imp {
 // installed by [`imp::Application::startup_signals`]. `g_unix_signal_add` calls
 // it on the main loop when SIGUSR2 is delivered; returning `G_SOURCE_CONTINUE`
 // keeps the handler installed.
-unsafe extern "C" fn handle_sigusr2(_ud: glib::ffi::gpointer) -> glib::ffi::gboolean {
+unsafe extern "C" fn handle_sigusr2(ud: glib::ffi::gpointer) -> glib::ffi::gboolean {
+    // `const self: *Self = @ptrCast(@alignCast(ud orelse return CONTINUE))` (`:1508`).
+    // The userdata is the `Application` GObject pointer (`startup_signals`); a null
+    // means the source outlived the app, so keep the handler installed and bail.
+    if ud.is_null() {
+        return glib::ffi::GTRUE;
+    }
+
     eprintln!("info(gtk): received SIGUSR2, reloading configuration");
-    // PORT NOTE (placeholder-leaf): `Action.reloadConfig(self, .app, .{})`
-    // (`:1512-1521`) reaches the action-dispatch surface (`performAction`, Task
-    // 23) through the `self` userdata. Until then we log the receipt; the reload
-    // wires up with that surface. `G_SOURCE_CONTINUE` (`:1523`).
+
+    // `Action.reloadConfig(self, .app, .{})` (`:1512-1521`). Reach the app singleton
+    // (rustty's blessed `self`-equivalent accessor; the `ud` pointer is that same
+    // object) and drive an `.app`-target reload directly — the reference calls the
+    // `Action` helper straight, NOT through `core.performAction`. On failure we log;
+    // "we should show another GUI" (`:1516-1519`) is future work.
+    let app = Application::default();
+    if action::reload_config(
+        &app,
+        Target::<AppTargetHandle>::App,
+        rustty_apprt_api::action::ReloadConfig::default(),
+    )
+    .is_err()
+    {
+        eprintln!("warn(gtk): error reloading config");
+    }
+
+    // `return @intFromBool(glib.SOURCE_CONTINUE)` (`:1523`).
     glib::ffi::GTRUE
+}
+
+/// A zero-sized [`CoreSurfaceHandle`] used only to name the `C` type parameter of
+/// [`Target::App`] from the non-generic reload entry points ([`handle_sigusr2`] and
+/// [`action_reload_config`]). The `.app` target never dereferences a surface handle
+/// (the reference's `.app` arms take no `core`), so this handle is never read — it
+/// exists purely to satisfy the generic `Target<'_, C>`.
+struct AppTargetHandle;
+
+impl CoreSurfaceHandle for AppTargetHandle {
+    fn rt_surface_ptr(&self) -> *mut c_void {
+        std::ptr::null_mut()
+    }
 }
 
 // SIGUSR2 on Linux (all glibc targets rustty builds for — aarch64/x86_64) is 12.
@@ -943,10 +1073,22 @@ fn action_quit(
 fn action_reload_config(
     _action: &gio::SimpleAction,
     _parameter: Option<&glib::Variant>,
-    _app: &Application,
+    app: &Application,
 ) {
-    // PORT NOTE (placeholder-leaf): `core_app.performAction(rt, .reload_config)`
-    // (`:1671`).
+    // `priv.core_app.performAction(self.rt(), .reload_config)` (`:1671`). The core
+    // app's `.reload_config` scoped action is a pure passthrough back to the apprt
+    // (`App.zig:428`, `rt_app.performAction(.app, .reload_config, .{})`), so it
+    // collapses to the same `.app`-target reload the SIGUSR2 handler performs. Route
+    // it directly. On failure, log (`:1672`).
+    if action::reload_config(
+        app,
+        Target::<AppTargetHandle>::App,
+        rustty_apprt_api::action::ReloadConfig::default(),
+    )
+    .is_err()
+    {
+        eprintln!("warn(gtk): error reloading config");
+    }
 }
 
 /// PORTS: `application.zig:1676-1685` `actionToggleQuickTerminal`
@@ -984,6 +1126,7 @@ fn deinit_private(priv_: &imp::Application) {
     priv_.new_window_thunk.replace(None);
     priv_.tick_thunk.replace(None);
     priv_.needs_confirm_quit_thunk.replace(None);
+    priv_.update_config_thunk.replace(None);
 
     // `if (priv.saved_language) |language| alloc.free(language)` (`:442`) —
     // clearing drops the `CString`.
@@ -1618,6 +1761,25 @@ impl Application {
                 // SAFETY: as above — app-thread-only access to the core app backref.
                 unsafe { &*core_app }.needsConfirmQuit()
             })));
+
+        // The `.app`-target config reload (`self.core().updateConfig(self.rt(),
+        // config)`, `application.zig:2473-2474`). `updateConfig` takes `&mut App<A>`
+        // and `rt_app: &A`; both `core_app` and `rt_app` are BACKREFs owned by
+        // libghostty-core / the apprt `App`, never freed here. Re-entrant: core's
+        // `updateConfig` synchronously calls back `rt_app.perform_action(.app,
+        // .config_change, ...)` which lands in `action::config_change` →
+        // `Application::set_config`.
+        self.imp()
+            .update_config_thunk
+            .replace(Some(Box::new(move |config: &rustty_config::Config| {
+                match rt_app {
+                    // SAFETY: as above — app-thread-only access to the two backrefs.
+                    Some(rt_app) => {
+                        unsafe { &mut *core_app }.updateConfig(unsafe { &*rt_app }, config)
+                    }
+                    None => Ok(()),
+                }
+            })));
     }
 
     /// Binds the `rt_app` BACKREF — the apprt `App`'s stable address — into the
@@ -2093,13 +2255,13 @@ mod action {
         CloseTabMode, GotoSplit, GotoTab, GotoWindow, PromptTitle, ResizeSplitDirection,
         SplitDirection,
     };
-    use rustty_apprt_api::{ApprtError, CoreSurfaceHandle, Target};
+    use rustty_apprt_api::{ApprtError, CoreSurfaceHandle, Surface as _, Target};
     use rustty_datastruct::split_tree::{Direction, Goto, SpatialDirection};
 
     use super::super::split_tree::SplitTree;
-    use super::super::surface::Surface as GhosttySurface;
+    use super::super::surface::{Size, Surface as GhosttySurface};
     use super::super::tab::{Tab, TabOverrides};
-    use super::super::window::Window;
+    use super::super::window::{SelectTab, Window};
     use super::{ext, Application, Config, CoreConfig};
     use crate::gtk::surface::Surface as ApprtSurface;
 
@@ -2157,15 +2319,11 @@ mod action {
     pub(super) fn copy_title_to_clipboard<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
         match target {
             Target::App => false,
-            Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.gobj().copyTitleToClipboard()`.
-                // The `GhosttySurface` clipboard-of-title method lands with the surface
-                // widget's clipboard/title completion; reach the widget to keep the shape.
-                match widget(v) {
-                    Some(_w) => false,
-                    None => false,
-                }
-            }
+            // `.surface => |v| v.rt_surface.gobj().copyTitleToClipboard()` (`:1939`).
+            Target::Surface(v) => match widget(v) {
+                Some(w) => w.copy_title_to_clipboard(),
+                None => false,
+            },
         }
     }
 
@@ -2180,17 +2338,19 @@ mod action {
         // Wrap our config in a GObject. This clones it (`:1949-1951`).
         let config_obj = Config::new(new_config);
         match target {
-            // INHABITED placeholder: reference `core.rt_surface.surface.setConfig(config_obj)`
-            // / `self.setConfig(config_obj)`. `Surface::set_config` / `Application::set_config`
-            // (the `config` property setter path) land with the surface-widget + config
-            // property completion. The wrapped clone is dropped here until then.
+            // `.surface => |core| core.rt_surface.surface.setConfig(config_obj)`
+            // (`:1953-1954`). Push the new config onto the LIVE surface widget via its
+            // `config` property setter (generated by `#[property(get, set)]` on
+            // `Surface::config`), which emits `notify::config` → `Surface::on_notify_config`
+            // so the surface re-applies (colors, font size, palette, overlays).
             Target::Surface(v) => {
-                let _ = widget(v);
-                let _ = config_obj;
+                if let Some(w) = widget(v) {
+                    w.set_config(Some(config_obj));
+                }
             }
+            // `.app => self.setConfig(config_obj)` (`:1955`).
             Target::App => {
-                let _ = app;
-                let _ = config_obj;
+                app.imp().set_config(config_obj);
             }
         }
         Ok(())
@@ -2200,20 +2360,55 @@ mod action {
     pub(super) fn desktop_notification<C: CoreSurfaceHandle>(
         app: &Application,
         target: Target<'_, C>,
-        _n: rustty_apprt_api::action::DesktopNotification<'_>,
+        n: rustty_apprt_api::action::DesktopNotification<'_>,
     ) {
-        // INHABITED placeholder: reference sends a `gio.Notification` (app arm) or
-        // `v.rt_surface.gobj().sendDesktopNotification(...)` (surface arm). The GTK
-        // notification wiring + the surface widget's `sendDesktopNotification` land
-        // with the surface-widget notification completion.
-        match target {
-            Target::App => {
-                let _ = app;
+        use gio::prelude::ApplicationExt as _;
+
+        // `.surface => |v| { v.rt_surface.gobj().sendDesktopNotification(n.title,
+        // n.body); return; }` (`:1965-1968`).
+        if let Target::Surface(v) = target {
+            if let Some(w) = widget(v) {
+                w.send_desktop_notification(n.title, n.body);
             }
-            Target::Surface(v) => {
-                let _ = widget(v);
-            }
+            return;
         }
+
+        // `.app => {}` then the app-level fallback (`:1963,1971-2000`): build a
+        // standalone `gio.Notification` presenting no specific surface (target id
+        // 0).
+        //
+        // Set a default title if we don't already have one (`:1971-1974`). PORT
+        // NOTE (R2 identity): the reference's literal `"Ghostty"` becomes the
+        // product display name [`rustty_identity::APP_NAME_TITLECASE`].
+        let title_owned;
+        let title_str: &str = if n.title.is_empty() {
+            rustty_identity::APP_NAME_TITLECASE
+        } else {
+            title_owned = String::from_utf8_lossy(n.title);
+            &title_owned
+        };
+        let body_str = String::from_utf8_lossy(n.body);
+
+        let notification = gio::Notification::new(title_str);
+        notification.set_body(Some(&body_str));
+
+        // `gio.ThemedIcon.new("com.mitchellh.ghostty")` (`:1980`). PORT NOTE (R2):
+        // the themed-icon name IS the application id
+        // ([`build_info::BASE_APPLICATION_ID`], the single source of truth).
+        let icon = gio::ThemedIcon::new(crate::gtk::build_info::BASE_APPLICATION_ID);
+        notification.set_icon(&icon);
+
+        // `setDefaultActionAndTargetValue("app.present-surface",
+        // glib.Variant.newUint64(0))` (`:1983-1986`).
+        notification.set_default_action_and_target_value(
+            "app.present-surface",
+            Some(&0u64.to_variant()),
+        );
+
+        // Notification ID = body so an identical follow-up replaces the prior one
+        // (`:1988-1999`).
+        app.upcast_ref::<gio::Application>()
+            .send_notification(Some(&body_str), &notification);
     }
 
     /// `pub fn equalizeSplits(target) bool` (`:2003-2015`). Activates
@@ -2265,11 +2460,15 @@ mod action {
                     eprintln!("warn(gtk): surface is not in a window, ignoring goto_tab");
                     return false;
                 };
-                // INHABITED placeholder: reference `window.selectTab(...)`. `Window::select_tab`
-                // lands with the Window tab-navigation completion; reach the window + read the
-                // requested tab to keep the shape.
-                let _ = (window, tab);
-                false
+                // `window.selectTab(switch (tab) { ... })` (`:2058-2063`). The special
+                // negative sentinels map to the directional variants; any other value is
+                // the (1-indexed) tab number carried by `GotoTab`'s raw `i32`.
+                window.select_tab(match tab {
+                    GotoTab::PREVIOUS => SelectTab::Previous,
+                    GotoTab::NEXT => SelectTab::Next,
+                    GotoTab::LAST => SelectTab::Last,
+                    GotoTab(n) => SelectTab::N(n as usize),
+                })
             }
         }
     }
@@ -2336,18 +2535,19 @@ mod action {
     ) -> bool {
         match target {
             Target::App => false,
-            Target::Surface(v) => {
-                // INHABITED placeholder: reference `surface.setDefaultSize(.{ width, height })`
-                // (the `GhosttySurface` default-size property). Lands with the surface-widget
-                // sizing completion; reach the widget + read the requested size to keep shape.
-                match widget(v) {
-                    Some(_w) => {
-                        let _ = value;
-                        true
-                    }
-                    None => false,
+            // `.surface => |core| { surface.setDefaultSize(.{ .width, .height });
+            // return true; }` (`:2128-2133`). Sets the `default-size` property; the
+            // owning window reads it when presenting.
+            Target::Surface(v) => match widget(v) {
+                Some(w) => {
+                    w.set_default_size(Some(Size {
+                        width: value.width,
+                        height: value.height,
+                    }));
+                    true
                 }
-            }
+                None => false,
+            },
         }
     }
 
@@ -2359,15 +2559,24 @@ mod action {
         match target {
             Target::App => eprintln!("warn(gtk): mouse over link to app is unexpected"),
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setMouseHoverUrl(url or null)` (the
-                // `mouse-hover-url` surface property). Lands with the surface-widget URL
-                // completion.
-                let _ = (widget(v), value);
+                // PORTS: `application.zig:2151-2153`
+                // `surface.rt_surface.gobj().setMouseHoverUrl(if (value.url.len > 0) value.url else null)`.
+                // Sets the widget's `mouse-hover-url` property (the generated setter fires
+                // `notify::mouse-hover-url`, driving `on_notify_mouse_hover_url` which
+                // reveals the URL overlay label). Empty url clears it (`null`).
+                if let Some(w) = widget(v) {
+                    let url = if value.url.is_empty() {
+                        None
+                    } else {
+                        Some(String::from_utf8_lossy(value.url).into_owned())
+                    };
+                    w.set_mouse_hover_url(url);
+                }
             }
         }
     }
 
-    /// `pub fn mouseShape(target, shape) void` (`:2150-2159`).
+    /// `pub fn mouseShape(target, shape) void` (`:2158-2166`).
     pub(super) fn mouse_shape<C: CoreSurfaceHandle>(
         target: Target<'_, C>,
         shape: rustty_vt::mouse::Shape,
@@ -2375,22 +2584,34 @@ mod action {
         match target {
             Target::App => eprintln!("warn(gtk): mouse shape to app is unexpected"),
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setMouseShape(shape)` (`mouse-shape` prop).
-                let _ = (widget(v), shape);
+                // PORTS: `application.zig:2164` `surface.rt_surface.gobj().setMouseShape(shape)`.
+                // Sets the widget's `mouse-shape` property (carried as the shape's `i32`
+                // discriminant, see the `mouse-shape` field PORT NOTE). The generated setter
+                // fires `notify::mouse-shape`, driving `on_notify_mouse_shape` which sets the
+                // GLArea cursor.
+                if let Some(w) = widget(v) {
+                    w.set_mouse_shape(shape as i32);
+                }
             }
         }
     }
 
-    /// `pub fn mouseVisibility(target, visibility) void` (`:2161-2172`).
+    /// `pub fn mouseVisibility(target, visibility) void` (`:2168-2179`).
     pub(super) fn mouse_visibility<C: CoreSurfaceHandle>(
         target: Target<'_, C>,
         visibility: rustty_apprt_api::action::MouseVisibility,
     ) {
+        use rustty_apprt_api::action::MouseVisibility;
         match target {
             Target::App => eprintln!("warn(gtk): mouse visibility to app is unexpected"),
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setMouseHidden(visibility == .hidden)`.
-                let _ = (widget(v), visibility);
+                // PORTS: `application.zig:2175-2178`
+                // `setMouseHidden(switch (visibility) { .visible => false, .hidden => true })`.
+                // The generated setter fires `notify::mouse-hidden`, driving
+                // `on_notify_mouse_hidden` which hides/shows the cursor.
+                if let Some(w) = widget(v) {
+                    w.set_mouse_hidden(matches!(visibility, MouseVisibility::Hidden));
+                }
             }
         }
     }
@@ -2408,10 +2629,8 @@ mod action {
                     eprintln!("warn(gtk): surface is not in a window, ignoring move_tab");
                     return false;
                 };
-                // INHABITED placeholder: reference `window.moveTab(surface, amount)`.
-                // `Window::move_tab` lands with the Window tab-navigation completion.
-                let _ = (window, value);
-                false
+                // `window.moveTab(surface, @intCast(value.amount))` (`:2196-2199`).
+                window.move_tab(&w, value.amount)
             }
         }
     }
@@ -2514,19 +2733,67 @@ mod action {
 
     /// `pub fn openConfig(self) bool` (`:2333-2347`).
     pub(super) fn open_config(app: &Application) -> bool {
-        // INHABITED placeholder: reference resolves the config path (`configpkg.edit.openPath`)
-        // then `openUrl(self, .{ .kind = .text, .url = path })`. The config-edit path resolver
-        // + `openUrl` os-open path land with the config-editor completion.
-        let _ = app;
-        false
+        // Get the config file path (`:2336-2340`, `configpkg.edit.openPath`).
+        let path = match rustty_config::edit::open_path() {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("warn(gtk): error getting config file path: {err:?}");
+                return false;
+            }
+        };
+
+        // Open it using openUrl. "path" isn't actually a URL but at the time of
+        // writing that works just fine for GTK (`:2342-2345`).
+        open_url(
+            app,
+            rustty_apprt_api::action::OpenUrl {
+                kind: rustty_apprt_api::action::OpenUrlKind::Text,
+                url: &path,
+            },
+        );
+        true
     }
 
-    /// `pub fn openUrl(self, value) void` (`:2349-2367`).
+    /// `pub fn openUrl(self, value) void` (`application.zig:2346-2364`).
     pub(super) fn open_url(app: &Application, value: rustty_apprt_api::action::OpenUrl<'_>) {
-        // INHABITED placeholder: reference dispatches to `openUri().start(value)` (an
-        // `xdg-open`/portal launcher) with a `/`-and-`file://` fallback. The URI-launcher
-        // lands with the os-open completion.
-        let _ = (app, value);
+        let _ = app;
+        // Local file paths and `file://` URLs bypass the URI launcher and go
+        // straight to the OS `open` fallback (`:2350-2356`).
+        if value.url.starts_with(b"/") || value.url.starts_with(b"file://") {
+            open_url_fallback(value.kind, value.url);
+            return;
+        }
+
+        // PORT NOTE: the reference dispatches to `self.openUri().start(value)`
+        // (`:2358`), the XDG-Desktop-Portal `OpenURI` D-Bus launcher
+        // (`portal/OpenURI.zig`). That portal subsystem is unported; `gio`'s
+        // `launch_default_for_uri` is the faithful stand-in — it routes through the
+        // portal under a sandbox and is the standard GLib "open this URI" entry
+        // point. As in the reference, any launch error falls back to the OS opener
+        // (`:2359-2363`).
+        let uri = String::from_utf8_lossy(value.url);
+        if let Err(err) =
+            gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
+        {
+            eprintln!("warn(gtk): unable to open uri err={err}");
+            open_url_fallback(value.kind, value.url);
+        }
+    }
+
+    /// `pub fn openUrlFallback(self, kind, url) void` (`application.zig:1896-1905`).
+    /// The minimal cross-platform URL opener (`internal_os.open`, ported as
+    /// [`rustty_os::open::open`]).
+    fn open_url_fallback(kind: rustty_apprt_api::action::OpenUrlKind, url: &[u8]) {
+        use rustty_apprt_api::action::OpenUrlKind;
+        // `apprt.action.OpenUrl.Kind` -> the `rustty_os::open::Kind` seam (`open.rs:31`).
+        let kind = match kind {
+            OpenUrlKind::Unknown => rustty_os::open::Kind::Unknown,
+            OpenUrlKind::Text => rustty_os::open::Kind::Text,
+            OpenUrlKind::Html => rustty_os::open::Kind::Html,
+        };
+        if let Err(err) = rustty_os::open::open(kind, url) {
+            eprintln!("warn(gtk): unable to open url: {err:?}");
+        }
     }
 
     /// `pub fn pwd(target, value) void` (`:2369-2378`).
@@ -2562,11 +2829,14 @@ mod action {
         match target {
             Target::App => false,
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.surface.present()` (the
-                // surface widget's present-me-in-my-window path). Lands with the surface-widget
-                // present completion.
+                // `v.rt_surface.surface.present()` (`:2395-2396`) — emits `present-request`;
+                // the owning window selects+focuses the surface's tab and raises the window
+                // (`window.rs` `surface_present_request`).
                 match widget(v) {
-                    Some(_w) => true,
+                    Some(w) => {
+                        w.present();
+                        true
+                    }
                     None => false,
                 }
             }
@@ -2581,11 +2851,10 @@ mod action {
         match target {
             Target::App => false,
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setProgressReport(value)` (the
-                // `progress-bar-overlay` surface path). Lands with the overlay completion (T24).
+                // `v.rt_surface.surface.setProgressReport(value)` (`:2405`).
                 match widget(v) {
-                    Some(_w) => {
-                        let _ = value;
+                    Some(w) => {
+                        w.set_progress_report(value);
                         true
                     }
                     None => false,
@@ -2633,19 +2902,70 @@ mod action {
         target: Target<'_, C>,
         opts: rustty_apprt_api::action::ReloadConfig,
     ) -> Result<(), ApprtError> {
-        // INHABITED placeholder: reference (soft) re-refs the current config or (hard)
-        // `CoreConfig.load`s a new one, then `core().updateConfig(...)` / `core.updateConfig(...)`.
-        // The `Application::core().update_config` seam + systemd reload notify land with the
-        // config-reload completion.
-        match target {
-            Target::App => {
-                let _ = app;
+        // Tell systemd that reloading has started (`:2448`), and — via the trailing
+        // `notify::ready()` after the body — that it has finished. The reference's
+        // `defer systemd.notify.ready()` (`:2451`) must run on EVERY exit path
+        // (including the `?` early-returns of the hard-reload load), so the body runs
+        // in an inner closure and `ready()` fires unconditionally afterwards.
+        rustty_os::systemd::notify::reloading();
+        let result = reload_config_inner(app, target, opts);
+        rustty_os::systemd::notify::ready();
+        result
+    }
+
+    /// The body of [`reload_config`], factored out so the caller's
+    /// `systemd.notify.ready()` runs on every exit path (the reference's
+    /// `defer`, `application.zig:2451`).
+    fn reload_config_inner<C: CoreSurfaceHandle>(
+        app: &Application,
+        target: Target<'_, C>,
+        opts: rustty_apprt_api::action::ReloadConfig,
+    ) -> Result<(), ApprtError> {
+        // Get our config object (`:2453-2472`).
+        let config: Config = if opts.soft {
+            // Soft reload: apply conditional logic to the existing loaded config, so
+            // return it as-is but take a reference (`:2458-2461`,
+            // `self.private().config.ref()`).
+            match app.get_config() {
+                Some(c) => c,
+                // No config set yet (pre-construction) — nothing to reload.
+                None => return Ok(()),
             }
+        } else {
+            // Hard reload: load a new config completely (`:2464-2470`). The reference
+            // wraps the loaded `CoreConfig` in a `Config` GObject (which clones it),
+            // so the local load result may drop here.
+            let core_config = CoreConfig::load().map_err(|err| {
+                eprintln!("warn(gtk): error loading config on reload err={err:?}");
+                ApprtError
+            })?;
+            Config::new(&core_config)
+        };
+
+        // Update the proper target. This triggers a `config_change` apprt action
+        // which propagates the config to our property system (`:2477-2481`).
+        match target {
+            // `.app => try self.core().updateConfig(self.rt(), config.get())`
+            // (`:2472-2475`).
+            Target::App => app.imp().update_config_app(config.get())?,
+            // `.surface => |core| try core.updateConfig(config.get())` (`:2477`).
             Target::Surface(v) => {
-                let _ = widget(v);
+                let rt = v.rt_surface_ptr().cast::<ApprtSurface>();
+                if !rt.is_null() {
+                    // SAFETY: same liveness contract as `widget`: for a `.surface`
+                    // action the core app hands the LIVE core surface whose
+                    // `rt_surface` points at the pinned apprt `Surface`, read on the
+                    // app thread. `core()` reads the embedded `*CoreSurface` backref.
+                    let core = unsafe { (*rt).core() };
+                    unsafe { &mut *core }
+                        .updateConfig(config.get())
+                        .map_err(|err| {
+                            eprintln!("warn(gtk): error updating surface config err={err:?}");
+                            ApprtError
+                        })?;
+                }
             }
         }
-        let _ = opts;
         Ok(())
     }
 
@@ -2689,13 +3009,30 @@ mod action {
         }
     }
 
-    /// `pub fn ringBell(target) void` (`:2521-2526`).
+    /// `pub fn ringBell(target) void` (`application.zig:2521-2526`) →
+    /// `surface.setBellRinging(true)` (`surface.zig:2208-2222`).
+    ///
+    /// `setBellRinging(true)` first runs `ringBell` (`surface.zig:2467-2509`),
+    /// which activates `tab.ring-bell` / `win.ring-bell` (system beep + urgency),
+    /// plays the custom audio bell, then sets the `bell-ringing` property. The
+    /// property drives the bind-time `should_border_be_shown` closure
+    /// (`surface.rs:3029`) so the bell border lights up. We reproduce that here on
+    /// the `Surface` widget: the generated `set_bell_ringing` setter (from
+    /// `#[property(get, set)]` on `bell_ringing`) is the property write, the two
+    /// `activate_action`s are `ringBell`'s action fan-out (`surface.zig:2480-2481`),
+    /// and `ring_bell_audio` is its audio block (`surface.zig:2484-2509`).
     pub(super) fn ring_bell<C: CoreSurfaceHandle>(target: Target<'_, C>) {
         match target {
             Target::App => {}
+            // `.surface => |v| v.rt_surface.surface.setBellRinging(true)` (`:2521`).
+            // rustty hosts the full bell (signal emit, `tab`/`win.ring-bell` action
+            // fan-out, audio, and the `bell-ringing` border property) in
+            // [`Surface::ring_bell`], which both this action and `commandFinished`
+            // funnel through.
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setBellRinging(true)` (`bell-ringing` prop).
-                let _ = widget(v);
+                if let Some(w) = widget(v) {
+                    w.ring_bell();
+                }
             }
         }
     }
@@ -2707,9 +3044,11 @@ mod action {
     ) {
         match target {
             Target::App => {}
+            // `.surface => |v| v.rt_surface.surface.setScrollbar(value)` (`:2534`).
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setScrollbar(value)` (`scrollbar` prop).
-                let _ = (widget(v), value);
+                if let Some(w) = widget(v) {
+                    w.set_scrollbar(value);
+                }
             }
         }
     }
@@ -2722,9 +3061,10 @@ mod action {
         match target {
             Target::App => {}
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setSearchActive(true, value.needle)` (the
-                // `search-overlay` path). Lands with the overlay completion (T24).
-                let _ = (widget(v), value);
+                // `v.rt_surface.surface.setSearchActive(true, value.needle)` (`:2549`).
+                if let Some(w) = widget(v) {
+                    w.set_search_active(true, value.needle);
+                }
             }
         }
     }
@@ -2734,8 +3074,10 @@ mod action {
         match target {
             Target::App => {}
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setSearchActive(false, "")`.
-                let _ = widget(v);
+                // `v.rt_surface.surface.setSearchActive(false, "")` (`:2556`).
+                if let Some(w) = widget(v) {
+                    w.set_search_active(false, b"");
+                }
             }
         }
     }
@@ -2748,8 +3090,10 @@ mod action {
         match target {
             Target::App => {}
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setSearchTotal(value.total)`.
-                let _ = (widget(v), value);
+                // `v.rt_surface.surface.setSearchTotal(value.total)` (`:2563`).
+                if let Some(w) = widget(v) {
+                    w.set_search_total(value.total);
+                }
             }
         }
     }
@@ -2762,8 +3106,10 @@ mod action {
         match target {
             Target::App => {}
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `setSearchSelected(value.selected)`.
-                let _ = (widget(v), value);
+                // `v.rt_surface.surface.setSearchSelected(value.selected)` (`:2570`).
+                if let Some(w) = widget(v) {
+                    w.set_search_selected(value.selected);
+                }
             }
         }
     }
@@ -2824,13 +3170,9 @@ mod action {
         match target {
             Target::App => false,
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.surface.childExited(value)`
-                // (the `child-exited-overlay`). Lands with the overlay completion (T24).
+                // `v.rt_surface.surface.childExited(value)` (`:2614`).
                 match widget(v) {
-                    Some(_w) => {
-                        let _ = value;
-                        false
-                    }
+                    Some(w) => w.child_exited_show(value),
                     None => false,
                 }
             }
@@ -2849,18 +3191,19 @@ mod action {
     ) -> bool {
         match target {
             Target::App => false,
-            Target::Surface(v) => {
-                // INHABITED placeholder: reference `surface.setMinSize(.{ min_width, min_height })`
-                // (max is ignored). The surface-widget min-size path lands with the sizing
-                // completion; read the requested min to keep shape.
-                match widget(v) {
-                    Some(_w) => {
-                        let _ = value;
-                        true
-                    }
-                    None => false,
+            // `.surface => |core| { surface.setMinSize(.{ .width = min_width,
+            // .height = min_height }); return true; }` (`:2621-2630`). The max size
+            // is ignored — we have no mechanism to enforce it (`:2622-2623`).
+            Target::Surface(v) => match widget(v) {
+                Some(w) => {
+                    w.set_min_size(Some(Size {
+                        width: value.min_width,
+                        height: value.min_height,
+                    }));
+                    true
                 }
-            }
+                None => false,
+            },
         }
     }
 
@@ -2869,8 +3212,12 @@ mod action {
         match target {
             Target::App => {}
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.surface.toggleFullscreen()`.
-                let _ = widget(v);
+                // `v.rt_surface.surface.toggleFullscreen()` (`:2638`) — emits
+                // `toggle-fullscreen`; the owning window fullscreens/unfullscreens
+                // (`window.rs` `surface_toggle_fullscreen`).
+                if let Some(w) = widget(v) {
+                    w.toggle_fullscreen();
+                }
             }
         }
     }
@@ -2915,8 +3262,12 @@ mod action {
         match target {
             Target::App => {}
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.surface.toggleMaximize()`.
-                let _ = widget(v);
+                // `v.rt_surface.surface.toggleMaximize()` (`:2729`) — emits
+                // `toggle-maximize`; the owning window maximizes/unmaximizes
+                // (`window.rs` `surface_toggle_maximize`).
+                if let Some(w) = widget(v) {
+                    w.toggle_maximize();
+                }
             }
         }
     }
@@ -2959,18 +3310,17 @@ mod action {
         }
     }
 
-    /// `pub fn toggleCommandPalette(target) bool` (`:2770-2777`).
+    /// `pub fn toggleCommandPalette(target) bool` (`:2778-2785`). Delegates to the
+    /// surface widget's `toggleCommandPalette` (`surface.zig:880-883`), which
+    /// activates the `win.toggle-command-palette` action installed on the window.
     pub(super) fn toggle_command_palette<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
         match target {
             Target::App => false,
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.gobj().toggleCommandPalette()`
-                // (the surface widget's command-palette toggle). Lands with the command
-                // palette completion (T25).
-                match widget(v) {
-                    Some(_w) => false,
-                    None => false,
-                }
+                let Some(w) = widget(v) else { return false };
+                // `surface.rt_surface.gobj().toggleCommandPalette()` →
+                // `activateAction("win.toggle-command-palette", null)`.
+                w.activate_action("win.toggle-command-palette", None).is_ok()
             }
         }
     }
@@ -2982,17 +3332,12 @@ mod action {
     ) -> bool {
         match target {
             Target::App => false,
-            Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.gobj().controlInspector(value)`.
-                // Reaches the L6 inspector; lands with the inspector completion.
-                match widget(v) {
-                    Some(_w) => {
-                        let _ = value;
-                        false
-                    }
-                    None => false,
-                }
-            }
+            // `.surface => |surface| surface.rt_surface.gobj().controlInspector(value)`
+            // (`:2783`).
+            Target::Surface(v) => match widget(v) {
+                Some(w) => w.control_inspector(value),
+                None => false,
+            },
         }
     }
 
@@ -3003,16 +3348,12 @@ mod action {
     ) -> bool {
         match target {
             Target::App => false,
-            Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.gobj().commandFinished(value)`.
-                match widget(v) {
-                    Some(_w) => {
-                        let _ = value;
-                        false
-                    }
-                    None => false,
-                }
-            }
+            // `.surface => |surface| surface.rt_surface.gobj().commandFinished(value)`
+            // (`:2792`).
+            Target::Surface(v) => match widget(v) {
+                Some(w) => w.command_finished(value),
+                None => false,
+            },
         }
     }
 
@@ -3023,17 +3364,12 @@ mod action {
     ) -> bool {
         match target {
             Target::App => false,
-            Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.gobj().setReadonly(value)`
-                // (`readonly` prop). Lands with the surface-widget readonly completion.
-                match widget(v) {
-                    Some(_w) => {
-                        let _ = value;
-                        false
-                    }
-                    None => false,
-                }
-            }
+            // `.surface => |surface| surface.rt_surface.gobj().setReadonly(value)`
+            // (`:2801`).
+            Target::Surface(v) => match widget(v) {
+                Some(w) => w.set_readonly(value),
+                None => false,
+            },
         }
     }
 
@@ -3048,10 +3384,11 @@ mod action {
                 false
             }
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.gobj().keySequenceAction(value)`
-                // (the `key-state-overlay`). Lands with the overlay completion (T24). Reference
-                // returns true unconditionally (errors only log).
-                let _ = (widget(v), value);
+                // `core.rt_surface.gobj().keySequenceAction(value)` (`:2821`). Errors
+                // only log; the action returns true unconditionally (`:2824`).
+                if let Some(w) = widget(v) {
+                    w.key_sequence_action(value);
+                }
                 true
             }
         }
@@ -3068,9 +3405,11 @@ mod action {
                 false
             }
             Target::Surface(v) => {
-                // INHABITED placeholder: reference `v.rt_surface.gobj().keyTableAction(value)`.
-                // Lands with the key-table completion. Reference returns true unconditionally.
-                let _ = (widget(v), value);
+                // `core.rt_surface.gobj().keyTableAction(value)` (`:2836`). Errors only
+                // log; the action returns true unconditionally (`:2839`).
+                if let Some(w) = widget(v) {
+                    w.key_table_action(value);
+                }
                 true
             }
         }

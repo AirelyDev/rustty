@@ -59,7 +59,7 @@ use crate::gtk::{ext, gtk_version, winproto, WeakRef};
 
 use super::application::Application;
 use super::close_confirmation_dialog::{CloseConfirmationDialog, Target};
-use super::command_palette::CommandPalette;
+use super::command_palette::{ActionBoxed, CommandPalette};
 use super::config::Config;
 use super::debug_warning::DebugWarning;
 use super::split_tree::{SplitTree, Tree};
@@ -1105,12 +1105,48 @@ mod imp {
             self.tab_view.close_page(&page);
         }
 
-        // ---- Command palette / inspector — INHABITED leaves ----------------
-        /// PORTS: `window.zig:2009-2049` `toggleCommandPalette`. **INHABITED leaf:**
-        /// the [`CommandPalette`] dialog + its `trigger`/`config` machinery land
-        /// with the command-palette task; a no-op with a warning until then.
+        // ---- Command palette / inspector -----------------------------------
+        /// PORTS: `window.zig:2007-2049` `toggleCommandPalette`. Lazily build a
+        /// [`CommandPalette`] (bind its config, connect its `trigger` signal, save a
+        /// WEAK ref), then toggle it modal over this window.
         pub(super) fn toggle_command_palette(&self) {
-            eprintln!("warn(gtk): command palette not yet implemented (L5.3)");
+            let obj = self.obj();
+
+            // Reuse the saved palette if it is still alive, else create one
+            // (`window.zig:2013-2045`).
+            let palette = self.command_palette.get().unwrap_or_else(|| {
+                // Create a fresh command palette (`:2015-2016`).
+                let palette = CommandPalette::new();
+
+                // Synchronize our config to the palette's config
+                // (`:2018-2025`).
+                obj.bind_property("config", &palette, "config")
+                    .sync_create()
+                    .build();
+
+                // Listen to `trigger` to know when the user selected an option
+                // (`:2027-2036`) → `signalCommandPaletteTrigger`
+                // (`window.zig:2052-2055`), which performs the binding action.
+                let this_weak = obj.downgrade();
+                palette.connect_local("trigger", false, move |args| {
+                    let boxed: ActionBoxed =
+                        args[1].get().expect("trigger action is an ActionBoxed");
+                    if let Some(win) = this_weak.upgrade() {
+                        win.imp().perform_binding_action(boxed.0);
+                    }
+                    None
+                });
+
+                // Save a WEAK ref to avoid reference-counting cycles
+                // (`:2038-2041`).
+                self.command_palette.set(Some(&palette));
+
+                palette
+            });
+
+            // Tell the palette to toggle itself, modal over our window
+            // (`:2047-2048`).
+            palette.toggle(&obj);
         }
 
         /// PORTS: `window.zig:2069-2072` `toggleInspector`. **INHABITED leaf (L6):**
@@ -1327,6 +1363,112 @@ impl Window {
     pub fn toggle_visibility(&self) {
         self.imp().toggle_visibility();
     }
+
+    /// PORTS: `window.zig:518-563` `selectTab`. Select the tab as requested.
+    /// Returns true if the tab selection changed.
+    pub fn select_tab(&self, n: SelectTab) -> bool {
+        let tab_view = self.imp().tab_view.get();
+
+        // Get our current tab numeric position (`:521-523`).
+        let Some(selected) = tab_view.selected_page() else {
+            return false;
+        };
+        let current = tab_view.page_position(&selected);
+
+        // Get our total (`:526`).
+        let total = tab_view.n_pages();
+
+        let goto: i32 = match n {
+            SelectTab::Previous => {
+                if current > 0 {
+                    current - 1
+                } else {
+                    total - 1
+                }
+            }
+            SelectTab::Next => {
+                if current < total - 1 {
+                    current + 1
+                } else {
+                    0
+                }
+            }
+            SelectTab::Last => total - 1,
+            SelectTab::N(v) => {
+                // 1-indexed (`:547-556`).
+                if v == 0 {
+                    return false;
+                }
+                let Ok(n_int) = i32::try_from(v) else {
+                    return false;
+                };
+                (n_int - 1).min(total - 1)
+            }
+        };
+        debug_assert!(goto >= 0);
+        debug_assert!(goto < total);
+
+        // If our target is the same as our current then we do nothing (`:561`).
+        if goto == current {
+            return false;
+        }
+
+        // Get the page and select it (`:563-566`).
+        let page = tab_view.nth_page(goto);
+        tab_view.set_selected_page(&page);
+
+        true
+    }
+
+    /// PORTS: `window.zig:568-605` `moveTab`. Move the tab containing the given
+    /// surface by the given amount. Returns whether this affected any tab
+    /// positioning.
+    pub fn move_tab(&self, surface: &Surface, amount: isize) -> bool {
+        let tab_view = self.imp().tab_view.get();
+
+        // If we have one tab we never move (`:576-577`).
+        let total = tab_view.n_pages();
+        if total == 1 {
+            return false;
+        }
+
+        // Get the tab that contains the given surface (`:580-583`).
+        let Some(tab) = ext::ancestor::<Tab>(surface) else {
+            return false;
+        };
+
+        // Get the page position that contains the tab (`:586-587`).
+        let page = tab_view.page(&tab);
+        let pos = tab_view.page_position(&page);
+
+        // Move it (`:590-602`).
+        let desired_pos: i32 = {
+            let initial = pos + amount as i32;
+            let max = total - 1;
+            if initial < 0 {
+                max + initial + 1
+            } else if initial > max {
+                initial - max - 1
+            } else {
+                initial
+            }
+        };
+        debug_assert!(desired_pos >= 0);
+        debug_assert!(desired_pos < total);
+
+        tab_view.reorder_page(&page, desired_pos)
+    }
+}
+
+/// PORTS: `window.zig:508-513` `Window.SelectTab`. The tab to select in
+/// [`Window::select_tab`].
+#[derive(Clone, Copy, Debug)]
+pub enum SelectTab {
+    Previous,
+    Next,
+    Last,
+    /// 1-indexed tab number.
+    N(usize),
 }
 
 // -- Template callbacks (window.zig:2132-2152 bindTemplateCallback) ----------

@@ -99,6 +99,7 @@ pub mod gresource;
 pub mod gsettings;
 pub mod gtk_version;
 pub mod key;
+pub mod media;
 pub mod surface;
 pub mod weak_ref;
 pub mod winproto;

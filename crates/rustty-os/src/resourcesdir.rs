@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ResourcesDir {
     /// Avoid accessing these directly, use the app() and host() methods instead.
     app_path: Option<String>,

@@ -3844,6 +3844,48 @@ reinforcing findings from the implementation:
 over BASELINE)`" to "live delegate to `runtime_at_least`", or reverse T2. Left
 as a flagged deviation rather than a silent one.
 
+## GlobalShortcuts XDG-portal round-trip (L6 portals) [added 2026-07-18, T26 GlobalShortcuts]
+
+**Ghostty source:** `src/apprt/gtk/class/global_shortcuts.zig:128-560` — `refresh`
+(map-build), `close` (session/subscription teardown), `request`, `Method`
+(`CreateSession`/`BindShortcuts` payloads + `onResponse`), `getRequestPath`,
+`generateToken`, and the `responded`/`gotResponseHandle`/`shortcutActivated`
+D-Bus callbacks. **Rustty counterpart:**
+`crates/rustty-apprt/src/gtk/class/global_shortcuts.rs` (`gtk` feature).
+**Status:** deferred — desktop portals are an L6 milestone; the portal DBus
+round-trip is NOT ported.
+
+**What IS ported (REAL, this tier).** The `GhosttyGlobalShortcuts` class itself:
+the `config` + `dbus-connection` properties, the `notify::config` → `refresh`
+wiring, `set_dbus_connection` (close prior → ref new → refresh, as the
+property's custom setter), the `trigger` signal (carrying an `ActionBoxed`), and
+`dispose`. The `Application` binding is REAL too — `startup_global_shortcuts`
+(`application.zig:1432-1457`) creates the object, feeds it
+`app.dbus_connection()`, `sync_create`-binds `config`, and connects `trigger`
+(→ `global_shortcut_trigger`, `:1655-1663`).
+
+**What is deferred (inhabited placeholders, NOT `unimplemented!()`).**
+`refresh` runs its real head (close prior state; require a config) and then
+no-ops instead of building the trigger→action map (from `config.keybind.set`,
+via `key::xdg_shortcut_from_trigger` + the `global` flag — both already exist in
+the port) and driving the `CreateSession`/`BindShortcuts` round-trip. `close` is
+an inhabited no-op (no session `handle` / signal subscriptions / arena exist to
+tear down until the round-trip lands). `global_shortcut_trigger` is a
+placeholder-leaf (the reference `core.performAllAction` lands with the Task-23
+action-dispatch surface) and is additionally unreachable: `shortcutActivated`,
+the sole emitter of `trigger`, is part of the deferred portal path.
+
+**Why no-op and not `unimplemented!()`.** `notify::config` and
+`set_dbus_connection` drive `refresh` on the startup hot path; an
+`unimplemented!()` there would be a latent abort the moment a user has a single
+`global:` keybind (the LATENT-CRASH trap). The portal state fields
+(`handle`/`response_subscription`/`activate_subscription`/`arena`/`map`) attach
+to `refresh`/`close` when the round-trip is ported.
+
+**What unblocks it:** L6 (desktop portals) — the XDG `org.freedesktop.portal.
+GlobalShortcuts` + `Request` DBus surface (and the sibling `OpenURI` portal
+deferred in `application.zig`).
+
 ## App-core over-claim CORRECTION — `main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` are DEFERRED (already tracked at C6)
 
 The gap-analysis app-core inventory marked `src/main_gen.zig`, `src/main_wasm.zig`,

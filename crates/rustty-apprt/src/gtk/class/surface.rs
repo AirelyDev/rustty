@@ -925,10 +925,7 @@ fn translate_mouse_button(button: u32) -> Button {
 /// PORTS: `surface.zig:4116-4120` `computeFraction`. Computes a fraction in
 /// `[0.0, 1.0]` from the supplied progress, clamped to `[0, 100]`.
 ///
-/// PORT NOTE: consumed by the progress-bar handler (`setProgressReport`), which
-/// lands with the progress-bar task (T16); ported here with its KAT per the T18
-/// brief.
-#[allow(dead_code)]
+/// PORT NOTE: consumed by the progress-bar handler [`Surface::set_progress_report`].
 fn compute_fraction(progress: u8) -> f64 {
     f64::from(progress.min(100)) / 100.0
 }
@@ -1187,6 +1184,22 @@ impl Surface {
     // `priv.@"error" = v; notifyByPspec(...)` (set the cell + notify on change), so
     // callers use it directly (e.g. `Surface::gl_realize`'s GL-error branch).
 
+    /// PORTS: `surface.zig:2378-2429` `propMouseShape`. Set the widget cursor from the
+    /// current `mouse-shape` property. Shared by `on_notify_mouse_shape` and
+    /// `on_notify_mouse_hidden` (which re-runs the shape logic on un-hide).
+    fn apply_mouse_shape_cursor(&self) {
+        // If our mouse should be hidden currently then we don't do anything
+        // (`:2385-2387`).
+        if self.imp().mouse_hidden.get() {
+            return;
+        }
+        // Map the shape (carried as its `i32` discriminant) to a CSS cursor name
+        // and set it (`:2389-2429`).
+        let name = mouse_shape_cursor_name(self.imp().mouse_shape.get());
+        self.upcast_ref::<gtk4::Widget>()
+            .set_cursor_from_name(Some(name));
+    }
+
     /// PORTS: `surface.zig:1500-1507` `close`. Emits `close-request`; the window
     /// tier decides what to do. The apprt seam's `close(process_alive)` discards
     /// `process_alive` and calls this (`Surface.zig:35-38`).
@@ -1202,6 +1215,304 @@ impl Surface {
     /// `adw::Bin`'s implicit focus-descent).
     pub fn grab_focus(&self) {
         let _ = self.imp().gl_area.upcast_ref::<gtk4::Widget>().grab_focus();
+    }
+
+    /// PORTS: `surface.zig:2231-2248` `setSearchActive`. Toggle the
+    /// [`SearchOverlay`]'s `active` property (which drives its `visible` binding);
+    /// on activation, seed a non-empty `needle` into the entry and grab focus. The
+    /// `active` property setter re-emits `search-changed`, and
+    /// [`SearchOverlay::set_search_contents`] re-emits it with `needle`, so the
+    /// core search is driven through the surface's `search_changed` signal handler.
+    pub fn set_search_active(&self, active: bool, needle: &[u8]) {
+        let overlay = &*self.imp().search_overlay;
+        // `gobject.Object.setProperty(search_overlay, "active", active)` (`:2233-2238`).
+        overlay.set_active(active);
+
+        // `if (!std.mem.eql(u8, needle, "")) search_overlay.setSearchContents(needle)`
+        // (`:2240-2242`).
+        if !needle.is_empty() {
+            overlay.set_search_contents(&String::from_utf8_lossy(needle));
+        }
+
+        // `if (active) search_overlay.grabFocus()` (`:2244-2246`).
+        if active {
+            overlay.grab_focus();
+        }
+    }
+
+    /// PORTS: `surface.zig:2250-2252` `setSearchTotal`. Forward the total match
+    /// count to the search overlay's counter.
+    pub fn set_search_total(&self, total: Option<usize>) {
+        self.imp().search_overlay.set_search_total(total);
+    }
+
+    /// PORTS: `surface.zig:2254-2256` `setSearchSelected`. Forward the selected
+    /// match index to the search overlay's counter.
+    pub fn set_search_selected(&self, selected: Option<usize>) {
+        self.imp().search_overlay.set_search_selected(selected);
+    }
+
+    /// PORTS: `surface.zig:916-950` `keySequenceAction`. Handle a key-sequence
+    /// action from the apprt, updating the owned `key_sequence` (which backs the
+    /// `key-sequence` property the key-state overlay binds, revealing pending
+    /// leader-key feedback).
+    pub fn key_sequence_action(&self, value: rustty_apprt_api::action::KeySequence) {
+        use rustty_apprt_api::action::KeySequence;
+        let imp = self.imp();
+
+        // `freezeNotify` / `defer thawNotify` (`:923-924`): the guard thaws on
+        // drop, coalescing the notify below.
+        let _guard = self.freeze_notify();
+        // Notify unconditionally (`:925`) — queued before the (possibly
+        // early-returning) switch, exactly like the reference.
+        self.notify("key-sequence");
+
+        match value {
+            KeySequence::Trigger(trigger) => {
+                // Convert the trigger to a human-readable label (`:930-934`).
+                let mut label = String::new();
+                if !key::label_from_trigger(&mut label, trigger) {
+                    // `if (!success) return` (`:933`).
+                    return;
+                }
+                // Copy and append (`:937-942`). A label can't contain a NUL, so
+                // `CString::new` only fails on a malformed label; drop it if so.
+                if let Ok(duped) = CString::new(label) {
+                    imp.key_sequence.borrow_mut().push(duped);
+                }
+            }
+            KeySequence::End => {
+                // Free all stored strings and clear (`:944-948`).
+                imp.key_sequence.borrow_mut().clear();
+            }
+        }
+    }
+
+    /// PORTS: `surface.zig:953-981` `keyTableAction`. Handle a key-table action,
+    /// maintaining the owned `key_tables` stack (which backs the `key-table`
+    /// property the key-state overlay binds).
+    pub fn key_table_action(&self, value: rustty_apprt_api::action::KeyTable<'_>) {
+        use rustty_apprt_api::action::KeyTable;
+        let imp = self.imp();
+
+        let _guard = self.freeze_notify();
+        self.notify("key-table");
+
+        match value {
+            KeyTable::Activate(name) => {
+                // Duplicate the name and push onto the stack (`:965-969`).
+                if let Ok(duped) = CString::new(name) {
+                    imp.key_tables.borrow_mut().push(duped);
+                }
+            }
+            KeyTable::Deactivate => {
+                // Pop and free the top table (`:971-973`).
+                imp.key_tables.borrow_mut().pop();
+            }
+            KeyTable::DeactivateAll => {
+                // Free all tables and clear (`:975-978`).
+                imp.key_tables.borrow_mut().clear();
+            }
+        }
+    }
+
+    /// PORTS: `surface.zig:1030-1113` `setProgressReport`. Drive the
+    /// `progress_bar_overlay` (a `gtk.ProgressBar` in `surface.blp`) visible +
+    /// fraction/pulse from an OSC 9;4 progress report, with a 15s watchdog timer
+    /// that removes bars stalled by bad-actor programs.
+    pub fn set_progress_report(&self, value: rustty_vt::osc::ProgressReport) {
+        use rustty_vt::osc::ProgressReportState;
+        let imp = self.imp();
+
+        // Stop the timer no matter what — if removing we're done, otherwise we
+        // restart it below (`:1036-1043`).
+        remove_source_id(imp.progress_bar_timer.take(), "progress bar timer");
+
+        // Config gate: `progress-style` off => hide + return (`:1045-1051`).
+        if let Some(config) = imp.config.borrow().as_ref() {
+            if !config.get().progress_style {
+                imp.progress_bar_overlay.set_visible(false);
+                return;
+            }
+        }
+
+        let progress_bar = &*imp.progress_bar_overlay;
+        match value.state {
+            // Remove the progress bar (`:1055-1059`).
+            ProgressReportState::Remove => {
+                progress_bar.set_visible(false);
+                return;
+            }
+            // Fixed value if provided, otherwise pulse; clear the `error` class
+            // (`:1063-1070`).
+            ProgressReportState::Set => {
+                progress_bar.remove_css_class("error");
+                match value.progress {
+                    Some(progress) => progress_bar.set_fraction(compute_fraction(progress)),
+                    None => progress_bar.pulse(),
+                }
+            }
+            // As `.set`, but with the `error` class (`:1074-1081`).
+            ProgressReportState::Error => {
+                progress_bar.add_css_class("error");
+                match value.progress {
+                    Some(progress) => progress_bar.set_fraction(compute_fraction(progress)),
+                    None => progress_bar.pulse(),
+                }
+            }
+            // Unknown progress — pulse (`:1085-1087`).
+            ProgressReportState::Indeterminate => progress_bar.pulse(),
+            // Keep the bar on screen; set a fixed value if provided, but don't
+            // pulse (`:1093-1097`).
+            ProgressReportState::Pause => {
+                if let Some(progress) = value.progress {
+                    progress_bar.set_fraction(compute_fraction(progress));
+                }
+            }
+        }
+
+        // All non-remove states lead to visibility (`:1100-1102`).
+        progress_bar.set_visible(true);
+
+        // Start the watchdog to remove bad-actor programs that stall the bar
+        // (`:1104-1112`). 15 seconds, mirroring `progress_bar_timeout_seconds`.
+        let id = glib::timeout_add_local(
+            Duration::from_secs(15),
+            glib::clone!(
+                #[weak(rename_to = this)]
+                self,
+                #[upgrade_or]
+                glib::ControlFlow::Break,
+                move || this.progress_bar_timer()
+            ),
+        );
+        imp.progress_bar_timer.replace(Some(id));
+    }
+
+    /// PORTS: `surface.zig:1116-1122` `progressBarTimer`. The bar hasn't been
+    /// updated by the TUI recently; remove it. Nulls the field first (before the
+    /// re-entrant `setProgressReport(.remove)`) so its timer-removal branch is a
+    /// no-op on the source currently firing (`:1119`).
+    fn progress_bar_timer(&self) -> glib::ControlFlow {
+        self.imp().progress_bar_timer.replace(None);
+        self.set_progress_report(rustty_vt::osc::ProgressReport {
+            state: rustty_vt::osc::ProgressReportState::Remove,
+            progress: None,
+        });
+        glib::ControlFlow::Break
+    }
+
+    /// PORTS: `surface.zig:1509-1530` `childExited`. Set the `child-exited`
+    /// property (which reveals `child_exited_overlay` via the `visible: bind
+    /// template.child-exited` in `surface.blp`) and populate the banner from the
+    /// exit payload. Always returns `true`: the `SurfaceChildExitedNoop` path that
+    /// returns `false` (forcing the text-based message) does not exist in this
+    /// Adwaita-1.3+ port (`:1521-1526`).
+    pub fn child_exited_show(&self, value: rustty_apprt_api::surface::ChildExited) -> bool {
+        // Keep the property up to date for anyone listening (`:1513-1519`).
+        self.set_child_exited(true);
+
+        // Populate the banner (`:1528`).
+        self.imp()
+            .child_exited_overlay
+            .set_child_exited_data(Some(value));
+        true
+    }
+
+    /// PORTS: `surface.zig:2472-2509` `ringBell`. Ring the terminal bell: emit the
+    /// `bell` signal, fan out to the `tab.ring-bell`/`win.ring-bell` widget actions
+    /// (system beep, title bell, urgency — `window.rs`/`tab.rs`), play the custom
+    /// audio bell, and light the bell border via the `bell-ringing` property.
+    ///
+    /// PORT NOTE: the reference's `ringBell` is invoked by `setBellRinging(true)`
+    /// (`surface.zig:2216`); rustty keeps `set_bell_ringing` as the plain property
+    /// write and hosts the full bell here, so the `.ring_bell` apprt action
+    /// (`application.rs`) and `commandFinished` both funnel through this one method.
+    pub fn ring_bell(&self) {
+        // `signals.bell.impl.emit(...)` (`:2472-2478`) — fire any bell subscriber
+        // BEFORE the action fan-out.
+        self.emit_by_name::<()>("bell", &[]);
+
+        // Action fan-out (`:2480-2481`): the `tab.ring-bell` / `win.ring-bell`
+        // widget actions do the system beep, title bell, and attention/urgency
+        // (`window.rs:1968`, `tab.rs:410`). They bubble up from the surface widget.
+        let _ = self.activate_action("tab.ring-bell", None);
+        let _ = self.activate_action("win.ring-bell", None);
+
+        // The custom audio bell (`:2484-2509`).
+        self.ring_bell_audio();
+
+        // The `bell-ringing` property write (`:2221`); the border's bind-time
+        // `should_border_be_shown` closure re-evaluates, lighting the bell border.
+        self.set_bell_ringing(true);
+    }
+
+    /// PORTS: `surface.zig:2484-2509` — the audio-bell block of `ringBell`. Plays
+    /// the configured custom bell sound (when `bell-features.audio` is set and a
+    /// `bell-audio-path` is configured), reusing one cached `MediaFile` per
+    /// surface to avoid the GStreamer pipeline leak (see `media.rs`). The
+    /// border/system-beep/urgency of `ringBell` are the sibling steps in
+    /// [`Surface::ring_bell`].
+    pub fn ring_bell_audio(&self) {
+        use std::os::unix::ffi::OsStrExt;
+
+        let imp = self.imp();
+        let cfg = imp.config.borrow();
+        let Some(config) = cfg.as_ref() else {
+            return;
+        };
+        let config = config.get();
+
+        // `if (config.@"bell-features".audio)` (`:2487`).
+        if !config.bell_features.audio {
+            return;
+        }
+
+        // `const config_path = config.@"bell-audio-path" orelse break :audio`
+        // (`:2488-2492`): the `Path` union carries the optional/required flag.
+        let Some(config_path) = config.bell_audio_path.as_ref() else {
+            return;
+        };
+        let (path_bytes, required) = match config_path {
+            rustty_config::path::Path::Optional(p) => (p.as_slice(), false),
+            rustty_config::path::Path::Required(p) => (p.as_slice(), true),
+        };
+
+        // `std.math.clamp(config.@"bell-audio-volume", 0.0, 1.0)` (`:2494-2498`).
+        let volume = config.bell_audio_volume.clamp(0.0, 1.0);
+
+        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(path_bytes));
+
+        // Reuse one MediaFile per surface, rebuilt only when the path changes
+        // (`:2506-2508`). `bell_media_file` frees any stale MediaFile and returns
+        // the current slot value (possibly None if the path is inaccessible), so
+        // `bell_media` never dangles.
+        let current = imp.bell_media.borrow_mut().take();
+        let media_file = crate::gtk::media::bell_media_file(current, path, required);
+        if let Some(media_file) = &media_file {
+            crate::gtk::media::play_bell(media_file, volume);
+        }
+        imp.bell_media.replace(media_file);
+    }
+
+    /// PORTS: `surface.zig:1126-1133` `present`. Request that this terminal come to
+    /// the front and become focused. It is up to the embedding widget (the owning
+    /// [`Window`](super::Window)) to react to this via the `present-request` signal
+    /// (`window.rs` `surface_present_request`).
+    pub fn present(&self) {
+        self.emit_by_name::<()>("present-request", &[]);
+    }
+
+    /// PORTS: `surface.zig:862-869` `toggleFullscreen`. Emits `toggle-fullscreen`;
+    /// the owning window reacts (`window.rs` `surface_toggle_fullscreen`).
+    pub fn toggle_fullscreen(&self) {
+        self.emit_by_name::<()>("toggle-fullscreen", &[]);
+    }
+
+    /// PORTS: `surface.zig:871-878` `toggleMaximize`. Emits `toggle-maximize`;
+    /// the owning window reacts (`window.rs` `surface_toggle_maximize`).
+    pub fn toggle_maximize(&self) {
+        self.emit_by_name::<()>("toggle-maximize", &[]);
     }
 
     /// PORTS: `surface.zig:1532-1576` `getContentScale`. The GTK widget scale
@@ -1260,6 +1571,270 @@ impl Surface {
     #[must_use]
     pub fn get_title(&self) -> Option<String> {
         self.imp().title.borrow().clone()
+    }
+
+    /// PORTS: `surface.zig:1998-2004` `getEffectiveTitle`. The user override wins
+    /// over the terminal-set title.
+    #[must_use]
+    pub fn get_effective_title(&self) -> Option<String> {
+        let imp = self.imp();
+        // `return priv.title_override orelse priv.title` (`:2003`).
+        imp.title_override
+            .borrow()
+            .clone()
+            .or_else(|| imp.title.borrow().clone())
+    }
+
+    /// PORTS: `surface.zig:2006-2019` `copyTitleToClipboard`. Copies the effective
+    /// title to the standard clipboard.
+    pub fn copy_title_to_clipboard(&self) -> bool {
+        // `const title = self.getEffectiveTitle() orelse return false` (`:2007`).
+        let Some(title) = self.get_effective_title() else {
+            return false;
+        };
+        // `if (title.len == 0) return false` (`:2008`).
+        if title.is_empty() {
+            return false;
+        }
+        // `self.setClipboard(.standard, &.{.{ .mime = "text/plain", .data = title }},
+        // false)` (`:2009-2013`). Reuses the Phase-A clipboard WRITE path.
+        self.set_clipboard(
+            Clipboard::Standard,
+            &[ClipboardContent {
+                mime: b"text/plain",
+                data: title.as_bytes(),
+            }],
+            false,
+        );
+        true
+    }
+
+    /// PORTS: `surface.zig:1747-1778` `sendDesktopNotification`. Build a
+    /// `gio.Notification` and send it via the application. The `present-surface`
+    /// default action targets this surface's core id, so activating the
+    /// notification focuses this surface.
+    pub fn send_desktop_notification(&self, title: &[u8], body: &[u8]) {
+        use gio::prelude::ApplicationExt as _;
+
+        let app = Application::default();
+        let imp = self.imp();
+
+        // `const core_surface = priv.core_surface orelse { warn; return; }`
+        // (`:1751-1754`).
+        let core = imp.core_surface.load(Ordering::Acquire);
+        if core.is_null() {
+            eprintln!("warn(gtk): can't send notification because there is no core surface");
+            return;
+        }
+        // SAFETY: a non-null pointer is a live, heap-stable `CoreSurface` (the pin;
+        // published by `init_surface`, cleared only after the render/io threads are
+        // joined in finalize). This runs on the main thread; `id` is a plain u64.
+        let core_id = unsafe { (*core).id };
+
+        // Set a default title if we don't already have one (`:1756-1759`). PORT
+        // NOTE (R2 identity): the reference's literal `"Ghostty"` becomes the
+        // product display name [`rustty_identity::APP_NAME_TITLECASE`].
+        let title_owned;
+        let title_str: &str = if title.is_empty() {
+            rustty_identity::APP_NAME_TITLECASE
+        } else {
+            title_owned = String::from_utf8_lossy(title);
+            &title_owned
+        };
+        let body_str = String::from_utf8_lossy(body);
+
+        // Build the notification (`:1761-1774`).
+        let notification = gio::Notification::new(title_str);
+        notification.set_body(Some(&body_str));
+
+        // `gio.ThemedIcon.new("com.mitchellh.ghostty")` (`:1765`). PORT NOTE (R2):
+        // the themed-icon name IS the application id ([`build_info::BASE_APPLICATION_ID`],
+        // the single source of truth).
+        let icon = gio::ThemedIcon::new(crate::gtk::build_info::BASE_APPLICATION_ID);
+        notification.set_icon(&icon);
+
+        // `notification.setDefaultActionAndTargetValue("app.present-surface",
+        // glib.Variant.newUint64(core_surface.id))` (`:1768-1772`).
+        notification.set_default_action_and_target_value(
+            "app.present-surface",
+            Some(&core_id.to_variant()),
+        );
+
+        // We set the notification ID to the body content so an identical follow-up
+        // replaces the prior notification (`:1774-1777`).
+        app.upcast_ref::<gio::Application>()
+            .send_notification(Some(&body_str), &notification);
+    }
+
+    /// PORTS: `surface.zig:988-1031` `setScrollbar`. Update the `Gtk.Scrollable`
+    /// vadjustment in place from the core's scroll state.
+    pub fn set_scrollbar(&self, scrollbar: rustty_vt::pagelist::grow::Scrollbar) {
+        let imp = self.imp();
+
+        // `const vadj = self.getVAdjustment() orelse return` (`:993`) — reads
+        // `priv.vadj`. Clone the GObject so we don't hold the `RefCell` borrow
+        // across `configure` (which may synchronously emit `value-changed`). No
+        // adjustment => we're not part of a scrolled window, so nothing to do.
+        let vadj = {
+            let borrow = imp.vadjustment.borrow();
+            match borrow.as_ref() {
+                Some(adj) => adj.clone(),
+                None => return,
+            }
+        };
+
+        // Target values (`:996-999`).
+        let value = scrollbar.offset as f64;
+        let upper = scrollbar.total as f64;
+        let page_size = scrollbar.len as f64;
+
+        // Skip the update if the adjustment already matches (`:1001-1007`,
+        // `approxEqAbs` with a 0.001 tolerance).
+        const EPS: f64 = 0.001;
+        if (vadj.value() - value).abs() < EPS
+            && (vadj.upper() - upper).abs() < EPS
+            && (vadj.page_size() - page_size).abs() < EPS
+        {
+            return;
+        }
+
+        // PORT NOTE (deviation, crash-safety): the reference asserts
+        // `priv.vadj_signal_group.?` and blocks it around `configure` to suppress
+        // the `value-changed` feedback loop (`:1009-1023`), relying on the
+        // invariant that a vadjustment implies a wired signal group. In rustty that
+        // invariant is not yet established — `on_notify_vadjustment` (the scroll
+        // `SignalGroup` wiring, L5.2 T15) is still a placeholder, so
+        // `vadj_signal_group` is `None` and there are no connected handlers to
+        // loop. We therefore configure directly; when T15 wires the group it MUST
+        // add the block/unblock here.
+        let _ = &imp.vadj_signal_group;
+
+        // `vadj.configure(value, 0, upper, 1, page_size, page_size)` (`:1024-1031`).
+        vadj.configure(value, 0.0, upper, 1.0, page_size, page_size);
+    }
+
+    /// PORTS: `surface.zig:1135-1202` `commandFinished`. Decide whether a
+    /// command-finished notification is warranted (config + the one-shot
+    /// `notify-on-next-command-finish` override + duration gate) and, if so, ring
+    /// the bell and/or send a desktop notification.
+    pub fn command_finished(&self, value: rustty_apprt_api::action::CommandFinished) -> bool {
+        use gio::prelude::ActionGroupExt as _;
+        use rustty_config::value_types::NotifyOnCommandFinish;
+
+        let imp = self.imp();
+
+        // Read + reset the one-shot `notify-on-next-command-finish` action state
+        // (`:1139-1150`). Absent group / absent-or-non-boolean state => false.
+        let notify_next_command_finish = {
+            let group_ref = imp.action_group.borrow();
+            match group_ref.as_ref() {
+                None => false,
+                Some(group) => {
+                    let ag = group.upcast_ref::<gio::ActionGroup>();
+                    match ag.action_state("notify-on-next-command-finish") {
+                        // `state.isOfType(bool)` + `state.getBoolean()` (`:1145-1146`);
+                        // `get::<bool>()` yields `None` for a non-boolean variant.
+                        Some(state) => match state.get::<bool>() {
+                            Some(notify) => {
+                                // Reset to false (`:1147`).
+                                ag.change_action_state(
+                                    "notify-on-next-command-finish",
+                                    &false.to_variant(),
+                                );
+                                notify
+                            }
+                            None => false,
+                        },
+                        None => false,
+                    }
+                }
+            }
+        };
+
+        // `const config = priv.config orelse return false` (`:1152`).
+        let config_ref = imp.config.borrow();
+        let Some(config) = config_ref.as_ref() else {
+            return false;
+        };
+        let cfg = config.get();
+
+        // Config gates (`:1156-1159`), skipped when the one-shot override is set.
+        if !notify_next_command_finish {
+            if cfg.notify_on_command_finish == NotifyOnCommandFinish::Never {
+                return true;
+            }
+            if cfg.notify_on_command_finish == NotifyOnCommandFinish::Unfocused
+                && self.focused()
+            {
+                return true;
+            }
+        }
+
+        // Duration gate (`:1161`).
+        if value.duration.lte(cfg.notify_on_command_finish_after) {
+            return true;
+        }
+
+        let action = cfg.notify_on_command_finish_action;
+
+        // `if (action.bell) self.setBellRinging(true)` (`:1165`). In rustty the full
+        // bell lives in [`Surface::ring_bell`] (see its PORT NOTE).
+        if action.bell {
+            self.ring_bell();
+        }
+
+        // `if (action.notify) { ... sendDesktopNotification(title, body) }`
+        // (`:1167-1200`).
+        if action.notify {
+            // Title (`:1170-1178`). PORT NOTE (i18n): the reference wraps each in
+            // `i18n._(...)`; rustty has no runtime `_()` binding yet (see the i18n
+            // PORT NOTE in `close_confirmation_dialog.rs`) and emits the literal.
+            let title = match value.exit_code {
+                None => "Command Finished",
+                Some(0) => "Command Succeeded",
+                Some(_) => "Command Failed",
+            };
+
+            // Body (`:1180-1196`): `"Command took {f}."` / `"Command took {f} and
+            // exited with code {d}."`, the duration rounded to the millisecond and
+            // rendered via `Duration`'s human formatter (the `{f}` format).
+            // `std.time.ns_per_ms` == 1_000_000.
+            let rounded = value.duration.round(1_000_000);
+            let mut dur_buf: Vec<u8> = Vec::new();
+            rounded.format(&mut dur_buf);
+            let dur = String::from_utf8_lossy(&dur_buf);
+            let body = match value.exit_code {
+                None => format!("Command took {dur}."),
+                Some(code) => format!("Command took {dur} and exited with code {code}."),
+            };
+
+            self.send_desktop_notification(title.as_bytes(), body.as_bytes());
+        }
+
+        true
+    }
+
+    /// PORTS: `surface.zig:1204-1208` `setReadonly`. The `readonly` property is a
+    /// computed read of the core surface's flag (which core has already toggled by
+    /// the time this fires); notifying re-evaluates the `reveal-child: bind
+    /// template.readonly` binding in `surface.blp`, showing/hiding the read-only
+    /// overlay. The `value` is ignored exactly as in the reference (`:1204`).
+    pub fn set_readonly(&self, _value: rustty_apprt_api::action::Readonly) -> bool {
+        // `self.as(gobject.Object).notifyByPspec(properties.readonly...)` (`:1206`).
+        self.notify("readonly");
+        true
+    }
+
+    /// PORTS: `surface.zig:885-909` `controlInspector`.
+    ///
+    /// **Placeholder-leaf (L6):** the reference shows/hides an `InspectorWindow`,
+    /// whose GType is not registered in rustty yet (see the `inspector` backref
+    /// field). Kept inhabited reaching the (future) inspector state and returning
+    /// `false` (unhandled) so the keybind falls through rather than lying that an
+    /// inspector was toggled. Lands with the inspector completion.
+    pub fn control_inspector(&self, _value: rustty_apprt_api::action::Inspector) -> bool {
+        let _ = &self.imp().inspector;
+        false
     }
 
     /// PORTS: `Surface.zig:40-42` `cgroup` → `self.surface.cgroupPath()`.
@@ -1968,18 +2543,35 @@ impl Surface {
         }
     }
 
-    /// PORTS: `surface.zig:3491-3520` `resizeOverlaySchedule`.
-    ///
-    /// **Placeholder-leaf (resize-overlay task, T16):** reached only with a live
-    /// core surface (post-init). The `ResizeOverlay.setLabel`/`schedule` methods
-    /// land with that task; until then this only honors the early-return guards.
+    /// PORTS: `surface.zig:3491-3520` `resizeOverlaySchedule`. Sets the overlay
+    /// label to the current `cols x rows` and schedules it to show/hide.
     fn resize_overlay_schedule(&self) {
+        let imp = self.imp();
+
         // `const surface = priv.core_surface orelse return` (`:3493`).
-        if !self.imp().core_surface.load(Ordering::Acquire).is_null() {
-            // PORT NOTE (placeholder-leaf, T16): only with a live core surface —
-            // format the grid size into the overlay label and schedule an idle
-            // show (`:3495-3519`).
+        let Some(core) = self.core() else {
+            return;
+        };
+
+        // Only show the resize overlay if its enabled (`:3496-3501`).
+        let cfg_ref = imp.config.borrow();
+        let Some(config) = cfg_ref.as_ref() else {
+            return;
+        };
+        match config.get().resize_overlay {
+            rustty_config::value_types::ResizeOverlay::Always
+            | rustty_config::value_types::ResizeOverlay::AfterFirst => {}
+            rustty_config::value_types::ResizeOverlay::Never => return,
         }
+
+        // If we have resize overlays enabled, setup an idler to show that. We do
+        // this in an idle tick because doing it during the resize results in
+        // flickering (`:3503-3519`).
+        // SAFETY: `core` is the widget's boxed, initialized core surface.
+        let grid = unsafe { &*core }.size.grid();
+        let text = format!("{} x {}", grid.columns, grid.rows);
+        imp.resize_overlay.set_label(Some(&text));
+        imp.resize_overlay.schedule();
     }
 
     /// PORTS: `surface.zig:3411-3489` `initSurface`. The lazy core-surface
@@ -2173,6 +2765,58 @@ fn action_notify_on_next_command_finish(
 // The 39 template callbacks (`surface.zig:3623-3661`). Per the placeholder-leaf
 // doctrine most are `unimplemented!()` (Tasks 16/17/19 fill them); the three
 // reached during template instantiation return safe values (see the module doc).
+/// Map a [`MouseShape`] discriminant (as carried by the `mouse-shape` property) to
+/// its W3C/CSS cursor name for `gtk.Widget.set_cursor_from_name`.
+///
+/// PORTS: the `switch (priv.mouse_shape)` in `surface.zig:2389-2427` (`propMouseShape`).
+/// Indexed by the shape's `#[repr(i32)]` discriminant in `mouse::Shape` declaration
+/// order (`rustty-vt/src/mouse.rs:70-105`); an out-of-range value falls back to
+/// `"default"`.
+fn mouse_shape_cursor_name(repr: i32) -> &'static str {
+    // Declaration order of `mouse::Shape` (`mouse.rs:71-104`), each mapped to the
+    // reference's cursor name (`surface.zig:2390-2426`).
+    const NAMES: [&str; 34] = [
+        "default",      // Default
+        "context-menu", // ContextMenu
+        "help",         // Help
+        "pointer",      // Pointer
+        "progress",     // Progress
+        "wait",         // Wait
+        "cell",         // Cell
+        "crosshair",    // Crosshair
+        "text",         // Text
+        "vertical-text", // VerticalText
+        "alias",        // Alias
+        "copy",         // Copy
+        "move",         // Move
+        "no-drop",      // NoDrop
+        "not-allowed",  // NotAllowed
+        "grab",         // Grab
+        "grabbing",     // Grabbing
+        "all-scroll",   // AllScroll
+        "col-resize",   // ColResize
+        "row-resize",   // RowResize
+        "n-resize",     // NResize
+        "e-resize",     // EResize
+        "s-resize",     // SResize
+        "w-resize",     // WResize
+        "ne-resize",    // NeResize
+        "nw-resize",    // NwResize
+        "se-resize",    // SeResize
+        "sw-resize",    // SwResize
+        "ew-resize",    // EwResize
+        "ns-resize",    // NsResize
+        "nesw-resize",  // NeswResize
+        "nwse-resize",  // NwseResize
+        "zoom-in",      // ZoomIn
+        "zoom-out",     // ZoomOut
+    ];
+    usize::try_from(repr)
+        .ok()
+        .and_then(|i| NAMES.get(i).copied())
+        .unwrap_or("default")
+}
+
 #[gtk4::template_callbacks]
 impl Surface {
     // -- EventControllerFocus (surface.blp:47-50) --------------------------
@@ -2491,9 +3135,147 @@ impl Surface {
     }
 
     // -- DropTarget (surface.blp:224-227) ----------------------------------
+    /// PORTS: `surface.zig:2627-2718` `dtDrop`.
+    ///
+    /// NON-SWAPPED template callback (`surface.blp:225` `drop => $drop()`): the
+    /// `DropTarget` emitter is arg0 and the `Surface` template instance is the
+    /// trailing user-data arg (mirrors `focus_enter`/`mouse_down`; the
+    /// reference's `callconv(.c) fn(_: *gtk.DropTarget, value, x, y, self)`).
+    ///
+    /// Files can be dropped from Nautilus and strings from many programs; the
+    /// drop-target gtypes are set IN ORDER FileList, File, string
+    /// (`constructed`, `:1818-1826`), and we branch on the value's runtime type
+    /// with [`ext::g_value_holds`] in the same order (`:2636`, `:2678`, `:2703`).
     #[template_callback]
-    fn drop(&self) -> bool {
-        unimplemented!("gtk::class::Surface::drop lands in L5.2 T16/T17")
+    fn drop(
+        _target: &gtk4::DropTarget,
+        value: &glib::Value,
+        _x: f64,
+        _y: f64,
+        this: &Surface,
+    ) -> bool {
+        use rustty_os::string_encoding::{AllocatingWriter, Writer};
+        use rustty_os::ShellEscapeWriter;
+        use std::os::unix::ffi::OsStrExt;
+
+        // gdk.FileList: shell-escape each file path and join with newlines, then
+        // paste the whole blob (`:2636-2676`).
+        if ext::g_value_holds(value, gdk4::FileList::static_type()) {
+            let Ok(list) = value.get::<gdk4::FileList>() else {
+                return false;
+            };
+
+            // `var stream: Allocating` + `ShellEscapeWriter.init(&stream.writer)`
+            // (`:2637-2641`). The escape writer excludes linefeeds so newlines
+            // delimit the list of paths.
+            let mut stream = AllocatingWriter::init();
+            {
+                let mut shell_escape_writer = ShellEscapeWriter::init(&mut stream);
+
+                // `while (current) |item| : file.getPath()` (`:2650-2668`).
+                for file in list.files() {
+                    let Some(path) = file.path() else {
+                        continue;
+                    };
+                    if shell_escape_writer
+                        .writeAll(path.as_os_str().as_bytes())
+                        .is_err()
+                    {
+                        eprintln!("err(gtk): unable to write path to buffer");
+                        continue;
+                    }
+                    if shell_escape_writer.writeAll(b"\n").is_err() {
+                        eprintln!("err(gtk): unable to write to buffer");
+                        continue;
+                    }
+                }
+            }
+
+            // `Clipboard.paste(self, string)` (`:2674`).
+            this.paste(stream.written());
+            return true;
+        }
+
+        // gio.File: shell-escape the single path (`:2678-2701`). NOTE: the
+        // reference builds the escaped string but does NOT paste it (`:2694-2700`
+        // ends `return 1` without a `Clipboard.paste` call), so we mirror that —
+        // the byte-faithful behaviour is to consume the drop without inserting.
+        if ext::g_value_holds(value, gio::File::static_type()) {
+            let Ok(file) = value.get::<gio::File>() else {
+                return false;
+            };
+            let Some(path) = file.path() else {
+                return false;
+            };
+            let mut stream = AllocatingWriter::init();
+            {
+                let mut shell_escape_writer = ShellEscapeWriter::init(&mut stream);
+                if shell_escape_writer
+                    .writeAll(path.as_os_str().as_bytes())
+                    .is_err()
+                {
+                    eprintln!("err(gtk): unable to write path to buffer");
+                    return false;
+                }
+                if shell_escape_writer.writeAll(b"\n").is_err() {
+                    eprintln!("err(gtk): unable to write to buffer");
+                    return false;
+                }
+            }
+            let _ = stream.written();
+            return true;
+        }
+
+        // string: paste it verbatim (`:2703-2708`).
+        if ext::g_value_holds(value, String::static_type()) {
+            if let Ok(string) = value.get::<String>() {
+                this.paste(string.as_bytes());
+            }
+            return true;
+        }
+
+        true
+    }
+
+    /// PORTS: `surface.zig:3898-3931` `Clipboard.paste`. Paste explicit text
+    /// directly into the surface, regardless of the actual clipboard contents.
+    /// Mirrors the Phase-A `clipboard_request` completion path (the core mutable
+    /// deref + the `UnsafePaste`/`UnauthorizedPaste` → confirmation fallback).
+    fn paste(&self, text: &[u8]) {
+        // `if (text.len == 0) return;` (`:3903`).
+        if text.is_empty() {
+            return;
+        }
+
+        // `const surface = self.private().core_surface orelse return;` (`:3905`).
+        let Some(core) = self.core() else {
+            return;
+        };
+
+        // `surface.completeClipboardRequest(.paste, text, false)` (`:3906-3910`).
+        // SAFETY: `core` is the widget's boxed, initialized core surface;
+        // `completeClipboardRequest` takes `&mut self` (mirror the deref used by
+        // the async `clipboard_request` completion above).
+        match unsafe { &mut *core }.completeClipboardRequest(
+            ClipboardRequest::Paste,
+            text,
+            false,
+        ) {
+            Ok(()) => {}
+
+            // error.UnsafePaste, error.UnauthorizedPaste => confirmation
+            // (`:3911-3921`).
+            Err(CoreSurfaceError::UnsafePaste | CoreSurfaceError::UnauthorizedPaste) => {
+                self.show_clipboard_confirmation(
+                    ClipboardRequest::Paste,
+                    &String::from_utf8_lossy(text),
+                );
+            }
+
+            Err(err) => {
+                eprintln!("warn(gtk): failed to complete clipboard request err={err}");
+            }
+        }
     }
 
     // -- GLArea lifecycle (surface.blp:24-29) ------------------------------
@@ -2803,13 +3585,23 @@ impl Surface {
     }
 
     // -- URL hover (surface.blp:171-174) -----------------------------------
+    // PORT NOTE (arg order): the `url_ec_motion` EventControllerMotion is connected
+    // NON-swapped in the blueprint (`surface.blp:172-173`), so gtk4-rs delivers
+    // `[emitter, ...args, this]` — the emitting controller first, `this: &Surface`
+    // LAST — matching the reference `callconv(.c)` signatures (`ecUrlMouseEnter`
+    // takes `(_: *EventControllerMotion, _: f64, _: f64, self)`).
+    /// PORTS: `surface.zig:3523-3532` `ecUrlMouseEnter`. When the pointer enters the
+    /// `url_left` overlay label (bottom-left), reveal `url_right` (bottom-right) so
+    /// the URL text moves to the opposite corner, out from under the cursor.
     #[template_callback]
-    fn url_mouse_enter(&self) {
-        unimplemented!("gtk::class::Surface::url_mouse_enter lands in L5.2 T16/T17")
+    fn url_mouse_enter(_ec: &gtk4::EventControllerMotion, _x: f64, _y: f64, this: &Surface) {
+        this.imp().url_right.set_visible(true);
     }
+    /// PORTS: `surface.zig:3534-3537` `ecUrlMouseLeave`. Hide `url_right` again when
+    /// the pointer leaves `url_left`.
     #[template_callback]
-    fn url_mouse_leave(&self) {
-        unimplemented!("gtk::class::Surface::url_mouse_leave lands in L5.2 T16/T17")
+    fn url_mouse_leave(_ec: &gtk4::EventControllerMotion, this: &Surface) {
+        this.imp().url_right.set_visible(false);
     }
 
     // -- child-exited / context menu ---------------------------------------
@@ -2862,17 +3654,39 @@ impl Surface {
         // `onIdleRechild`) — deferred with the error-page display work. The `error`
         // property + CSS are already authoritative for listeners.
     }
+    /// PORTS: `surface.zig:2350-2358` `propMouseHoverUrl`. Reveal `url_left` (the
+    /// bottom-left URL overlay label, whose text is bound to `mouse-hover-url` in the
+    /// blueprint) when the hovered URL is non-empty, hide it otherwise.
     #[template_callback(name = "notify_mouse_hover_url")]
     fn on_notify_mouse_hover_url(&self) {
-        unimplemented!("gtk::class::Surface::notify_mouse_hover_url lands in L5.2 T16/T17")
+        let visible = self
+            .imp()
+            .mouse_hover_url
+            .borrow()
+            .as_deref()
+            .is_some_and(|v| !v.is_empty());
+        self.imp().url_left.set_visible(visible);
     }
+    /// PORTS: `surface.zig:2360-2376` `propMouseHidden`. When the mouse is hidden set
+    /// the widget cursor to `"none"`; otherwise re-run the mouse-shape logic to
+    /// restore the proper cursor.
     #[template_callback(name = "notify_mouse_hidden")]
     fn on_notify_mouse_hidden(&self) {
-        unimplemented!("gtk::class::Surface::notify_mouse_hidden lands in L5.2 T16/T17")
+        // If we're hidden we set it to "none" (`:2367-2371`).
+        if self.imp().mouse_hidden.get() {
+            self.upcast_ref::<gtk4::Widget>()
+                .set_cursor_from_name(Some("none"));
+            return;
+        }
+        // If we're not hidden we just trigger the mouse shape logic to handle
+        // setting the proper mouse shape (`:2373-2375`).
+        self.apply_mouse_shape_cursor();
     }
+    /// PORTS: `surface.zig:2378-2429` `propMouseShape`. Set the GLArea/widget cursor
+    /// from the `mouse-shape` property (a no-op while the mouse is hidden).
     #[template_callback(name = "notify_mouse_shape")]
     fn on_notify_mouse_shape(&self) {
-        unimplemented!("gtk::class::Surface::notify_mouse_shape lands in L5.2 T16/T17")
+        self.apply_mouse_shape_cursor();
     }
     /// PORTS: `surface.zig:2540-...` `propVAdjustment`. **Reached during
     /// construction** — GtkScrollable's `vadjustment` is a construct property GTK
@@ -2916,21 +3730,80 @@ impl Surface {
     }
 
     // -- SearchOverlay (surface.blp:192-195) -------------------------------
+    // PORT NOTE (arg order): these four signals are connected NON-swapped in the
+    // blueprint (unlike the `swapped` `gl_*` GLArea callbacks), so gtk4-rs
+    // delivers `[emitter, ...signal_args, this]` — the emitting `SearchOverlay`
+    // FIRST and the template instance (`this: &Surface`) LAST — matching the
+    // reference callconv(.c) signatures (`surface.zig:3552-3577`,
+    // `fn searchStop(_: *SearchOverlay, self: *Self)` etc.). A wrong (`&self`)
+    // signature COMPILES but aborts at runtime (WrongValueType) when the signal
+    // fires, so the shape is copied verbatim from `focus_enter`/`mouse_down`.
+
+    /// PORTS: `surface.zig:3552-3558` `searchStop`. Perform the `end_search`
+    /// binding action on the core surface, then return focus to the GLArea.
     #[template_callback]
-    fn search_stop(&self) {
-        unimplemented!("gtk::class::Surface::search_stop lands in L5.2 T16/T17")
+    fn search_stop(_o: &SearchOverlay, this: &Surface) {
+        let Some(core) = this.core() else {
+            return;
+        };
+        // `surface.performBindingAction(.end_search)` (`:3554`).
+        if let Err(err) =
+            unsafe { &mut *core }.performBindingAction(rustty_input::binding::Action::EndSearch)
+        {
+            eprintln!("warn(gtk): unable to perform end_search action err={err:?}");
+        }
+        // `self.private().gl_area.as(gtk.Widget).grabFocus()` (`:3557`).
+        this.grab_focus();
     }
+
+    /// PORTS: `surface.zig:3560-3565` `searchChanged`. Drive the `search` binding
+    /// action with the (nullable) needle. `needle` is the debounced search-entry
+    /// text; a null needle is treated as the empty string (`std.mem.sliceTo(needle
+    /// orelse "", 0)`), which the core search arm interprets as "stop search".
     #[template_callback]
-    fn search_changed(&self) {
-        unimplemented!("gtk::class::Surface::search_changed lands in L5.2 T16/T17")
+    fn search_changed(_o: &SearchOverlay, needle: Option<&str>, this: &Surface) {
+        let Some(core) = this.core() else {
+            return;
+        };
+        // `.{ .search = std.mem.sliceTo(needle orelse "", 0) }` (`:3562`).
+        let needle_bytes = needle.unwrap_or("").as_bytes().to_vec();
+        if let Err(err) = unsafe { &mut *core }
+            .performBindingAction(rustty_input::binding::Action::Search(needle_bytes))
+        {
+            eprintln!("warn(gtk): unable to perform search action err={err:?}");
+        }
     }
+
+    /// PORTS: `surface.zig:3567-3572` `searchNextMatch`. Drive
+    /// `navigate_search = .next` on the core surface.
     #[template_callback]
-    fn search_next_match(&self) {
-        unimplemented!("gtk::class::Surface::search_next_match lands in L5.2 T16/T17")
+    fn search_next_match(_o: &SearchOverlay, this: &Surface) {
+        let Some(core) = this.core() else {
+            return;
+        };
+        // `.{ .navigate_search = .next }` (`:3569`).
+        if let Err(err) = unsafe { &mut *core }.performBindingAction(
+            rustty_input::binding::Action::NavigateSearch(rustty_input::binding::NavigateSearch::Next),
+        ) {
+            eprintln!("warn(gtk): unable to perform navigate_search action err={err:?}");
+        }
     }
+
+    /// PORTS: `surface.zig:3574-3579` `searchPreviousMatch`. Drive
+    /// `navigate_search = .previous` on the core surface.
     #[template_callback]
-    fn search_previous_match(&self) {
-        unimplemented!("gtk::class::Surface::search_previous_match lands in L5.2 T16/T17")
+    fn search_previous_match(_o: &SearchOverlay, this: &Surface) {
+        let Some(core) = this.core() else {
+            return;
+        };
+        // `.{ .navigate_search = .previous }` (`:3576`).
+        if let Err(err) = unsafe { &mut *core }.performBindingAction(
+            rustty_input::binding::Action::NavigateSearch(
+                rustty_input::binding::NavigateSearch::Previous,
+            ),
+        ) {
+            eprintln!("warn(gtk): unable to perform navigate_search action err={err:?}");
+        }
     }
 }
 

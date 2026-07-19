@@ -82,6 +82,15 @@ pub fn init() -> Result<(), InitError> {
     //   self.resources_dir = try apprt.runtime.resourcesDir(self.alloc);
     let resources_dir = rustty_os::resourcesDir().map_err(InitError::ResourcesDir)?;
 
+    // Populate the config crate's `.resources` theme-search seam (BREAK #1) from
+    // the SAME resources dir (list_themes.rs C6 note: both the core `STATE` and
+    // this config seam are populated by the bin's init so they stay consistent).
+    // Without this, bundled themes (`theme=NAME`) and `+list-themes` never
+    // resolve the resources-dir location. `set_resources_dir` returns `Err` if
+    // already set (idempotent bootstrap); ignore it, mirroring the `STATE.set`
+    // below.
+    let _ = rustty_config::theme::set_resources_dir(resources_dir.clone());
+
     // reference: `self.* = .{ .alloc = ..., .action = null, ... }` — the
     // seam-free field construction (rustty_global `GlobalState::new`). The
     // allocator seam is `()` (see PORT NOTE above).
