@@ -1136,10 +1136,14 @@ fn action_new_window(
 fn action_open_config(
     _action: &gio::SimpleAction,
     _parameter: Option<&glib::Variant>,
-    _app: &Application,
+    app: &Application,
 ) {
-    // PORT NOTE (placeholder-leaf): `self.core().mailbox.push(.open_config, ...)`
-    // (`:1816`) reaches the type-erased core surface (Task 11+).
+    // `self.core().mailbox.push(.open_config, ...)` (`:1816`) is drained to
+    // `rt_app.performAction(.app, .open_config)` (`App.zig:427`) — a pure
+    // passthrough. rustty's `action::open_config` is self-contained (config path +
+    // `open_url`; needs no core mailbox/surface), so route it directly, the same
+    // precedent as [`action_reload_config`].
+    let _ = action::open_config(app);
 }
 
 /// PORTS: `application.zig:1819-1850` `actionPresentSurface` (`present-surface`,
@@ -1157,9 +1161,13 @@ fn action_present_surface(
 fn action_quit(
     _action: &gio::SimpleAction,
     _parameter: Option<&glib::Variant>,
-    _app: &Application,
+    app: &Application,
 ) {
-    // PORT NOTE (placeholder-leaf): `core_app.performAction(rt, .quit)` (`:1693`).
+    // `priv.core_app.performAction(self.rt(), .quit)` (`:1693`). The core `.quit`
+    // action is a pure passthrough back to the apprt (`App.zig:425`), so it
+    // collapses to the direct `Application::quit` the `Action::Quit` performAction
+    // arm takes (cf. [`action_reload_config`]).
+    app.quit();
 }
 
 /// PORTS: `application.zig:1665-1674` `actionReloadConfig` (`reload-config`).
@@ -1189,10 +1197,15 @@ fn action_reload_config(
 fn action_toggle_quick_terminal(
     _action: &gio::SimpleAction,
     _parameter: Option<&glib::Variant>,
-    _app: &Application,
+    app: &Application,
 ) {
-    // PORT NOTE (placeholder-leaf): `core_app.performAction(rt,
-    // .toggle_quick_terminal)` (`:1682`).
+    // `priv.core_app.performAction(self.rt(), .toggle_quick_terminal)` (`:1682`).
+    // The core `.toggle_quick_terminal` action is a pure passthrough back to the
+    // apprt (`application.zig:762` → `Action.toggleQuickTerminal(self)`), so it
+    // collapses to the same direct `action::toggle_quick_terminal` route the
+    // `Action::ToggleQuickTerminal` performAction arm takes (cf.
+    // [`action_reload_config`]). On failure the toggle just returns `false`.
+    let _ = action::toggle_quick_terminal(app);
 }
 
 /// PORTS: `application.zig:435-459` `deinit` (the field-clearing body). Shared by
