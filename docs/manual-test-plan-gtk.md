@@ -1,0 +1,126 @@
+# Rustty Linux/GTK — Manual Test Plan
+
+A top-to-bottom checklist to validate the GTK terminal against **Ghostty** parity. Run each,
+compare to Ghostty on the same machine, and note any divergence.
+
+> **Scope:** this covers the Linux/GTK apprt (the native GTK4/libadwaita backend). It does **not**
+> apply to the macOS build (different apprt). Items marked **[deferred]** are not wired yet — don't
+> test them as bugs.
+
+## 0. Setup (dev build)
+
+A dev/cargo build needs a `share/`-style resources layout (a packaged install resolves this
+automatically). One-time:
+
+```sh
+SHARE=/home/gael/rustty-dev-resources
+mkdir -p "$SHARE/rustty" "$SHARE/terminfo"
+ln -sfn <repo>/crates/rustty-extra/shell-integration "$SHARE/rustty/shell-integration"
+sed 's/xterm-ghostty|ghostty|Ghostty/xterm-rustty|rustty|Rustty/' \
+  <repo>/.port/phase-0/corpora/terminfo/ghostty.terminfo > /tmp/xterm-rustty.terminfo
+tic -x -o "$SHARE/terminfo" /tmp/xterm-rustty.terminfo
+```
+
+Launch:
+```sh
+export TMPDIR=/home/gael/tmp RUSTTY_RESOURCES_DIR=$SHARE/rustty
+<repo>/target/debug/rustty
+```
+
+- [ ] **0.1** A window opens with a libadwaita header bar (title, `+`, tab-overview, hamburger, close).
+- [ ] **0.2** A shell prompt renders as crisp glyphs (not a blank/black area).
+
+## 1. Rendering & fonts
+- [ ] **1.1** Type `printf '%s\n' 'the quick brown fox 0123' 'ABC <>{}[]()#@&*'` — all glyphs render correctly.
+- [ ] **1.2** Resize the window — the grid reflows; a **"cols × rows" overlay** briefly appears (parity: Ghostty).
+- [ ] **1.3** Run a full-screen TUI (`vim`, `htop`, `less /etc/services`) — renders + scrolls correctly (needs terminfo, see 0).
+
+## 2. Keyboard input
+- [ ] **2.1** A freshly-opened terminal accepts typing **without clicking first**.
+- [ ] **2.2** `ctrl+c` interrupts a running `sleep 100`; `ctrl+d` exits the shell.
+- [ ] **2.3** `ctrl+l` (or `clear`) clears the screen. **(Was broken pre-terminfo-fix — confirm it clears.)**
+- [ ] **2.4** Unicode / dead keys / IME compose (if configured) produce the right characters.
+
+## 3. Clipboard
+- [ ] **3.1 Copy:** select text, `ctrl+shift+c`, paste into another app — your selection appears.
+- [ ] **3.2 Paste:** copy from another app, `ctrl+shift+v` in the terminal — it pastes.
+- [ ] **3.3 Round-trip:** `echo hello`, select `hello`, copy, paste.
+- [ ] **3.4 Unsafe-paste confirm:** copy **multi-line** text, `ctrl+shift+v` → a **"Warning: Potentially
+      Unsafe Paste"** dialog with the content + **Deny/Allow**. Allow pastes; Deny doesn't. (Single-line pastes directly, no dialog.)
+
+## 4. Close-confirmation dialogs
+Run `sleep 300` first (so the surface "needs confirm"), then:
+- [ ] **4.1** Close the **window** (X) → **"Close Window?"** dialog. Cancel keeps it; Close closes it.
+- [ ] **4.2** New tab (`+`), `sleep 300`, close the **tab** → **"Close Tab?"**.
+- [ ] **4.3** Split (if bound), `sleep 300`, close the **split** → **"Close Split?"**.
+- [ ] **4.4** At a bare prompt (no running command) closing happens **without** a dialog.
+
+## 5. Tab title
+- [ ] **5.1** Right-click the **tab** → **"Change Tab Title…"** → dialog with an entry → type → OK → tab renames.
+- [ ] **5.2** The hamburger/main-menu **"Change Tab Title…"** does the same.
+- [ ] **5.3** OK with an empty field restores the default title; Cancel makes no change.
+
+## 6. Menus & keyboard shortcuts
+- [ ] **6.1** Open the **hamburger menu** — items show their **keyboard shortcuts** on the right (parity: Ghostty).
+- [ ] **6.2** Right-click the terminal → **context menu** appears; **Escape/click-away dismisses it without crashing**.
+
+## 7. Window / tab title tracking
+- [ ] **7.1** The window title reflects the shell (e.g. `~`), not a static "Rustty"; `cd` into a dir updates it.
+      (Exact string depends on shell integration; parity is "tracks the surface, like Ghostty".)
+
+## 8. Bell
+- [ ] **8.1** `printf '\a'` (or a command that beeps) → **border flash** + system beep / urgency hint.
+
+## 9. Mouse
+- [ ] **9.1** Cursor shape changes to an **I-beam** over text (and a **hand** over a URL).
+- [ ] **9.2** The pointer **auto-hides while typing** and reappears on mouse move.
+- [ ] **9.3** Hover a URL (e.g. `echo https://example.com`) → it **highlights**; **click/ctrl-click opens it** in the browser.
+
+## 10. Drag & drop
+- [ ] **10.1** Drag a **file** from the file manager onto the terminal → its **path is pasted** (shell-escaped). **(Was a crash pre-fix — confirm no crash.)**
+- [ ] **10.2** Drag **text** onto the terminal → the text is pasted.
+
+## 11. Config
+- [ ] **11.1** `theme = catppuccin-mocha` in `~/.config/rustty/config.rustty` → colors change (bundled themes now resolve).
+- [ ] **11.2** Reload config (menu / keybind / `kill -USR2 <pid>`) → changes apply to **live** windows (colors, font size).
+- [ ] **11.3** A config with a bad key → a **config-errors dialog** lists the diagnostics.
+
+## 12. Tab / window management
+- [ ] **12.1** `ctrl+shift+t` new tab; next/prev/`alt+N` **switch tabs**; reorder (move-tab) keybind moves the tab.
+- [ ] **12.2** Fullscreen keybind toggles fullscreen; maximize toggles maximize.
+
+## 13. Overlays
+- [ ] **13.1** Resize → the size overlay (13.: see 1.2).
+- [ ] **13.2** Search keybind (`ctrl+shift+f` or configured) opens a **search bar**; typing highlights matches; next/prev navigate; Esc closes. **[verify — new in T24]**
+- [ ] **13.3** A **leader-key** sequence (if configured) shows a **key-state overlay** of the pending keys.
+- [ ] **13.4** When the child process **exits** (type `exit`), a **child-exited banner** appears with a close button.
+- [ ] **13.5** A shell emitting **OSC 9;4** progress shows a **progress bar**.
+
+## 14. Command palette
+- [ ] **14.1** The command-palette keybind (`ctrl+shift+p` / configured) opens a **searchable command list**; picking one runs it. **[verify — new in T25]**
+
+## 15. Notifications
+- [ ] **15.1** OSC 777 / notify-on-command-finish → a **desktop notification** appears.
+
+## 16. CLI IPC (single-instance)
+Launch a primary: `rustty --gtk-single-instance=true &`, then:
+- [ ] **16.1** `rustty +new-window` → a **new window** opens in the running instance.
+- [ ] **16.2** `rustty +new-window -e echo hi` → new window running that command. **[argv override is a placeholder-leaf — may open a default window instead]**
+- [ ] **16.3** `rustty +toggle-quick-terminal` → **[deferred: needs the Wayland/layer-shell winproto — see below]**
+
+---
+
+## Deferred / not-yet-wired (do NOT test as bugs)
+
+- **[deferred] Window-protocol integration (T27/T28 Wayland, L6 X11):** background blur, KDE
+  client-side-decoration/slide, and the **wlr layer-shell quick-terminal** (drop-down). On **GNOME/mutter
+  these protocols are unsupported for apps anyway**, so behavior there matches Ghostty (no blur/quick-terminal).
+  Relevant on KDE/wlr compositors.
+- **[deferred] Terminal inspector (dcimgui):** the debug inspector window. Toggling it is a no-op.
+- **[at-parity, not a gap] OSC color/palette runtime change, secure input, undo/redo:** unimplemented in
+  Ghostty's GTK apprt too.
+
+## Regression anchors (automated — `cargo test -p rustty-apprt --features gtk --test <name> -- --ignored`)
+`gtk_first_light`, `gtk_window_live`, `gtk_glyph_dump` (rendering); `gtk_input_focus` (overlays don't
+capture input); `gtk_close_confirmation`, `gtk_title_dialog`, `gtk_clipboard`, `gtk_clipboard_confirm`
+(dialogs/clipboard); `gtk_parity_callbacks` (the newly-wired callbacks don't abort).
