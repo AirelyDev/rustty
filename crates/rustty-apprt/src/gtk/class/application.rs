@@ -4044,6 +4044,99 @@ mod tests {
         );
     }
 
+    /// PORTS: `application.zig:1565-1583` (the GTK ≥ 4.20 `prefers-color-scheme`
+    /// push inside `handleStyleManagerDark`) — the RUNTIME KAT for the opt-in
+    /// `gtk-v4_20` feature. Ghostty's branch is comptime-folded below 4.20 and
+    /// runtime-guarded above; rustty mirrors that as `#[cfg(feature =
+    /// "gtk-v4_20")]` + `gtk_version::at_least(4, 20, 0)`. This test only exists
+    /// when the feature is on, and only proves anything on a ≥ 4.20 GTK runtime
+    /// (validated 2026-07-19 on GTK 4.22.4): forcing the Adwaita color scheme
+    /// must synchronously drive `handle_style_manager_dark` (via the
+    /// `notify::dark` connection made in `startup_style_manager`,
+    /// `application.zig:1386-1396`) and push the matching
+    /// `InterfaceColorScheme` onto the startup-installed `css_provider`
+    /// (`application.zig:1570-1582`).
+    #[cfg(feature = "gtk-v4_20")]
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk,gtk-v4_20 -- --ignored"]
+    fn application_v4_20_color_scheme_css_push() {
+        use gio::prelude::ApplicationExt;
+        use libadwaita::prelude::AdwApplicationExt;
+
+        if gtk4::init().is_err() {
+            eprintln!("skip: no display");
+            return;
+        }
+        let _ = libadwaita::init();
+        assert!(
+            crate::gtk::gtk_version::at_least(4, 20, 0),
+            "the gtk-v4_20 KAT needs a GTK >= 4.20 shared library at runtime \
+             (found {}.{}.{})",
+            gtk4::major_version(),
+            gtk4::minor_version(),
+            gtk4::micro_version()
+        );
+
+        // A real core app so `build_test_app` has a heap-stable pointer (same
+        // shape as `application_activate_pushes_new_window`).
+        let mut core_app: Box<CoreApp<Double>> =
+            CoreApp::<Double>::create(Global).expect("core app");
+        let core_ptr: *mut CoreApp<Double> = &mut *core_app;
+        let app = build_test_app(core_ptr.cast());
+        // `register` emits `startup` synchronously → `startup_style_manager`
+        // connects `notify::dark` (`application.zig:1386-1396`).
+        app.register(gio::Cancellable::NONE).expect("register");
+        // The shared `css_provider` is installed by `Application::new`
+        // (`application.zig:401` → `new` at `:1844`), which `build_test_app`
+        // bypasses (it builds the bare NON_UNIQUE test instance to avoid the
+        // primary-instance/session-bus hazard). Install a bare provider on the
+        // imp directly — the unit under test is `handle_style_manager_dark`'s
+        // ≥ 4.20 push into whatever provider the imp holds, not `new`'s
+        // installation (exercised by the real binary).
+        let provider = gtk4::CssProvider::new();
+        app.imp().css_provider.replace(Some(provider.clone()));
+
+        // `notify::dark` only fires on a real transition, and the session may
+        // already be dark (or light) — so force the OPPOSITE of the current
+        // state first, then flip back: two guaranteed transitions, each driving
+        // `handleStyleManagerDark`'s ≥ 4.20 push, independent of session theme.
+        let style = app.style_manager();
+        let started_dark = style.is_dark();
+        let (first, first_expect, second, second_expect) = if started_dark {
+            (
+                libadwaita::ColorScheme::ForceLight,
+                gtk4::InterfaceColorScheme::Light,
+                libadwaita::ColorScheme::ForceDark,
+                gtk4::InterfaceColorScheme::Dark,
+            )
+        } else {
+            (
+                libadwaita::ColorScheme::ForceDark,
+                gtk4::InterfaceColorScheme::Dark,
+                libadwaita::ColorScheme::ForceLight,
+                gtk4::InterfaceColorScheme::Light,
+            )
+        };
+
+        style.set_color_scheme(first);
+        while glib::MainContext::default().iteration(false) {}
+        assert_eq!(
+            provider.property::<gtk4::InterfaceColorScheme>("prefers-color-scheme"),
+            first_expect,
+            "the first forced transition must push the matching \
+             InterfaceColorScheme onto the css_provider (application.zig:1570-1582)"
+        );
+
+        style.set_color_scheme(second);
+        while glib::MainContext::default().iteration(false) {}
+        assert_eq!(
+            provider.property::<gtk4::InterfaceColorScheme>("prefers-color-scheme"),
+            second_expect,
+            "the second forced transition must push the matching \
+             InterfaceColorScheme onto the css_provider"
+        );
+    }
+
     /// PORTS: `application.zig:474-592` `run` + `:1286-1289` `wakeup` + `:639-665`
     /// `quitNow`. The L5.1 gate KAT for the hand-rolled loop: with no initial
     /// window and `quit-after-last-window-closed`, `run` must acquire → register →
