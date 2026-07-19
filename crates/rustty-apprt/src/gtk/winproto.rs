@@ -24,6 +24,10 @@ pub mod noop;
 
 #[cfg(feature = "wayland")]
 pub mod wayland;
+/// The blur-region helper ([`BlurRegion`](blur_region::BlurRegion)) is consumed
+/// only by the Wayland arm, so it is gated with it.
+#[cfg(feature = "wayland")]
+mod blur_region;
 #[cfg(feature = "x11")]
 pub mod x11;
 
@@ -35,17 +39,31 @@ use rustty_config::Config as CoreConfig;
 /// (`winproto.zig:29,94`). The only backends that can fail are `wayland`/`x11`
 /// (display/protocol probing), and both are `#[cfg(feature = …)]`-gated OFF in
 /// this task — so this build has NO error source: [`noop`] is infallible. The
-/// type is therefore an empty (uninhabited) enum here, and grows real variants
-/// when the protocol backends land (L5.4 / L6). `App::init`'s caller
-/// ([`crate::gtk::class::application::Application::new`]) still ports the
-/// reference's fallback-to-`.none`-on-error path (`application.zig:345-356`),
-/// which is provably-unreachable now but faithful and ready for those backends.
+/// type is therefore an empty (uninhabited) enum in a noop-only build, and grows
+/// the `Wayland` variant when the `wayland` feature is on (L5.4). `App::init`'s
+/// caller ([`crate::gtk::class::application::Application::new`]) still ports the
+/// reference's fallback-to-`.none`-on-error path (`application.zig:345-356`).
 #[derive(Debug)]
-pub enum WinprotoError {}
+pub enum WinprotoError {
+    /// A Wayland-backend failure (display probe / registry roundtrip /
+    /// unsupported quick terminal). See [`wayland::Error`].
+    #[cfg(feature = "wayland")]
+    Wayland(wayland::Error),
+}
 
+#[cfg(feature = "wayland")]
+impl core::fmt::Display for WinprotoError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            WinprotoError::Wayland(e) => write!(f, "wayland winproto error: {e}"),
+        }
+    }
+}
+
+#[cfg(not(feature = "wayland"))]
 impl core::fmt::Display for WinprotoError {
     fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // Uninhabited in a noop-only build: this arm is never reached.
+        // Uninhabited in a noop-only / x11-only build: this arm is never reached.
         match *self {}
     }
 }

@@ -4577,21 +4577,35 @@ Recorded after the **final parity audit** (25 adversarially-verified agents over
 features vs ghostty) confirmed these are the ONLY remaining Linux/GTK divergences and that they
 are **not daily-use parity gaps on the common (GNOME/mutter) target**.
 
-- **`gtk/winproto/{wayland,x11}.rs` — the wayland + x11 window-protocol arms (T27/T28 wayland,
-  L6 x11).** The port ships the `noop` arm only; the reference `winproto/wayland.zig` (App +
-  Window + Globals) + `winproto/x11.zig` + `BlurRegion.zig` are unported. **This is a non-gap on
-  GNOME:** mutter supports none of the protocols these arms drive — `wlr-layer-shell` (the
-  drop-down *quick terminal*), background **blur** (`ext_background_effect`/KDE), KDE
-  server-side-**decoration**/**slide**, `kde_output_order`. Ghostty likewise disables blur +
-  quick-terminal on GNOME, and the port's `noop` `client_side_decoration_enabled() == true` is the
-  CORRECT default for `window-decoration=auto` on mutter (audit-verified). The winproto **dispatch
-  is fully wired** end-to-end (winproto.rs threads deinit/CSD/resize_event/sync_appearance/set_urgent
-  to the active arm; window.rs already calls them at the right sites), so the wayland/x11 arms drop
-  in with no caller changes. Un-defers when targeting KDE/wlr compositors (needs `gdk4-wayland` /
-  `gdk4-x11` / `gtk4-layer-shell` + KDE/wlr protocol crates + a KDE/wlr session to verify — none
-  available on the current GNOME machine). `xdg_activation` (focus-stealing / urgency) is the one
-  arm that *would* apply on GNOME Wayland; it is a minor enhancement over the noop set_urgent path
-  and rides with the wayland arm.
+- **`gtk/winproto/x11.rs` — the x11 window-protocol arm (L6).** The reference
+  `winproto/x11.zig` is unported; the x11 arm of the `App`/`Window` unions stays `#[cfg]`-gated
+  off. Non-gap on Wayland sessions. Un-defers with `gdk4-x11` + an X11 session to verify.
+- **`gtk/winproto/wayland.rs` — the wayland arm LANDED [2026-07-19], with two sub-deferrals.**
+  `winproto/{wayland.rs, wayland/globals.rs, blur_region.rs}` are now ported behind the `wayland`
+  cargo feature (`gdk4-wayland` + `wayland-client`/`wayland-backend`/`wayland-protocols`/
+  `wayland-protocols-plasma`). `App::init` bridges GDK's foreign `wl_display` -> wayland-backend
+  guest backend -> wayland-client `Connection` -> `wl_registry`, then two-phase-roundtrips to bind
+  globals. Bound when advertised: `wl_compositor` + `xdg_activation_v1` (present on GNOME/mutter);
+  graceful-`None` when absent (all KDE globals + `ext_background_effect` on GNOME):
+  `org_kde_kwin_server_decoration_manager`, `org_kde_kwin_slide_manager`, `kde_output_order_v1`,
+  `ext_background_effect_manager_v1`. **`ext_background_effect` IS bindable** (wayland-protocols
+  0.32 staging), so the blur arm is a full faithful port — not skipped — it just early-returns on
+  mutter (no blur cap). `Window` drives CSD (`org_kde_kwin_server_decoration.request_mode` per the
+  window-decoration config), `xdg_activation` urgency (`set_urgent`), and blur (`BlurRegion` +
+  `ext_background_effect_surface_v1.set_blur_region`). Two sub-deferrals:
+  - **Quick terminal / `wlr-layer-shell`.** `App::supports_quick_terminal() == false`,
+    `init_quick_terminal()` returns `Error::QuickTerminalUnsupported`. Needs `gtk4-layer-shell`
+    (deliberately not pulled; mutter has no `wlr-layer-shell`). The `Window.slide`/`slide_manager`
+    fields + KDE-slide destroy path are kept so the arm drops in with the layer-shell work.
+    `wayland.zig:70-88,310-389`.
+  - **Post-init async event delivery.** The registry `Connection` gets its OWN libwayland event
+    queue (`Backend::from_foreign_display` -> `wl_display_create_queue`), which GDK's main loop
+    does not dispatch. The init two-phase roundtrip captures all bind-time state (default
+    decoration mode, blur caps, output order); events arriving LATER (a compositor decoration-mode
+    change, an `xdg_activation` token `done`) dispatch only if the queue is cranked. Requests we
+    SEND go out on the shared display fd via `Connection::flush` and are unaffected. Integrating
+    the queue fd into the GLib main loop is the follow-up. **NOT run on a live Wayland display** —
+    `App::init` on a real compositor is the human verification step.
 - **`gtk/class/inspector_*` + `imgui_widget` — the dcimgui terminal inspector (L6).** Already a
   port-wide tracked deferral (see the `dcimgui`/`imgui` entries above): the `.inspector`
   performAction arm + `Surface::control_inspector` are placeholder-leaves returning false; the
@@ -4603,3 +4617,23 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
   `+new-window` open a window (done); the `-e`/`--command`/`--working-directory`/`--title` argv
   override on the received `new-window-command` action is not yet applied (opens a default window).
   `application.zig:1716-1808` `actionNewWindow` argv parsing.
+
+### Wayland winproto — set_urgent async dispatch + duplicate-global nit [2026-07-19, grounding review]
+The wayland arm (feature `wayland`) is a FAITHFUL, runtime-verified port (App::init selects
+Protocol::Wayland on a live GNOME/Wayland session; blur/CSD/slide/ownership verified vs the
+protocol XML — the port even destroys a `wl_region` + the `activation_token` that ghostty leaks).
+Two known residuals (grounding-review):
+- **MATERIAL (deferred): `set_urgent` urgency has no visible effect.** The registry/globals live on
+  a private libwayland event queue (`Connection::new_event_queue`) that GDK's main loop does not
+  dispatch; the port only `flush`es (outgoing). So `xdg_activation_token_v1.done` (the inbound reply
+  carrying the token) never dispatches → `xdg_activation_v1.activate(token, surface)` never fires →
+  a backgrounded terminal's bell does NOT flash the taskbar / request attention (works on ghostty,
+  which uses GDK's default `wl_display` queue, `Globals.zig:82`). CSD + blur are NOT affected (their
+  inputs are captured at the init two-phase roundtrip; their requests are outgoing). Fix: integrate
+  the wayland queue fd into the GLib main loop as a GSource (dispatch_pending on readable) — AND make
+  `Window` re-read `Globals` live rather than snapshotting at init (the two are coupled; see below).
+  Hard to verify on GNOME (needs a backgrounded window + bell + taskbar observation).
+- **LOW (pathological): duplicate global re-advertisement.** If a compositor re-advertises a singleton
+  interface with a new `name`, `Globals::bind_global` overwrites the typed proxy but leaves the stale
+  `name→tag` map entry, so a later `global_remove(old_name)` would unbind the live proxy. Compositors
+  don't re-advertise these singletons in practice. (globals.rs bind_global/remove_global.)
