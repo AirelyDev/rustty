@@ -67,12 +67,16 @@ use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActiva
 use wayland_protocols_plasma::server_decoration::client::org_kde_kwin_server_decoration::OrgKdeKwinServerDecoration;
 use wayland_protocols_plasma::server_decoration::client::org_kde_kwin_server_decoration_manager::Mode;
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide::OrgKdeKwinSlide;
+use wayland_protocols_plasma::slide::client::org_kde_kwin_slide::Location as SlideLocation;
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide_manager::OrgKdeKwinSlideManager;
 use wayland_client::protocol::wl_compositor::WlCompositor;
 
-use gtk4_layer_shell::LayerShell;
+use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
-use rustty_config::value_types::{BackgroundBlur, QuickTerminalScreen, WindowDecoration};
+use rustty_config::value_types::{
+    BackgroundBlur, QuickTerminalKeyboardInteractivity, QuickTerminalLayer, QuickTerminalPosition,
+    QuickTerminalScreen, WindowDecoration,
+};
 use rustty_config::Config as CoreConfig;
 
 use self::globals::Globals;
@@ -374,7 +378,8 @@ pub struct Window {
     // absent — i.e. everything but `compositor`/`activation` on GNOME).
     compositor: Option<WlCompositor>,
     activation: Option<XdgActivationV1>,
-    #[allow(dead_code)] // used by the DEFERRED quick-terminal slide arm
+    /// The KDE `org_kde_kwin_slide_manager`, used by `sync_quick_terminal` to
+    /// create the quick-terminal slide animation (absent on GNOME/sway/wlroots).
     slide_manager: Option<OrgKdeKwinSlideManager>,
     /// Whether the KDE decoration manager exists — drives the CSD/SSD decision
     /// (`wayland.zig:222`).
@@ -389,8 +394,10 @@ pub struct Window {
     bg_effect: Option<ExtBackgroundEffectSurfaceV1>,
     /// PORTS: `wayland.zig:106-107` `decoration`.
     decoration: Option<OrgKdeKwinServerDecoration>,
-    /// PORTS: `wayland.zig:110-111` `slide` (always None until the quick-terminal
-    /// arm lands — see module DEFERRALS).
+    /// PORTS: `wayland.zig:108-111` `slide`. Object that controls the
+    /// slide-in/slide-out animations of the quick terminal. Always `None` for
+    /// windows other than the quick terminal (and when the compositor lacks the
+    /// KDE slide manager). Set in `sync_quick_terminal`.
     slide: Option<OrgKdeKwinSlide>,
     /// PORTS: `wayland.zig:114` `activation_token`.
     activation_token: Option<XdgActivationTokenV1>,
@@ -518,8 +525,18 @@ impl Window {
     pub fn sync_appearance(&mut self) -> Result<(), WinprotoError> {
         self.sync_blur();
         self.sync_decoration();
-        // `if (isQuickTerminal()) syncQuickTerminal()` (`wayland.zig:209-213`) —
-        // DEFERRED with the quick-terminal arm.
+
+        // `if (isQuickTerminal()) syncQuickTerminal()` (`wayland.zig:209-213`).
+        if self
+            .apprt_window
+            .upgrade()
+            .is_some_and(|w| w.is_quick_terminal())
+        {
+            if let Err(err) = self.sync_quick_terminal() {
+                eprintln!("warn(gtk): failed to sync quick terminal appearance={err}");
+            }
+        }
+
         let _ = self.conn.flush();
         Ok(())
     }
@@ -640,6 +657,132 @@ impl Window {
             Some(WindowDecoration::None) => Mode::None,
         }
     }
+
+    /// PORTS: `wayland.zig:310-389` `Window.syncQuickTerminal`. Push the
+    /// quick-terminal's layer, namespace, target monitor, keyboard mode, anchor,
+    /// and margins to the `wlr-layer-shell` surface, then (re)create the KDE
+    /// `org_kde_kwin_slide` so anchored edges get the compositor slide animation.
+    /// Invoked from [`Window::sync_appearance`] on every appearance sync (not once),
+    /// so config reloads and primary-output changes take effect.
+    fn sync_quick_terminal(&mut self) -> Result<(), WinprotoError> {
+        let Some(apprt_window) = self.apprt_window.upgrade() else {
+            return Ok(());
+        };
+        let window: &gtk4::Window = apprt_window.upcast_ref();
+        let Some(config) = apprt_window.get_config() else {
+            return Ok(());
+        };
+        let config = config.get();
+
+        window.set_layer(match config.gtk_quick_terminal_layer {
+            QuickTerminalLayer::Overlay => Layer::Overlay,
+            QuickTerminalLayer::Top => Layer::Top,
+            QuickTerminalLayer::Bottom => Layer::Bottom,
+            QuickTerminalLayer::Background => Layer::Background,
+        });
+        window.set_namespace(Some(&String::from_utf8_lossy(
+            &config.gtk_quick_terminal_namespace,
+        )));
+
+        // Re-resolve the target monitor on every sync so that config reloads
+        // and primary-output changes take effect without recreating the window.
+        let primary_output_name = quick_terminal_primary_output_name(&apprt_window);
+        let target_monitor =
+            resolve_quick_terminal_monitor(primary_output_name.as_deref(), &apprt_window);
+        // The reference unrefs the returned monitor here; the owned `gdk::Monitor`
+        // is dropped (unref'd) at the end of this scope.
+        window.set_monitor(target_monitor.as_ref());
+
+        window.set_keyboard_mode(match config.quick_terminal_keyboard_interactivity {
+            QuickTerminalKeyboardInteractivity::None => KeyboardMode::None,
+            QuickTerminalKeyboardInteractivity::OnDemand => {
+                if gtk4_layer_shell::protocol_version() < 4 {
+                    eprintln!(
+                        "warn(gtk): your compositor does not support on-demand keyboard access; falling back to exclusive access"
+                    );
+                    KeyboardMode::Exclusive
+                } else {
+                    KeyboardMode::OnDemand
+                }
+            }
+            QuickTerminalKeyboardInteractivity::Exclusive => KeyboardMode::Exclusive,
+        });
+
+        let anchored_edge: Option<Edge> = match config.quick_terminal_position {
+            QuickTerminalPosition::Left => Some(Edge::Left),
+            QuickTerminalPosition::Right => Some(Edge::Right),
+            QuickTerminalPosition::Top => Some(Edge::Top),
+            QuickTerminalPosition::Bottom => Some(Edge::Bottom),
+            QuickTerminalPosition::Center => None,
+        };
+
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            if let Some(anchored) = anchored_edge {
+                if edge == anchored {
+                    window.set_margin(edge, 0);
+                    window.set_anchor(edge, true);
+                    continue;
+                }
+            }
+
+            // Arbitrary margin - could be made customizable?
+            window.set_margin(edge, 20);
+            window.set_anchor(edge, false);
+        }
+
+        if let Some(slide) = self.slide.take() {
+            slide.release();
+        }
+
+        self.slide = if let Some(anchored) = anchored_edge {
+            if let Some(mgr) = self.slide_manager.clone() {
+                let slide = mgr.create(&self.surface, &self.qh, ());
+
+                let slide_location = match anchored {
+                    Edge::Top => SlideLocation::Top,
+                    Edge::Bottom => SlideLocation::Bottom,
+                    Edge::Left => SlideLocation::Left,
+                    Edge::Right => SlideLocation::Right,
+                    // `Edge` is `#[non_exhaustive]`; the loop only produces the four
+                    // real edges above.
+                    _ => SlideLocation::Top,
+                };
+
+                slide.set_location(slide_location as u32);
+                slide.commit();
+                Some(slide)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Ok(())
+    }
+}
+
+/// Resolve the `Globals.state.primary_output_name` for the quick terminal by
+/// reaching the wayland winproto [`App`] through the owning [`Application`].
+///
+/// PORTS: the reference reads `self.globals.state.primary_output_name` directly
+/// (the winproto `Window` holds the `*Globals`, `wayland.zig:327,464`). rustty's
+/// winproto [`Window`] deliberately holds no `globals` pointer, so both this sync
+/// path and the `enter_monitor` callback reach the primary output through
+/// [`App::primary_output_name`] via `apprt_window.application().winproto()`.
+///
+/// [`Application`]: crate::gtk::class::application::Application
+fn quick_terminal_primary_output_name(apprt_window: &ApprtWindow) -> Option<String> {
+    let app = apprt_window
+        .upcast_ref::<gtk4::Window>()
+        .application()?
+        .downcast::<crate::gtk::class::application::Application>()
+        .ok()?;
+    let name = match &*app.winproto() {
+        super::App::Wayland(wp) => wp.primary_output_name(),
+        _ => None,
+    };
+    name
 }
 
 /// PORTS: `value_types.zig` `BackgroundBlur.enabled` (rustty's
