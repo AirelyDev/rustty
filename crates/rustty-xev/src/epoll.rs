@@ -50,17 +50,22 @@ use core::ptr;
 use crate::heap;
 use crate::linux::eventfd::Eventfd;
 use crate::linux::net;
-use crate::linux::{CallbackAction, CompletionState, RunMode};
+use crate::linux::{CallbackAction, CompletionState, Options, RunMode};
 use crate::queue;
+use crate::queue_mpsc;
+use crate::thread_pool::{self, ThreadPool};
 use crate::Error;
 use core::any::TypeId;
 use core::ffi::c_void;
 use core::ptr::NonNull;
 
-// PORT NOTE: the reference `init(options: Options)` carries `Options` (entries +
-// thread_pool). ghostty only calls `Loop.init(.{})` and the thread-pool path is
-// deferred (see the Loop PORT NOTE), so `linux::Options` is not consumed yet; it
-// lands with Task 4's blocking-op path.
+// PORT NOTE (Task 2): the reference `init(options: Options)` carries `Options`
+// (entries + thread_pool). The epoll backend consumes exactly ONE field —
+// `options.thread_pool` — for the blocking-op (`.close`, and File's pread/pwrite)
+// thread-pool path (`thread_schedule`/`thread_perform`); `entries` is io_uring-only
+// upstream (loop.zig:15 "Backends: io_uring"). With the Linux `ThreadPool` body now
+// ported (Task 1) and un-gated for Linux, `Loop::init` takes `Options` (matching
+// `io_uring::Loop::init` + the oracle) and stores the pool.
 
 // PORT NOTE: `posix.fd_t` — the C file descriptor int.
 pub type fd_t = libc::c_int;
@@ -143,15 +148,10 @@ fn errno() -> i32 {
 
 // PORT NOTE: `const TimerHeap = heap.Intrusive(Operation.Timer, void, Operation.Timer.less);`
 type TimerHeap = heap::Intrusive<Timer, ()>;
+// PORT NOTE: `const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);`
+type TaskCompletionQueue = queue_mpsc::Intrusive<Completion>;
 
 /// PORT NOTE: `pub const Loop = struct { ... }`.
-//
-// PORT NOTE (deferred fields): the reference also carries `thread_pool:
-// ?*ThreadPool` + `thread_pool_completions: TaskCompletionQueue` for blocking
-// ops that epoll can't do. The Linux `ThreadPool` body is a whole follow-up port
-// (R5 forbids importing the macOS one; `Options.thread_pool` is an opaque
-// `*mut c_void` on Linux), and no L1 LT3 test uses it, so the thread-pool
-// machinery is omitted here and lands with Task 4's blocking-op path.
 pub struct Loop {
     /// The epoll fd.
     fd: fd_t,
@@ -178,6 +178,39 @@ pub struct Loop {
     /// Heap of timers.
     timers: TimerHeap,
 
+    /// The thread pool to use for blocking operations that epoll can't do.
+    thread_pool: Option<*mut ThreadPool>,
+
+    /// The MPSC queue for completed completions from the thread pool.
+    //
+    // PORT NOTE [mirrors kqueue.rs's LIFETIMES-AUDIT M1+M2 fix, proven on
+    // `.port/phase-2/mirihar-xev-mpsc`]: the Zig field is inline
+    // (`thread_pool_completions: TaskCompletionQueue`), but that queue is
+    // SELF-REFERENTIAL — its `head`/`tail` point at the embedded `stub`, an address
+    // INSIDE this queue. `init` writes those stub self-pointers ONCE and `pop`/`push`
+    // re-deref them on every later tick. If the queue lived inline in `Loop`, each
+    // `tick(&mut self)`/`run(&mut self)` whole-`Loop` `&mut` reborrow would
+    // INVALIDATE the provenance the stub self-pointers were minted with, making the
+    // later deref Stacked/Tree-Borrows UB. Giving the queue its OWN heap allocation
+    // (a `Box`) launders it: `tick`'s `&mut self` reborrows only the `Loop`
+    // allocation, never the queue's separate heap allocation, so the stub
+    // self-pointers survive across ticks. The Zig `*Self` method contract on
+    // `TaskCompletionQueue` is preserved verbatim; only the storage is heap-rooted.
+    // `thread_pool_completions_ptr` caches the stable raw handle established at
+    // `init` (from the `Box`), and every post-init access (`pop` in tick_inner,
+    // `push` in thread_perform) routes through THAT cache — the `Box` itself is never
+    // reborrowed again — so no `&mut`/`Box`-deref retag ever pops the queue's
+    // internal-pointer lineage (mirihar `boxq` + `xthread_boxq`: CLEAN under BOTH SB
+    // and TB, single- and cross-thread). Symmetric with kqueue.rs (DEFERRALS
+    // 4396-4398).
+    thread_pool_completions: Box<TaskCompletionQueue>,
+
+    /// Stable raw handle to `*thread_pool_completions`, cached at first-tick `init`
+    /// from the `Box` (null until then). The ONLY handle used post-init by
+    /// `pop`/`push` so the self-referential queue's stub pointers are never
+    /// invalidated by a `&mut self` reborrow. See the field PORT NOTE above.
+    thread_pool_completions_ptr: *mut TaskCompletionQueue,
+
     /// Cached time.
     cached_now: Timespec,
 
@@ -196,22 +229,27 @@ struct LoopFlags {
     stopped: bool,
 }
 
-// PORT NOTE: `Loop` holds raw-ptr intrusive queues/heap + an fd → auto-`!Send`;
-// ghostty MOVES a `Loop` onto the spawned termio thread. SAFETY / single-thread
-// affinity: after the move a `Loop` (and every `Completion` it links) is touched
-// by exactly one thread at a time — the owning event-loop thread — so
-// transferring ownership is sound. The cross-thread wakeup rides the `Eventfd`
-// (a plain `Copy` fd, auto-`Send`), never a shared `&mut Loop`.
+// PORT NOTE: `Loop` holds raw-ptr intrusive queues/heap + an fd + a `*mut
+// ThreadPool` → auto-`!Send`; ghostty MOVES a `Loop` onto the spawned termio
+// thread. SAFETY / single-thread affinity: after the move a `Loop` (and every
+// `Completion` it links) is touched by exactly one thread at a time — the owning
+// event-loop thread — so transferring ownership is sound. The `thread_pool` raw
+// pointer targets a `ThreadPool` the caller keeps alive across the loop's life;
+// the pool itself is `Sync + Send` (its worker threads run concurrently by design),
+// so the only cross-thread channel — a worker running `thread_perform` and pushing
+// onto `thread_pool_completions` — rides the lock-free MPSC queue (through the
+// cached stable raw handle) + the `Eventfd` wakeup (a plain `Copy` fd), never a
+// shared `&mut Loop`.
 unsafe impl Send for Loop {}
 
 impl Loop {
     /// Initialize a new epoll-backed event loop.
     //
-    // PORT NOTE: reference `init(options: Options)`; ghostty only calls
-    // `Loop.init(.{})`, so this specializes to default `Options` (the
-    // thread-pool option is deferred with the pool body). `Async.init()` →
+    // PORT NOTE: reference `init(options: Options)`. The epoll backend reads the
+    // one field it consumes — `options.thread_pool` — and stores it for the
+    // blocking-op path; `entries` is io_uring-only upstream. `Async.init()` →
     // `Eventfd::init()`.
-    pub fn init() -> core::result::Result<Loop, Error> {
+    pub fn init(options: Options) -> core::result::Result<Loop, Error> {
         let eventfd = Eventfd::init().map_err(|_| Error)?;
         // errdefer eventfd.deinit();
         let fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
@@ -227,6 +265,15 @@ impl Loop {
             submissions: queue::Intrusive::default(),
             deletions: queue::Intrusive::default(),
             timers: TimerHeap::new((), Timer::less),
+            thread_pool: options.thread_pool,
+            // .thread_pool_completions = undefined — Rust has no undefined; place a
+            // valid stub queue (never `init`'d/used while thread_pool is None).
+            // Heap-rooted (Box) so its self-referential stub pointers survive the
+            // per-tick `&mut self` reborrows (see the field PORT NOTE).
+            thread_pool_completions: Box::new(TaskCompletionQueue::new(Completion::default())),
+            // Cached at first-tick `init` from the `Box`; null until then. Never
+            // dereferenced while `thread_pool` is None.
+            thread_pool_completions_ptr: ptr::null_mut(),
             // .cached_now = undefined — populated by update_now() below.
             cached_now: unsafe { core::mem::zeroed() },
             flags: LoopFlags::default(),
@@ -491,6 +538,20 @@ impl Loop {
         if !self.flags.init {
             self.flags.init = true;
 
+            if self.thread_pool.is_some() {
+                // Establish the stable heap-rooted raw handle ONCE, then init the
+                // self-referential queue THROUGH it, so the stub self-pointers it
+                // writes carry the queue's own (Box) allocation provenance — not a
+                // per-tick `&mut self` tag that the next tick's reborrow would pop.
+                // (mirrors kqueue.rs's LIFETIMES-AUDIT M2 fix; mirihar `boxq`.)
+                unsafe {
+                    let qp: *mut TaskCompletionQueue =
+                        &raw mut *(*self_ptr).thread_pool_completions;
+                    ptr::addr_of_mut!((*self_ptr).thread_pool_completions_ptr).write(qp);
+                    TaskCompletionQueue::init(qp);
+                }
+            }
+
             let mut ev = libc::epoll_event {
                 events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
                 u64: self.eventfd.fd as u64,
@@ -596,6 +657,38 @@ impl Loop {
                 }
             }
 
+            // Run our completed thread pool work
+            if self.thread_pool.is_some() {
+                loop {
+                    // Drain through the cached stable raw handle (never a fresh
+                    // `&mut self.thread_pool_completions`, which would pop the
+                    // queue's stub-pointer lineage). Mirrors kqueue.rs; mirihar
+                    // `boxq`.
+                    let c =
+                        unsafe { TaskCompletionQueue::pop((*self_ptr).thread_pool_completions_ptr) };
+                    if c.is_null() {
+                        break;
+                    }
+
+                    // Mark completion as done
+                    unsafe { (*c).flags.state = State::Dead };
+                    self.active -= 1;
+
+                    // Lower our remaining count
+                    wait_rem = wait_rem.saturating_sub(1);
+
+                    // Invoke
+                    let cb = unsafe { (*c).callback };
+                    let ud = unsafe { (*c).userdata };
+                    let tr = unsafe { (*c).task_result };
+                    let action = cb(ud, self_ptr, c, tr);
+                    match action {
+                        CallbackAction::Disarm => {}
+                        CallbackAction::Rearm => unsafe { self.start(c) },
+                    }
+                }
+            }
+
             // Determine our next timeout based on the timers
             let timeout: i32 = if wait_rem == 0 {
                 0
@@ -696,6 +789,76 @@ impl Loop {
         }
 
         Ok(())
+    }
+
+    /// Schedule a completion to run on a thread.
+    ///
+    /// PORT NOTE: `fn thread_schedule(self: *Loop, c: *Completion) !void`
+    /// (epoll.zig:483). Returns `Err(())` for the reference's
+    /// `error.ThreadPoolRequired` when no pool is attached; the caller maps that to
+    /// the op's `ThreadPoolRequired` result. Mirrors kqueue.rs's threadpool
+    /// `StartAction` idioms: the per-completion `task_completions` field the oracle
+    /// sets is elided — `thread_perform` reaches the loop's cached stable
+    /// `thread_pool_completions_ptr` via `task_loop` instead (the lifetimes-audit
+    /// fix), so the self-referential MPSC queue's stub pointers are never
+    /// invalidated.
+    ///
+    /// # Safety
+    /// `c` must be a valid, stable `Completion` pointer owned by this loop.
+    unsafe fn thread_schedule(&mut self, c: *mut Completion) -> core::result::Result<(), ()> {
+        // const pool = self.thread_pool orelse return error.ThreadPoolRequired;
+        let pool = match self.thread_pool {
+            Some(p) => p,
+            None => return Err(()),
+        };
+
+        unsafe {
+            // Setup our completion state so that thread_perform can do stuff.
+            (*c).task_loop = self;
+            (*c).task = thread_pool::Task {
+                callback: Loop::thread_perform,
+                ..thread_pool::Task::default()
+            };
+
+            // We need to mark this completion as active before we schedule.
+            (*c).flags.state = State::Active;
+            self.active += 1;
+
+            // Schedule it, from this point forward its not safe to touch c.
+            (*pool).schedule(thread_pool::Batch::from(ptr::addr_of_mut!((*c).task)));
+        }
+
+        Ok(())
+    }
+
+    /// This is the main callback for the threadpool to perform work
+    /// on completions for the loop.
+    //
+    // PORT NOTE: `fn thread_perform(t: *ThreadPool.Task) void` (epoll.zig:501).
+    // `@fieldParentPtr("task", t)` recovers the owning Completion via `container_of`
+    // (offset-of). The result is stored on `task_result`, then the completion is
+    // pushed onto the loop's MPSC queue THROUGH the cached stable raw handle
+    // (`thread_pool_completions_ptr`), never a fresh `&mut ...
+    // thread_pool_completions`: this runs ON A POOL THREAD, so a unique `&mut`
+    // reborrow of the queue (or of the owning `Loop`) formed here would be UB
+    // regardless of the atomics inside, AND would pop the queue's stub-pointer
+    // lineage (mirrors kqueue.rs; mirihar `xthread_boxq`: CLEAN under SB + TB).
+    fn thread_perform(t: *mut thread_pool::Task) {
+        // const c: *Completion = @fieldParentPtr("task", t);
+        let c: *mut Completion = unsafe {
+            (t as *mut u8).sub(core::mem::offset_of!(Completion, task)) as *mut Completion
+        };
+
+        // Do our task
+        unsafe { (*c).task_result = Completion::perform(c, None) };
+
+        // Add to our completion queue
+        unsafe { TaskCompletionQueue::push((*(*c).task_loop).thread_pool_completions_ptr, c) };
+
+        // Wake up our main loop
+        unsafe {
+            let _ = (*(*c).task_loop).wakeup();
+        }
     }
 
     /// Sends an empty message to this loop's eventfd so that it wakes up.
@@ -882,14 +1045,18 @@ impl Loop {
             Operation::Close { fd, .. } => {
                 let fd = *fd;
                 // PORT NOTE: the reference routes close through the thread pool when
-                // `flags.threadpool` is set (Stream.close does, epoll arm). The pool
-                // body is DEFERRED (type-surface only, per the brief) — no pool is
-                // ever attached on Linux — so a threadpool-flagged close yields
-                // ThreadPoolRequired exactly as the reference's `thread_schedule`
-                // would with no pool. Un-flagged close (the raw socket-test path)
-                // runs the `posix.close` synchronously here.
+                // `flags.threadpool` is set (Stream.close does, epoll arm). When a
+                // pool is attached, `thread_schedule` enqueues the blocking
+                // `posix.close` onto it and returns (the completion fires from the
+                // drain in `tick`); with no pool, `thread_schedule` yields
+                // `error.ThreadPoolRequired`, mapped to the op result. An un-flagged
+                // close (the raw socket-test path) runs `posix.close` synchronously
+                // here.
                 if unsafe { (*completion).flags.threadpool } {
-                    Some(Result::Close(Err(CloseError::ThreadPoolRequired)))
+                    match unsafe { self.thread_schedule(completion) } {
+                        Ok(()) => return,
+                        Err(()) => Some(Result::Close(Err(CloseError::ThreadPoolRequired))),
+                    }
                 } else {
                     // SAFETY: closing a caller-owned fd.
                     unsafe { libc::close(fd) };
@@ -1032,11 +1199,24 @@ pub struct Completion {
     next: *mut Completion,
 
     flags: CompletionFlags,
+
+    /// If scheduled on a thread pool, these will be set. This is NOT a
+    /// reliable way to get access to the loop and shouldn't be used
+    /// except internally.
+    //
+    // PORT NOTE (Task 2): the oracle's `task_completions: *TaskCompletionQueue`
+    // per-completion field is elided — `thread_perform` reaches the loop's cached
+    // stable `thread_pool_completions_ptr` via `task_loop` instead (the
+    // lifetimes-audit fix; symmetric with kqueue.rs). `task_result` holds the result
+    // computed on the pool thread until the loop drains it in `tick`.
+    task: thread_pool::Task,
+    task_loop: *mut Loop,
+    task_result: Result,
 }
 
 /// PORT NOTE: the `flags: packed struct { state, threadpool, dup, dup_fd }`
-/// sub-struct. The `threadpool` bit is deferred with the thread-pool path
-/// (Task 4); `dup`/`dup_fd` back the epoll single-op-per-fd dup hack.
+/// sub-struct. The `threadpool` bit routes the op through the thread pool (Task 2);
+/// `dup`/`dup_fd` back the epoll single-op-per-fd dup hack.
 #[derive(Clone, Copy)]
 struct CompletionFlags {
     /// Watch state of this completion. We use this to determine whether
@@ -1047,11 +1227,10 @@ struct CompletionFlags {
     /// Schedule this onto the threadpool rather than epoll. Not all
     /// operations support this.
     //
-    // PORT NOTE: the thread-pool work-stealing body is DEFERRED (type-surface
-    // only, per the brief — the shell path attaches no pool). The bit is honored
-    // by the `.close` start arm (Stream.close sets it, epoll arm): with no pool
-    // attached it yields `ThreadPoolRequired`, exactly as the reference's
-    // `thread_schedule` does when `Loop.thread_pool == null`.
+    // PORT NOTE (Task 2): honored by the `.close` start arm (Stream.close sets it,
+    // epoll arm). With a pool attached, `thread_schedule` enqueues the blocking op
+    // onto it; with no pool it yields `ThreadPoolRequired`, exactly as the
+    // reference's `thread_schedule` does when `Loop.thread_pool == null`.
     threadpool: bool,
 
     /// Set to true to dup the file descriptor for the operation prior
@@ -1093,6 +1272,11 @@ impl Default for Completion {
                 dup: false,
                 dup_fd: 0,
             },
+            // `task`/`task_loop`/`task_result` are Zig `undefined` (only set when
+            // scheduled on the pool); zeroed/placeholder here (Rust has no undefined).
+            task: thread_pool::Task::default(),
+            task_loop: ptr::null_mut(),
+            task_result: Result::Noop,
         }
     }
 }
@@ -1106,6 +1290,14 @@ unsafe impl Send for Completion {}
 // PORT NOTE: intrusive `next` link seam for `queue::Intrusive<Completion>`
 // (submissions/deletions).
 impl queue::Node for Completion {
+    unsafe fn next_field(this: *mut Self) -> *mut *mut Self {
+        unsafe { ptr::addr_of_mut!((*this).next) }
+    }
+}
+
+// PORT NOTE: intrusive `next` link seam for `queue_mpsc::Intrusive<Completion>`
+// (thread_pool_completions).
+impl queue_mpsc::Node for Completion {
     unsafe fn next_field(this: *mut Self) -> *mut *mut Self {
         unsafe { ptr::addr_of_mut!((*this).next) }
     }
@@ -1265,11 +1457,11 @@ impl Completion {
                 })
             }
 
-            // PORT NOTE: `close` completes synchronously in `start` (or via the
-            // deferred threadpool). It only reaches `perform` on the threadpool
-            // path, which yields ThreadPoolRequired in `start` — so this arm is
-            // unreachable in the ported (pool-less) surface, but the reference's
-            // `posix.close` body is preserved for fidelity.
+            // PORT NOTE: an un-flagged `close` completes synchronously in `start`; a
+            // threadpool-flagged `close` (Stream.close) reaches `perform` HERE, on a
+            // pool worker thread via `thread_perform`, when a pool is attached (Task
+            // 2). The `posix.close` body matches the reference's `perform` `.close`
+            // arm.
             Operation::Close { fd } => {
                 unsafe { libc::close(*fd) };
                 Result::Close(Ok(()))
@@ -2676,9 +2868,13 @@ struct WriteResult {
 // RE-MEASURED (Task 4): 104 → 152. The Task-4 socket/proc/stream ops widened the
 // `Operation` union: `Connect` embeds `net::Address` (a `sockaddr` union whose
 // largest member is `sockaddr_un`, ~112 bytes), which now dominates the tag's
-// payload. The `threadpool` flag bit was also added. 152 is the new measured
-// Rust size on aarch64-unknown-linux-gnu.
-const COMPLETION_SIZE: usize = 152;
+// payload. The `threadpool` flag bit was also added.
+//
+// RE-MEASURED (Task 2): 152 → 208. Wiring the thread-pool path added the
+// per-completion `task: thread_pool::Task` (16), `task_loop: *mut Loop` (8), and
+// `task_result: Result` (32 incl. alignment) fields the blocking-op path needs.
+// 208 is the new measured Rust size on aarch64-unknown-linux-gnu.
+const COMPLETION_SIZE: usize = 208;
 const _: () = assert!(size_of::<Completion>() == COMPLETION_SIZE);
 
 // ---------------------------------------------------------------------------
@@ -2706,7 +2902,7 @@ mod tests {
     // test "epoll: default completion"
     #[test]
     fn epoll_default_completion() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         let mut c = Completion::default();
         unsafe { loop_.add(ptr::addr_of_mut!(c)) };
@@ -2723,7 +2919,7 @@ mod tests {
     // test "epoll: loop time"
     #[test]
     fn epoll_loop_time() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // should never init zero
         let now = loop_.now();
@@ -2740,7 +2936,7 @@ mod tests {
     // test "epoll: stop"
     #[test]
     fn epoll_stop() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut called = false;
@@ -2773,7 +2969,7 @@ mod tests {
     #[allow(clippy::while_immutable_condition)]
     #[test]
     fn epoll_timer() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut called = false;
@@ -2847,7 +3043,7 @@ mod tests {
     // test "epoll: timer reset"
     #[test]
     fn epoll_timer_reset() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -2891,7 +3087,7 @@ mod tests {
     // test "epoll: timer reset before tick"
     #[test]
     fn epoll_timer_reset_before_tick() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -2931,7 +3127,7 @@ mod tests {
     // test "epoll: timer reset after trigger"
     #[test]
     fn epoll_timer_reset_after_trigger() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -2977,7 +3173,7 @@ mod tests {
     // test "epoll: timerfd"
     #[test]
     fn epoll_timerfd() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // We'll try with a simple timerfd
         let t = Timerfd::init().unwrap();
@@ -3035,7 +3231,7 @@ mod tests {
     // test "epoll: timer cancellation"
     #[test]
     fn epoll_timer_cancellation() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -3076,7 +3272,7 @@ mod tests {
     // test "epoll: canceling a completed operation"
     #[test]
     fn epoll_canceling_a_completed_operation() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Add the timer
         let mut trigger: Option<TimerTrigger> = None;
@@ -3148,7 +3344,7 @@ mod tests {
     #[test]
     fn epoll_socket_roundtrip() {
         let _guard = SOCKET_TEST_LOCK.lock().unwrap();
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         // Create a TCP server socket
         let address = net::Address::parse_ip4(b"127.0.0.1", 3131).unwrap();
@@ -3421,7 +3617,7 @@ mod tests {
         };
         assert_eq!(rc, 0, "posix_spawn /bin/true");
 
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
         let mut p = Process::init(pid).unwrap();
 
         // Wait
@@ -3456,7 +3652,7 @@ mod tests {
     #[test]
     fn epoll_pty_write_roundtrip() {
         let mut pty = Pty::init().unwrap();
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
 
         let parent = Stream::init_fd(pty.parent); // write side
         let child = Stream::init_fd(pty.child); // read side
@@ -3533,7 +3729,7 @@ mod tests {
     // twin of `io_uring_async_notify`).
     #[test]
     fn epoll_async_notify() {
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
         let notifier = Async::init().unwrap();
 
         let mut wake = false;
@@ -3599,6 +3795,119 @@ mod tests {
 
         notifier.deinit();
         loop_.deinit();
+    }
+
+    // Task-2 KAT: a `.close` op flagged for the thread pool runs on the pool
+    // (`thread_schedule` -> worker `thread_perform` closes the fd + pushes onto
+    // `thread_pool_completions` + wakes the loop) and its callback fires when the
+    // loop drains the MPSC queue in `tick`. This exercises the whole epoll
+    // thread-pool path the File watcher (Task 5) rides. With NO pool attached the
+    // same flagged close yields `ThreadPoolRequired` (asserted in the second half).
+    #[test]
+    fn epoll_close_on_thread_pool() {
+        use crate::thread_pool::Config;
+
+        struct CloseState {
+            fired: bool,
+            ok: bool,
+        }
+
+        fn close_cb(
+            ud: *mut c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            r: Result,
+        ) -> CallbackAction {
+            let st = unsafe { &mut *(ud as *mut CloseState) };
+            st.fired = true;
+            st.ok = matches!(r, Result::Close(Ok(())));
+            CallbackAction::Disarm
+        }
+
+        // --- With a real pool: the flagged close runs on the pool. ---
+        let mut pool = ThreadPool::init(Config {
+            stack_size: 0,
+            max_threads: 1,
+        });
+        let pool_ptr: *mut ThreadPool = &mut pool;
+
+        let mut loop_ = Loop::init(Options {
+            thread_pool: Some(pool_ptr),
+            ..Options::default()
+        })
+        .unwrap();
+
+        // A pipe gives us a real fd to close.
+        let mut fds = [0 as fd_t; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (fds[0], fds[1]);
+
+        let mut st = CloseState {
+            fired: false,
+            ok: false,
+        };
+        let mut c = Completion::new_op(
+            Operation::Close { fd: read_fd },
+            ptr::addr_of_mut!(st) as *mut c_void,
+            close_cb,
+        );
+        // Stream.close sets this bit; set it directly here to drive the pool path.
+        unsafe { Completion::set_threadpool(ptr::addr_of_mut!(c), true) };
+        unsafe { loop_.add(ptr::addr_of_mut!(c)) };
+
+        // Blocks in epoll_wait until the pool worker wakes us; a hang is a real bug.
+        loop_.run(RunMode::UntilDone).unwrap();
+
+        assert!(
+            st.fired,
+            "close callback never fired — the thread-pool completion was not drained"
+        );
+        // `st.ok` (the pool-thread `perform` returned `Result::Close(Ok(()))`) is
+        // the meaningful proof the blocking close ran on the pool. We deliberately
+        // do NOT re-close `read_fd` to prove EBADF: fd numbers are per-process, and
+        // a concurrently-running test may have already recycled this integer — the
+        // re-close would then race (or, worse, close an unrelated test's fd).
+        let _ = read_fd;
+
+        unsafe { libc::close(write_fd) };
+        loop_.deinit();
+        pool.shutdown();
+        pool.deinit();
+
+        // --- With NO pool: the same flagged close yields ThreadPoolRequired. ---
+        let mut loop2 = Loop::init(Options::default()).unwrap();
+        let mut fds2 = [0 as fd_t; 2];
+        assert_eq!(unsafe { libc::pipe(fds2.as_mut_ptr()) }, 0);
+
+        let mut got_required = false;
+        fn required_cb(
+            ud: *mut c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            r: Result,
+        ) -> CallbackAction {
+            let flag = unsafe { &mut *(ud as *mut bool) };
+            *flag = matches!(r, Result::Close(Err(CloseError::ThreadPoolRequired)));
+            CallbackAction::Disarm
+        }
+        let mut c2 = Completion::new_op(
+            Operation::Close { fd: fds2[0] },
+            ptr::addr_of_mut!(got_required) as *mut c_void,
+            required_cb,
+        );
+        unsafe { Completion::set_threadpool(ptr::addr_of_mut!(c2), true) };
+        unsafe { loop2.add(ptr::addr_of_mut!(c2)) };
+        loop2.run(RunMode::UntilDone).unwrap();
+        assert!(
+            got_required,
+            "flagged close with no pool must yield ThreadPoolRequired"
+        );
+
+        unsafe {
+            libc::close(fds2[0]);
+            libc::close(fds2[1]);
+        }
+        loop2.deinit();
     }
 
     // Helper to open a pty (test-only), mirroring watcher/stream.zig's `Pty`.

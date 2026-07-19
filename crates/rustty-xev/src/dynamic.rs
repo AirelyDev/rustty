@@ -302,16 +302,14 @@ impl Loop {
                     ),
                 },
             },
-            // PORT NOTE: `epoll::Loop::init()` takes no `Options`. The reference's
-            // `epoll.Loop.init(options)` reads exactly ONE field —
-            // `options.thread_pool` — and the Linux `ThreadPool` body is a
-            // ledgered deferral (epoll.rs's Loop PORT NOTE: the pool machinery is
-            // omitted, so `Options` is not consumed there yet). `entries` is
-            // io_uring-only upstream too (loop.zig:15 "Backends: io_uring"), so
-            // dropping `Options` on this arm loses nothing that is ported.
+            // PORT NOTE (Task 2): `epoll::Loop::init(options)` reads exactly ONE
+            // field — `options.thread_pool` — for the blocking-op thread-pool path
+            // (`entries` is io_uring-only upstream, loop.zig:15 "Backends:
+            // io_uring"). With the Linux `ThreadPool` body ported (Task 1) it now
+            // takes `Options` like `io_uring::Loop::init` + the oracle.
             Backend::Epoll => Loop {
                 backend: LoopUnion {
-                    epoll: ManuallyDrop::new(epoll::Loop::init()?),
+                    epoll: ManuallyDrop::new(epoll::Loop::init(options)?),
                 },
             },
             be => unreachable!("non-candidate backend {be:?}"),
@@ -512,16 +510,18 @@ const _: () = assert!(offset_of!(Completion, value) == 0);
 // RE-MEASURED empirically on aarch64-unknown-linux-gnu via a temporary probe
 // (since removed):
 //
-//   epoll::Completion = 152, io_uring::Completion = 152  → CompletionUnion = 152
+//   epoll::Completion = 208, io_uring::Completion = 152  → CompletionUnion = 208
 //   Backend = 4 (a `#[repr(C)]` tag-only enum)           → +4, padded to align 8
-//   size_of::<Completion>() = 160, align 8
-//   offset_of!(Completion, value) = 0, offset_of!(Completion, tag) = 152
+//   size_of::<Completion>() = 216, align 8
+//   offset_of!(Completion, value) = 0, offset_of!(Completion, tag) = 208
 //
 // This is the "minimal overhead" the reference's doc comment promises for making
 // completions tagged (dynamic.zig:244-247): ONE machine word over the widest
-// backend completion. RE-MEASURE (and update) whenever either backend's
+// backend completion. (Task 2 grew epoll::Completion 152 → 208 by adding the
+// thread-pool `task`/`task_loop`/`task_result` fields, so the union — and this
+// pin — grew 160 → 216.) RE-MEASURE (and update) whenever either backend's
 // `Completion` grows — the assert is what forces that.
-const _: () = assert!(size_of::<Completion>() == 160);
+const _: () = assert!(size_of::<Completion>() == 216);
 
 impl Default for Completion {
     /// PORT NOTE (dynamic.zig:251-255):

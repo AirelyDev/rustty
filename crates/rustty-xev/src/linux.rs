@@ -35,12 +35,11 @@ pub mod timerfd;
 // which `#[derive(Default)]` would render as `0`/`None` — the faithful
 // defaults are set explicitly below, exactly as `loop.rs` does.
 //
-// PORT NOTE: `loop.rs`'s twin of this field names the concrete macOS-gated
-// `*mut crate::thread_pool::ThreadPool` (that module doesn't exist on Linux —
-// R5 forbids reaching into it anyway). The Linux `ThreadPool` body is a
-// whole follow-up port (same "type surface only, body deferred" status as
-// macOS's), so this field is an opaque raw pointer option instead: same
-// shape (`Option<*mut _>`), no macOS-only type name.
+// PORT NOTE (Task 2): with the `ThreadPool` body ported (Task 1) and un-gated for
+// Linux, this field names the concrete `*mut crate::thread_pool::ThreadPool`, the
+// faithful twin of `loop.rs`'s field. The epoll backend consumes it for its
+// blocking-op path (`.close`, and File's pread/pwrite); io_uring ignores it (it
+// does async file IO natively).
 pub struct Options {
     /// The number of queued completions that can be in flight before
     /// requiring interaction with the kernel.
@@ -56,7 +55,7 @@ pub struct Options {
     /// recommended you provide a thread pool.
     ///
     /// Backends: epoll, io_uring
-    pub thread_pool: Option<*mut core::ffi::c_void>,
+    pub thread_pool: Option<*mut crate::thread_pool::ThreadPool>,
 }
 
 impl Default for Options {
