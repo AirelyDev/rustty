@@ -783,17 +783,202 @@ impl Key {
     /// Returns the cimgui key constant for this key.
     ///
     /// PORT NOTE: `imguiKey` maps a `Key` to a `dcimgui` (cimgui) constant. The
-    /// dcimgui binding is an apprt-layer GUI dependency (R3 GUI-glue), DEFERRED
-    /// to the apprt layer (see DEFERRALS.md). It is gated behind the off-by-
-    /// default `imgui` cargo feature so the VT crate has no GUI dependency. The
-    /// reference body (the full `Key` → `cimgui.c.ImGuiKey_*` mapping) is
-    /// reproduced as a comment for the future apprt port and is not compiled.
+    /// dcimgui binding is an apprt-layer GUI dependency (R3 GUI-glue), so this
+    /// method is gated behind the off-by-default `imgui` cargo feature — with the
+    /// feature OFF the VT crate has no GUI dependency. The `dcimgui_sys`
+    /// `ImGuiKey_*` constants are `c_uint` (bindgen's `_bindgen_ty_3`), so the
+    /// whole match is cast to `c_int` to match the reference's `?c_int` return.
     #[cfg(feature = "imgui")]
     pub fn imgui_key(self) -> Option<std::os::raw::c_int> {
-        // The dcimgui binding is not available in the VT crate; this is a
-        // placeholder that mirrors the reference's mapping shape and will be
-        // wired up when the apprt layer ports dcimgui.
-        unimplemented!("imguiKey requires the apprt dcimgui binding (DEFERRED)")
+        Some(match self {
+            Key::KeyA => dcimgui_sys::ImGuiKey_A,
+            Key::KeyB => dcimgui_sys::ImGuiKey_B,
+            Key::KeyC => dcimgui_sys::ImGuiKey_C,
+            Key::KeyD => dcimgui_sys::ImGuiKey_D,
+            Key::KeyE => dcimgui_sys::ImGuiKey_E,
+            Key::KeyF => dcimgui_sys::ImGuiKey_F,
+            Key::KeyG => dcimgui_sys::ImGuiKey_G,
+            Key::KeyH => dcimgui_sys::ImGuiKey_H,
+            Key::KeyI => dcimgui_sys::ImGuiKey_I,
+            Key::KeyJ => dcimgui_sys::ImGuiKey_J,
+            Key::KeyK => dcimgui_sys::ImGuiKey_K,
+            Key::KeyL => dcimgui_sys::ImGuiKey_L,
+            Key::KeyM => dcimgui_sys::ImGuiKey_M,
+            Key::KeyN => dcimgui_sys::ImGuiKey_N,
+            Key::KeyO => dcimgui_sys::ImGuiKey_O,
+            Key::KeyP => dcimgui_sys::ImGuiKey_P,
+            Key::KeyQ => dcimgui_sys::ImGuiKey_Q,
+            Key::KeyR => dcimgui_sys::ImGuiKey_R,
+            Key::KeyS => dcimgui_sys::ImGuiKey_S,
+            Key::KeyT => dcimgui_sys::ImGuiKey_T,
+            Key::KeyU => dcimgui_sys::ImGuiKey_U,
+            Key::KeyV => dcimgui_sys::ImGuiKey_V,
+            Key::KeyW => dcimgui_sys::ImGuiKey_W,
+            Key::KeyX => dcimgui_sys::ImGuiKey_X,
+            Key::KeyY => dcimgui_sys::ImGuiKey_Y,
+            Key::KeyZ => dcimgui_sys::ImGuiKey_Z,
+
+            Key::Digit0 => dcimgui_sys::ImGuiKey_0,
+            Key::Digit1 => dcimgui_sys::ImGuiKey_1,
+            Key::Digit2 => dcimgui_sys::ImGuiKey_2,
+            Key::Digit3 => dcimgui_sys::ImGuiKey_3,
+            Key::Digit4 => dcimgui_sys::ImGuiKey_4,
+            Key::Digit5 => dcimgui_sys::ImGuiKey_5,
+            Key::Digit6 => dcimgui_sys::ImGuiKey_6,
+            Key::Digit7 => dcimgui_sys::ImGuiKey_7,
+            Key::Digit8 => dcimgui_sys::ImGuiKey_8,
+            Key::Digit9 => dcimgui_sys::ImGuiKey_9,
+
+            Key::Semicolon => dcimgui_sys::ImGuiKey_Semicolon,
+            Key::Space => dcimgui_sys::ImGuiKey_Space,
+            Key::Quote => dcimgui_sys::ImGuiKey_Apostrophe,
+            Key::Comma => dcimgui_sys::ImGuiKey_Comma,
+            Key::Backquote => dcimgui_sys::ImGuiKey_GraveAccent,
+            Key::Period => dcimgui_sys::ImGuiKey_Period,
+            Key::Slash => dcimgui_sys::ImGuiKey_Slash,
+            Key::Minus => dcimgui_sys::ImGuiKey_Minus,
+            Key::Equal => dcimgui_sys::ImGuiKey_Equal,
+            Key::BracketLeft => dcimgui_sys::ImGuiKey_LeftBracket,
+            Key::BracketRight => dcimgui_sys::ImGuiKey_RightBracket,
+            Key::Backslash => dcimgui_sys::ImGuiKey_Backslash,
+
+            Key::ArrowUp => dcimgui_sys::ImGuiKey_UpArrow,
+            Key::ArrowDown => dcimgui_sys::ImGuiKey_DownArrow,
+            Key::ArrowLeft => dcimgui_sys::ImGuiKey_LeftArrow,
+            Key::ArrowRight => dcimgui_sys::ImGuiKey_RightArrow,
+            Key::Home => dcimgui_sys::ImGuiKey_Home,
+            Key::End => dcimgui_sys::ImGuiKey_End,
+            Key::Insert => dcimgui_sys::ImGuiKey_Insert,
+            Key::Delete => dcimgui_sys::ImGuiKey_Delete,
+            Key::CapsLock => dcimgui_sys::ImGuiKey_CapsLock,
+            Key::ScrollLock => dcimgui_sys::ImGuiKey_ScrollLock,
+            Key::NumLock => dcimgui_sys::ImGuiKey_NumLock,
+            Key::PageUp => dcimgui_sys::ImGuiKey_PageUp,
+            Key::PageDown => dcimgui_sys::ImGuiKey_PageDown,
+            Key::Escape => dcimgui_sys::ImGuiKey_Escape,
+            Key::Enter => dcimgui_sys::ImGuiKey_Enter,
+            Key::Tab => dcimgui_sys::ImGuiKey_Tab,
+            Key::Backspace => dcimgui_sys::ImGuiKey_Backspace,
+            Key::PrintScreen => dcimgui_sys::ImGuiKey_PrintScreen,
+            Key::Pause => dcimgui_sys::ImGuiKey_Pause,
+            Key::ContextMenu => dcimgui_sys::ImGuiKey_Menu,
+
+            Key::F1 => dcimgui_sys::ImGuiKey_F1,
+            Key::F2 => dcimgui_sys::ImGuiKey_F2,
+            Key::F3 => dcimgui_sys::ImGuiKey_F3,
+            Key::F4 => dcimgui_sys::ImGuiKey_F4,
+            Key::F5 => dcimgui_sys::ImGuiKey_F5,
+            Key::F6 => dcimgui_sys::ImGuiKey_F6,
+            Key::F7 => dcimgui_sys::ImGuiKey_F7,
+            Key::F8 => dcimgui_sys::ImGuiKey_F8,
+            Key::F9 => dcimgui_sys::ImGuiKey_F9,
+            Key::F10 => dcimgui_sys::ImGuiKey_F10,
+            Key::F11 => dcimgui_sys::ImGuiKey_F11,
+            Key::F12 => dcimgui_sys::ImGuiKey_F12,
+
+            Key::Numpad0 => dcimgui_sys::ImGuiKey_Keypad0,
+            Key::Numpad1 => dcimgui_sys::ImGuiKey_Keypad1,
+            Key::Numpad2 => dcimgui_sys::ImGuiKey_Keypad2,
+            Key::Numpad3 => dcimgui_sys::ImGuiKey_Keypad3,
+            Key::Numpad4 => dcimgui_sys::ImGuiKey_Keypad4,
+            Key::Numpad5 => dcimgui_sys::ImGuiKey_Keypad5,
+            Key::Numpad6 => dcimgui_sys::ImGuiKey_Keypad6,
+            Key::Numpad7 => dcimgui_sys::ImGuiKey_Keypad7,
+            Key::Numpad8 => dcimgui_sys::ImGuiKey_Keypad8,
+            Key::Numpad9 => dcimgui_sys::ImGuiKey_Keypad9,
+            Key::NumpadDecimal => dcimgui_sys::ImGuiKey_KeypadDecimal,
+            Key::NumpadDivide => dcimgui_sys::ImGuiKey_KeypadDivide,
+            Key::NumpadMultiply => dcimgui_sys::ImGuiKey_KeypadMultiply,
+            Key::NumpadSubtract => dcimgui_sys::ImGuiKey_KeypadSubtract,
+            Key::NumpadAdd => dcimgui_sys::ImGuiKey_KeypadAdd,
+            Key::NumpadEnter => dcimgui_sys::ImGuiKey_KeypadEnter,
+            Key::NumpadEqual => dcimgui_sys::ImGuiKey_KeypadEqual,
+            // We map KP_SEPARATOR to Comma because traditionally a numpad would
+            // have a numeric separator key. Most modern numpads do not
+            Key::NumpadLeft => dcimgui_sys::ImGuiKey_LeftArrow,
+            Key::NumpadRight => dcimgui_sys::ImGuiKey_RightArrow,
+            Key::NumpadUp => dcimgui_sys::ImGuiKey_UpArrow,
+            Key::NumpadDown => dcimgui_sys::ImGuiKey_DownArrow,
+            Key::NumpadPageUp => dcimgui_sys::ImGuiKey_PageUp,
+            Key::NumpadPageDown => dcimgui_sys::ImGuiKey_PageUp,
+            Key::NumpadHome => dcimgui_sys::ImGuiKey_Home,
+            Key::NumpadEnd => dcimgui_sys::ImGuiKey_End,
+            Key::NumpadInsert => dcimgui_sys::ImGuiKey_Insert,
+            Key::NumpadDelete => dcimgui_sys::ImGuiKey_Delete,
+            Key::NumpadBegin => dcimgui_sys::ImGuiKey_NamedKey_BEGIN,
+
+            Key::ShiftLeft => dcimgui_sys::ImGuiKey_LeftShift,
+            Key::ControlLeft => dcimgui_sys::ImGuiKey_LeftCtrl,
+            Key::AltLeft => dcimgui_sys::ImGuiKey_LeftAlt,
+            Key::MetaLeft => dcimgui_sys::ImGuiKey_LeftSuper,
+            Key::ShiftRight => dcimgui_sys::ImGuiKey_RightShift,
+            Key::ControlRight => dcimgui_sys::ImGuiKey_RightCtrl,
+            Key::AltRight => dcimgui_sys::ImGuiKey_RightAlt,
+            Key::MetaRight => dcimgui_sys::ImGuiKey_RightSuper,
+
+            // These keys aren't represented in cimgui
+            Key::F13
+            | Key::F14
+            | Key::F15
+            | Key::F16
+            | Key::F17
+            | Key::F18
+            | Key::F19
+            | Key::F20
+            | Key::F21
+            | Key::F22
+            | Key::F23
+            | Key::F24
+            | Key::F25
+            | Key::IntlBackslash
+            | Key::IntlRo
+            | Key::IntlYen
+            | Key::Convert
+            | Key::KanaMode
+            | Key::NonConvert
+            | Key::NumpadSeparator
+            | Key::NumpadBackspace
+            | Key::NumpadClear
+            | Key::NumpadClearEntry
+            | Key::NumpadComma
+            | Key::NumpadMemoryAdd
+            | Key::NumpadMemoryClear
+            | Key::NumpadMemoryRecall
+            | Key::NumpadMemoryStore
+            | Key::NumpadMemorySubtract
+            | Key::NumpadParenLeft
+            | Key::NumpadParenRight
+            | Key::Fn
+            | Key::FnLock
+            | Key::BrowserBack
+            | Key::BrowserFavorites
+            | Key::BrowserForward
+            | Key::BrowserHome
+            | Key::BrowserRefresh
+            | Key::BrowserSearch
+            | Key::BrowserStop
+            | Key::Eject
+            | Key::LaunchApp1
+            | Key::LaunchApp2
+            | Key::LaunchMail
+            | Key::MediaPlayPause
+            | Key::MediaSelect
+            | Key::MediaStop
+            | Key::MediaTrackNext
+            | Key::MediaTrackPrevious
+            | Key::Power
+            | Key::Sleep
+            | Key::AudioVolumeDown
+            | Key::AudioVolumeMute
+            | Key::AudioVolumeUp
+            | Key::WakeUp
+            | Key::Help
+            | Key::Copy
+            | Key::Cut
+            | Key::Paste => return None,
+
+            Key::Unidentified => return None,
+        } as std::os::raw::c_int)
     }
 
     /// true if this key is one of the left or right versions of super (MacOS)
@@ -999,8 +1184,10 @@ const W3C_NAMES: &[&str] = &[
     "Paste",
 ];
 
-// PORT NOTE: the reference `imguiKey` body is reproduced here verbatim (as a
-// comment) for the future apprt dcimgui port. It is DEFERRED (see DEFERRALS.md):
+// PORT NOTE: the reference `imguiKey` body (oracle src/input/key.zig:545) is
+// reproduced below verbatim (as a comment) alongside the compiled `imgui`-gated
+// `Key::imgui_key` port above, so the full `Key` -> `cimgui.c.ImGuiKey_*`
+// mapping stays reviewable against the oracle in one place:
 //
 //   .key_a => cimgui.c.ImGuiKey_A, ... .key_z => cimgui.c.ImGuiKey_Z,
 //   .digit_0 => cimgui.c.ImGuiKey_0, ... .digit_9 => cimgui.c.ImGuiKey_9,
