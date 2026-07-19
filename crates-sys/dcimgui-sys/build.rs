@@ -115,6 +115,17 @@ fn main() {
         build.define("ZIGPKG_IMGUI_ENABLE_METAL", "1");
     }
 
+    // On non-macOS the OpenGL3 rendering backend is compiled (added to the core
+    // TU list below). Activate ext.cpp's `imgui_impl_opengl3.h` __has_include
+    // block by defining ZIGPKG_IMGUI_ENABLE_OPENGL3 for the TU that compiles
+    // ext.cpp, mirroring how the reference sets ZIGPKG_IMGUI_ENABLE_OPENGL3 when
+    // its `backend-opengl3` option is on (pkg/dcimgui/build.zig:72-74). The
+    // vendored `imgui_impl_opengl3_loader.h` is self-contained (it dlopens the
+    // GL library at runtime via imgl3wInit), so no libGL link is required here.
+    if target_os != "macos" {
+        build.define("ZIGPKG_IMGUI_ENABLE_OPENGL3", "1");
+    }
+
     // Dear ImGui core translation units (reference addCSourceFiles).
     for src in [
         "imgui/imgui.cpp",
@@ -135,6 +146,20 @@ fn main() {
     // package root). It #includes "imgui.h" and (namespaced) "dcimgui.h".
     build.file(manifest_dir.join("ext.cpp"));
     println!("cargo:rerun-if-changed=ext.cpp");
+
+    // OpenGL3 rendering backend (non-macOS). The reference compiles
+    // `backends/imgui_impl_opengl3.cpp` when its `backend-opengl3` option is set
+    // (pkg/dcimgui/build.zig). Unlike the Metal backend it is plain C++ (no
+    // Objective-C), so it joins the core C++ `cc::Build` above rather than a
+    // separate archive. It resolves its sibling `imgui_impl_opengl3_loader.h`
+    // relative to the already-configured `vendor/imgui` include path; the loader
+    // is self-contained (dlopens libGL at runtime), so no libGL link is needed.
+    if target_os != "macos" {
+        build.file(imgui.join("backends/imgui_impl_opengl3.cpp"));
+        println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_opengl3.cpp");
+        println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_opengl3.h");
+        println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_opengl3_loader.h");
+    }
 
     // Compiles the vendored sources into a static archive and emits the
     // `cargo:rustc-link-lib=static=dcimgui` + search-path directives. Because
