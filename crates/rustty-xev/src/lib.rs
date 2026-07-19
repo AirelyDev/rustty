@@ -322,7 +322,7 @@ pub use dynamic::{
     AcceptError, Async, CallbackAction, CancelError, CloseError, Completion, CompletionState,
     ConnectError, Loop, Options, PollError, PollEvent, Process, ProcessWaitError, ReadBuffer,
     ReadError, RunMode, ShutdownError, Stream, Timer, TimerCancelError, TimerRunError, WaitError,
-    WriteBuffer, WriteError, WriteQueue, WriteRequest,
+    WriteBuffer, WriteError, WriteQueue, WriteRequest, TCP,
 };
 // The `Dynamic`-only decls (`main.zig` forwards `dynamic`/`backend`/`available`
 // from the selected Api(); on macOS they are the elided single-candidate ones —
