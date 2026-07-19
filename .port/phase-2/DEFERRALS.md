@@ -4568,3 +4568,38 @@ it does on macOS. This removes only the exit RACE — the KAT still spawns a rea
 `EnvMap` — there is no PATH to search.)
 
 **Un-defer trigger:** an upstream ghostty fix to the `threadMainPosix` HUP path.
+
+---
+
+## GTK winproto (wayland/x11 arms) + dcimgui inspector — Linux/GTK tail [2026-07-18, final parity audit]
+
+Recorded after the **final parity audit** (25 adversarially-verified agents over all Linux/GTK
+features vs ghostty) confirmed these are the ONLY remaining Linux/GTK divergences and that they
+are **not daily-use parity gaps on the common (GNOME/mutter) target**.
+
+- **`gtk/winproto/{wayland,x11}.rs` — the wayland + x11 window-protocol arms (T27/T28 wayland,
+  L6 x11).** The port ships the `noop` arm only; the reference `winproto/wayland.zig` (App +
+  Window + Globals) + `winproto/x11.zig` + `BlurRegion.zig` are unported. **This is a non-gap on
+  GNOME:** mutter supports none of the protocols these arms drive — `wlr-layer-shell` (the
+  drop-down *quick terminal*), background **blur** (`ext_background_effect`/KDE), KDE
+  server-side-**decoration**/**slide**, `kde_output_order`. Ghostty likewise disables blur +
+  quick-terminal on GNOME, and the port's `noop` `client_side_decoration_enabled() == true` is the
+  CORRECT default for `window-decoration=auto` on mutter (audit-verified). The winproto **dispatch
+  is fully wired** end-to-end (winproto.rs threads deinit/CSD/resize_event/sync_appearance/set_urgent
+  to the active arm; window.rs already calls them at the right sites), so the wayland/x11 arms drop
+  in with no caller changes. Un-defers when targeting KDE/wlr compositors (needs `gdk4-wayland` /
+  `gdk4-x11` / `gtk4-layer-shell` + KDE/wlr protocol crates + a KDE/wlr session to verify — none
+  available on the current GNOME machine). `xdg_activation` (focus-stealing / urgency) is the one
+  arm that *would* apply on GNOME Wayland; it is a minor enhancement over the noop set_urgent path
+  and rides with the wayland arm.
+- **`gtk/class/inspector_*` + `imgui_widget` — the dcimgui terminal inspector (L6).** Already a
+  port-wide tracked deferral (see the `dcimgui`/`imgui` entries above): the `.inspector`
+  performAction arm + `Surface::control_inspector` are placeholder-leaves returning false; the
+  `InspectorWindow`/`imgui_widget` GTypes are unported. Debug/developer-facing only; needs the
+  `imgui`/dcimgui binding (off-by-default `imgui` cargo feature) + ~1.5k lines of inspector UI.
+  Not a daily-use feature; the separate inspector-port plan (`docs/superpowers/plans/
+  2026-07-14-inspector-port.md`) owns it.
+- **`+new-window -e <cmd>` argv override — placeholder-leaf.** The IPC delivery + plain
+  `+new-window` open a window (done); the `-e`/`--command`/`--working-directory`/`--title` argv
+  override on the received `new-window-command` action is not yet applied (opens a default window).
+  `application.zig:1716-1808` `actionNewWindow` argv parsing.
