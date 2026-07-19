@@ -23,13 +23,13 @@
 //!
 //! # DEFERRALS (recorded in `.port/phase-2/DEFERRALS.md`)
 //!
-//! * **Quick terminal / `wlr-layer-shell`.** [`App::supports_quick_terminal`]
-//!   returns `false` and [`App::init_quick_terminal`] returns
-//!   [`Error::QuickTerminalUnsupported`]. The reference gates the quick terminal on
-//!   `gtk4-layer-shell` (`wayland.zig:70-88,310-389`); mutter does not implement
-//!   `wlr-layer-shell`, so ghostty disables it on GNOME anyway. rustty does not
-//!   pull `gtk4-layer-shell`; the [`Window`] keeps the `slide` field + destroy path
-//!   so the KDE slide arm drops in with the layer-shell work.
+//! * **Quick terminal / `wlr-layer-shell`.** [`App::supports_quick_terminal`] gates
+//!   on the runtime `gtk4-layer-shell` capability and [`App::init_quick_terminal`]
+//!   turns the window into a layer surface (`wayland.zig:70-88`); mutter does not
+//!   implement `wlr-layer-shell`, so ghostty (and rustty) disables it on GNOME
+//!   anyway. The per-sync `syncQuickTerminal` (layer/anchor/margin + the KDE slide)
+//!   and `enteredMonitor` sizing (`wayland.zig:310-421`) are the remaining arm; the
+//!   [`Window`] keeps the `slide` field + destroy path for the KDE slide.
 //! * **Post-init async event delivery — CRANKED via a GSource.** The registry
 //!   [`Connection`] gets its own libwayland event queue
 //!   (`Backend::from_foreign_display` calls `wl_display_create_queue`), which GDK's
@@ -70,7 +70,9 @@ use wayland_protocols_plasma::slide::client::org_kde_kwin_slide::OrgKdeKwinSlide
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide_manager::OrgKdeKwinSlideManager;
 use wayland_client::protocol::wl_compositor::WlCompositor;
 
-use rustty_config::value_types::{BackgroundBlur, WindowDecoration};
+use gtk4_layer_shell::LayerShell;
+
+use rustty_config::value_types::{BackgroundBlur, QuickTerminalScreen, WindowDecoration};
 use rustty_config::Config as CoreConfig;
 
 use self::globals::Globals;
@@ -240,27 +242,107 @@ impl App {
         None
     }
 
-    /// PORTS: `wayland.zig:70-78` `App.supportsQuickTerminal`. DEFERRED: returns
-    /// `false` (the quick terminal needs `wlr-layer-shell` via `gtk4-layer-shell`,
-    /// which is not pulled; mutter does not implement it). See module DEFERRALS.
+    /// PORTS: `wayland.zig:70-78` `App.supportsQuickTerminal`. Gated on the runtime
+    /// `wlr-layer-shell` capability: `gtk4-layer-shell` reports whether the running
+    /// compositor implements the protocol (mutter does not → warn + `false`, a
+    /// graceful non-gap; sway/wlroots/KDE → `true`).
     #[allow(clippy::unused_self)]
     #[must_use]
     pub fn supports_quick_terminal(&self) -> bool {
-        false
+        if !gtk4_layer_shell::is_supported() {
+            eprintln!(
+                "warn(gtk): your compositor does not support the wlr-layer-shell protocol; disabling quick terminal"
+            );
+            return false;
+        }
+
+        true
     }
 
-    /// PORTS: `wayland.zig:80-88` `App.initQuickTerminal`. DEFERRED — returns
-    /// [`Error::QuickTerminalUnsupported`]. The sole caller
-    /// (`window.rs` `on_notify_quick_terminal`) logs and ignores the error, and it
-    /// only reaches here if [`Self::supports_quick_terminal`] is `true` (never),
-    /// so this is effectively unreachable today.
-    #[allow(clippy::unused_self)]
+    /// The connector name of the primary output (`Globals.state.primary_output_name`),
+    /// used to resolve the quick-terminal target monitor.
+    ///
+    /// Divergence: the reference reads `self.globals.state.primary_output_name` live
+    /// (`wayland.zig:471`); rustty's winproto [`Window`] deliberately holds no
+    /// `globals` pointer (it snapshots only proxy clones + scalars), so both the
+    /// [`Window`] method and the `enter_monitor` callback reach the primary output
+    /// through this App accessor via `apprt_window.application().winproto()`. Returns
+    /// an owned clone (the `globals` live behind the shared `Rc<RefCell<Pump>>`, so a
+    /// borrow can't escape); re-read each sync so primary-output/config changes take
+    /// effect (matching the reference's live re-resolve).
+    #[must_use]
+    pub fn primary_output_name(&self) -> Option<String> {
+        self.pump.borrow().globals.state.primary_output_name.clone()
+    }
+
+    /// PORTS: `wayland.zig:80-88` `App.initQuickTerminal`. Turn the quick-terminal
+    /// window into a layer surface (`initForWindow`) and pin it to the configured
+    /// monitor (`setMonitor`; `None` lets the compositor decide). The layer,
+    /// namespace, keyboard mode, anchor, and margins are set later in
+    /// `syncQuickTerminal` on every appearance sync.
     pub fn init_quick_terminal(
         &mut self,
-        _window: &impl gtk4::prelude::IsA<gtk4::Window>,
+        window: &impl gtk4::prelude::IsA<gtk4::Window>,
     ) -> Result<(), WinprotoError> {
-        Err(Error::QuickTerminalUnsupported.into())
+        let gtk_window: &gtk4::Window = window.upcast_ref();
+        gtk_window.init_layer_shell();
+
+        // Set target monitor based on config (null lets compositor decide).
+        let monitor = gtk_window
+            .downcast_ref::<ApprtWindow>()
+            .and_then(|apprt_window| {
+                resolve_quick_terminal_monitor(
+                    self.primary_output_name().as_deref(),
+                    apprt_window,
+                )
+            });
+        // The reference unrefs the returned monitor here; the `gdk::Monitor` owned by
+        // `monitor` is dropped (unref'd) at the end of this scope.
+        gtk_window.set_monitor(monitor.as_ref());
+        Ok(())
     }
+}
+
+/// Resolve the `quick-terminal-screen` config to a specific monitor.
+/// Returns `None` to let the compositor decide (used for `.mouse` mode).
+///
+/// PORTS: `wayland.zig:449-483` `resolveQuickTerminalMonitor`. Divergence: the
+/// reference takes `*Globals` and reads `globals.state.primary_output_name`; rustty
+/// passes the connector name in (see [`App::primary_output_name`]). The caller owns
+/// the returned ref (Rust drops/unrefs it).
+fn resolve_quick_terminal_monitor(
+    primary_output_name: Option<&str>,
+    apprt_window: &ApprtWindow,
+) -> Option<gdk4::Monitor> {
+    let config = apprt_window.get_config()?;
+    let config = config.get();
+
+    match config.quick_terminal_screen {
+        QuickTerminalScreen::Mouse => return None,
+        QuickTerminalScreen::Main | QuickTerminalScreen::MacosMenuBar => {}
+    }
+
+    let display = apprt_window.upcast_ref::<gtk4::Widget>().display();
+    let monitors = display.monitors();
+
+    // Try to find the monitor matching the primary output name.
+    if let Some(stored_name) = primary_output_name {
+        let mut i = 0;
+        while let Some(item) = monitors.item(i) {
+            i += 1;
+            let Some(monitor) = item.downcast_ref::<gdk4::Monitor>() else {
+                continue;
+            };
+            if let Some(connector) = monitor.connector() {
+                if connector.as_str() == stored_name {
+                    return Some(monitor.clone());
+                }
+            }
+        }
+    }
+
+    // Fall back to the first monitor in the list.
+    monitors.item(0)?.downcast::<gdk4::Monitor>().ok()
 }
 
 /// PORTS: `wayland.zig:91-444` `Window`. Per-surface Wayland state.
