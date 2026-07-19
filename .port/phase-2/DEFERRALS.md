@@ -4623,11 +4623,13 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
     `docs/superpowers/plans/2026-07-19-gtk-quick-terminal-layer-shell.md`. NOTE: the toggle GAction
     handler (`action_toggle_quick_terminal`) had been a placeholder-leaf no-op — a whole class of bug
     (also `action_quit`/`action_open_config`) fixed in `8e024f3`; that wiring is what makes the
-    keybind actually work. Residual: `init_and_show_window` still omits `estimateInitialSize` (a
-    separate ledgered general-window sizing leaf, irrelevant to the QT — sized by `entered_monitor`);
-    and the D-Bus `+toggle-quick-terminal` IPC path (vs the keybind) has an unconfirmed render
-    asymmetry outside the — verified-faithful — toggle/IPC code (likely a D-Bus-activation lifecycle
-    detail; the keybind path is the shipping one and works).
+    keybind actually work. ~~Residual: `estimateInitialSize`~~ **RESOLVED**: `Surface::estimate_initial_size`
+    is now ported (`surface.zig:2095-2138`) and called from `init_and_show_window` — window-width/height
+    are honored (verified on real sway: `window-width=120 window-height=40` → 1204×869 px vs 804×629
+    natural; early-returns when unset, matching ghostty's `<=0` guard). Remaining residual: the D-Bus
+    `+toggle-quick-terminal` IPC path (vs the keybind) has an unconfirmed render asymmetry outside the
+    — verified-faithful — toggle/IPC code (likely a D-Bus-activation lifecycle detail; the keybind path
+    is the shipping one and works).
   - **Post-init async event delivery — RESOLVED [2026-07-19] via a GSource.** The registry
     `Connection` gets its OWN libwayland event queue (`Backend::from_foreign_display` ->
     `wl_display_create_queue`), which GDK's main loop does not dispatch. The init two-phase
