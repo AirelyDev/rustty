@@ -46,6 +46,7 @@
 //! here for every class port to check against.
 
 pub mod application;
+pub mod clipboard_confirmation_dialog;
 pub mod close_confirmation_dialog;
 pub mod command_palette;
 pub mod config;

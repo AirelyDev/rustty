@@ -61,7 +61,7 @@ use rustty_apprt_api::{
     NewSurfaceContext, SurfaceSize,
 };
 use rustty_config::command::Command;
-use rustty_config::value_types::WorkingDirectory;
+use rustty_config::value_types::{ClipboardAccess, WorkingDirectory};
 use rustty_core::surface::{Error as CoreSurfaceError, InputEffect};
 use rustty_font_shaper::face::DesiredSize;
 use rustty_vt::input::key::{Action, Key, KeyEvent};
@@ -76,6 +76,7 @@ use crate::gtk::key;
 use crate::gtk::surface::Surface as ApprtSurface;
 
 use super::application::Application;
+use super::clipboard_confirmation_dialog::{ClipboardConfirmationDialog, ClipboardRequestBoxed};
 use super::config::Config;
 use super::key_state_overlay::KeyStateOverlay;
 use super::resize_overlay::ResizeOverlay;
@@ -1444,13 +1445,145 @@ impl Surface {
     }
 
     /// PORTS: `surface.zig:3945-3984` `Clipboard.showClipboardConfirmation`.
-    ///
-    /// **Placeholder-leaf (Phase B):** the `ClipboardConfirmationDialog` is a
-    /// separate follow-up. For now this logs and drops the request rather than
-    /// presenting the confirmation dialog described at `surface.zig:3960`
-    /// (`showClipboardConfirmation` building the dialog + wiring confirm/deny).
-    fn show_clipboard_confirmation(&self, _req: ClipboardRequest, _text: &str) {
-        eprintln!("warn(gtk): clipboard confirmation not yet implemented (Phase B)");
+    /// Build a `TextBuffer` for the contents, construct the
+    /// [`ClipboardConfirmationDialog`], wire `confirm`/`deny`, and present it.
+    fn show_clipboard_confirmation(&self, req: ClipboardRequest, text: &str) {
+        // Build a text buffer for our contents (`surface.zig:3950-3953`). The
+        // dialog takes its own ref via the `clipboard-contents` property; the
+        // reference `defer`-unrefs its local afterwards, which the gtk4-rs
+        // refcount handles automatically when this local drops.
+        let contents_buf = gtk4::TextBuffer::new(None);
+        contents_buf.insert_at_cursor(text);
+
+        // `gobject.ext.newInstance(ClipboardConfirmationDialog, ...)`
+        // (`surface.zig:3956-3966`) — construct, then set the three properties.
+        // `can-remember` is true for OSC 52 read/write, false for paste.
+        let dialog = ClipboardConfirmationDialog::new();
+        let can_remember = matches!(
+            req,
+            ClipboardRequest::Osc52Read(_) | ClipboardRequest::Osc52Write(_)
+        );
+        dialog.set_clipboard_contents(Some(contents_buf));
+        dialog.set_can_remember(can_remember);
+        // Set `request` LAST: it fires `notify::request`, which sets the dialog's
+        // heading/body from the variant.
+        dialog.set_request(Some(ClipboardRequestBoxed(req)));
+
+        // Wire confirm/deny (`surface.zig:3968-3981`). The signals carry the
+        // "remember" flag as their single bool param (`args[1]`). We ref `self`
+        // (a cheap GObject refcount bump) into each closure so the surface can't be
+        // freed while the dialog is open — mirroring the reference's `self` capture.
+        dialog.connect_local(
+            "confirm",
+            false,
+            glib::clone!(
+                #[weak(rename_to = this)]
+                self,
+                #[weak]
+                dialog,
+                #[upgrade_or]
+                None,
+                move |args| {
+                    let remember = args[1].get::<bool>().unwrap_or(false);
+                    this.clipboard_confirmation_confirm(&dialog, remember);
+                    None
+                }
+            ),
+        );
+        dialog.connect_local(
+            "deny",
+            false,
+            glib::clone!(
+                #[weak(rename_to = this)]
+                self,
+                #[weak]
+                dialog,
+                #[upgrade_or]
+                None,
+                move |args| {
+                    let remember = args[1].get::<bool>().unwrap_or(false);
+                    this.clipboard_confirmation_deny(&dialog, remember);
+                    None
+                }
+            ),
+        );
+
+        // `dialog.present(self.as(gtk.Widget))` (`surface.zig:3983`).
+        dialog.present(Some(self.upcast_ref::<gtk4::Widget>()));
+    }
+
+    /// PORTS: `surface.zig:3986-4022` `clipboardConfirmationConfirm`. On confirm,
+    /// optionally persist the "remember" choice to the core surface config, then
+    /// complete the clipboard request with `confirmed = true`.
+    fn clipboard_confirmation_confirm(&self, dialog: &ClipboardConfirmationDialog, remember: bool) {
+        // `priv.core_surface orelse return` (`:3991-3992`).
+        let Some(core) = self.core() else {
+            return;
+        };
+        // `dialog.getRequest() orelse return` (`:3993`).
+        let Some(req) = dialog.get_request() else {
+            return;
+        };
+
+        // Handle remember (`:3995-4000`). The core config's `clipboard_read`/
+        // `clipboard_write` are directly reachable and mutable here (`&mut *core`),
+        // so we port the persistence faithfully (no defer).
+        if remember {
+            match req.0 {
+                ClipboardRequest::Osc52Read(_) => {
+                    unsafe { &mut *core }.config.clipboard_read = ClipboardAccess::Allow;
+                }
+                ClipboardRequest::Osc52Write(_) => {
+                    unsafe { &mut *core }.config.clipboard_write = ClipboardAccess::Allow;
+                }
+                ClipboardRequest::Paste => {}
+            }
+        }
+
+        // Get our text from the dialog's clipboard-contents buffer (`:4002-4014`).
+        let Some(buffer) = dialog.get_clipboard_contents() else {
+            return;
+        };
+        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+
+        // `surface.completeClipboardRequest(req.*, text, true)` (`:4016-4022`).
+        // `confirmed = true`. Raw bytes, never a lossy String (R3).
+        if let Err(err) =
+            unsafe { &mut *core }.completeClipboardRequest(req.0, text.as_bytes(), true)
+        {
+            eprintln!("warn(gtk): failed to complete clipboard request err={err}");
+        }
+    }
+
+    /// PORTS: `surface.zig:4025-4040` `clipboardConfirmationDeny`. On deny, only
+    /// the "remember" persistence happens (the request is simply left uncompleted).
+    fn clipboard_confirmation_deny(&self, dialog: &ClipboardConfirmationDialog, remember: bool) {
+        // `priv.core_surface orelse return` (`:4030-4031`).
+        let Some(core) = self.core() else {
+            return;
+        };
+        // `dialog.getRequest() orelse return` (`:4032`).
+        let Some(req) = dialog.get_request() else {
+            return;
+        };
+
+        // Handle remember (`:4034-4039`).
+        if remember {
+            match req.0 {
+                ClipboardRequest::Osc52Read(_) => {
+                    unsafe { &mut *core }.config.clipboard_read = ClipboardAccess::Deny;
+                }
+                ClipboardRequest::Osc52Write(_) => {
+                    unsafe { &mut *core }.config.clipboard_write = ClipboardAccess::Deny;
+                }
+                // PORT NOTE: the reference `@panic("paste should not be able to be
+                // remembered")` (`:4038`); a paste request can never set the
+                // remember switch to reach here. In Rust we log instead of aborting.
+                ClipboardRequest::Paste => {
+                    eprintln!("warn(gtk): paste request should not be able to be remembered");
+                }
+            }
+        }
     }
 
     /// PORTS: `surface.zig:1592-1641` `defaultTermioEnv`. The default environment
