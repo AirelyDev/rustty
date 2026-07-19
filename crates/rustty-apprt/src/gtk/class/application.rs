@@ -3059,10 +3059,12 @@ mod action {
             PromptTitle::Surface => match target {
                 Target::App => false,
                 Target::Surface(v) => {
-                    // INHABITED placeholder: reference `v.rt_surface.surface.promptTitle()`.
-                    // The surface-title prompt dialog lands with the dialog family (T23).
+                    // `v.rt_surface.surface.promptTitle()` (`:2419`).
                     match widget(v) {
-                        Some(_w) => true,
+                        Some(w) => {
+                            w.prompt_title();
+                            true
+                        }
                         None => false,
                     }
                 }

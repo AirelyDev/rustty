@@ -1671,6 +1671,41 @@ impl Surface {
         true
     }
 
+    /// PORTS: `surface.zig:1466-1478` `promptTitle` + `titleDialogSet`
+    /// (`:3543-3551`). Mirrors [`super::Tab::prompt_tab_title`], but targets the
+    /// surface: the initial value is `title_override orelse title` (`:1468`), and
+    /// on the dialog's `set` signal we apply the empty-string → `None`
+    /// normalization via `setTitleOverride` (`:3550`).
+    pub fn prompt_title(&self) {
+        use super::title_dialog::{Target, TitleDialog};
+
+        // PORTS: `surface.zig:1468` `priv.title_override orelse priv.title`.
+        let initial = self.title_override().or_else(|| self.get_title());
+        let dialog = TitleDialog::new(Target::Surface, initial.as_deref());
+
+        // PORTS: `surface.zig:1469-1476` — connect `titleDialogSet` to `set`.
+        dialog.connect_local(
+            "set",
+            false,
+            glib::clone!(
+                #[weak(rename_to = this)]
+                self,
+                #[upgrade_or]
+                None,
+                move |args| {
+                    // arg 0 is the emitter; arg 1 is the string param.
+                    let title: String = args[1].get().expect("set arg is a string");
+                    // PORTS: `surface.zig:3549-3550` `titleDialogSet`.
+                    this.set_title_override(if title.is_empty() { None } else { Some(title) });
+                    None
+                }
+            ),
+        );
+
+        // PORTS: `surface.zig:1478`.
+        dialog.present(self.upcast_ref::<gtk4::Widget>());
+    }
+
     /// PORTS: `surface.zig:1747-1778` `sendDesktopNotification`. Build a
     /// `gio.Notification` and send it via the application. The `present-surface`
     /// default action targets this surface's core id, so activating the
@@ -2850,15 +2885,24 @@ impl Surface {
 // (T16/T17) — see the `mouse-shape` property's PORT NOTE. The generated
 // `mouse_shape()`/`set_mouse_shape()` `i32` accessors carry the shape meanwhile.
 
-/// PORTS: `surface.zig:1975-...` `actionPromptTitle`. **Placeholder-leaf (T16/17)**:
-/// the title-prompt dialog lands with the surface-action tier; a bare action
-/// invocation is a no-op until then.
+/// PORTS: `surface.zig:2575-2584` `actionPromptTitle`. Perform the
+/// `prompt_surface_title` binding action on the core surface; the action loops
+/// back through the apprt `PromptTitle::Surface` seam to open the `TitleDialog`.
 fn action_prompt_title(
     _action: &gio::SimpleAction,
     _param: Option<&glib::Variant>,
-    _self: &Surface,
+    this: &Surface,
 ) {
-    // PORT NOTE (placeholder-leaf): opens the `TitleDialog`; wired in T16/T17.
+    // `const surface = self.core() orelse return` (`:2580`).
+    let Some(core) = this.core() else {
+        return;
+    };
+    // `surface.performBindingAction(.prompt_surface_title)` (`:2581`).
+    if let Err(err) = unsafe { &mut *core }
+        .performBindingAction(rustty_input::binding::Action::PromptSurfaceTitle)
+    {
+        eprintln!("warn(gtk): unable to perform prompt title action err={err:?}");
+    }
 }
 
 /// PORTS: `surface.zig:2586-2597` `actionNotifyOnNextCommandFinish`. Flip the
