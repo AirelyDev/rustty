@@ -125,8 +125,14 @@ gtk,wayland --test gtk_wayland_winproto -- --ignored` and the `gtk,x11` counterp
 
 ## Deferred / not-yet-wired (do NOT test as bugs)
 
-- **[deferred] Terminal inspector (dcimgui):** the debug inspector window. Toggling it is a no-op
-  (developer tool; needs the imgui binding).
+- **[implemented 2026-07-19] Terminal inspector (Dear ImGui over OpenGL):** press **Ctrl+Shift+I** to
+  toggle a separate "Terminal Inspector" window with the live panels (Terminal / Surface / Keyboard /
+  Terminal IO / Renderer / Dear ImGui Demo). Type in the terminal → the Keyboard panel logs the events;
+  run shell output → the Terminal IO panel logs the VT stream. Toggling again closes it. Regression
+  anchor: `RUSTTY_DUMP_PPM=/tmp/i.ppm cargo test -p rustty-apprt --features gtk --test gtk_inspector_dump
+  -- --ignored --exact inspector_dump` (needs a display). NOTE: a native-Xorg session is required to
+  screenshot the GLArea content (`import` reads blank under XWayland; the KAT's framebuffer readback is
+  the portable path).
 - **[at-parity, not a gap] OSC color/palette runtime change, secure input, undo/redo:** unimplemented in
   Ghostty's GTK apprt too.
 

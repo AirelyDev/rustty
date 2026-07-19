@@ -1576,6 +1576,7 @@ name = "rustty-vt"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "dcimgui-sys",
  "libc",
  "rustty-datastruct",
  "rustty-font",

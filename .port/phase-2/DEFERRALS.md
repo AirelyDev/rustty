@@ -554,20 +554,23 @@ of the five tiers have since LANDED and the stale list was never resolved here):
 - ~~**overlay-render**~~ **RESOLVED**: the four z2d `Overlay` `highlight_*` draws
   are live (overlay.rs; z2d `Context` gained `anti_aliasing_mode`/`hairline`).
 
-**STILL DEFERRED (the honest residual — 1 live `unimplemented!()` in this crate):**
-- **rustty-inspector:** `overlayFeatures` (generic.rs:4566) — statically the
-  unreachable `Some(_insp)` arm over the uninhabited inspector placeholder;
-  verbatim reference body preserved. Un-defers with the Phase-3 dcimgui
-  inspector fill.
-- the **OpenGL/WebGL** backends (Linux/wasm) and **GTK** — out of the monomorphic
-  Metal scope (whole-backend follow-up ports, no in-crate `unimplemented!()`).
+- ~~**rustty-inspector `overlayFeatures`**~~ **RESOLVED**: `overlayFeatures` is
+  live (generic.rs:4619 — `match state.inspector { Some(insp) => (*insp).overlay_features() }`
+  through the renderer-owned `*mut dyn InspectorOverlay` fat pointer, the R2
+  accessor-trait edge). The inspector arm is inhabited; no `unimplemented!()`.
+- ~~**GTK / OpenGL3 inspector backend**~~ **RESOLVED 2026-07-19**: the GTK Dear
+  ImGui inspector is implemented over the OpenGL3 backend — dcimgui-sys
+  `imgui_impl_opengl3` vendored + compiled + FFI; the `ImguiWidget` /
+  `InspectorWidget` / `InspectorWindow` gtk4-rs classes; `Key::imgui_key` filled;
+  `toggle-inspector` / `control_inspector` / `redraw_inspector` wired. Verified by
+  `tests/gtk_inspector_dump.rs` (framebuffer→PPM KAT: panels render + live input)
+  and a live-app toggle shakedown (Ctrl+Shift+I opens/closes the inspector window).
+  See `docs/superpowers/plans/2026-07-19-gtk-inspector-opengl.md`.
 
-**G3b.** The crate remains `PORT STATUS: in progress` (honest — GL/WebGL/GTK
-backends are unported and the inspector arm is a placeholder) ⇒ G3b
-comment-coverage keeps SKIPPING it. R1 for the ported slices is backstopped by
-the adversary + verify panel + the golden gate (heavy-tier doctrine); a scoped
-`check_comment_coverage.py --port-glob` run is available on the done slice as an
-optional on-demand check.
+**STILL DEFERRED (the honest residual):**
+- the **WebGL** backend (wasm) — out of the monomorphic Metal scope; a
+  whole-backend follow-up port, no in-crate `unimplemented!()`. (Metal = macOS and
+  OpenGL3 = GTK/Linux are both done.)
 
 ## rustty-crash (integration-tier stage 1) — `ThreadStateSurface` seam; concrete `ThreadState` impl deferred
 
