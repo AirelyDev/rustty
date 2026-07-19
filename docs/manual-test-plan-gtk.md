@@ -110,13 +110,23 @@ Launch a primary: `rustty --gtk-single-instance=true &`, then:
 
 ---
 
+## Window-protocol integration (implemented behind feature flags)
+
+The Wayland (`--features gtk,wayland`) and X11 (`--features gtk,x11`) winproto arms are implemented +
+runtime-verified (App::init selects the right protocol — `cargo test -p rustty-apprt --features
+gtk,wayland --test gtk_wayland_winproto -- --ignored` and the `gtk,x11` counterpart). The default
+`--features gtk` build uses the noop arm (correct on GNOME).
+- [ ] **W.1 (KDE/wlr only):** with a KDE or wlroots session, build `--features gtk,wayland`, set
+      `background-blur = true` → the window background blurs; `window-decoration = server` → server-side
+      decorations. On GNOME/mutter these are inert by design (mutter lacks the protocols — matches Ghostty).
+- [ ] **W.2:** a backgrounded terminal's bell requests attention (taskbar flash). Works on X11; on
+      **Wayland it's a known no-op** (the xdg-activation token round-trip isn't dispatched yet — deferred).
+- **[deferred] wlr layer-shell quick-terminal** (drop-down): needs a wlroots compositor; not built (mutter unsupported).
+
 ## Deferred / not-yet-wired (do NOT test as bugs)
 
-- **[deferred] Window-protocol integration (T27/T28 Wayland, L6 X11):** background blur, KDE
-  client-side-decoration/slide, and the **wlr layer-shell quick-terminal** (drop-down). On **GNOME/mutter
-  these protocols are unsupported for apps anyway**, so behavior there matches Ghostty (no blur/quick-terminal).
-  Relevant on KDE/wlr compositors.
-- **[deferred] Terminal inspector (dcimgui):** the debug inspector window. Toggling it is a no-op.
+- **[deferred] Terminal inspector (dcimgui):** the debug inspector window. Toggling it is a no-op
+  (developer tool; needs the imgui binding).
 - **[at-parity, not a gap] OSC color/palette runtime change, secure input, undo/redo:** unimplemented in
   Ghostty's GTK apprt too.
 
