@@ -54,6 +54,7 @@ pub mod debug_warning;
 pub mod dialog;
 pub mod global_shortcuts;
 pub mod gtypes;
+pub mod imgui_widget;
 pub mod key_state_overlay;
 pub mod resize_overlay;
 pub mod search_overlay;
