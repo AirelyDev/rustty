@@ -4613,11 +4613,21 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
   mutter (no blur cap). `Window` drives CSD (`org_kde_kwin_server_decoration.request_mode` per the
   window-decoration config), `xdg_activation` urgency (`set_urgent`), and blur (`BlurRegion` +
   `ext_background_effect_surface_v1.set_blur_region`). Two sub-deferrals:
-  - **Quick terminal / `wlr-layer-shell`.** `App::supports_quick_terminal() == false`,
-    `init_quick_terminal()` returns `Error::QuickTerminalUnsupported`. Needs `gtk4-layer-shell`
-    (deliberately not pulled; mutter has no `wlr-layer-shell`). The `Window.slide`/`slide_manager`
-    fields + KDE-slide destroy path are kept so the arm drops in with the layer-shell work.
-    `wayland.zig:70-88,310-389`.
+  - ~~**Quick terminal / `wlr-layer-shell`.**~~ **RESOLVED [2026-07-19].** Implemented via the
+    `gtk4-layer-shell` 0.8 crate (behind the `wayland` feature). `App::supports_quick_terminal()`
+    now returns `gtk4_layer_shell::is_supported()` (graceful-`false` on mutter, which has no
+    `wlr-layer-shell`); `init_quick_terminal()` + `sync_quick_terminal` (layer/namespace/keyboard/
+    anchor/margin + the KDE `org_kde_kwin_slide`) + `entered_monitor` sizing are ported faithfully
+    (`wayland.zig:70-88,310-389,392-421`). **Verified working on a real sway 1.11 session** (Super+`
+    → full-width top drop-down, functional), matching ghostty. Plan:
+    `docs/superpowers/plans/2026-07-19-gtk-quick-terminal-layer-shell.md`. NOTE: the toggle GAction
+    handler (`action_toggle_quick_terminal`) had been a placeholder-leaf no-op — a whole class of bug
+    (also `action_quit`/`action_open_config`) fixed in `8e024f3`; that wiring is what makes the
+    keybind actually work. Residual: `init_and_show_window` still omits `estimateInitialSize` (a
+    separate ledgered general-window sizing leaf, irrelevant to the QT — sized by `entered_monitor`);
+    and the D-Bus `+toggle-quick-terminal` IPC path (vs the keybind) has an unconfirmed render
+    asymmetry outside the — verified-faithful — toggle/IPC code (likely a D-Bus-activation lifecycle
+    detail; the keybind path is the shipping one and works).
   - **Post-init async event delivery — RESOLVED [2026-07-19] via a GSource.** The registry
     `Connection` gets its OWN libwayland event queue (`Backend::from_foreign_display` ->
     `wl_display_create_queue`), which GDK's main loop does not dispatch. The init two-phase

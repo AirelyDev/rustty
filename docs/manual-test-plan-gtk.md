@@ -105,8 +105,8 @@ Run `sleep 300` first (so the surface "needs confirm"), then:
 ## 16. CLI IPC (single-instance)
 Launch a primary: `rustty --gtk-single-instance=true &`, then:
 - [ ] **16.1** `rustty +new-window` → a **new window** opens in the running instance.
-- [ ] **16.2** `rustty +new-window -e echo hi` → new window running that command. **[argv override is a placeholder-leaf — may open a default window instead]**
-- [ ] **16.3** `rustty +toggle-quick-terminal` → **[deferred: needs the Wayland/layer-shell winproto — see below]**
+- [ ] **16.2** `rustty +new-window -e echo hi` → new window running that command (argv override implemented 2026-07-19).
+- [ ] **16.3** `rustty +toggle-quick-terminal` (Wayland build on wlroots/KDE) → toggles the quick terminal. NOTE: the **keybind** path is verified working; the **D-Bus IPC** path has an unconfirmed render asymmetry (toggle/IPC code is verified faithful to ghostty — see DEFERRALS).
 
 ---
 
@@ -120,8 +120,13 @@ gtk,wayland --test gtk_wayland_winproto -- --ignored` and the `gtk,x11` counterp
       `background-blur = true` → the window background blurs; `window-decoration = server` → server-side
       decorations. On GNOME/mutter these are inert by design (mutter lacks the protocols — matches Ghostty).
 - [ ] **W.2:** a backgrounded terminal's bell requests attention (taskbar flash). Works on X11; on
-      **Wayland it's a known no-op** (the xdg-activation token round-trip isn't dispatched yet — deferred).
-- **[deferred] wlr layer-shell quick-terminal** (drop-down): needs a wlroots compositor; not built (mutter unsupported).
+      **Wayland** now via a GSource that pumps the registry queue so the `xdg-activation` token `done`
+      completes (RESOLVED 2026-07-19).
+- [ ] **[implemented 2026-07-19] wlr layer-shell quick-terminal** (drop-down): bind a key to
+      `toggle_quick_terminal` (e.g. `keybind = super+grave_accent=toggle_quick_terminal`), build
+      `--features gtk,wayland`, and run on a **wlroots** compositor (sway/Hyprland) or KDE → a
+      full-width drop-down anchors at the top (verified on sway 1.11). Inert on GNOME/mutter (no
+      wlr-layer-shell — `supports_quick_terminal()` returns false, graceful).
 
 ## Deferred / not-yet-wired (do NOT test as bugs)
 
