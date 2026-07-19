@@ -4,13 +4,12 @@
 //!
 //! Discovery is fully ported in `rustty-font-shaper` (the D1 shaper tier ABOVE
 //! `rustty-vt`+`rustty-font`): on macOS `font::Discover` = the CoreText
-//! discoverer (`discovery.rs`), `font::Library` = `NoopLibrary`, and the
-//! `DeferredFace::{family_name, name}` accessors read the CoreText face. This is
-//! the real port, NOT a stub — the earlier "blocked on rustty-font discovery"
-//! note was a mis-attribution (discovery lives in the shaper crate). The
-//! non-macOS Fontconfig discoverer is still DEFERRED in the shaper, so on those
-//! targets this maps the reference's `font.Discover == void` arm (no discovery
-//! mechanism available).
+//! discoverer (`discovery.rs`), `font::Library` = `NoopLibrary`; on Linux/BSD
+//! `font::Discover` = the Fontconfig discoverer, `font::Library` =
+//! `FreetypeLibrary`. In both cases the `DeferredFace::{family_name, name}`
+//! accessors read the discovered pattern/face. This is the real port, NOT a stub.
+//! The reference's `font.Discover == void` arm maps ONLY to the wasm `web_canvas`
+//! backend (no enumerable font list in the browser).
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
@@ -188,11 +187,12 @@ where
     // Its possible to build Ghostty without font discovery!
     // if (comptime font.Discover == void) { ...print...; return 1; }
     //
-    // PORT NOTE: on non-macOS the shaper's Fontconfig discoverer is DEFERRED
-    // (discovery.rs), so this build currently has no usable discovery mechanism —
-    // the faithful analogue of the reference's `font.Discover == void` arm. On
-    // macOS `font::Discover` = CoreText (fully ported) and this arm is skipped.
-    #[cfg(not(target_os = "macos"))]
+    // PORT NOTE: rustty's `font::Discover` is a real discoverer on every native
+    // target — CoreText on macOS, Fontconfig on Linux/BSD (both fully ported in
+    // the shaper's `discovery.rs`) — so this arm is skipped there and the live
+    // discovery body below runs. The `font.Discover == void` arm maps ONLY to the
+    // wasm `web_canvas` backend, whose browser has no enumerable font list.
+    #[cfg(target_arch = "wasm32")]
     {
         let _ = &config;
         // var buffer: [1024]u8 = undefined;
@@ -218,7 +218,7 @@ where
         return Ok(1);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         use std::collections::HashMap;
 
@@ -240,8 +240,13 @@ where
         // var font_lib = try font.Library.init(alloc);
         //   PORT NOTE: on macOS `font::Library` = `NoopLibrary` whose `init` error
         //   set is uninhabited (the reference `error{}` arm); `?` discharges it via
-        //   `match e {}`.
+        //   `match e {}`. On Linux/BSD `font::Library` = `FreetypeLibrary` whose
+        //   `init` returns a real `ft::FtError` — the reference `try` propagates it
+        //   (folded into `Error::FontLibrary`).
+        #[cfg(target_os = "macos")]
         let mut font_lib = font::Library::init().unwrap_or_else(|e| match e {});
+        #[cfg(not(target_os = "macos"))]
+        let mut font_lib = font::Library::init()?;
         // defer font_lib.deinit();
         // var disco = font.Discover.init(font_lib);
         let mut disco = font::Discover::init(font_lib);

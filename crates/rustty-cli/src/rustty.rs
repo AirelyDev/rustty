@@ -53,13 +53,22 @@ pub enum Error {
     /// `configpkg.preferredDefaultFilePath(alloc)`, folded into `edit_config`'s
     /// `runInner` `!u8`.
     FileLoad(rustty_config::file_load::FileLoadError),
-    /// A CoreText font-discovery failure propagated from `list_fonts`
+    /// A font-discovery failure propagated from `list_fonts`
     /// (`font.Discover.discover`/`DiscoverIterator.next`), folded into the
-    /// reference `run`'s inferred `!u8` error set. macOS-only — the shaper's
-    /// `discovery::Error` is defined only on the CoreText backend; the Fontconfig
-    /// discoverer (non-macOS) is DEFERRED.
-    #[cfg(target_os = "macos")]
+    /// reference `run`'s inferred `!u8` error set. Present on every target that
+    /// has a real discoverer: macOS (CoreText) and Linux/BSD (Fontconfig). The
+    /// wasm `web_canvas` backend maps the reference's `font.Discover == void` arm,
+    /// so the shaper defines no `discovery::Error` there.
+    #[cfg(not(target_arch = "wasm32"))]
     FontDiscover(rustty_font_shaper::discovery::Error),
+    /// A FreeType library-init failure propagated from `list_fonts`'
+    /// `try font.Library.init(alloc)` (reference `list_fonts.zig:106`), folded
+    /// into the inferred `!u8` error set. Linux/BSD only — the
+    /// `fontconfig_freetype` backend's `Library` is `FreetypeLibrary`, whose
+    /// `init` returns `ft::FtError`; on macOS/wasm `Library` is the `NoopLibrary`
+    /// whose `InitError` is uninhabited (that arm is discharged with `match e {}`).
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    FontLibrary(rustty_font_shaper::ft::FtError),
     /// A vaxis tty failure propagated from the interactive `prettyPrint` render
     /// paths (`list_colors`/`list_keybinds`). Reference: `vaxis.Tty.init` /
     /// `vaxis.Tty.getWinsize` `try`d into the inferred `!u8` error set.
@@ -110,10 +119,17 @@ impl From<rustty_config::file_load::FileLoadError> for Error {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 impl From<rustty_font_shaper::discovery::Error> for Error {
     fn from(e: rustty_font_shaper::discovery::Error) -> Self {
         Error::FontDiscover(e)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+impl From<rustty_font_shaper::ft::FtError> for Error {
+    fn from(e: rustty_font_shaper::ft::FtError) -> Self {
+        Error::FontLibrary(e)
     }
 }
 

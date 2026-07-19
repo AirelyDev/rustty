@@ -4,7 +4,8 @@
 //!
 //! The whole font pipeline this action drives is ported in `rustty-font-shaper`
 //! (the D1 shaper tier): `SharedGridSet`/`SharedGrid`/`CodepointResolver`/
-//! `Collection`/`DesiredSize` and the CoreText discoverer. This is the real port,
+//! `Collection`/`DesiredSize` and the platform discoverer (CoreText on macOS,
+//! Fontconfig on Linux/BSD). This is the real port,
 //! NOT a stub — the earlier "blocked on rustty-font discovery/SharedGridSet" note
 //! was a mis-attribution (that subsystem lives in the shaper crate). The one seam
 //! is the break-#9 config DI bridge: the reference `SharedGridSet.DerivedConfig
@@ -252,11 +253,12 @@ where
     // Its possible to build Ghostty without font discovery!
     // if (comptime font.Discover == void) { try stderr.print(...); return 1; }
     //
-    // PORT NOTE: on non-macOS the shaper's Fontconfig discoverer is DEFERRED
-    // (discovery.rs), so this build currently has no usable discovery mechanism —
-    // the faithful analogue of the reference's `font.Discover == void` arm. On
-    // macOS `font::Discover` = CoreText (fully ported) and this arm is skipped.
-    #[cfg(not(target_os = "macos"))]
+    // PORT NOTE: rustty's `font::Discover` is a real discoverer on every native
+    // target — CoreText on macOS, Fontconfig on Linux/BSD (both fully ported in
+    // the shaper's `discovery.rs`) — so this arm is skipped there and the live
+    // lookup body below runs. The `font.Discover == void` arm maps ONLY to the
+    // wasm `web_canvas` backend, whose browser has no font-file discovery.
+    #[cfg(target_arch = "wasm32")]
     {
         let _ = (&args_iter, &stdout);
         // R2: oracle prints the capitalized product name at both positions here.
@@ -270,7 +272,7 @@ where
         return Ok(1);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         // var opts: Options = .{};
         // defer opts.deinit();
@@ -397,11 +399,23 @@ where
         // errdefer font_grid_set.deinit();
         //   PORT NOTE: on macOS `SharedGridSet.init`'s error set is uninhabited (the
         //   `NoopLibrary` `error{}` arm), so the `catch` print is statically
-        //   unreachable (`match e {}` discharges it). The reference has only an
-        //   `errdefer` (no unconditional `defer deinit`): no error propagates after
-        //   this point (every failure below is caught → `return Ok(1)`), so the set
-        //   is dropped by RAII at scope end (the reference leaks it on success).
+        //   unreachable (`match e {}` discharges it). On Linux/BSD the set opens the
+        //   `FreetypeLibrary`, so `init` returns a real `ft::FtError` — the reference
+        //   `catch |err| { print; return 1; }` is reproduced literally there. The
+        //   reference has only an `errdefer` (no unconditional `defer deinit`): no
+        //   error propagates after this point (every failure below is caught →
+        //   `return Ok(1)`), so the set is dropped by RAII at scope end (the
+        //   reference leaks it on success).
+        #[cfg(target_os = "macos")]
         let mut font_grid_set = font::SharedGridSet::init(Global).unwrap_or_else(|e| match e {});
+        #[cfg(not(target_os = "macos"))]
+        let mut font_grid_set = match font::SharedGridSet::init(Global) {
+            Ok(set) => set,
+            Err(err) => {
+                write!(stderr, "Unable to initialize font grid set: {err:?}")?;
+                return Ok(1);
+            }
+        };
 
         // const font_size: font.face.DesiredSize = .{
         //     .points = config.@"font-size",
@@ -492,7 +506,7 @@ where
 }
 
 // fn lookup(alloc, stdout, stderr, font_grid: *font.SharedGrid, style, presentation, cp) !?u8 {
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 fn lookup<SO: Write, SE: Write>(
     stdout: &mut SO,
     stderr: &mut SE,
@@ -576,7 +590,7 @@ fn lookup<SO: Write, SE: Write>(
 
 /// Format a codepoint as its UTF-8 encoding — the reference `{u}` format
 /// specifier (`std.fmt` UTF-8-encodes a `u21`).
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 fn write_codepoint<W: Write>(w: &mut W, cp: u32) -> std::io::Result<()> {
     match char::from_u32(cp) {
         Some(ch) => {
@@ -602,7 +616,7 @@ fn write_codepoint<W: Write>(w: &mut W, cp: u32) -> std::io::Result<()> {
 /// `RepeatableFontVariation`, `RepeatableCodepointMap`, `FontSyntheticStyle`),
 /// duplicated across the tier boundary by break #9; `Modifier` and `CodepointMap`
 /// are literally the same rustty-font types on both sides.
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 fn font_shared_grid_set_derived_config(config: &Config) -> font::shared_grid_set::DerivedConfig {
     use rustty_font_shaper::config as font_config;
 

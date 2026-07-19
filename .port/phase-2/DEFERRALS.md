@@ -2832,10 +2832,22 @@ to the Pager/stdout sinks). Enabling change in `rustty-args`: an additive
   types, so the config→DerivedConfig conversion is cli-local glue
   (`show_face.rs::font_shared_grid_set_derived_config`), byte-for-byte identical to
   rustty-core's proven `font_shared_grid_set_derived_config` (surface.rs) — all
-  fields convert exactly. **Non-macOS Fontconfig discovery** is still DEFERRED in
+  fields convert exactly. ~~**Non-macOS Fontconfig discovery** is still DEFERRED in
   the shaper (`discovery.rs`); on those targets both actions map the reference's
   `font.Discover == void` arm (print "no discovery mechanism", exit 1) — the macOS
-  CoreText path is the live port (gates run on macOS).
+  CoreText path is the live port (gates run on macOS).~~ **RESOLVED (2026-07-19).**
+  The shaper's Fontconfig `Discover` + `DiscoverIterator` + the `DeferredFace` `fc`
+  arms (`familyName`/`name`/`load`) were already fully ported; the only residual
+  was that both CLI actions still hard-mapped the `font.Discover == void` arm on
+  `not(target_os = "macos")`. Re-gated so the live discovery body runs on every
+  real-discoverer target — macOS (CoreText) AND Linux/BSD (Fontconfig) — and the
+  void arm now maps ONLY to `target_arch = "wasm32"` (web_canvas, no font
+  enumeration). `list_fonts` threads the Linux `Library.init` `ft::FtError` and the
+  `discovery::Error` through new `Error::{FontLibrary, FontDiscover}` arms (the
+  latter un-`cfg`'d from macOS-only to `not(wasm)`); `show_face` reproduces the
+  reference `SharedGridSet.init catch { print; return 1 }` on Linux. Runtime-
+  verified on Fedora: `+list-fonts` enumerates 112 families via fontconfig,
+  `+show-face --cp/--string` resolves real faces, no-arg → exit 1.
 
 ## rustty-cli C3 (Phase-2 CLI milestone) — the ssh subsystem (30 tests)
 
@@ -4275,11 +4287,16 @@ faces, HarfBuzz shaping, discovery, Collection/CodepointResolver,
 SharedGrid/SharedGridSet — 110 tests). Residual, per the macOS-first locked
 fork:
 
-- **`deferred_face.rs:479/482/489` — the 3 Fontconfig `DeferredFace` arms**
+- ~~**`deferred_face.rs:479/482/489` — the 3 Fontconfig `DeferredFace` arms**
   (`unimplemented!("Fontconfig DeferredFace is DEFERRED (Linux backend)")`).
   The fontconfig discovery half is the same deferral class as the empty
   `fontconfig-sys` stub (VALIDATION_REPORT §3f). **Un-defer trigger: the Linux
-  font-discovery milestone** (platform-linux workstream, GAP_ANALYSIS §3.6).
+  font-discovery milestone** (platform-linux workstream, GAP_ANALYSIS §3.6).~~
+  **RESOLVED.** The Fontconfig `Discover`/`DiscoverIterator` (`discovery.rs`) and
+  the `DeferredFace` `fc` arms — `familyName`/`name`/`load` (`loadFontconfig`) —
+  are real ports against the `fc` binding + `fontconfig-sys` (no `unimplemented!`
+  remains). The CLI wiring that consumes them (`+list-fonts`/`+show-face` on
+  Linux) closed 2026-07-19 — see the "rustty-cli C1/C2" entry above.
 - ~~**`face/web_canvas.zig`** — the wasm browser face: NOT ported~~ **RESOLVED
   (2026-07-15).** Ported to `face/web_canvas.rs` + `shaper/web_canvas.rs` as the
   `Backend::WebCanvas` wasm backend (Canvas FFI replaces `zig-js`; faceFromIndex →
