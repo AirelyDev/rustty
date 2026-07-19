@@ -1034,6 +1034,32 @@ impl Loop {
                 }
             }
 
+            Operation::SendMsg { buffer, .. } => {
+                // if (v.buffer) |_| { @panic("TODO: sendmsg with buffer"); }
+                //
+                // PORT NOTE (a REFERENCE QUIRK, preserved deliberately): the
+                // buffer-populating path is UNIMPLEMENTED upstream and panics. Kept
+                // as a panic rather than "fixed" (that would diverge, R1); no ported
+                // watcher constructs a `SendMsg` with a buffer, so it is unreachable
+                // in practice.
+                if buffer.is_some() {
+                    panic!("TODO: sendmsg with buffer");
+                }
+                match unsafe { self.epoll_register(completion, libc::EPOLLOUT as u32) } {
+                    Ok(()) => None,
+                    Err(()) => Some(Result::SendMsg(Err(WriteError::Unexpected))),
+                }
+            }
+
+            Operation::RecvMsg { .. } => {
+                match unsafe {
+                    self.epoll_register(completion, (libc::EPOLLIN | libc::EPOLLRDHUP) as u32)
+                } {
+                    Ok(()) => None,
+                    Err(()) => Some(Result::RecvMsg(Err(ReadError::Unexpected))),
+                }
+            }
+
             Operation::Poll { events, .. } => {
                 let ev = *events;
                 match unsafe { self.epoll_register(completion, ev) } {
@@ -1457,6 +1483,19 @@ impl Completion {
                 })
             }
 
+            // PORT NOTE: `.sendmsg => |*op| .{ .sendmsg = posix.sendmsg(op.fd,
+            // op.msghdr, 0) }`. The `buffer` panic guard lives in `start`, not here.
+            Operation::SendMsg { fd, msghdr, .. } => {
+                Result::SendMsg(unsafe { posix_sendmsg(*fd, *msghdr) })
+            }
+
+            // PORT NOTE: `.recvmsg => |*op| { const res = linux.recvmsg(op.fd,
+            // op.msghdr, 0); ... if (res == 0) error.EOF else if (res > 0) res ...
+            // }`. A zero-byte datagram result is an unconditional `error.EOF`.
+            Operation::RecvMsg { fd, msghdr } => {
+                Result::RecvMsg(unsafe { posix_recvmsg(*fd, *msghdr) })
+            }
+
             // PORT NOTE: an un-flagged `close` completes synchronously in `start`; a
             // threadpool-flagged `close` (Stream.close) reaches `perform` HERE, on a
             // pool worker thread via `thread_perform`, when a pool is attached (Task
@@ -1504,6 +1543,8 @@ impl Completion {
             Operation::Recv { fd, .. } => Some(*fd),
             Operation::Write { fd, .. } => Some(*fd),
             Operation::Send { fd, .. } => Some(*fd),
+            Operation::SendMsg { fd, .. } => Some(*fd),
+            Operation::RecvMsg { fd, .. } => Some(*fd),
             Operation::Close { fd, .. } => Some(*fd),
             Operation::Shutdown { socket, .. } => Some(*socket),
 
@@ -1573,6 +1614,42 @@ pub enum Operation {
         buffer: ReadBuffer,
     },
 
+    /// Send a message on a socket using sendmsg (i.e. UDP).
+    //
+    // PORT NOTE: the reference field is `msghdr: *posix.msghdr_const`. `libc` has no
+    // `msghdr_const` twin (Zig splits the type by constness; C/Rust do not), so the
+    // constness rides the POINTER: `*const libc::msghdr`. `libc::msghdr` is the
+    // glibc/kernel `struct msghdr` layout — exactly what `libc::sendmsg` reads.
+    SendMsg {
+        fd: fd_t,
+        msghdr: *const libc::msghdr,
+
+        /// Optionally, a write buffer can be specified and the given
+        /// msghdr will be populated with information about this buffer.
+        //
+        // PORT NOTE (a REFERENCE QUIRK, preserved deliberately): this field is
+        // DEAD in the reference — the `start` `.sendmsg` arm does
+        // `if (v.buffer) |_| @panic("TODO: sendmsg with buffer");`, so the only
+        // reachable value is `null`. The field (and `iov` below) are kept so the
+        // op's shape matches the reference and so the panic arm is faithful (mirrors
+        // io_uring.rs's `SendMsg`).
+        buffer: Option<WriteBuffer>,
+
+        /// Do not use this, it is only used internally.
+        //
+        // PORT NOTE: `iov: [1]posix.iovec_const = undefined` — never written nor
+        // read by the reference (it is the scratch the unimplemented `buffer` path
+        // would populate). Kept for shape fidelity; `libc::iovec` is the same layout
+        // as Zig's `iovec_const` (constness rides the pointer in C/Rust).
+        iov: [libc::iovec; 1],
+    },
+
+    /// Recieve a message on a socket using recvmsg (i.e. UDP).
+    RecvMsg {
+        fd: fd_t,
+        msghdr: *mut libc::msghdr,
+    },
+
     Close {
         fd: fd_t,
     },
@@ -1607,6 +1684,8 @@ pub enum Result {
     Write(core::result::Result<usize, WriteError>),
     Send(core::result::Result<usize, WriteError>),
     Recv(core::result::Result<usize, ReadError>),
+    SendMsg(core::result::Result<usize, WriteError>),
+    RecvMsg(core::result::Result<usize, ReadError>),
     Close(core::result::Result<(), CloseError>),
     Shutdown(core::result::Result<(), ShutdownError>),
     Timer(core::result::Result<TimerTrigger, TimerError>),
@@ -1768,6 +1847,42 @@ unsafe fn posix_send(
     let n = unsafe { libc::send(fd, ptr.cast(), len, 0) };
     if n < 0 {
         Err(WriteError::Unexpected)
+    } else {
+        Ok(n as usize)
+    }
+}
+
+// PORT NOTE: `posix.sendmsg(fd, msghdr, 0)` wrapper (the `sendmsg` perform path).
+//
+// # Safety
+// `fd` a live socket; `msghdr` (and everything it points at) valid for the call.
+unsafe fn posix_sendmsg(
+    fd: fd_t,
+    msghdr: *const libc::msghdr,
+) -> core::result::Result<usize, WriteError> {
+    let n = unsafe { libc::sendmsg(fd, msghdr, 0) };
+    if n < 0 {
+        Err(WriteError::Unexpected)
+    } else {
+        Ok(n as usize)
+    }
+}
+
+// PORT NOTE: `linux.recvmsg(fd, msghdr, 0)` wrapper (the `recvmsg` perform path):
+// a zero-byte datagram is `error.EOF`; a negative return is `Unexpected`.
+//
+// # Safety
+// `fd` a live socket; `msghdr` (and everything it points at) valid+writable for
+// the call — the kernel writes `msg_name`/the iovec buffers.
+unsafe fn posix_recvmsg(
+    fd: fd_t,
+    msghdr: *mut libc::msghdr,
+) -> core::result::Result<usize, ReadError> {
+    let n = unsafe { libc::recvmsg(fd, msghdr, 0) };
+    if n < 0 {
+        Err(ReadError::Unexpected)
+    } else if n == 0 {
+        Err(ReadError::EOF)
     } else {
         Ok(n as usize)
     }
@@ -3700,6 +3815,639 @@ impl TCP {
     }
 }
 
+// ---------------------------------------------------------------------------
+// UDP (watcher/udp.zig `UDPSendMsg`) — the per-backend (`epoll`) instantiation of
+// the datagram socket. On both Linux backends `UDP(xev)` selects `UDPSendMsg`
+// (udp.zig:20-24), which uses `sendmsg`/`recvmsg` exclusively; this is the epoll
+// arm (the io_uring arm is byte-identical apart from `init`'s NONBLOCK and the
+// dup/threadpool flag switches). The Dynamic arm lives in `dynamic.rs`.
+//
+// PORT NOTE (ownership shape): the msghdr + its iovec + the address storage are
+// embedded in the caller-owned `UdpState` (udp.zig:405-422) and the msghdr's
+// `msg_name`/`msg_iov` point back INTO that same `UdpState` — a self-referential
+// struct. `read`/`write` therefore write `*s` FIRST (establishing stable field
+// addresses) and only then fix up those interior pointers; the caller must keep
+// `s` pinned for the whole in-flight op (exactly the Zig `s: *State` contract).
+// `close`/`poll` reproduce `Stream`'s bodies (fd-only ops) but hand back a `UDP`.
+// ---------------------------------------------------------------------------
+
+/// UDP requires some extra state to perform operations. The state is
+/// opaque. This isn't part of `Completion` because it is relatively
+/// large and would force ALL operations (not just UDP) to have a relatively
+/// large structure size and we didn't want to pay that cost.
+//
+// PORT NOTE: the reference `State.op` is an UNTAGGED `union { recv, send }` whose
+// active arm is tracked by the in-flight operation; Rust models it as a safe
+// tagged `enum` (`UdpStateOp`) — the discriminant is the same information Zig's
+// `s.op = .{ .recv = undefined }` tag-set line encodes. `userdata` is the
+// reference's `?*anyopaque = null` (set by `read`/`write`).
+pub struct UdpState {
+    userdata: *mut c_void,
+    op: UdpStateOp,
+}
+
+// PORT NOTE: `msghdr`/`iov` for the recv arm are the writable `posix.msghdr`/
+// `iovec`; the send arm's are `posix.msghdr_const`/`iovec_const`. `libc` has a
+// single `msghdr`/`iovec` (constness rides the pointer in C/Rust), so both arms
+// name `libc::msghdr`/`libc::iovec` and the send path only ever READS through them.
+enum UdpStateOp {
+    Recv {
+        buf: ReadBuffer,
+        addr_buffer: libc::sockaddr_storage,
+        msghdr: libc::msghdr,
+        iov: [libc::iovec; 1],
+    },
+    Send {
+        buf: WriteBuffer,
+        addr: net::Address,
+        msghdr: libc::msghdr,
+        iov: [libc::iovec; 1],
+    },
+}
+
+impl UdpState {
+    /// A throwaway `UdpState` used only to establish a valid Rust value before
+    /// `read`/`write` overwrite it wholesale. Mirrors the reference's
+    /// `var s: State = undefined;` (the content is never observed).
+    pub fn undefined() -> UdpState {
+        UdpState {
+            userdata: ptr::null_mut(),
+            // SAFETY: `sockaddr_storage`/`msghdr`/`iovec` are POD; all-zero is a
+            // valid bit pattern. `ReadBuffer::Slice(empty)` is a valid enum value.
+            op: UdpStateOp::Recv {
+                buf: ReadBuffer::Slice(ptr::slice_from_raw_parts_mut(ptr::null_mut(), 0)),
+                addr_buffer: unsafe { core::mem::zeroed() },
+                msghdr: unsafe { core::mem::zeroed() },
+                iov: [libc::iovec {
+                    iov_base: ptr::null_mut(),
+                    iov_len: 0,
+                }],
+            },
+        }
+    }
+}
+
+/// UDP client and server.
+///
+/// This is a "higher-level abstraction" in libxev. The goal of higher-level
+/// abstractions in libxev are to make it easier to use specific functionality
+/// with the event loop, but does not promise perfect flexibility or optimal
+/// performance. In almost all cases, the abstraction is good enough. But,
+/// if you have specific needs or want to push for the most optimal performance,
+/// use the platform-specific Loop directly.
+//
+// PORT NOTE: `#[derive(Clone, Copy)]` — the reference `UDP` is a bare `fd` struct
+// passed BY VALUE everywhere (`bind(self)`, `Impl` in the tests).
+#[derive(Clone, Copy)]
+pub struct UDP {
+    fd: socket_t,
+}
+
+impl UDP {
+    /// Initialize a new UDP with the family from the given address. Only
+    /// the family is used, the actual address has no impact on the created
+    /// resource.
+    //
+    // PORT NOTE: `if (xev.backend != .io_uring) flags |= posix.SOCK.NONBLOCK` —
+    // this is the epoll arm, which KEEPS NONBLOCK (io_uring omits it).
+    pub fn init(addr: net::Address) -> core::result::Result<UDP, Error> {
+        // SAFETY: reading `any.family` is valid for any active `Address` member
+        // (all overlay `family` as their first field).
+        let family = unsafe { addr.any }.family as libc::c_int;
+        let flags = libc::SOCK_DGRAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK;
+        let fd = unsafe { libc::socket(family, flags, 0) };
+        if fd < 0 {
+            return Err(Error);
+        }
+        Ok(UDP { fd })
+    }
+
+    /// Initialize a UDP socket from a file descriptor.
+    pub fn init_fd(fd: socket_t) -> UDP {
+        UDP { fd }
+    }
+
+    /// The underlying socket file descriptor.
+    //
+    // PORT NOTE: the reference exposes `fd` as a public FIELD; the Rust field stays
+    // private (mirroring `TCP`) and this accessor stands in — it is what the Dynamic
+    // wrapper's `fd()` and `getsockname`/`setsockopt` in the tests reach.
+    pub fn fd(self) -> socket_t {
+        self.fd
+    }
+
+    /// Bind the address to the socket.
+    pub fn bind(self, addr: net::Address) -> core::result::Result<(), Error> {
+        let one: libc::c_int = 1;
+        // SAFETY: `self.fd` is a live socket; `addr.any` overlays a valid sockaddr
+        // for the bound length.
+        unsafe {
+            if libc::setsockopt(
+                self.fd,
+                libc::SOL_SOCKET,
+                libc::SO_REUSEPORT,
+                ptr::addr_of!(one).cast(),
+                size_of::<libc::c_int>() as net::socklen_t,
+            ) != 0
+            {
+                return Err(Error);
+            }
+            if libc::setsockopt(
+                self.fd,
+                libc::SOL_SOCKET,
+                libc::SO_REUSEADDR,
+                ptr::addr_of!(one).cast(),
+                size_of::<libc::c_int>() as net::socklen_t,
+            ) != 0
+            {
+                return Err(Error);
+            }
+            if libc::bind(
+                self.fd,
+                ptr::addr_of!(addr.any) as *const libc::sockaddr,
+                addr.get_os_sock_len(),
+            ) != 0
+            {
+                return Err(Error);
+            }
+        }
+        Ok(())
+    }
+
+    /// Read from the socket. This performs a single read. The callback must
+    /// requeue the read if additional reads want to be performed. Additional
+    /// reads simultaneously can be queued by calling this multiple times. Note
+    /// that depending on the backend, the reads can happen out of order.
+    ///
+    /// # Safety
+    /// `c`/`loop_`/`s` valid+stable (held raw by the loop); `s` must outlive the
+    /// op (the msghdr embedded in it points back into it); `buf` (if a slice)
+    /// outlives the read — the KERNEL writes it asynchronously.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn read<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        s: *mut UdpState,
+        buf: ReadBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                *mut UdpState,
+                net::Address,
+                UDP,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "UDP::read cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            // s.* = .{ .userdata, .op = .{ .recv = .{ ... } } }; — write the State
+            // FIRST so its interior addresses are stable, then patch the self-refs.
+            *s = UdpState {
+                userdata: userdata.cast::<c_void>(),
+                op: UdpStateOp::Recv {
+                    buf,
+                    addr_buffer: core::mem::zeroed(),
+                    msghdr: core::mem::zeroed(),
+                    iov: [libc::iovec {
+                        iov_base: ptr::null_mut(),
+                        iov_len: 0,
+                    }],
+                },
+            };
+
+            let UdpStateOp::Recv {
+                buf,
+                addr_buffer,
+                msghdr,
+                iov,
+            } = &mut (*s).op
+            else {
+                unreachable!()
+            };
+
+            match buf {
+                ReadBuffer::Slice(v) => {
+                    iov[0] = libc::iovec {
+                        iov_base: (*v).cast::<u8>() as *mut c_void,
+                        iov_len: (*v).len(),
+                    };
+                }
+                ReadBuffer::Array(arr) => {
+                    iov[0] = libc::iovec {
+                        iov_base: arr.as_mut_ptr().cast::<c_void>(),
+                        iov_len: arr.len(),
+                    };
+                }
+            }
+
+            *msghdr = core::mem::zeroed::<libc::msghdr>();
+            msghdr.msg_name = ptr::addr_of_mut!(*addr_buffer).cast::<c_void>();
+            msghdr.msg_namelen = size_of::<libc::sockaddr_storage>() as net::socklen_t;
+            msghdr.msg_iov = iov.as_mut_ptr();
+            msghdr.msg_iovlen = 1;
+
+            let msghdr_ptr: *mut libc::msghdr = ptr::addr_of_mut!(*msghdr);
+
+            *c = Completion::new_op(
+                Operation::RecvMsg {
+                    fd: self.fd,
+                    msghdr: msghdr_ptr,
+                },
+                s as *mut c_void,
+                Self::read_trampoline::<UD, CB>,
+            );
+            // epoll arm of the dup switch: `c.flags.dup = true`.
+            Completion::set_dup(c, true);
+            (*loop_).add(c);
+        }
+    }
+
+    fn read_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                *mut UdpState,
+                net::Address,
+                UDP,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        // ud is the *State (the Completion's userdata).
+        let s_inner = ud as *mut UdpState;
+        let fd = match unsafe { &(*c_inner).op } {
+            Operation::RecvMsg { fd, .. } => *fd,
+            _ => unreachable!(),
+        };
+        let (addr, buf) = match unsafe { &(*s_inner).op } {
+            UdpStateOp::Recv {
+                buf, addr_buffer, ..
+            } => (
+                // std.net.Address.initPosix(@ptrCast(&s_inner.op.recv.addr_buffer))
+                unsafe {
+                    net::Address::init_posix(
+                        ptr::addr_of!(*addr_buffer).cast::<net::sockaddr::Any>(),
+                    )
+                },
+                *buf,
+            ),
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<usize, ReadError> = match r {
+            Result::RecvMsg(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(unsafe { (*s_inner).userdata }),
+            l_inner,
+            c_inner,
+            s_inner,
+            addr,
+            UDP::init_fd(fd),
+            buf,
+            mapped,
+        )
+    }
+
+    /// Write to the socket. This performs a single write. Additional writes
+    /// can be queued by calling this multiple times. Note that depending on the
+    /// backend, writes can happen out of order.
+    ///
+    /// # Safety
+    /// `c`/`loop_`/`s` valid+stable (held raw by the loop); `s` must outlive the
+    /// op (the msghdr embedded in it points back into it); `buf` (if a slice)
+    /// outlives the write — the KERNEL reads it asynchronously.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn write<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        s: *mut UdpState,
+        addr: net::Address,
+        buf: WriteBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                *mut UdpState,
+                UDP,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "UDP::write cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            // s.* = .{ .userdata, .op = .{ .send = .{ ... } } }; — write FIRST, then
+            // patch the msghdr's self-references (msg_name → s.op.send.addr, msg_iov
+            // → s.op.send.iov).
+            *s = UdpState {
+                userdata: userdata.cast::<c_void>(),
+                op: UdpStateOp::Send {
+                    buf,
+                    addr,
+                    msghdr: core::mem::zeroed(),
+                    iov: [libc::iovec {
+                        iov_base: ptr::null_mut(),
+                        iov_len: 0,
+                    }],
+                },
+            };
+
+            let UdpStateOp::Send {
+                buf,
+                addr,
+                msghdr,
+                iov,
+            } = &mut (*s).op
+            else {
+                unreachable!()
+            };
+
+            match buf {
+                WriteBuffer::Slice(v) => {
+                    iov[0] = libc::iovec {
+                        iov_base: (*v).cast::<u8>() as *mut c_void,
+                        iov_len: (*v).len(),
+                    };
+                }
+                WriteBuffer::Array { array, len } => {
+                    iov[0] = libc::iovec {
+                        iov_base: array.as_mut_ptr().cast::<c_void>(),
+                        iov_len: *len,
+                    };
+                }
+            }
+
+            let namelen = addr.get_os_sock_len();
+            *msghdr = core::mem::zeroed::<libc::msghdr>();
+            msghdr.msg_name = ptr::addr_of_mut!(addr.any).cast::<c_void>();
+            msghdr.msg_namelen = namelen;
+            msghdr.msg_iov = iov.as_mut_ptr();
+            msghdr.msg_iovlen = 1;
+
+            let msghdr_ptr: *const libc::msghdr = ptr::addr_of!(*msghdr);
+
+            *c = Completion::new_op(
+                Operation::SendMsg {
+                    fd: self.fd,
+                    msghdr: msghdr_ptr,
+                    // Zig field defaults: `buffer = null`, `iov = undefined`.
+                    buffer: None,
+                    iov: [libc::iovec {
+                        iov_base: ptr::null_mut(),
+                        iov_len: 0,
+                    }],
+                },
+                s as *mut c_void,
+                Self::write_trampoline::<UD, CB>,
+            );
+            // epoll arm of the dup switch: `c.flags.dup = true`.
+            Completion::set_dup(c, true);
+            (*loop_).add(c);
+        }
+    }
+
+    fn write_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                *mut UdpState,
+                UDP,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let s_inner = ud as *mut UdpState;
+        let fd = match unsafe { &(*c_inner).op } {
+            Operation::SendMsg { fd, .. } => *fd,
+            _ => unreachable!(),
+        };
+        let buf = match unsafe { &(*s_inner).op } {
+            UdpStateOp::Send { buf, .. } => *buf,
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<usize, WriteError> = match r {
+            Result::SendMsg(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(unsafe { (*s_inner).userdata }),
+            l_inner,
+            c_inner,
+            s_inner,
+            UDP::init_fd(fd),
+            buf,
+            mapped,
+        )
+    }
+
+    /// Close the socket.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn close<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                UDP,
+                core::result::Result<(), CloseError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "UDP::close cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Close { fd: self.fd },
+                userdata.cast::<c_void>(),
+                Self::close_trampoline::<UD, CB>,
+            );
+            // epoll arm: `c.flags.threadpool = true`.
+            Completion::set_threadpool(c, true);
+            (*loop_).add(c);
+        }
+    }
+
+    fn close_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                UDP,
+                core::result::Result<(), CloseError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let fd = match unsafe { &(*c_inner).op } {
+            Operation::Close { fd } => *fd,
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<(), CloseError> = match r {
+            Result::Close(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            UDP::init_fd(fd),
+            mapped,
+        )
+    }
+
+    /// Poll the file descriptor for the given event.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn poll<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        _event: PollEvent,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                UDP,
+                core::result::Result<PollEvent, PollError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "UDP::poll cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Poll {
+                    fd: self.fd,
+                    events: libc::EPOLLIN as u32,
+                },
+                userdata.cast::<c_void>(),
+                Self::poll_trampoline::<UD, CB>,
+            );
+            (*loop_).add(c);
+        }
+    }
+
+    fn poll_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                UDP,
+                core::result::Result<PollEvent, PollError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let fd = match unsafe { &(*c_inner).op } {
+            Operation::Poll { fd, .. } => *fd,
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<PollEvent, PollError> = match r {
+            Result::Poll(Ok(())) => Ok(PollEvent::Read),
+            Result::Poll(Err(e)) => Err(e),
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            UDP::init_fd(fd),
+            mapped,
+        )
+    }
+}
+
 // PORT NOTE: `test "Completion size"` (epoll.zig:1380) — the layout tripwire.
 //
 // PORT NOTE: the reference asserts the Zig `@sizeOf(Completion) == 208`. Rust's
@@ -3712,6 +4460,12 @@ impl TCP {
 // Measured Rust size (Zig reference is 208; Rust tagged-enum/struct layout
 // differs — see the PORT NOTE above). Pinned so any op-union/buffer/error-set
 // drift trips this compile-time guard.
+//
+// RE-MEASURED (UDP task, after adding the `SendMsg`/`RecvMsg` ops): UNCHANGED at
+// 208. `SendMsg` (msghdr ptr 8 + `Option<WriteBuffer>` 48 + `[iovec;1]` 16 + fd 4
+// → ~76) stays smaller than `Connect`'s embedded `net::Address` (~112), which
+// still dominates the `Operation` union — so the socket-datagram ops add no width.
+// (Same result as io_uring.rs's `SendMsg`/`RecvMsg` re-measure.)
 //
 // RE-MEASURED (Task 4): 104 → 152. The Task-4 socket/proc/stream ops widened the
 // `Operation` union: `Connect` embeds `net::Address` (a `sockaddr` union whose
@@ -4917,6 +5671,128 @@ mod tests {
         assert!(server_conn.is_none());
         assert!(!connected);
         assert!(server_closed);
+
+        loop_.deinit();
+        pool.shutdown();
+        pool.deinit();
+    }
+
+    // -----------------------------------------------------------------------
+    // UDP watcher tests (watcher/udp.zig `UDPTests`). Ported for the epoll
+    // backend instantiation. The `test "UDP: Stream decls"` reflection test
+    // (udp.zig:902) is a Zig comptime `@hasDecl` sweep with no Rust runtime
+    // analog — it is enforced at COMPILE time by `UDP` carrying every
+    // `read`/`write`/`close`/`poll` method, so it is not a separate runtime test.
+    // Like the epoll `TCP` tests, `UDP::close` rides the thread pool, so the loop
+    // is built with one (the reference builds `Loop.init(.{ .thread_pool })`).
+    // -----------------------------------------------------------------------
+
+    // test "UDP: read/write" (udp.zig:914). Distinct port from the TCP/socket
+    // tests so parallel cargo runs cannot cross-route datagrams (SO_REUSEPORT).
+    #[test]
+    fn epoll_udp_read_write() {
+        use crate::thread_pool::{Config, ThreadPool};
+
+        let mut pool = ThreadPool::init(Config::default());
+        let pool_ptr: *mut ThreadPool = &mut pool;
+        let mut loop_ = Loop::init(Options {
+            thread_pool: Some(pool_ptr),
+            ..Options::default()
+        })
+        .unwrap();
+
+        let address = net::Address::parse_ip4(b"127.0.0.1", 3135).unwrap();
+        let server = UDP::init(address).unwrap();
+        let client = UDP::init(address).unwrap();
+
+        // Bind / Recv
+        server.bind(address).unwrap();
+        let mut c_read = Completion::default();
+        let mut s_read = UdpState::undefined();
+        let mut recv_buf = [0u8; 128];
+        let mut recv_len: usize = 0;
+        unsafe {
+            server.read(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_read),
+                ptr::addr_of_mut!(s_read),
+                read_slice(&mut recv_buf),
+                ptr::addr_of_mut!(recv_len),
+                |ud: *mut usize,
+                 _l: *mut Loop,
+                 _c: *mut Completion,
+                 _s: *mut UdpState,
+                 _addr: net::Address,
+                 _sock: UDP,
+                 _b: ReadBuffer,
+                 r: core::result::Result<usize, ReadError>| {
+                    *ud = r.unwrap();
+                    CallbackAction::Disarm
+                },
+            );
+        }
+
+        // Send
+        let send_buf = [1u8, 1, 2, 3, 5, 8, 13];
+        let mut c_write = Completion::default();
+        let mut s_write = UdpState::undefined();
+        unsafe {
+            client.write(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                ptr::addr_of_mut!(s_write),
+                address,
+                write_slice(&send_buf),
+                ptr::null_mut::<()>(),
+                |_ud: *mut (),
+                 _l: *mut Loop,
+                 _c: *mut Completion,
+                 _s: *mut UdpState,
+                 _sock: UDP,
+                 _b: WriteBuffer,
+                 r: core::result::Result<usize, WriteError>| {
+                    r.unwrap();
+                    CallbackAction::Disarm
+                },
+            );
+        }
+
+        // Wait for the send/receive
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(recv_len > 0);
+        assert_eq!(send_buf.as_slice(), &recv_buf[0..recv_len]);
+
+        // Close
+        unsafe {
+            server.close(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_read),
+                ptr::null_mut::<()>(),
+                |_ud: *mut (),
+                 _l: *mut Loop,
+                 _c: *mut Completion,
+                 _s: UDP,
+                 r: core::result::Result<(), CloseError>| {
+                    r.unwrap();
+                    CallbackAction::Disarm
+                },
+            );
+            client.close(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                ptr::null_mut::<()>(),
+                |_ud: *mut (),
+                 _l: *mut Loop,
+                 _c: *mut Completion,
+                 _s: UDP,
+                 r: core::result::Result<(), CloseError>| {
+                    r.unwrap();
+                    CallbackAction::Disarm
+                },
+            );
+        }
+
+        loop_.run(RunMode::UntilDone).unwrap();
 
         loop_.deinit();
         pool.shutdown();

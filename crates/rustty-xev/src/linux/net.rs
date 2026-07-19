@@ -239,6 +239,18 @@ impl Address {
         }
     }
 
+    /// PORT NOTE: `Address.initPosix(addr: *align(4) const sockaddr) Address` —
+    /// `return .{ .any = addr.* };`. Reinterprets a filled `sockaddr` (e.g. the
+    /// `msg_name` a `recvmsg` wrote) as an `Address` by copying its `any` overlay.
+    ///
+    /// # Safety
+    /// `addr` must point at a readable `sockaddr` (at least `sockaddr::Any` bytes).
+    pub unsafe fn init_posix(addr: *const sockaddr::Any) -> Address {
+        Address {
+            any: unsafe { *addr },
+        }
+    }
+
     /// PORT NOTE: `Address.getOsSockLen(self)`.
     //
     // PORT NOTE: the `else => unreachable` (non-IP/UNIX family) ports as a Rust
