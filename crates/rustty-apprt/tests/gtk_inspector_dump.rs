@@ -427,6 +427,19 @@ fn inspector_dump() {
             }
         });
     }
+    // Drain the core-app mailbox before re-entering the run loop. Every inspector
+    // frame the render pumps drew went through `renderer_seam::drawFrame`, which —
+    // because GTK is `MUST_DRAW_FROM_APP_THREAD` — pushes a `RedrawSurface` onto the
+    // core-app mailbox with `Timeout::Instant`. Those pushes are non-blocking (they
+    // drop when full), and nothing drained them here (the core-app `tick` that
+    // drains the mailbox is only wired into `app.run()`, not the manual
+    // `ctx.iteration` pump), so after ~64 frames the 64-slot mailbox is full.
+    // `app.run()` below emits `activate`, whose `new_window_thunk` does a BLOCKING
+    // `push(NewWindow, Timeout::Forever)` — onto a full queue that would deadlock.
+    // Draining gives that one push room; subsequent `RedrawSurface` pushes stay
+    // non-blocking and `quit_now` (scheduled above) ends the loop.
+    while core_app.mailbox.pop().is_some() {}
+
     let run_result = app.run();
     assert!(run_result.is_ok(), "App::run returns Ok: {:?}", run_result.err());
 }
