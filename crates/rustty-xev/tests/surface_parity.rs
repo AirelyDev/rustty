@@ -56,8 +56,10 @@ const _: fn() = || {
     needs_sized::<rustty_xev::CompletionState>();
     needs_sized::<rustty_xev::Backend>();
 
-    // --- The watchers (main.zig:34-39). `File`/`TCP`/`UDP` are deferred on
-    // BOTH targets (DEFERRALS.md), so they are deliberately absent here. ---
+    // --- The watchers (main.zig:34-39). `File`/`TCP`/`UDP`/`ThreadPool` are
+    // deliberately absent from THIS shared block: they are still deferred on
+    // macOS (zero ghostty uses there — DEFERRALS.md), even though Linux now
+    // exports all four (Tasks 1-5). The Linux-only block below pins them. ---
     needs_sized::<rustty_xev::Async>();
     needs_sized::<rustty_xev::Process>();
     needs_sized::<rustty_xev::Stream>();
@@ -160,6 +162,15 @@ const _: fn() = || {
     // backend-specific one (`ProcError`/`TimerError` are kqueue-only).
     needs_sized::<rustty_xev::ProcessWaitError>();
     needs_sized::<rustty_xev::TimerCancelError>();
+
+    // The Linux-only watchers (Tasks 3-5) + the shared thread pool (Task 1,
+    // re-exported per Task 6) — still deferred on macOS, so pinned only here
+    // rather than in the shared cross-target block above.
+    needs_sized::<rustty_xev::File>();
+    needs_sized::<rustty_xev::TCP>();
+    needs_sized::<rustty_xev::UDP>();
+    needs_sized::<rustty_xev::UdpState>();
+    needs_sized::<rustty_xev::ThreadPool>();
 };
 
 // ---------------------------------------------------------------------------

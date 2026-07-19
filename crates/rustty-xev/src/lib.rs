@@ -17,13 +17,22 @@
 //! const xev` is; the concrete handle types live here.
 //!
 //! PORT STATUS: done — the whole in-scope macOS/kqueue surface (chunks C1–C7
-//! below) AND the whole in-scope Linux surface (L1 LT1–LT8) are filled; the
-//! `ThreadPool` body is the one ledgered deferral on both (DEFERRALS.md "kqueue:
-//! file IO on thread pool", honest-skip stub; on Linux the pool has no type
-//! surface either — R5). (`Timer::cancel` WAS additionally deferred on Linux;
-//! L1 LT9 un-defers it — `dynamic.rs`'s `Timer::cancel` now carries the real
-//! io_uring `timer_remove` / epoll `cancel` arms of timer.zig:137-210.)
+//! below) AND the whole in-scope Linux surface (L1 LT1–LT8) are filled.
+//! (`Timer::cancel` WAS additionally deferred on Linux; L1 LT9 un-defers it —
+//! `dynamic.rs`'s `Timer::cancel` now carries the real io_uring `timer_remove` /
+//! epoll `cancel` arms of timer.zig:137-210.)
 //! (Marker normalized from 'CHUNK STATUS' per VALIDATION_REPORT.md §3b.)
+//!
+//! POST-MILESTONE (Tasks 1-6, this branch): the `ThreadPool` body (kprotty's Zap
+//! work-stealing pool) is now the FULL faithful port on BOTH targets (Task 1,
+//! incl. a ledgered deliberate deviation from the Zig source — see
+//! DEFERRALS.md), and Linux's `File`/`TCP`/`UDP` watchers (Tasks 3-5) route their
+//! blocking ops through it (Task 2's `epoll::Loop` pool wiring). The ONE
+//! remaining ledgered deferral is macOS-only and narrower than "the ThreadPool
+//! body": the kqueue `File` watcher's actual USE of the pool for blocking file
+//! IO is still the DEFERRALS.md "kqueue: file IO on thread pool" honest-skip
+//! stub (zero ghostty uses of `xev.File` on macOS) — the Linux `epoll`/
+//! `io_uring` `File`/`TCP`/`UDP` watchers have no such gap.
 //!
 //! CHUNK LOG: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:
 //! `Loop`/`Completion`/`Operation`/`Result`, the tick, `Async`(mach) wakeup
@@ -107,7 +116,8 @@ mod darwin;
 //  - `looppkg` (loop.zig): Options/RunMode/Callback/NoopCallback/CallbackAction/
 //    CompletionState (the callback ABI). `loop` is a Rust keyword → `#[path]`.
 //  - `common` (watcher/common.zig): the typed→untyped `userdata_value` bridge.
-//  - `thread_pool` (ThreadPool.zig): the TYPE SURFACE only (body deferred, §1/§6).
+//  - `thread_pool` (ThreadPool.zig): the full body (Task 1 — kprotty's Zap
+//    work-stealing pool), shared with the Linux epoll/io_uring backends below.
 //  - `kqueue` (backend/kqueue.zig): the whole loop — `Loop`/`Completion`/
 //    `Operation`/`Result`/`Wakeup`/`kevent_syscall`.
 //  - `async_watcher` (watcher/async.zig): the `AsyncMachPort` C3 subset (the
@@ -144,12 +154,15 @@ mod process;
 mod stream;
 // XEV_BLUEPRINT §1/§6 chunk C3 -> Task 1 (`.superpowers/sdd/task-1-brief.md`): the
 // full faithful port of `ThreadPool.zig` (kprotty's Zap work-stealing pool) now
-// compiles on BOTH macOS (its original home) and Linux — the Linux epoll File
-// watcher routes blocking pread/pwrite/close through this pool. The lock-free
-// `NodeQueue`/`NodeBuffer` primitives were proven Stacked- AND Tree-Borrows clean
-// on `.port/phase-2/mirihar-threadpool/` before shipping. Zero Linux callers yet
-// (library-completeness parity), so it stays a private module (not re-exported on
-// Linux).
+// compiles on BOTH macOS (its original home) and Linux — the Linux epoll File/TCP/
+// UDP watchers route their blocking ops (pread/pwrite/close) through this pool
+// (Task 2's `epoll::Loop` pool wiring). The lock-free `NodeQueue`/`NodeBuffer`
+// primitives were proven Stacked- AND Tree-Borrows clean on
+// `.port/phase-2/mirihar-threadpool/` before shipping. Re-exported on BOTH targets
+// below (Task 6 un-gates the Linux `pub use`, matching the macOS one that was
+// already there) — library-completeness parity: `dynamic::Options.thread_pool`'s
+// `*mut crate::thread_pool::ThreadPool` field needs the type nameable by any
+// caller that wants to construct one, exactly as the macOS `Options` field does.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod thread_pool;
 #[cfg(target_os = "macos")]
@@ -189,7 +202,9 @@ mod timer;
 //
 // The high-level helper interfaces that make it easier to perform
 // common tasks. These may not work with all possible Loop implementations.
-// (`Async`/`Process`/`Stream`/`Timer` live; `File`/`TCP`/`UDP` deferred, §1.)
+// (On macOS: `Async`/`Process`/`Stream`/`Timer` live; `File`/`TCP`/`UDP` are
+// still deferred there — zero ghostty uses on kqueue. On Linux, below, ALL of
+// `Async`/`Process`/`Stream`/`Timer`/`File`/`TCP`/`UDP` are done, §1 Tasks 2-5.)
 //
 // [main.zig] The dynamic interface that allows for runtime selection of the
 // backend to use. This is useful if you want to support multiple
@@ -304,11 +319,6 @@ pub use process::WaitError as ProcessWaitError;
 //    `ShutdownHow`: kqueue/Darwin-specific spellings with no Linux analogue; the
 //    Linux twins are the merged `ErrorSet`s below (`ProcessWaitError`,
 //    `TimerRunError`, ...).
-//  - `ThreadPool`: `dynamic.zig:56` does forward `main.ThreadPool`, but the LINUX
-//    `ThreadPool` is a whole follow-up port — R5 forbids reaching into the
-//    macOS-gated `thread_pool` module, and `epoll::Loop`/`io_uring::Loop` carry no
-//    pool (epoll.rs:149-152; `Options.thread_pool` is an opaque `*mut c_void`
-//    there). DEFERRALS.md.
 //  - `File`/`TCP`/`UDP`: Linux-only exports (Tasks 3/4/5); still deferred on macOS
 //    (zero ghostty uses there — the kqueue block above omits them).
 //
@@ -317,6 +327,16 @@ pub use process::WaitError as ProcessWaitError;
 // `dynamic::NotifyError` are already aliases OF those crate-root types (the
 // unified D6 seam error), and re-exporting an alias of a local item under its own
 // name would collide with the declaration.
+//
+// PORT NOTE (`ThreadPool`, Task 6 — RESOLVED, was listed here as NOT forwarded):
+// `dynamic.zig:56` forwards `main.ThreadPool`; that decl is NOT a `dynamic::*`
+// member here (it lives in the crate-root `thread_pool` module both backends
+// share, same as macOS), so it is `pub use`d separately below rather than folded
+// into the `dynamic::{...}` list. With the Linux `ThreadPool` body ported (Task 1)
+// and `epoll::Loop`/`io_uring::Loop` wired to accept a real
+// `Option<*mut thread_pool::ThreadPool>` (Task 2's `dynamic::Options.thread_pool`
+// field — no more opaque `*mut c_void`), the type is nameable under the SAME
+// public name the macOS block above exports it under.
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "linux")]
 pub use dynamic::{
@@ -325,6 +345,8 @@ pub use dynamic::{
     ReadError, RunMode, ShutdownError, Stream, Timer, TimerCancelError, TimerRunError, UdpState,
     WaitError, WriteBuffer, WriteError, WriteQueue, WriteRequest, TCP, UDP,
 };
+#[cfg(target_os = "linux")]
+pub use thread_pool::ThreadPool;
 // The `Dynamic`-only decls (`main.zig` forwards `dynamic`/`backend`/`available`
 // from the selected Api(); on macOS they are the elided single-candidate ones —
 // `dynamic == false`, `backend == .kqueue` — and are not exported there).

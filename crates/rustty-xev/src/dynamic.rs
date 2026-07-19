@@ -5093,6 +5093,204 @@ mod tests {
         }
     }
 
+    // PORT NOTE (test-harness divergence, ports): see io_uring.rs's identical NOTE
+    // on its `PORT_*` registry — Rust's whole-crate parallel test harness means
+    // every fixed-port socket test (unlike the reference's serial `test{}` runner)
+    // needs its OWN port so concurrent tests never race a bind/connect. This is
+    // the `dynamic.rs`-local twin of that registry (3131-3134/3136 are claimed by
+    // kqueue.rs/epoll.rs/io_uring.rs; 3137 by `dynamic_udp_read_write` below).
+    const PORT_DYNAMIC_TCP_ROUNDTRIP: u16 = 3138;
+
+    // KAT — TCP accept/connect/send/recv/close round-trip through the Dynamic
+    // union, on BOTH candidate backends. This is the reference's `TCPDynamic`
+    // instantiation of `test "TCP: accept/connect/send/recv/close"` (tcp.zig:518,
+    // run via `TCPDynamic` at tcp.zig:498-500) — it exercises the dynamic `TCP`
+    // enum tagging (the accept/connect/read/write/close callback re-wraps +
+    // up/down-casts) plus the `ReadBuffer`/`WriteBuffer` to/from-backend
+    // conversions on the stream path. A ThreadPool is attached for BOTH backends,
+    // mirroring `dynamic_udp_read_write`/`dynamic_file_read_write`: the epoll
+    // arm's `TCP::close` rides it (the `.threadpool` flag), io_uring's is a real
+    // SQE that ignores it.
+    #[test]
+    fn dynamic_tcp_accept_connect_send_recv_close() {
+        use crate::thread_pool::{Config, ThreadPool};
+
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut pool = ThreadPool::init(Config::default());
+            let pool_ptr: *mut ThreadPool = &mut pool;
+            let mut loop_ = Loop::init(Options {
+                thread_pool: Some(pool_ptr),
+                ..Options::default()
+            })
+            .unwrap();
+
+            let address =
+                net::Address::parse_ip4(b"127.0.0.1", PORT_DYNAMIC_TCP_ROUNDTRIP).unwrap();
+            let server = TCP::init(address).unwrap();
+            server.bind(address).unwrap();
+            server.listen(1).unwrap();
+
+            let client = TCP::init(address).unwrap();
+
+            // Accept
+            let mut c_accept = Completion::default();
+            let mut server_conn: Option<TCP> = None;
+            unsafe {
+                server.accept(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_accept),
+                    ptr::addr_of_mut!(server_conn),
+                    |ud: *mut Option<TCP>,
+                     _l: *mut Loop,
+                     _c: *mut Completion,
+                     r: core::result::Result<TCP, AcceptError>| {
+                        *ud = Some(r.unwrap());
+                        CallbackAction::Disarm
+                    },
+                );
+            }
+            // `accept` re-tagged the zero-initialized completion.
+            assert_eq!(c_accept.tag(), be);
+
+            // Connect
+            let mut c_connect = Completion::default();
+            let mut connected = false;
+            unsafe {
+                client.connect(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_connect),
+                    address,
+                    ptr::addr_of_mut!(connected),
+                    |ud: *mut bool,
+                     _l: *mut Loop,
+                     _c: *mut Completion,
+                     _s: TCP,
+                     r: core::result::Result<(), ConnectError>| {
+                        r.unwrap();
+                        *ud = true;
+                        CallbackAction::Disarm
+                    },
+                );
+            }
+            assert_eq!(c_connect.tag(), be);
+
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(
+                server_conn.is_some(),
+                "backend {be:?} TCP accept did not complete"
+            );
+            assert!(connected, "backend {be:?} TCP connect did not complete");
+            let server_conn_tcp = server_conn.unwrap();
+
+            // Send
+            let send_buf = [1u8, 1, 2, 3, 5, 8, 13];
+            let mut c_write = Completion::default();
+            unsafe {
+                client.write(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_write),
+                    WriteBuffer::Slice(send_buf.as_slice() as *const [u8]),
+                    ptr::null_mut::<()>(),
+                    |_ud: *mut (),
+                     _l: *mut Loop,
+                     _c: *mut Completion,
+                     _s: TCP,
+                     _b: WriteBuffer,
+                     r: core::result::Result<usize, WriteError>| {
+                        r.unwrap();
+                        CallbackAction::Disarm
+                    },
+                );
+            }
+            assert_eq!(c_write.tag(), be);
+
+            // Receive
+            let mut c_read = Completion::default();
+            let mut recv_buf = [0u8; 128];
+            let mut recv_len: Option<usize> = None;
+            unsafe {
+                server_conn_tcp.read(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_read),
+                    ReadBuffer::Slice(&mut recv_buf[..] as *mut [u8]),
+                    ptr::addr_of_mut!(recv_len),
+                    |ud: *mut Option<usize>,
+                     _l: *mut Loop,
+                     _c: *mut Completion,
+                     _s: TCP,
+                     _b: ReadBuffer,
+                     r: core::result::Result<usize, ReadError>| {
+                        *ud = Some(r.unwrap());
+                        CallbackAction::Disarm
+                    },
+                );
+            }
+            assert_eq!(c_read.tag(), be);
+
+            // Wait for the send/receive
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(
+                recv_len.is_some(),
+                "backend {be:?} TCP read did not complete"
+            );
+            let recv_len = recv_len.unwrap();
+            assert!(recv_len > 0);
+            assert_eq!(send_buf.as_slice(), &recv_buf[0..recv_len]);
+
+            // Close (server_conn, server, client)
+            unsafe {
+                server_conn_tcp.close(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_read),
+                    ptr::null_mut::<()>(),
+                    |_ud: *mut (),
+                     _l: *mut Loop,
+                     _c: *mut Completion,
+                     _s: TCP,
+                     r: core::result::Result<(), CloseError>| {
+                        r.unwrap();
+                        CallbackAction::Disarm
+                    },
+                );
+                server.close(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_accept),
+                    ptr::null_mut::<()>(),
+                    |_ud: *mut (),
+                     _l: *mut Loop,
+                     _c: *mut Completion,
+                     _s: TCP,
+                     r: core::result::Result<(), CloseError>| {
+                        r.unwrap();
+                        CallbackAction::Disarm
+                    },
+                );
+                client.close(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_connect),
+                    ptr::null_mut::<()>(),
+                    |_ud: *mut (),
+                     _l: *mut Loop,
+                     _c: *mut Completion,
+                     _s: TCP,
+                     r: core::result::Result<(), CloseError>| {
+                        r.unwrap();
+                        CallbackAction::Disarm
+                    },
+                );
+            }
+            loop_.run(RunMode::UntilDone).unwrap();
+
+            loop_.deinit();
+            pool.shutdown();
+            pool.deinit();
+        }
+    }
+
     // KAT — UDP datagram round-trip through the Dynamic union, on BOTH candidate
     // backends. This is the reference's `UDPDynamic` instantiation of
     // `test "UDP: read/write"` (udp.zig:914 via udp.zig:894) — it exercises the
