@@ -924,24 +924,75 @@ impl Loop {
                 Some(Result::Cancel(Ok(())))
             }
 
-            Operation::Read { .. } => match unsafe { Completion::fd_maybe_dup(completion) } {
-                // DupFailed — surfaced as an immediate read error.
-                Err(()) => Some(Result::Read(Err(ReadError::Unexpected))),
-                Ok(reg_fd) => {
-                    let mut ev = libc::epoll_event {
-                        events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
-                        u64: completion as u64,
-                    };
-                    // SAFETY: register `reg_fd` for read readiness with our epoll fd.
-                    let rc =
-                        unsafe { libc::epoll_ctl(self.fd, libc::EPOLL_CTL_ADD, reg_fd, &mut ev) };
-                    if rc < 0 {
-                        Some(Result::Read(Err(ReadError::Unexpected)))
-                    } else {
-                        None
+            // PORT NOTE: the reference `.read` arm opens with `if
+            // (completion.flags.threadpool) { if (self.thread_schedule(completion))
+            // |_| return else |err| break :res .{ .read = err }; }` (epoll.zig:588)
+            // — a threadpool-flagged read (File's, epoll arm) is a BLOCKING op that
+            // rides the pool, exactly like `.close`/`.pread`/`.pwrite`. With no pool
+            // attached `thread_schedule` yields `ThreadPoolRequired`. An un-flagged
+            // read (GenericStream/TCP, which set `dup` not `threadpool`) registers
+            // with epoll below.
+            Operation::Read { .. } => {
+                if unsafe { (*completion).flags.threadpool } {
+                    match unsafe { self.thread_schedule(completion) } {
+                        Ok(()) => return,
+                        Err(()) => Some(Result::Read(Err(ReadError::ThreadPoolRequired))),
+                    }
+                } else {
+                    match unsafe { Completion::fd_maybe_dup(completion) } {
+                        // DupFailed — surfaced as an immediate read error.
+                        Err(()) => Some(Result::Read(Err(ReadError::Unexpected))),
+                        Ok(reg_fd) => {
+                            let mut ev = libc::epoll_event {
+                                events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
+                                u64: completion as u64,
+                            };
+                            // SAFETY: register `reg_fd` for read readiness with our epoll fd.
+                            let rc = unsafe {
+                                libc::epoll_ctl(self.fd, libc::EPOLL_CTL_ADD, reg_fd, &mut ev)
+                            };
+                            if rc < 0 {
+                                Some(Result::Read(Err(ReadError::Unexpected)))
+                            } else {
+                                None
+                            }
+                        }
                     }
                 }
-            },
+            }
+
+            // PORT NOTE: the `.pread` arm (epoll.zig:608) is byte-identical to
+            // `.read` — the same threadpool gate then the same IN|RDHUP epoll
+            // registration; only the perform-side syscall differs (`posix.pread`
+            // with the op's `offset`). File sets `threadpool = true` on pread
+            // (file.zig:131), so in practice the pool path is always taken here.
+            Operation::PRead { .. } => {
+                if unsafe { (*completion).flags.threadpool } {
+                    match unsafe { self.thread_schedule(completion) } {
+                        Ok(()) => return,
+                        Err(()) => Some(Result::PRead(Err(ReadError::ThreadPoolRequired))),
+                    }
+                } else {
+                    match unsafe { Completion::fd_maybe_dup(completion) } {
+                        Err(()) => Some(Result::PRead(Err(ReadError::Unexpected))),
+                        Ok(reg_fd) => {
+                            let mut ev = libc::epoll_event {
+                                events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
+                                u64: completion as u64,
+                            };
+                            // SAFETY: register `reg_fd` for read readiness with our epoll fd.
+                            let rc = unsafe {
+                                libc::epoll_ctl(self.fd, libc::EPOLL_CTL_ADD, reg_fd, &mut ev)
+                            };
+                            if rc < 0 {
+                                Some(Result::PRead(Err(ReadError::Unexpected)))
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                }
+            }
 
             Operation::Timer(_) => {
                 // Point back to completion since we need this.
@@ -1011,10 +1062,42 @@ impl Loop {
                 }
             }
 
+            // PORT NOTE: the reference `.write` arm opens with `if
+            // (completion.flags.threadpool) { if (self.thread_schedule(completion))
+            // |_| return else |err| break :res .{ .write = err }; }`
+            // (epoll.zig:632) — the write twin of the `.read` gate above. File sets
+            // `threadpool = true` on plain write (file.zig:142), so its writes ride
+            // the pool; an un-flagged write (GenericStream/TCP, which set `dup`)
+            // registers for OUT below.
             Operation::Write { .. } => {
-                match unsafe { self.epoll_register(completion, libc::EPOLLOUT as u32) } {
-                    Ok(()) => None,
-                    Err(()) => Some(Result::Write(Err(WriteError::Unexpected))),
+                if unsafe { (*completion).flags.threadpool } {
+                    match unsafe { self.thread_schedule(completion) } {
+                        Ok(()) => return,
+                        Err(()) => Some(Result::Write(Err(WriteError::ThreadPoolRequired))),
+                    }
+                } else {
+                    match unsafe { self.epoll_register(completion, libc::EPOLLOUT as u32) } {
+                        Ok(()) => None,
+                        Err(()) => Some(Result::Write(Err(WriteError::Unexpected))),
+                    }
+                }
+            }
+
+            // PORT NOTE: the `.pwrite` arm (epoll.zig:652) is the pwrite twin of
+            // `.write` — the same threadpool gate then the same OUT registration;
+            // only the perform-side syscall differs (`posix.pwrite` with `offset`).
+            // File sets `threadpool = true` on pwrite (file.zig:302).
+            Operation::PWrite { .. } => {
+                if unsafe { (*completion).flags.threadpool } {
+                    match unsafe { self.thread_schedule(completion) } {
+                        Ok(()) => return,
+                        Err(()) => Some(Result::PWrite(Err(WriteError::ThreadPoolRequired))),
+                    }
+                } else {
+                    match unsafe { self.epoll_register(completion, libc::EPOLLOUT as u32) } {
+                        Ok(()) => None,
+                        Err(()) => Some(Result::PWrite(Err(WriteError::Unexpected))),
+                    }
                 }
             }
 
@@ -1449,12 +1532,55 @@ impl Completion {
                 })
             }
 
+            // PORT NOTE: `.pread => |*op| { const n_ = switch (op.buffer) { .slice
+            // => posix.pread(op.fd, v, op.offset), .array => posix.pread(...) };
+            // ... if (n == 0) error.EOF else n }` (epoll.zig:992) — the `.read`
+            // body with `posix.pread(fd, buf, offset)` in place of `posix.read`.
+            Operation::PRead { fd, buffer, offset } => {
+                let off = *offset;
+                let n_: core::result::Result<usize, ReadError> = match buffer {
+                    ReadBuffer::Slice(v) => unsafe {
+                        posix_pread(*fd, (*v).cast::<u8>(), (*v).len(), off)
+                    },
+                    ReadBuffer::Array(v) => unsafe {
+                        posix_pread(*fd, v.as_mut_ptr(), v.len(), off)
+                    },
+                };
+
+                Result::PRead(match n_ {
+                    Ok(n) => {
+                        if n == 0 {
+                            Err(ReadError::EOF)
+                        } else {
+                            Ok(n)
+                        }
+                    }
+                    Err(err) => Err(err),
+                })
+            }
+
             Operation::Write { fd, buffer } => Result::Write(match buffer {
                 WriteBuffer::Slice(v) => unsafe { posix_write(*fd, (*v).cast::<u8>(), (*v).len()) },
                 WriteBuffer::Array { array, len } => unsafe {
                     posix_write(*fd, array.as_ptr(), *len)
                 },
             }),
+
+            // PORT NOTE: `.pwrite => |*op| .{ .pwrite = switch (op.buffer) { .slice
+            // => posix.pwrite(op.fd, v, op.offset), .array => posix.pwrite(op.fd,
+            // v.array[0..v.len], op.offset) } }` (epoll.zig:1013) — the `.write`
+            // body with `posix.pwrite(fd, buf, offset)`.
+            Operation::PWrite { fd, buffer, offset } => {
+                let off = *offset;
+                Result::PWrite(match buffer {
+                    WriteBuffer::Slice(v) => unsafe {
+                        posix_pwrite(*fd, (*v).cast::<u8>(), (*v).len(), off)
+                    },
+                    WriteBuffer::Array { array, len } => unsafe {
+                        posix_pwrite(*fd, array.as_ptr(), *len, off)
+                    },
+                })
+            }
 
             Operation::Send { fd, buffer } => Result::Send(match buffer {
                 WriteBuffer::Slice(v) => unsafe { posix_send(*fd, (*v).cast::<u8>(), (*v).len()) },
@@ -1540,8 +1666,10 @@ impl Completion {
             Operation::Connect { socket, .. } => Some(*socket),
             Operation::Poll { fd, .. } => Some(*fd),
             Operation::Read { fd, .. } => Some(*fd),
+            Operation::PRead { fd, .. } => Some(*fd),
             Operation::Recv { fd, .. } => Some(*fd),
             Operation::Write { fd, .. } => Some(*fd),
+            Operation::PWrite { fd, .. } => Some(*fd),
             Operation::Send { fd, .. } => Some(*fd),
             Operation::SendMsg { fd, .. } => Some(*fd),
             Operation::RecvMsg { fd, .. } => Some(*fd),
@@ -1564,8 +1692,8 @@ impl Completion {
 // PORT NOTE: `pub const Operation = union(OperationType) { ... }`.
 // `op: Operation = .{ .noop = {} }` — the `#[default]` `Noop` variant. Task 4 adds
 // the socket/process/stream tags (accept/connect/poll/write/send/recv/close/
-// shutdown); the reference's pread/pwrite/sendmsg/recvmsg tags stay DEFERRED (no
-// in-scope test/shell-path use — the brief scopes the socket subset).
+// shutdown); Task 5 adds `pread`/`pwrite` (the File watcher's offset-carrying
+// read/write, which ride the thread pool on epoll).
 #[derive(Default)]
 pub enum Operation {
     #[default]
@@ -1599,9 +1727,25 @@ pub enum Operation {
         buffer: ReadBuffer,
     },
 
+    /// PORT NOTE: `pread: struct { fd, buffer, offset: u64 }` — the offset-carrying
+    /// read used by the File watcher.
+    PRead {
+        fd: fd_t,
+        buffer: ReadBuffer,
+        offset: u64,
+    },
+
     Write {
         fd: fd_t,
         buffer: WriteBuffer,
+    },
+
+    /// PORT NOTE: `pwrite: struct { fd, buffer, offset: u64 }` — the offset-carrying
+    /// write used by the File watcher.
+    PWrite {
+        fd: fd_t,
+        buffer: WriteBuffer,
+        offset: u64,
     },
 
     Send {
@@ -1681,7 +1825,9 @@ pub enum Result {
     Connect(core::result::Result<(), ConnectError>),
     Poll(core::result::Result<(), PollError>),
     Read(core::result::Result<usize, ReadError>),
+    PRead(core::result::Result<usize, ReadError>),
     Write(core::result::Result<usize, WriteError>),
+    PWrite(core::result::Result<usize, WriteError>),
     Send(core::result::Result<usize, WriteError>),
     Recv(core::result::Result<usize, ReadError>),
     SendMsg(core::result::Result<usize, WriteError>),
@@ -1723,10 +1869,14 @@ pub enum PollError {
     Unexpected,
 }
 
-/// PORT NOTE: `pub const WriteError = ... || posix.WriteError || posix.SendError
-/// || error{DupFailed, Unknown}`. Collapsed to `Unexpected`.
+/// PORT NOTE: `pub const WriteError = ThreadPoolError || posix.EpollCtlError ||
+/// posix.WriteError || posix.PWriteError || posix.SendError || error{DupFailed,
+/// Unknown}`. The `ThreadPoolRequired` arm is reached when a threadpool-flagged
+/// write/pwrite (File's, epoll arm) runs with no pool attached; the rest of the
+/// posix syscall-error variants collapse to `Unexpected`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteError {
+    ThreadPoolRequired,
     Unexpected,
 }
 
@@ -1746,11 +1896,15 @@ pub enum ShutdownError {
     Unexpected,
 }
 
-/// PORT NOTE: `pub const ReadError = ... || error{DupFailed, EOF, Unknown}`. The
-/// posix syscall-error variants collapse to `Unexpected` (no in-scope test
-/// exercises a raw read-error path).
+/// PORT NOTE: `pub const ReadError = ThreadPoolError || posix.EpollCtlError ||
+/// posix.ReadError || posix.PReadError || ... || error{DupFailed, EOF, Unknown}`.
+/// The `ThreadPoolRequired` arm is reached when a threadpool-flagged read/pread
+/// (File's, epoll arm) runs with no pool attached; the rest of the posix
+/// syscall-error variants collapse to `Unexpected` (no in-scope test exercises a
+/// raw read-error path).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadError {
+    ThreadPoolRequired,
     EOF,
     Unexpected,
 }
@@ -1814,6 +1968,21 @@ unsafe fn posix_read(fd: fd_t, ptr: *mut u8, len: usize) -> core::result::Result
     }
 }
 
+// PORT NOTE: `posix.pread(fd, buf, offset)` wrapper (the `pread` perform path).
+unsafe fn posix_pread(
+    fd: fd_t,
+    ptr: *mut u8,
+    len: usize,
+    offset: u64,
+) -> core::result::Result<usize, ReadError> {
+    let n = unsafe { libc::pread(fd, ptr.cast(), len, offset as libc::off_t) };
+    if n < 0 {
+        Err(ReadError::Unexpected)
+    } else {
+        Ok(n as usize)
+    }
+}
+
 // PORT NOTE: `posix.recv(fd, buf, 0)` wrapper (the `recv` perform path).
 unsafe fn posix_recv(fd: fd_t, ptr: *mut u8, len: usize) -> core::result::Result<usize, ReadError> {
     let n = unsafe { libc::recv(fd, ptr.cast(), len, 0) };
@@ -1831,6 +2000,21 @@ unsafe fn posix_write(
     len: usize,
 ) -> core::result::Result<usize, WriteError> {
     let n = unsafe { libc::write(fd, ptr.cast(), len) };
+    if n < 0 {
+        Err(WriteError::Unexpected)
+    } else {
+        Ok(n as usize)
+    }
+}
+
+// PORT NOTE: `posix.pwrite(fd, buf, offset)` wrapper (the `pwrite` perform path).
+unsafe fn posix_pwrite(
+    fd: fd_t,
+    ptr: *const u8,
+    len: usize,
+    offset: u64,
+) -> core::result::Result<usize, WriteError> {
+    let n = unsafe { libc::pwrite(fd, ptr.cast(), len, offset as libc::off_t) };
     if n < 0 {
         Err(WriteError::Unexpected)
     } else {
@@ -4448,6 +4632,889 @@ impl UDP {
     }
 }
 
+// ---------------------------------------------------------------------------
+// File (watcher/file.zig `FileStream`, file.zig:33-317) — the per-backend
+// (`epoll`) instantiation of the regular-file watcher.
+//
+// PORT NOTE: `xev.File` = a regular-fd handle over `stream.Stream(xev, Self, .{
+// .close = true, .poll = true, .read = .read, .write = .write, .threadpool = true
+// })` PLUS the pread/pwrite ops. This is the epoll arm of the comptime `File(xev)`
+// split (`if (xev.dynamic) return FileDynamic(xev) else FileStream(xev)`,
+// file.zig:27-30); the Dynamic arm lives in `dynamic.rs`.
+//
+// PORT NOTE (the Stream monomorphization): File is the SAME stream generic as the
+// crate's `Stream`/`TCP`, instantiated with `.read = .read, .write = .write` (so
+// the ops are `Operation::Read`/`Operation::Write`, like `Stream`) but with
+// `.threadpool = true`. On epoll that ONE option flips the Readable/Writeable
+// flag switch (`if (options.threadpool) c.flags.threadpool = true else c.flags.dup
+// = true`): File's read/write set `threadpool` (routing them through the pool as
+// BLOCKING ops), where `Stream`/`TCP` set `dup`. `close` is byte-identical to
+// `Stream`'s (already `threadpool`); `poll` is identical (fd-only, no flag) except
+// the callback hands back a `File`. The pread/pwrite ops are File-only additions —
+// `.read`/`.write` with an `offset`, always threadpool-flagged (file.zig:131/302).
+// The buffer helpers (`Stream::write_buffer_length`/`write_buffer_remainder`) are
+// backend-shared and reused directly.
+// ---------------------------------------------------------------------------
+
+/// File operations.
+///
+/// These operations typically run on the event loop thread pool, rather
+/// than the core async OS APIs, because most core async OS APIs don't support
+/// async operations on regular files (with many caveats attached to that
+/// statement). This high-level abstraction will attempt to make the right
+/// decision about what to do but this should generally be used by
+/// operations that need to run on a thread pool. For operations that you're
+/// sure are better supported by core async OS APIs (such as sockets, pipes,
+/// TTYs, etc.), use a specific high-level abstraction like xev.TCP or
+/// the generic xev.Stream.
+//
+// PORT NOTE: `#[derive(Clone, Copy)]` — the reference `File` is a bare `fd` struct
+// passed BY VALUE everywhere (`read(self: Self)`, `?Self` in the tests).
+#[derive(Clone, Copy)]
+pub struct File {
+    /// The underlying file
+    fd: fd_t,
+}
+
+impl File {
+    /// Initialize a File from a file descriptor.
+    //
+    // PORT NOTE: `pub fn init(file: std.fs.File) !Self { return .{ .fd =
+    // file.handle }; }`. Rust has no `std.fs.File` handle-wrapper worth threading
+    // through this crate; the caller passes the raw fd (its `std.fs.File.handle`).
+    // The reference's `!Self` is vestigial (the body cannot error), so this is
+    // infallible.
+    pub fn init(fd: fd_t) -> File {
+        File { fd }
+    }
+
+    /// Initialize a File from a file descriptor.
+    pub fn init_fd(fd: fd_t) -> File {
+        File { fd }
+    }
+
+    /// Clean up any watcher resources. This does NOT close the file.
+    /// If you want to close the file you must call close or do so
+    /// synchronously.
+    pub fn deinit(&self) {
+        let _ = self;
+    }
+
+    // -------------------------------------------------------------------
+    // Readable (stream.zig:443). `options.read == .read` for File.
+    // -------------------------------------------------------------------
+
+    /// Read from the file. This performs a single read.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice) outlives
+    /// the read.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn read<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: ReadBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::read cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Read {
+                    fd: self.fd,
+                    buffer: buf,
+                },
+                userdata.cast::<c_void>(),
+                Self::read_trampoline::<UD, CB>,
+            );
+            // epoll arm: `if (options.threadpool) threadpool=true else dup=true`.
+            // File `options.threadpool == true` ⇒ threadpool.
+            Completion::set_threadpool(c, true);
+            (*loop_).add(c);
+        }
+    }
+
+    fn read_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let (fd, buffer) = match unsafe { &(*c_inner).op } {
+            Operation::Read { fd, buffer } => (*fd, *buffer),
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<usize, ReadError> = match r {
+            Result::Read(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            File::init_fd(fd),
+            buffer,
+            mapped,
+        )
+    }
+
+    /// Read from the file at the given offset.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice) outlives
+    /// the read.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn pread<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: ReadBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::pread cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::PRead {
+                    fd: self.fd,
+                    buffer: buf,
+                    offset,
+                },
+                userdata.cast::<c_void>(),
+                Self::pread_trampoline::<UD, CB>,
+            );
+            // epoll arm: `c.flags.threadpool = true` (file.zig:131).
+            Completion::set_threadpool(c, true);
+            (*loop_).add(c);
+        }
+    }
+
+    fn pread_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let (fd, buffer) = match unsafe { &(*c_inner).op } {
+            Operation::PRead { fd, buffer, .. } => (*fd, *buffer),
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<usize, ReadError> = match r {
+            Result::PRead(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            File::init_fd(fd),
+            buffer,
+            mapped,
+        )
+    }
+
+    // -------------------------------------------------------------------
+    // Writeable (stream.zig:620). `options.write == .write` for File.
+    // -------------------------------------------------------------------
+
+    /// Write to the file. This queues the writes to ensure they remain in
+    /// order.
+    ///
+    /// # Safety
+    /// `loop_`/`q`/`req` valid+stable, outliving the queued write; the loop holds
+    /// `&req.completion` raw across ticks.
+    pub unsafe fn queue_write<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        q: *mut WriteQueue,
+        req: *mut WriteRequest,
+        buf: WriteBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::queue_write cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            // req.* = .{ .full_write_buffer = buf };
+            *req = WriteRequest {
+                full_write_buffer: buf,
+                ..WriteRequest::default()
+            };
+            // Must be kept in sync with partial write logic inside the callback
+            self.write_init(ptr::addr_of_mut!((*req).completion), buf);
+            (*req).completion.userdata = q as *mut c_void;
+            (*req).completion.callback = Self::queue_write_trampoline::<UD, CB>;
+
+            // The userdata as to go on the WriteRequest because we need
+            // our actual completion userdata to be the WriteQueue.
+            (*req).userdata = userdata.cast::<c_void>();
+
+            // If the queue is empty, then we add our completion.
+            if (*q).empty() {
+                (*loop_).add(ptr::addr_of_mut!((*req).completion));
+            }
+
+            // We always add this item to our queue no matter what
+            (*q).push(req);
+        }
+    }
+
+    /// The ordered-write engine trampoline — chains completions through the
+    /// `WriteQueue` and handles partial writes by re-`write_init`-ing the remainder.
+    fn queue_write_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let q_inner = ud as *mut WriteQueue;
+        debug_assert!(!q_inner.is_null());
+
+        // We only peek the request here (not pop) because we may need to rearm
+        // this write if the write was partial.
+        let req_inner: *mut WriteRequest = unsafe { (*q_inner).head };
+        debug_assert!(!req_inner.is_null());
+
+        let (writer, cb_buf, cb_result) = File::write_result(c_inner, r);
+        let mut result: core::result::Result<usize, WriteError> = cb_result;
+
+        // Checks whether the entire buffer was written; if the write was partial,
+        // it re-submits the remainder of the buffer. (`write_buffer_length`/
+        // `write_buffer_remainder` are backend-shared with `Stream`.)
+        let queued_len = Stream::write_buffer_length(cb_buf);
+        if let Ok(written_len) = cb_result {
+            if written_len < queued_len {
+                // Write remainder of the buffer, reusing the same completion.
+                let rem_buf = Stream::write_buffer_remainder(cb_buf, written_len);
+                unsafe {
+                    writer.write_init(ptr::addr_of_mut!((*req_inner).completion), rem_buf);
+                    (*req_inner).completion.userdata = q_inner as *mut c_void;
+                    (*req_inner).completion.callback = Self::queue_write_trampoline::<UD, CB>;
+                    (*l_inner).add(ptr::addr_of_mut!((*req_inner).completion));
+                }
+                return CallbackAction::Disarm;
+            }
+
+            // We wrote the entire buffer; report the full length to the caller.
+            result = Ok(Stream::write_buffer_length(unsafe {
+                (*req_inner).full_write_buffer
+            }));
+        }
+
+        // We can pop previously peeked request.
+        let popped = unsafe { (*q_inner).pop() };
+        debug_assert!(!popped.is_null());
+
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let action = cb(
+            userdata_value::<UD>(unsafe { (*req_inner).userdata }),
+            l_inner,
+            c_inner,
+            writer,
+            unsafe { (*req_inner).full_write_buffer },
+            result,
+        );
+
+        // Rearm requeues this request at the end of the queue.
+        if action == CallbackAction::Rearm {
+            unsafe { (*q_inner).push(req_inner) };
+        }
+
+        // If we have another request, add that completion next.
+        let req_next = unsafe { (*q_inner).head };
+        if !req_next.is_null() {
+            unsafe { (*l_inner).add(ptr::addr_of_mut!((*req_next).completion)) };
+        }
+
+        // We always disarm because the completion in the next request will be used.
+        CallbackAction::Disarm
+    }
+
+    /// Write to the file. This performs a single write (NOT queued).
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice) outlives
+    /// the write.
+    pub unsafe fn write<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: WriteBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::write cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            self.write_init(c, buf);
+            (*c).userdata = userdata.cast::<c_void>();
+            (*c).callback = Self::write_trampoline::<UD, CB>;
+            (*loop_).add(c);
+        }
+    }
+
+    fn write_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let (writer, buf, result) = File::write_result(c_inner, r);
+        cb(userdata_value::<UD>(ud), l_inner, c_inner, writer, buf, result)
+    }
+
+    /// Extracts the result from a completion for a write callback (`.write` arm).
+    fn write_result(
+        c: *mut Completion,
+        r: Result,
+    ) -> (File, WriteBuffer, core::result::Result<usize, WriteError>) {
+        let (fd, buffer) = match unsafe { &(*c).op } {
+            Operation::Write { fd, buffer } => (*fd, *buffer),
+            _ => unreachable!(),
+        };
+        let result: core::result::Result<usize, WriteError> = match r {
+            Result::Write(res) => res,
+            _ => unreachable!(),
+        };
+        (File::init_fd(fd), buffer, result)
+    }
+
+    /// Initialize the completion c for a write. This does NOT set userdata or a
+    /// callback.
+    //
+    // PORT NOTE: epoll arm sets `c.flags.threadpool = true`
+    // (`options.threadpool == true`).
+    //
+    // # Safety
+    // `c` must be a valid, stable `Completion` pointer.
+    unsafe fn write_init(self, c: *mut Completion, buf: WriteBuffer) {
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Write {
+                    fd: self.fd,
+                    buffer: buf,
+                },
+                ptr::null_mut(),
+                noop_callback,
+            );
+            Completion::set_threadpool(c, true);
+        }
+    }
+
+    /// Write to the file at the given offset. This queues the writes to ensure
+    /// they remain in order.
+    ///
+    /// # Safety
+    /// `loop_`/`q`/`req` valid+stable, outliving the queued write; the loop holds
+    /// `&req.completion` raw across ticks.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn queue_pwrite<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        q: *mut WriteQueue,
+        req: *mut WriteRequest,
+        buf: WriteBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::queue_pwrite cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            // req.* = .{};
+            *req = WriteRequest {
+                full_write_buffer: buf,
+                ..WriteRequest::default()
+            };
+            self.pwrite_init(ptr::addr_of_mut!((*req).completion), buf, offset);
+            (*req).completion.userdata = q as *mut c_void;
+            (*req).completion.callback = Self::queue_pwrite_trampoline::<UD, CB>;
+
+            // The userdata as to go on the WriteRequest because we need
+            // our actual completion userdata to be the WriteQueue.
+            (*req).userdata = userdata.cast::<c_void>();
+
+            // If the queue is empty, then we add our completion.
+            if (*q).empty() {
+                (*loop_).add(ptr::addr_of_mut!((*req).completion));
+            }
+
+            // We always add this item to our queue no matter what
+            (*q).push(req);
+        }
+    }
+
+    /// The ordered-pwrite engine trampoline. Mirrors `queuePWrite`'s callback
+    /// (file.zig:172-208): pops the request, chains the next, but has NO
+    /// partial-write re-arm (pwrite requests are one-shot at their offset).
+    fn queue_pwrite_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let q_inner = ud as *mut WriteQueue;
+        debug_assert!(!q_inner.is_null());
+
+        // The queue MUST have a request because a completion can only be added if
+        // the queue is not empty, and nothing else should be popping!
+        let req_inner: *mut WriteRequest = unsafe { (*q_inner).pop() };
+        debug_assert!(!req_inner.is_null());
+
+        let (writer, buf, result) = File::pwrite_result(c_inner, r);
+
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let action = cb(
+            userdata_value::<UD>(unsafe { (*req_inner).userdata }),
+            l_inner,
+            c_inner,
+            writer,
+            buf,
+            result,
+        );
+
+        // Rearm requeues this request, it doesn't return rearm on the actual
+        // callback here...
+        if action == CallbackAction::Rearm {
+            unsafe { (*q_inner).push(req_inner) };
+        }
+
+        // If we have another request, add that completion next.
+        let req_next = unsafe { (*q_inner).head };
+        if !req_next.is_null() {
+            unsafe { (*l_inner).add(ptr::addr_of_mut!((*req_next).completion)) };
+        }
+
+        // We always disarm because the completion in the next request will be used.
+        CallbackAction::Disarm
+    }
+
+    /// Write to the file at the given offset. This performs a single write.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice) outlives
+    /// the write.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn pwrite<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: WriteBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::pwrite cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            self.pwrite_init(c, buf, offset);
+            (*c).userdata = userdata.cast::<c_void>();
+            (*c).callback = Self::pwrite_trampoline::<UD, CB>;
+            (*loop_).add(c);
+        }
+    }
+
+    fn pwrite_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let (writer, buf, result) = File::pwrite_result(c_inner, r);
+        cb(userdata_value::<UD>(ud), l_inner, c_inner, writer, buf, result)
+    }
+
+    /// Extracts the result from a completion for a pwrite callback (`.pwrite` arm).
+    //
+    // PORT NOTE: `pwrite_result` (file.zig:264) — the `.pwrite` twin of
+    // `write_result`.
+    fn pwrite_result(
+        c: *mut Completion,
+        r: Result,
+    ) -> (File, WriteBuffer, core::result::Result<usize, WriteError>) {
+        let (fd, buffer) = match unsafe { &(*c).op } {
+            Operation::PWrite { fd, buffer, .. } => (*fd, *buffer),
+            _ => unreachable!(),
+        };
+        let result: core::result::Result<usize, WriteError> = match r {
+            Result::PWrite(res) => res,
+            _ => unreachable!(),
+        };
+        (File::init_fd(fd), buffer, result)
+    }
+
+    /// Initialize the completion c for a pwrite. This does NOT set userdata or a
+    /// callback.
+    //
+    // PORT NOTE: `pwriteInit` (file.zig:276). epoll arm sets `c.flags.threadpool =
+    // true` (file.zig:302).
+    //
+    // # Safety
+    // `c` must be a valid, stable `Completion` pointer.
+    unsafe fn pwrite_init(self, c: *mut Completion, buf: WriteBuffer, offset: u64) {
+        unsafe {
+            *c = Completion::new_op(
+                Operation::PWrite {
+                    fd: self.fd,
+                    buffer: buf,
+                    offset,
+                },
+                ptr::null_mut(),
+                noop_callback,
+            );
+            Completion::set_threadpool(c, true);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Closeable (stream.zig:319). `options.close == true` for File.
+    // -------------------------------------------------------------------
+
+    /// Close the file.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn close<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<(), CloseError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::close cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Close { fd: self.fd },
+                userdata.cast::<c_void>(),
+                Self::close_trampoline::<UD, CB>,
+            );
+            // epoll arm: `c.flags.threadpool = true`.
+            Completion::set_threadpool(c, true);
+            (*loop_).add(c);
+        }
+    }
+
+    fn close_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<(), CloseError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let fd = match unsafe { &(*c_inner).op } {
+            Operation::Close { fd } => *fd,
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<(), CloseError> = match r {
+            Result::Close(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            File::init_fd(fd),
+            mapped,
+        )
+    }
+
+    // -------------------------------------------------------------------
+    // Pollable (stream.zig:139). `options.poll == true` for File.
+    // -------------------------------------------------------------------
+
+    /// Poll the file descriptor for the given event.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn poll<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        _event: PollEvent,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<PollEvent, PollError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::poll cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Poll {
+                    fd: self.fd,
+                    events: libc::EPOLLIN as u32,
+                },
+                userdata.cast::<c_void>(),
+                Self::poll_trampoline::<UD, CB>,
+            );
+            (*loop_).add(c);
+        }
+    }
+
+    fn poll_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<PollEvent, PollError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let fd = match unsafe { &(*c_inner).op } {
+            Operation::Poll { fd, .. } => *fd,
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<PollEvent, PollError> = match r {
+            Result::Poll(Ok(())) => Ok(PollEvent::Read),
+            Result::Poll(Err(e)) => Err(e),
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            File::init_fd(fd),
+            mapped,
+        )
+    }
+}
+
 // PORT NOTE: `test "Completion size"` (epoll.zig:1380) — the layout tripwire.
 //
 // PORT NOTE: the reference asserts the Zig `@sizeOf(Completion) == 208`. Rust's
@@ -6182,5 +7249,327 @@ mod tests {
                 libc::close(self.child);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // File watcher tests (watcher/file.zig `FileTests`). On epoll every File
+    // read/write/pread/pwrite is a BLOCKING op that rides the ThreadPool, so these
+    // exercise the whole epoll thread-pool round-trip (schedule -> worker
+    // `thread_perform` -> MPSC drain -> callback) AND the real multi-worker pool
+    // teardown at the end of each test (the exact path Task 1's deviation hardened
+    // — `Config::default()` resolves `max_threads = 0` to the host CPU count).
+    // -----------------------------------------------------------------------
+
+    // Creates a fresh empty temp file (read+write, truncated) and returns its raw
+    // fd + path. The caller closes the fd and removes the path.
+    fn temp_file() -> (fd_t, std::path::PathBuf) {
+        use std::os::unix::io::IntoRawFd;
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("rustty_xev_file_epoll_{}_{}", std::process::id(), n));
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        (f.into_raw_fd(), path)
+    }
+
+    // Opens an existing path read-only and returns its raw fd (a fresh fd resets the
+    // file offset, exactly as the reference reopens `f2` before the read).
+    fn open_read_fd(path: &std::path::Path) -> fd_t {
+        use std::os::unix::io::IntoRawFd;
+        std::fs::File::open(path).unwrap().into_raw_fd()
+    }
+
+    // test "read/write" (file.zig:596). write a payload via File.write (on the
+    // pool), then read it back through a freshly-opened fd.
+    #[test]
+    fn epoll_file_read_write() {
+        use crate::thread_pool::Config;
+
+        let mut pool = ThreadPool::init(Config::default());
+        let pool_ptr: *mut ThreadPool = &mut pool;
+        let mut loop_ = Loop::init(Options {
+            thread_pool: Some(pool_ptr),
+            ..Options::default()
+        })
+        .unwrap();
+
+        let (wfd, path) = temp_file();
+        let file = File::init(wfd);
+
+        let write_buf = [1u8, 1, 2, 3, 5, 8, 13];
+        let mut c_write = Completion::default();
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: File,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            assert_eq!(r.unwrap(), 7);
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.write(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                write_slice(&write_buf),
+                ptr::null_mut::<()>(),
+                write_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+
+        // Make sure the data is on disk.
+        assert_eq!(unsafe { libc::fsync(wfd) }, 0);
+
+        let rfd = open_read_fd(&path);
+        let file2 = File::init(rfd);
+        let mut read_buf = [0u8; 128];
+        let mut read_len: usize = 0;
+        let read_cb = |ud: *mut usize,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = r.unwrap() };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file2.read(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                read_slice(&mut read_buf),
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(read_len, write_buf.len());
+        assert_eq!(&write_buf, &read_buf[0..read_len]);
+
+        unsafe {
+            libc::close(wfd);
+            libc::close(rfd);
+        }
+        loop_.deinit();
+        pool.shutdown();
+        pool.deinit();
+        std::fs::remove_file(&path).ok();
+    }
+
+    // test "pread/pwrite" (file.zig:671). Same as read/write but with explicit
+    // offset 0 through File.pwrite / File.pread.
+    #[test]
+    fn epoll_file_pread_pwrite() {
+        use crate::thread_pool::Config;
+
+        let mut pool = ThreadPool::init(Config::default());
+        let pool_ptr: *mut ThreadPool = &mut pool;
+        let mut loop_ = Loop::init(Options {
+            thread_pool: Some(pool_ptr),
+            ..Options::default()
+        })
+        .unwrap();
+
+        let (wfd, path) = temp_file();
+        let file = File::init(wfd);
+
+        let write_buf = [1u8, 1, 2, 3, 5, 8, 13];
+        let mut c_write = Completion::default();
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: File,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            assert_eq!(r.unwrap(), 7);
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.pwrite(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                write_slice(&write_buf),
+                0,
+                ptr::null_mut::<()>(),
+                write_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+
+        assert_eq!(unsafe { libc::fsync(wfd) }, 0);
+
+        let rfd = open_read_fd(&path);
+        let file2 = File::init(rfd);
+        let mut read_buf = [0u8; 128];
+        let mut read_len: usize = 0;
+        let read_cb = |ud: *mut usize,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = r.unwrap() };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file2.pread(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                read_slice(&mut read_buf),
+                0,
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(&write_buf, &read_buf[0..read_len]);
+
+        unsafe {
+            libc::close(wfd);
+            libc::close(rfd);
+        }
+        loop_.deinit();
+        pool.shutdown();
+        pool.deinit();
+        std::fs::remove_file(&path).ok();
+    }
+
+    // test "queued writes" (file.zig:744). Two ordered File.queue_write requests
+    // ("1234" then "5678"); read back "12345678".
+    #[test]
+    fn epoll_file_queued_writes() {
+        use crate::thread_pool::Config;
+
+        let mut pool = ThreadPool::init(Config::default());
+        let pool_ptr: *mut ThreadPool = &mut pool;
+        let mut loop_ = Loop::init(Options {
+            thread_pool: Some(pool_ptr),
+            ..Options::default()
+        })
+        .unwrap();
+
+        let (wfd, path) = temp_file();
+        let file = File::init(wfd);
+
+        let mut write_queue: WriteQueue = WriteQueue::default();
+        let mut write_req: [WriteRequest; 2] =
+            [WriteRequest::default(), WriteRequest::default()];
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: File,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            r.unwrap();
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.queue_write::<(), _>(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[0]),
+                write_slice(b"1234"),
+                ptr::null_mut(),
+                write_cb,
+            );
+            file.queue_write::<(), _>(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[1]),
+                write_slice(b"5678"),
+                ptr::null_mut(),
+                write_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(write_queue.empty());
+
+        assert_eq!(unsafe { libc::fsync(wfd) }, 0);
+
+        let rfd = open_read_fd(&path);
+        let file2 = File::init(rfd);
+        let mut read_buf = [0u8; 128];
+        let mut read_len: usize = 0;
+        let mut c_read = Completion::default();
+        let read_cb = |ud: *mut usize,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = r.unwrap() };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file2.read(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_read),
+                read_slice(&mut read_buf),
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(b"12345678", &read_buf[0..read_len]);
+
+        unsafe {
+            libc::close(wfd);
+            libc::close(rfd);
+        }
+        loop_.deinit();
+        pool.shutdown();
+        pool.deinit();
+        std::fs::remove_file(&path).ok();
+    }
+
+    // test "poll" (file.zig:557). A pipe with a byte already written is poll-read
+    // ready. File.poll does NOT ride the pool (it registers with epoll directly),
+    // so no ThreadPool is attached here.
+    #[test]
+    fn epoll_file_poll() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        // Create our pipe and write to it so it's ready to be read.
+        let mut fds = [0 as fd_t; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (fds[0], fds[1]);
+        assert_eq!(unsafe { libc::write(write_fd, b"x".as_ptr().cast(), 1) }, 1);
+
+        let file = File::init_fd(read_fd);
+        let mut c = Completion::default();
+        let mut ready = false;
+        let poll_cb = |ud: *mut bool,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       r: core::result::Result<PollEvent, PollError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.poll(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c),
+                PollEvent::Read,
+                ptr::addr_of_mut!(ready),
+                poll_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(ready);
+
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        loop_.deinit();
     }
 }

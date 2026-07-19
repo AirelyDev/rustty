@@ -309,7 +309,8 @@ pub use process::WaitError as ProcessWaitError;
 //    macOS-gated `thread_pool` module, and `epoll::Loop`/`io_uring::Loop` carry no
 //    pool (epoll.rs:149-152; `Options.thread_pool` is an opaque `*mut c_void`
 //    there). DEFERRALS.md.
-//  - `File`/`TCP`/`UDP`: deferred on BOTH targets (zero ghostty uses).
+//  - `File`/`TCP`/`UDP`: Linux-only exports (Tasks 3/4/5); still deferred on macOS
+//    (zero ghostty uses there — the kqueue block above omits them).
 //
 // `Backend` (above), `Error` + `NotifyError` (below) are declared ONCE at the
 // crate root for every target and so are absent from this list: `dynamic::Error`/
@@ -320,7 +321,7 @@ pub use process::WaitError as ProcessWaitError;
 #[cfg(target_os = "linux")]
 pub use dynamic::{
     AcceptError, Async, CallbackAction, CancelError, CloseError, Completion, CompletionState,
-    ConnectError, Loop, Options, PollError, PollEvent, Process, ProcessWaitError, ReadBuffer,
+    ConnectError, File, Loop, Options, PollError, PollEvent, Process, ProcessWaitError, ReadBuffer,
     ReadError, RunMode, ShutdownError, Stream, Timer, TimerCancelError, TimerRunError, UdpState,
     WaitError, WriteBuffer, WriteError, WriteQueue, WriteRequest, TCP, UDP,
 };

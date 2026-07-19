@@ -903,17 +903,22 @@ pub enum ShutdownError {
 }
 
 /// PORT NOTE: `ErrorSet(&.{"WriteError"})` = io_uring `{Canceled, BrokenPipe,
-/// ConnectionResetByPeer, Unexpected}` || epoll `{Unexpected}`.
+/// ConnectionResetByPeer, Unexpected}` || epoll `{ThreadPoolRequired, Unexpected}`
+/// (the epoll `WriteError` gained `ThreadPoolRequired` with the File watcher's
+/// threadpool-flagged write/pwrite, Task 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteError {
     Canceled,
     BrokenPipe,
     ConnectionResetByPeer,
+    ThreadPoolRequired,
     Unexpected,
 }
 
 /// PORT NOTE: `ErrorSet(&.{"ReadError"})` = io_uring `{EOF, Canceled,
-/// Unexpected, ConnectionResetByPeer}` || epoll `{EOF, Unexpected}`.
+/// Unexpected, ConnectionResetByPeer}` || epoll `{ThreadPoolRequired, EOF,
+/// Unexpected}` (the epoll `ReadError` gained `ThreadPoolRequired` with the File
+/// watcher's threadpool-flagged read/pread, Task 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum ReadError {
@@ -921,6 +926,7 @@ pub enum ReadError {
     EOF,
     Canceled,
     ConnectionResetByPeer,
+    ThreadPoolRequired,
     Unexpected,
 }
 
@@ -1026,6 +1032,7 @@ impl WriteError {
     }
     fn from_epoll(e: epoll::WriteError) -> WriteError {
         match e {
+            epoll::WriteError::ThreadPoolRequired => WriteError::ThreadPoolRequired,
             epoll::WriteError::Unexpected => WriteError::Unexpected,
         }
     }
@@ -1042,6 +1049,7 @@ impl ReadError {
     }
     fn from_epoll(e: epoll::ReadError) -> ReadError {
         match e {
+            epoll::ReadError::ThreadPoolRequired => ReadError::ThreadPoolRequired,
             epoll::ReadError::EOF => ReadError::EOF,
             epoll::ReadError::Unexpected => ReadError::Unexpected,
         }
@@ -3666,6 +3674,736 @@ fn udp_backend_mismatch(u: UDP, be: Backend) -> ! {
 }
 
 // ---------------------------------------------------------------------------
+// File (watcher/file.zig `FileDynamic`, file.zig:319-499).
+//
+// PORT NOTE: `FileDynamic(xev)` is `struct { backend: xev.Union(&.{"File"}) }`
+// over the two candidates' `api.File`. Spelled as a Rust `enum` (self-tagged)
+// exactly like `TCP`/`UDP`/`Async` above — both arms are `Copy` fd handles passed
+// BY VALUE and never pointer-projected, so a self-describing enum is safe and is
+// what the read/write/pread/pwrite callbacks re-wrap into. The dynamic
+// `read`/`write`/`pread`/`pwrite`/`close`/`poll`/`queueWrite` forward to each
+// `api.File`'s methods (its `S = stream.Stream(xev, File, .{ .type = "File", ... })`
+// decls plus the pread/pwrite pair).
+// ---------------------------------------------------------------------------
+
+/// File operations.
+///
+/// These operations typically run on the event loop thread pool, rather
+/// than the core async OS APIs, because most core async OS APIs don't support
+/// async operations on regular files (with many caveats attached to that
+/// statement). This high-level abstraction will attempt to make the right
+/// decision about what to do but this should generally be used by
+/// operations that need to run on a thread pool.
+//
+// PORT NOTE: `Copy` — `File` is held/copied by value (the read/write callbacks
+// yield a fresh `File`).
+#[derive(Clone, Copy)]
+pub enum File {
+    IoUring(io_uring::File),
+    Epoll(epoll::File),
+}
+
+impl File {
+    /// Initialize a File from a file descriptor.
+    //
+    // PORT NOTE: `pub fn init(file: std.fs.File) !Self` (file.zig:341) — the
+    // `switch (xev.backend)` constructor. Rust has no `std.fs.File`; the caller
+    // passes the raw fd (its `.handle`). Infallible (the reference's `!Self` is
+    // vestigial for both arms).
+    pub fn init(fd: libc::c_int) -> core::result::Result<File, Error> {
+        Ok(match backend() {
+            Backend::IoUring => File::IoUring(io_uring::File::init(fd)),
+            Backend::Epoll => File::Epoll(epoll::File::init(fd)),
+            be => unreachable!("non-candidate backend {be:?}"),
+        })
+    }
+
+    /// Initialize a File from a file descriptor.
+    //
+    // PORT NOTE: `pub fn initFd(fd: std.posix.pid_t) Self` (file.zig:354) — note
+    // the reference's `pid_t` parameter type is an upstream typo for `fd_t` (both
+    // are `c_int`); ported as the `fd_t` it actually is.
+    pub fn init_fd(fd: libc::c_int) -> File {
+        match backend() {
+            Backend::IoUring => File::IoUring(io_uring::File::init_fd(fd)),
+            Backend::Epoll => File::Epoll(epoll::File::init_fd(fd)),
+            be => unreachable!("non-candidate backend {be:?}"),
+        }
+    }
+
+    /// Clean up any watcher resources. This does NOT close the file.
+    pub fn deinit(&self) {
+        match self {
+            File::IoUring(f) => f.deinit(),
+            File::Epoll(f) => f.deinit(),
+        }
+    }
+
+    /// The `File::from_io_uring`/`from_epoll` re-wrap the read/write/pread/pwrite
+    /// trampolines do (`initFd(s_inner.fd)`, file.zig:408/472).
+    fn from_io_uring(f: io_uring::File) -> File {
+        File::IoUring(f)
+    }
+
+    /// See `from_io_uring`.
+    fn from_epoll(f: epoll::File) -> File {
+        File::Epoll(f)
+    }
+
+    // -------------------------------------------------------------------
+    // Readable (stream.zig:444 dynamic arm). `options.read == .read`.
+    // -------------------------------------------------------------------
+
+    /// Read from the file. This performs a single read.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice)
+    /// outlives the read.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn read<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: ReadBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::read cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+
+        match (self, backend()) {
+            (File::IoUring(f), Backend::IoUring) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::IoUring);
+                f.read(
+                    Loop::as_io_uring(loop_),
+                    Completion::as_io_uring(c),
+                    buf.to_io_uring(),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_io_uring(l_inner),
+                            Completion::from_io_uring(c_inner),
+                            File::from_io_uring(s_inner),
+                            ReadBuffer::from_io_uring(b_inner),
+                            r_inner.map_err(ReadError::from_io_uring),
+                        )
+                    },
+                );
+            },
+            (File::Epoll(f), Backend::Epoll) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::Epoll);
+                f.read(
+                    Loop::as_epoll(loop_),
+                    Completion::as_epoll(c),
+                    buf.to_epoll(),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_epoll(l_inner),
+                            Completion::from_epoll(c_inner),
+                            File::from_epoll(s_inner),
+                            ReadBuffer::from_epoll(b_inner),
+                            r_inner.map_err(ReadError::from_epoll),
+                        )
+                    },
+                );
+            },
+            (f, be) => file_backend_mismatch(f, be),
+        }
+    }
+
+    /// Read from the file at the given offset.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice)
+    /// outlives the read.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn pread<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: ReadBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::pread cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+
+        match (self, backend()) {
+            (File::IoUring(f), Backend::IoUring) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::IoUring);
+                f.pread(
+                    Loop::as_io_uring(loop_),
+                    Completion::as_io_uring(c),
+                    buf.to_io_uring(),
+                    offset,
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_io_uring(l_inner),
+                            Completion::from_io_uring(c_inner),
+                            File::from_io_uring(s_inner),
+                            ReadBuffer::from_io_uring(b_inner),
+                            r_inner.map_err(ReadError::from_io_uring),
+                        )
+                    },
+                );
+            },
+            (File::Epoll(f), Backend::Epoll) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::Epoll);
+                f.pread(
+                    Loop::as_epoll(loop_),
+                    Completion::as_epoll(c),
+                    buf.to_epoll(),
+                    offset,
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_epoll(l_inner),
+                            Completion::from_epoll(c_inner),
+                            File::from_epoll(s_inner),
+                            ReadBuffer::from_epoll(b_inner),
+                            r_inner.map_err(ReadError::from_epoll),
+                        )
+                    },
+                );
+            },
+            (f, be) => file_backend_mismatch(f, be),
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Writeable (stream.zig:621 dynamic arm). `options.write == .write`.
+    // -------------------------------------------------------------------
+
+    /// Write to the file. This performs a single write, unordered with respect to
+    /// other writes; use `queue_write` if ordering matters.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable; `buf` (if a slice) outlives the write.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn write<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: WriteBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::write cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+
+        match (self, backend()) {
+            (File::IoUring(f), Backend::IoUring) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::IoUring);
+                f.write(
+                    Loop::as_io_uring(loop_),
+                    Completion::as_io_uring(c),
+                    buf.to_io_uring(),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_io_uring(l_inner),
+                            Completion::from_io_uring(c_inner),
+                            File::from_io_uring(s_inner),
+                            WriteBuffer::from_io_uring(b_inner),
+                            r_inner.map_err(WriteError::from_io_uring),
+                        )
+                    },
+                );
+            },
+            (File::Epoll(f), Backend::Epoll) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::Epoll);
+                f.write(
+                    Loop::as_epoll(loop_),
+                    Completion::as_epoll(c),
+                    buf.to_epoll(),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_epoll(l_inner),
+                            Completion::from_epoll(c_inner),
+                            File::from_epoll(s_inner),
+                            WriteBuffer::from_epoll(b_inner),
+                            r_inner.map_err(WriteError::from_epoll),
+                        )
+                    },
+                );
+            },
+            (f, be) => file_backend_mismatch(f, be),
+        }
+    }
+
+    /// Write to the file at the given offset. This performs a single write.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable; `buf` (if a slice) outlives the write.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn pwrite<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: WriteBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::pwrite cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+
+        match (self, backend()) {
+            (File::IoUring(f), Backend::IoUring) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::IoUring);
+                f.pwrite(
+                    Loop::as_io_uring(loop_),
+                    Completion::as_io_uring(c),
+                    buf.to_io_uring(),
+                    offset,
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_io_uring(l_inner),
+                            Completion::from_io_uring(c_inner),
+                            File::from_io_uring(s_inner),
+                            WriteBuffer::from_io_uring(b_inner),
+                            r_inner.map_err(WriteError::from_io_uring),
+                        )
+                    },
+                );
+            },
+            (File::Epoll(f), Backend::Epoll) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::Epoll);
+                f.pwrite(
+                    Loop::as_epoll(loop_),
+                    Completion::as_epoll(c),
+                    buf.to_epoll(),
+                    offset,
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_epoll(l_inner),
+                            Completion::from_epoll(c_inner),
+                            File::from_epoll(s_inner),
+                            WriteBuffer::from_epoll(b_inner),
+                            r_inner.map_err(WriteError::from_epoll),
+                        )
+                    },
+                );
+            },
+            (f, be) => file_backend_mismatch(f, be),
+        }
+    }
+
+    /// Write to the file. This queues the writes to ensure they remain in order.
+    //
+    // PORT NOTE: same `q.ensureTag(tag)` + wholesale-`req`-init contract as
+    // `Stream::queue_write` (stream.zig:686); the `c` handed to `cb` MUST NOT be
+    // dereferenced (see `Stream::queue_write`'s PORT NOTE).
+    ///
+    /// # Safety
+    /// `loop_`/`q`/`req` valid+stable, outliving the queued write; the loop holds
+    /// `&req.completion` raw across ticks. The `c` passed to `cb` MUST NOT be
+    /// dereferenced.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn queue_write<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        q: *mut WriteQueue,
+        req: *mut WriteRequest,
+        buf: WriteBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::queue_write cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+
+        match (self, backend()) {
+            (File::IoUring(f), Backend::IoUring) => unsafe {
+                WriteQueue::ensure_tag_raw(q, Backend::IoUring);
+                f.queue_write(
+                    Loop::as_io_uring(loop_),
+                    WriteQueue::as_io_uring(q),
+                    WriteRequest::as_io_uring(req),
+                    buf.to_io_uring(),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_io_uring(l_inner),
+                            Completion::from_io_uring(c_inner),
+                            File::from_io_uring(s_inner),
+                            WriteBuffer::from_io_uring(b_inner),
+                            r_inner.map_err(WriteError::from_io_uring),
+                        )
+                    },
+                );
+            },
+            (File::Epoll(f), Backend::Epoll) => unsafe {
+                WriteQueue::ensure_tag_raw(q, Backend::Epoll);
+                f.queue_write(
+                    Loop::as_epoll(loop_),
+                    WriteQueue::as_epoll(q),
+                    WriteRequest::as_epoll(req),
+                    buf.to_epoll(),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_epoll(l_inner),
+                            Completion::from_epoll(c_inner),
+                            File::from_epoll(s_inner),
+                            WriteBuffer::from_epoll(b_inner),
+                            r_inner.map_err(WriteError::from_epoll),
+                        )
+                    },
+                );
+            },
+            (f, be) => file_backend_mismatch(f, be),
+        }
+    }
+
+    /// Write to the file at the given offset. This queues the writes to ensure
+    /// they remain in order.
+    //
+    // PORT NOTE: `queuePWrite` (file.zig:151). Same `WriteRequest`-wholesale-init
+    // contract as `queue_write`; the reference does NOT `q.ensureTag` here (the
+    // completion lives inside the `WriteRequest`, fully re-initialized by
+    // `queuePWrite`). The `c` handed to `cb` MUST NOT be dereferenced.
+    ///
+    /// # Safety
+    /// `loop_`/`q`/`req` valid+stable, outliving the queued write; the loop holds
+    /// `&req.completion` raw across ticks. The `c` passed to `cb` MUST NOT be
+    /// dereferenced.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn queue_pwrite<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        q: *mut WriteQueue,
+        req: *mut WriteRequest,
+        buf: WriteBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::queue_pwrite cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+
+        match (self, backend()) {
+            (File::IoUring(f), Backend::IoUring) => unsafe {
+                WriteQueue::ensure_tag_raw(q, Backend::IoUring);
+                f.queue_pwrite(
+                    Loop::as_io_uring(loop_),
+                    WriteQueue::as_io_uring(q),
+                    WriteRequest::as_io_uring(req),
+                    buf.to_io_uring(),
+                    offset,
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_io_uring(l_inner),
+                            Completion::from_io_uring(c_inner),
+                            File::from_io_uring(s_inner),
+                            WriteBuffer::from_io_uring(b_inner),
+                            r_inner.map_err(WriteError::from_io_uring),
+                        )
+                    },
+                );
+            },
+            (File::Epoll(f), Backend::Epoll) => unsafe {
+                WriteQueue::ensure_tag_raw(q, Backend::Epoll);
+                f.queue_pwrite(
+                    Loop::as_epoll(loop_),
+                    WriteQueue::as_epoll(q),
+                    WriteRequest::as_epoll(req),
+                    buf.to_epoll(),
+                    offset,
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, b_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_epoll(l_inner),
+                            Completion::from_epoll(c_inner),
+                            File::from_epoll(s_inner),
+                            WriteBuffer::from_epoll(b_inner),
+                            r_inner.map_err(WriteError::from_epoll),
+                        )
+                    },
+                );
+            },
+            (f, be) => file_backend_mismatch(f, be),
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Closeable (stream.zig:320 dynamic arm). `options.close == true`.
+    // -------------------------------------------------------------------
+
+    /// Close the file.
+    ///
+    /// # Safety
+    /// `c`/`loop_` must be valid, stable pointers held raw by the loop.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn close<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<(), CloseError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::close cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+
+        match (self, backend()) {
+            (File::IoUring(f), Backend::IoUring) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::IoUring);
+                f.close(
+                    Loop::as_io_uring(loop_),
+                    Completion::as_io_uring(c),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_io_uring(l_inner),
+                            Completion::from_io_uring(c_inner),
+                            File::from_io_uring(s_inner),
+                            r_inner.map_err(CloseError::from_io_uring),
+                        )
+                    },
+                );
+            },
+            (File::Epoll(f), Backend::Epoll) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::Epoll);
+                f.close(
+                    Loop::as_epoll(loop_),
+                    Completion::as_epoll(c),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_epoll(l_inner),
+                            Completion::from_epoll(c_inner),
+                            File::from_epoll(s_inner),
+                            r_inner.map_err(CloseError::from_epoll),
+                        )
+                    },
+                );
+            },
+            (f, be) => file_backend_mismatch(f, be),
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Pollable (stream.zig:140 dynamic arm). `options.poll == true`.
+    // -------------------------------------------------------------------
+
+    /// Poll for events but do not perform any operations on them being ready.
+    ///
+    /// # Safety
+    /// `c`/`loop_` must be valid, stable pointers held raw by the loop.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn poll<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        event: PollEvent,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<PollEvent, PollError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::poll cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+
+        match (self, backend()) {
+            (File::IoUring(f), Backend::IoUring) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::IoUring);
+                f.poll(
+                    Loop::as_io_uring(loop_),
+                    Completion::as_io_uring(c),
+                    event.to_io_uring(),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_io_uring(l_inner),
+                            Completion::from_io_uring(c_inner),
+                            File::from_io_uring(s_inner),
+                            r_inner
+                                .map(PollEvent::from_io_uring)
+                                .map_err(PollError::from_io_uring),
+                        )
+                    },
+                );
+            },
+            (File::Epoll(f), Backend::Epoll) => unsafe {
+                Completion::ensure_tag_raw(c, Backend::Epoll);
+                f.poll(
+                    Loop::as_epoll(loop_),
+                    Completion::as_epoll(c),
+                    event.to_epoll(),
+                    userdata,
+                    move |ud, l_inner, c_inner, s_inner, r_inner| {
+                        cb(
+                            ud,
+                            Loop::from_epoll(l_inner),
+                            Completion::from_epoll(c_inner),
+                            File::from_epoll(s_inner),
+                            r_inner.map(PollEvent::from_epoll).map_err(PollError::from_epoll),
+                        )
+                    },
+                );
+            },
+            (f, be) => file_backend_mismatch(f, be),
+        }
+    }
+}
+
+/// The `File`-method mismatch-panic, shared like `tcp_backend_mismatch`.
+fn file_backend_mismatch(f: File, be: Backend) -> ! {
+    let self_be = match f {
+        File::IoUring(_) => Backend::IoUring,
+        File::Epoll(_) => Backend::Epoll,
+    };
+    panic!(
+        "File handle backend {self_be:?} does not match the global backend {be:?} — \
+         the backend must be set before initializing any other types"
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Trait-bound tripwires (brief Step 3: "Assert the trait bounds with
 // `const _: fn() = || { fn needs<T: Copy>(){} needs::<Async>(); };`-style
 // compile checks").
@@ -3720,6 +4458,7 @@ const _: fn() = || {
     needs_copy::<Async>();
     needs_copy::<Timer>();
     needs_copy::<Stream>();
+    needs_copy::<File>();
 
     // `Default`: REQUIRED by termio (Exec default-constructs `write_queue`; its
     // `SegmentedPool` default-constructs pooled `WriteRequest`s). Hand-written
@@ -4542,6 +5281,277 @@ mod tests {
                 libc::close(self.parent);
                 libc::close(self.child);
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // File watcher tests through the Dynamic union, on BOTH candidate backends.
+    // The reference's `FileDynamic` instantiation of `FileTests` (file.zig:495).
+    // These exercise the dynamic File union tagging (the read/write/pread/pwrite
+    // callback re-wraps + the ReadBuffer/WriteBuffer to/from-backend conversions).
+    // A ThreadPool is attached for BOTH backends: the epoll arm's File ops ride it
+    // (blocking), io_uring's are native SQEs that ignore it.
+    // -----------------------------------------------------------------------
+
+    fn temp_file() -> (libc::c_int, std::path::PathBuf) {
+        use std::os::unix::io::IntoRawFd;
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir()
+            .join(format!("rustty_xev_file_dyn_{}_{}", std::process::id(), n));
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        (f.into_raw_fd(), path)
+    }
+
+    fn open_read_fd(path: &std::path::Path) -> libc::c_int {
+        use std::os::unix::io::IntoRawFd;
+        std::fs::File::open(path).unwrap().into_raw_fd()
+    }
+
+    // test "read/write" + "pread/pwrite" + "queued writes" (file.zig:596/671/744),
+    // all through the Dynamic `File`, on each candidate backend.
+    #[test]
+    fn dynamic_file_read_write() {
+        use crate::thread_pool::{Config, ThreadPool};
+
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut pool = ThreadPool::init(Config::default());
+            let pool_ptr: *mut ThreadPool = &mut pool;
+            let mut loop_ = Loop::init(Options {
+                thread_pool: Some(pool_ptr),
+                ..Options::default()
+            })
+            .unwrap();
+
+            let (wfd, path) = temp_file();
+            let file = File::init(wfd).unwrap();
+
+            // --- plain write then read ---
+            let write_buf = [1u8, 1, 2, 3, 5, 8, 13];
+            let mut c_write = Completion::default();
+            let write_cb = |_ud: *mut (),
+                            _l: *mut Loop,
+                            _c: *mut Completion,
+                            _s: File,
+                            _b: WriteBuffer,
+                            r: core::result::Result<usize, WriteError>| {
+                assert_eq!(r.unwrap(), 7);
+                CallbackAction::Disarm
+            };
+            unsafe {
+                file.write(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_write),
+                    WriteBuffer::Slice(write_buf.as_slice() as *const [u8]),
+                    ptr::null_mut::<()>(),
+                    write_cb,
+                );
+            }
+            assert_eq!(c_write.tag(), be);
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert_eq!(unsafe { libc::fsync(wfd) }, 0);
+
+            let rfd = open_read_fd(&path);
+            let file2 = File::init(rfd).unwrap();
+            let mut read_buf = [0u8; 128];
+            let mut read_len: usize = 0;
+            let read_cb = |ud: *mut usize,
+                           _l: *mut Loop,
+                           _c: *mut Completion,
+                           _s: File,
+                           _b: ReadBuffer,
+                           r: core::result::Result<usize, ReadError>| {
+                unsafe { *ud = r.unwrap() };
+                CallbackAction::Disarm
+            };
+            let mut c_read = Completion::default();
+            unsafe {
+                file2.read(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_read),
+                    ReadBuffer::Slice(&mut read_buf[..] as *mut [u8]),
+                    ptr::addr_of_mut!(read_len),
+                    read_cb,
+                );
+            }
+            assert_eq!(c_read.tag(), be);
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert_eq!(read_len, write_buf.len());
+            assert_eq!(&write_buf, &read_buf[0..read_len]);
+
+            unsafe {
+                libc::close(wfd);
+                libc::close(rfd);
+            }
+            std::fs::remove_file(&path).ok();
+
+            // --- pread/pwrite at offset 0 ---
+            let (wfd2, path2) = temp_file();
+            let pfile = File::init(wfd2).unwrap();
+            let mut c_pwrite = Completion::default();
+            unsafe {
+                pfile.pwrite(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_pwrite),
+                    WriteBuffer::Slice(write_buf.as_slice() as *const [u8]),
+                    0,
+                    ptr::null_mut::<()>(),
+                    write_cb,
+                );
+            }
+            assert_eq!(c_pwrite.tag(), be);
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert_eq!(unsafe { libc::fsync(wfd2) }, 0);
+
+            let rfd2 = open_read_fd(&path2);
+            let pfile2 = File::init(rfd2).unwrap();
+            let mut pread_buf = [0u8; 128];
+            let mut pread_len: usize = 0;
+            let mut c_pread = Completion::default();
+            unsafe {
+                pfile2.pread(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_pread),
+                    ReadBuffer::Slice(&mut pread_buf[..] as *mut [u8]),
+                    0,
+                    ptr::addr_of_mut!(pread_len),
+                    read_cb,
+                );
+            }
+            assert_eq!(c_pread.tag(), be);
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert_eq!(&write_buf, &pread_buf[0..pread_len]);
+
+            unsafe {
+                libc::close(wfd2);
+                libc::close(rfd2);
+            }
+            std::fs::remove_file(&path2).ok();
+
+            // --- queued writes ("1234" then "5678") ---
+            let (wfd3, path3) = temp_file();
+            let qfile = File::init(wfd3).unwrap();
+            let mut write_queue: WriteQueue = WriteQueue::default();
+            let mut write_req: [WriteRequest; 2] =
+                [WriteRequest::default(), WriteRequest::default()];
+            // The queued writes are 4 bytes each, so this callback only asserts
+            // success (unlike `write_cb`, which pins the 7-byte payload above).
+            let qwrite_cb = |_ud: *mut (),
+                             _l: *mut Loop,
+                             _c: *mut Completion,
+                             _s: File,
+                             _b: WriteBuffer,
+                             r: core::result::Result<usize, WriteError>| {
+                r.unwrap();
+                CallbackAction::Disarm
+            };
+            unsafe {
+                qfile.queue_write::<(), _>(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(write_queue),
+                    ptr::addr_of_mut!(write_req[0]),
+                    WriteBuffer::Slice(b"1234".as_slice() as *const [u8]),
+                    ptr::null_mut(),
+                    qwrite_cb,
+                );
+                qfile.queue_write::<(), _>(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(write_queue),
+                    ptr::addr_of_mut!(write_req[1]),
+                    WriteBuffer::Slice(b"5678".as_slice() as *const [u8]),
+                    ptr::null_mut(),
+                    qwrite_cb,
+                );
+            }
+            assert_eq!(write_queue.tag(), be);
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(write_queue.empty());
+            assert_eq!(unsafe { libc::fsync(wfd3) }, 0);
+
+            let rfd3 = open_read_fd(&path3);
+            let qfile2 = File::init(rfd3).unwrap();
+            let mut qread_buf = [0u8; 128];
+            let mut qread_len: usize = 0;
+            let mut c_qread = Completion::default();
+            unsafe {
+                qfile2.read(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_qread),
+                    ReadBuffer::Slice(&mut qread_buf[..] as *mut [u8]),
+                    ptr::addr_of_mut!(qread_len),
+                    read_cb,
+                );
+            }
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert_eq!(b"12345678", &qread_buf[0..qread_len]);
+
+            unsafe {
+                libc::close(wfd3);
+                libc::close(rfd3);
+            }
+            std::fs::remove_file(&path3).ok();
+
+            loop_.deinit();
+            pool.shutdown();
+            pool.deinit();
+        }
+    }
+
+    // test "poll" (file.zig:557) through the Dynamic `File`, on each candidate.
+    #[test]
+    fn dynamic_file_poll() {
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+
+            let mut fds = [0 as libc::c_int; 2];
+            assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+            let (read_fd, write_fd) = (fds[0], fds[1]);
+            assert_eq!(unsafe { libc::write(write_fd, b"x".as_ptr().cast(), 1) }, 1);
+
+            let file = File::init_fd(read_fd);
+            let mut c = Completion::default();
+            let mut ready = false;
+            let poll_cb = |ud: *mut bool,
+                           _l: *mut Loop,
+                           _c: *mut Completion,
+                           _s: File,
+                           r: core::result::Result<PollEvent, PollError>| {
+                r.unwrap();
+                unsafe { *ud = true };
+                CallbackAction::Disarm
+            };
+            unsafe {
+                file.poll(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c),
+                    PollEvent::Read,
+                    ptr::addr_of_mut!(ready),
+                    poll_cb,
+                );
+            }
+            assert_eq!(c.tag(), be);
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(ready);
+
+            unsafe {
+                libc::close(read_fd);
+                libc::close(write_fd);
+            }
+            loop_.deinit();
         }
     }
 }

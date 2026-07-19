@@ -1709,6 +1709,20 @@ impl Loop {
                 }
             },
 
+            // PORT NOTE: `.pread => |*v| switch (v.buffer) { ... sqe.prep_read(v.fd,
+            // buf, v.offset) }` (io_uring.zig:436) — the `.read` arm with the op's
+            // actual `offset` instead of the `-1` "use the fd's offset" sentinel.
+            Operation::PRead { fd, buffer, offset } => unsafe {
+                match buffer {
+                    ReadBuffer::Array(buf) => {
+                        prep_read(sqe, *fd, buf.as_mut_ptr(), buf.len(), *offset)
+                    }
+                    ReadBuffer::Slice(buf) => {
+                        prep_read(sqe, *fd, (*buf).cast::<u8>(), (*buf).len(), *offset)
+                    }
+                }
+            },
+
             Operation::Recv { fd, buffer } => unsafe {
                 match buffer {
                     ReadBuffer::Array(buf) => prep_recv(sqe, *fd, buf.as_mut_ptr(), buf.len(), 0),
@@ -1781,6 +1795,21 @@ impl Loop {
                     }
                     WriteBuffer::Slice(buf) => {
                         prep_write(sqe, *fd, (*buf).cast::<u8>(), (*buf).len(), -1i64 as u64)
+                    }
+                }
+            },
+
+            // PORT NOTE: `.pwrite => |*v| switch (v.buffer) { .array => sqe.prep_write(
+            // v.fd, buf.array[0..buf.len], v.offset), .slice => sqe.prep_write(v.fd,
+            // buf, v.offset) }` (io_uring.zig:539) — the `.write` arm with the op's
+            // actual `offset`.
+            Operation::PWrite { fd, buffer, offset } => unsafe {
+                match buffer {
+                    WriteBuffer::Array { array, len } => {
+                        prep_write(sqe, *fd, array.as_ptr(), *len, *offset)
+                    }
+                    WriteBuffer::Slice(buf) => {
+                        prep_write(sqe, *fd, (*buf).cast::<u8>(), (*buf).len(), *offset)
                     }
                 }
             },
@@ -2086,6 +2115,10 @@ impl Completion {
 
             Operation::Read { buffer, .. } => Result::Read(read_result(Some(buffer), res)),
 
+            // PORT NOTE: `.pread => .{ .pread = self.readResult(.pread, res) }`
+            // (io_uring.zig:698) — the same `readResult` decoder as `.read`.
+            Operation::PRead { buffer, .. } => Result::PRead(read_result(Some(buffer), res)),
+
             Operation::Recv { buffer, .. } => Result::Recv(read_result(Some(buffer), res)),
 
             Operation::Send { .. } => Result::Send(if res >= 0 {
@@ -2179,6 +2212,19 @@ impl Completion {
                 }
             }
 
+            // PORT NOTE: `.pwrite => .{ .pwrite = if (res >= 0) @intCast(res) else
+            // switch { .CANCELED => error.Canceled, else => unexpectedErrno } }`
+            // (io_uring.zig:786). NOTE: unlike `.write`, the reference's `.pwrite`
+            // decode has NO `EINTR => .rearm` auto-retry — reproduced faithfully.
+            Operation::PWrite { .. } => Result::PWrite(if res >= 0 {
+                Ok(res as usize)
+            } else {
+                Err(match -res {
+                    libc::ECANCELED => WriteError::Canceled,
+                    _ => WriteError::Unexpected,
+                })
+            }),
+
             Operation::Cancel { .. } => Result::Cancel(if res >= 0 {
                 Ok(())
             } else {
@@ -2248,11 +2294,10 @@ fn read_result(buffer: Option<&ReadBuffer>, res: i32) -> core::result::Result<us
 // io_uring's own reference tests exercise, unlike epoll's; `libc::msghdr`/`iovec`
 // supply the surface epoll.rs lacked a reason to reach for).
 //
-// PORT NOTE: the reference's `pread`/`pwrite` tags stay DEFERRED exactly as they
-// are in epoll.rs — no in-scope test or shell path constructs them, and both are
-// pure `offset`-carrying variants of the already-ported `Read`/`Write` (the
-// `prep_read`/`prep_write` helpers already take the `offset` argument, so landing
-// them later is additive and reshapes nothing).
+// PORT NOTE: Task 5 adds `pread`/`pwrite` (the File watcher's offset-carrying
+// read/write) — pure `offset`-carrying variants of `Read`/`Write`; on io_uring
+// they are native SQEs (`prep_read`/`prep_write` with the op's `offset` instead of
+// `-1`), NOT thread-pool ops (that split is epoll-only).
 #[derive(Default)]
 pub enum Operation {
     /// Do nothing. This operation will not be queued and will never
@@ -2283,6 +2328,13 @@ pub enum Operation {
 
     /// Read
     Read { fd: fd_t, buffer: ReadBuffer },
+
+    /// Read at an offset (the File watcher's offset-carrying read).
+    PRead {
+        fd: fd_t,
+        buffer: ReadBuffer,
+        offset: u64,
+    },
 
     /// Receive a message from a socket.
     Recv { fd: fd_t, buffer: ReadBuffer },
@@ -2330,6 +2382,13 @@ pub enum Operation {
     /// Write
     Write { fd: fd_t, buffer: WriteBuffer },
 
+    /// Write at an offset (the File watcher's offset-carrying write).
+    PWrite {
+        fd: fd_t,
+        buffer: WriteBuffer,
+        offset: u64,
+    },
+
     /// A oneshot or repeating timer. For io_uring, this is implemented
     /// using the timeout mechanism.
     Timer(Timer),
@@ -2376,12 +2435,14 @@ pub enum Result {
     Connect(core::result::Result<(), ConnectError>),
     Poll(core::result::Result<(), PollError>),
     Read(core::result::Result<usize, ReadError>),
+    PRead(core::result::Result<usize, ReadError>),
     Recv(core::result::Result<usize, ReadError>),
     Send(core::result::Result<usize, WriteError>),
     SendMsg(core::result::Result<usize, WriteError>),
     RecvMsg(core::result::Result<usize, ReadError>),
     Shutdown(core::result::Result<(), ShutdownError>),
     Write(core::result::Result<usize, WriteError>),
+    PWrite(core::result::Result<usize, WriteError>),
     Timer(core::result::Result<TimerTrigger, TimerError>),
     TimerRemove(core::result::Result<(), TimerRemoveError>),
     Cancel(core::result::Result<(), CancelError>),
@@ -4989,6 +5050,869 @@ impl UDP {
     }
 }
 
+// ---------------------------------------------------------------------------
+// File (watcher/file.zig `FileStream`, file.zig:33-317) — the per-backend
+// (`io_uring`) instantiation of the regular-file watcher.
+//
+// PORT NOTE: `xev.File` = a regular-fd handle over `stream.Stream(xev, Self, .{
+// .close = true, .poll = true, .read = .read, .write = .write, .threadpool = true
+// })` PLUS pread/pwrite. On io_uring the `.threadpool` option is IRRELEVANT — the
+// backend has no thread pool, so read/write/close/pread/pwrite are all native SQEs
+// (the `if (options.threadpool) ...` flag switches are `{}` / no-ops on this arm).
+// File is therefore the io_uring `Stream` with the callbacks handing back a `File`
+// PLUS the pread/pwrite ops (native `IORING_OP_READ`/`WRITE` SQEs carrying the
+// op's `offset` instead of the `-1` "use fd offset" sentinel). The Dynamic arm
+// lives in `dynamic.rs`. The buffer helpers (`Stream::write_buffer_length`/
+// `write_buffer_remainder`) are backend-shared and reused directly.
+// ---------------------------------------------------------------------------
+
+/// File operations.
+///
+/// These operations typically run on the event loop thread pool, rather
+/// than the core async OS APIs, because most core async OS APIs don't support
+/// async operations on regular files (with many caveats attached to that
+/// statement). This high-level abstraction will attempt to make the right
+/// decision about what to do but this should generally be used by
+/// operations that need to run on a thread pool. For operations that you're
+/// sure are better supported by core async OS APIs (such as sockets, pipes,
+/// TTYs, etc.), use a specific high-level abstraction like xev.TCP or
+/// the generic xev.Stream.
+//
+// PORT NOTE: `#[derive(Clone, Copy)]` — the reference `File` is a bare `fd` struct
+// passed BY VALUE everywhere.
+#[derive(Clone, Copy)]
+pub struct File {
+    /// The underlying file
+    fd: fd_t,
+}
+
+impl File {
+    /// Initialize a File from a file descriptor.
+    //
+    // PORT NOTE: `pub fn init(file: std.fs.File) !Self`. Rust has no `std.fs.File`
+    // wrapper worth threading through this crate; the caller passes the raw fd (its
+    // `std.fs.File.handle`). The reference's `!Self` is vestigial (infallible).
+    pub fn init(fd: fd_t) -> File {
+        File { fd }
+    }
+
+    /// Initialize a File from a file descriptor.
+    pub fn init_fd(fd: fd_t) -> File {
+        File { fd }
+    }
+
+    /// Clean up any watcher resources. This does NOT close the file.
+    pub fn deinit(&self) {
+        let _ = self;
+    }
+
+    // -------------------------------------------------------------------
+    // Readable (stream.zig:443). `options.read == .read` for File.
+    // -------------------------------------------------------------------
+
+    /// Read from the file. This performs a single read.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice) outlives
+    /// the read — the KERNEL writes it asynchronously.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn read<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: ReadBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::read cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Read {
+                    fd: self.fd,
+                    buffer: buf,
+                },
+                userdata.cast::<c_void>(),
+                Self::read_trampoline::<UD, CB>,
+            );
+            // io_uring arm of the flags switch: `{}` (nothing to set).
+            (*loop_).add(c);
+        }
+    }
+
+    fn read_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let (fd, buffer) = match unsafe { &(*c_inner).op } {
+            Operation::Read { fd, buffer } => (*fd, *buffer),
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<usize, ReadError> = match r {
+            Result::Read(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            File::init_fd(fd),
+            buffer,
+            mapped,
+        )
+    }
+
+    /// Read from the file at the given offset.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice) outlives
+    /// the read — the KERNEL writes it asynchronously.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn pread<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: ReadBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::pread cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::PRead {
+                    fd: self.fd,
+                    buffer: buf,
+                    offset,
+                },
+                userdata.cast::<c_void>(),
+                Self::pread_trampoline::<UD, CB>,
+            );
+            // io_uring arm of the flags switch: `{}` (nothing to set).
+            (*loop_).add(c);
+        }
+    }
+
+    fn pread_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                ReadBuffer,
+                core::result::Result<usize, ReadError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let (fd, buffer) = match unsafe { &(*c_inner).op } {
+            Operation::PRead { fd, buffer, .. } => (*fd, *buffer),
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<usize, ReadError> = match r {
+            Result::PRead(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            File::init_fd(fd),
+            buffer,
+            mapped,
+        )
+    }
+
+    // -------------------------------------------------------------------
+    // Writeable (stream.zig:620). `options.write == .write` for File.
+    // -------------------------------------------------------------------
+
+    /// Write to the file. This queues the writes to ensure they remain in
+    /// order.
+    ///
+    /// # Safety
+    /// `loop_`/`q`/`req` valid+stable, outliving the queued write; the loop holds
+    /// `&req.completion` raw across ticks.
+    pub unsafe fn queue_write<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        q: *mut WriteQueue,
+        req: *mut WriteRequest,
+        buf: WriteBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::queue_write cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            // req.* = .{ .full_write_buffer = buf };
+            *req = WriteRequest {
+                full_write_buffer: buf,
+                ..WriteRequest::default()
+            };
+            // Must be kept in sync with partial write logic inside the callback
+            self.write_init(ptr::addr_of_mut!((*req).completion), buf);
+            (*req).completion.userdata = q as *mut c_void;
+            (*req).completion.callback = Self::queue_write_trampoline::<UD, CB>;
+
+            // The userdata as to go on the WriteRequest because we need
+            // our actual completion userdata to be the WriteQueue.
+            (*req).userdata = userdata.cast::<c_void>();
+
+            // If the queue is empty, then we add our completion. Otherwise,
+            // the previously queued writes will trigger this one.
+            if (*q).empty() {
+                (*loop_).add(ptr::addr_of_mut!((*req).completion));
+            }
+
+            // We always add this item to our queue no matter what
+            (*q).push(req);
+        }
+    }
+
+    /// The ordered-write engine trampoline — chains completions through the
+    /// `WriteQueue` and handles partial writes by re-`write_init`-ing the remainder.
+    fn queue_write_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let q_inner = ud as *mut WriteQueue;
+        debug_assert!(!q_inner.is_null());
+
+        // We only peek the request here (not pop) because we may need to rearm
+        // this write if the write was partial.
+        let req_inner: *mut WriteRequest = unsafe { (*q_inner).head };
+        debug_assert!(!req_inner.is_null());
+
+        let (writer, cb_buf, cb_result) = File::write_result(c_inner, r);
+        let mut result: core::result::Result<usize, WriteError> = cb_result;
+
+        // Checks whether the entire buffer was written; if the write was partial,
+        // it re-submits the remainder of the buffer. (`write_buffer_length`/
+        // `write_buffer_remainder` are backend-shared with `Stream`.)
+        let queued_len = Stream::write_buffer_length(cb_buf);
+        if let Ok(written_len) = cb_result {
+            if written_len < queued_len {
+                // Write remainder of the buffer, reusing the same completion.
+                let rem_buf = Stream::write_buffer_remainder(cb_buf, written_len);
+                unsafe {
+                    writer.write_init(ptr::addr_of_mut!((*req_inner).completion), rem_buf);
+                    (*req_inner).completion.userdata = q_inner as *mut c_void;
+                    (*req_inner).completion.callback = Self::queue_write_trampoline::<UD, CB>;
+                    (*l_inner).add(ptr::addr_of_mut!((*req_inner).completion));
+                }
+                return CallbackAction::Disarm;
+            }
+
+            // We wrote the entire buffer; report the full length to the caller.
+            result = Ok(Stream::write_buffer_length(unsafe {
+                (*req_inner).full_write_buffer
+            }));
+        }
+
+        // We can pop previously peeked request.
+        let popped = unsafe { (*q_inner).pop() };
+        debug_assert!(!popped.is_null());
+
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let action = cb(
+            userdata_value::<UD>(unsafe { (*req_inner).userdata }),
+            l_inner,
+            c_inner,
+            writer,
+            unsafe { (*req_inner).full_write_buffer },
+            result,
+        );
+
+        // Rearm requeues this request at the end of the queue.
+        if action == CallbackAction::Rearm {
+            unsafe { (*q_inner).push(req_inner) };
+        }
+
+        // If we have another request, add that completion next.
+        let req_next = unsafe { (*q_inner).head };
+        if !req_next.is_null() {
+            unsafe { (*l_inner).add(ptr::addr_of_mut!((*req_next).completion)) };
+        }
+
+        // We always disarm because the completion in the next request will be used.
+        CallbackAction::Disarm
+    }
+
+    /// Write to the file. This performs a single write (NOT queued).
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice) outlives
+    /// the write — the KERNEL reads it asynchronously.
+    pub unsafe fn write<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: WriteBuffer,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::write cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            self.write_init(c, buf);
+            (*c).userdata = userdata.cast::<c_void>();
+            (*c).callback = Self::write_trampoline::<UD, CB>;
+            (*loop_).add(c);
+        }
+    }
+
+    fn write_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let (writer, buf, result) = File::write_result(c_inner, r);
+        cb(userdata_value::<UD>(ud), l_inner, c_inner, writer, buf, result)
+    }
+
+    /// Extracts the result from a completion for a write callback (`.write` arm).
+    fn write_result(
+        c: *mut Completion,
+        r: Result,
+    ) -> (File, WriteBuffer, core::result::Result<usize, WriteError>) {
+        let (fd, buffer) = match unsafe { &(*c).op } {
+            Operation::Write { fd, buffer } => (*fd, *buffer),
+            _ => unreachable!(),
+        };
+        let result: core::result::Result<usize, WriteError> = match r {
+            Result::Write(res) => res,
+            _ => unreachable!(),
+        };
+        (File::init_fd(fd), buffer, result)
+    }
+
+    /// Initialize the completion c for a write. This does NOT set userdata or a
+    /// callback.
+    //
+    // PORT NOTE: io_uring arm of the flags switch is `{}` (nothing to set).
+    //
+    // # Safety
+    // `c` must be a valid, stable `Completion` pointer.
+    unsafe fn write_init(self, c: *mut Completion, buf: WriteBuffer) {
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Write {
+                    fd: self.fd,
+                    buffer: buf,
+                },
+                ptr::null_mut(),
+                noop_callback,
+            );
+        }
+    }
+
+    /// Write to the file at the given offset. This queues the writes to ensure
+    /// they remain in order.
+    ///
+    /// # Safety
+    /// `loop_`/`q`/`req` valid+stable, outliving the queued write; the loop holds
+    /// `&req.completion` raw across ticks.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn queue_pwrite<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        q: *mut WriteQueue,
+        req: *mut WriteRequest,
+        buf: WriteBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::queue_pwrite cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            // req.* = .{};
+            *req = WriteRequest {
+                full_write_buffer: buf,
+                ..WriteRequest::default()
+            };
+            self.pwrite_init(ptr::addr_of_mut!((*req).completion), buf, offset);
+            (*req).completion.userdata = q as *mut c_void;
+            (*req).completion.callback = Self::queue_pwrite_trampoline::<UD, CB>;
+
+            // The userdata as to go on the WriteRequest because we need
+            // our actual completion userdata to be the WriteQueue.
+            (*req).userdata = userdata.cast::<c_void>();
+
+            // If the queue is empty, then we add our completion.
+            if (*q).empty() {
+                (*loop_).add(ptr::addr_of_mut!((*req).completion));
+            }
+
+            // We always add this item to our queue no matter what
+            (*q).push(req);
+        }
+    }
+
+    /// The ordered-pwrite engine trampoline. Mirrors `queuePWrite`'s callback
+    /// (file.zig:172-208): pops the request, chains the next, but has NO
+    /// partial-write re-arm (pwrite requests are one-shot at their offset).
+    fn queue_pwrite_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let q_inner = ud as *mut WriteQueue;
+        debug_assert!(!q_inner.is_null());
+
+        let req_inner: *mut WriteRequest = unsafe { (*q_inner).pop() };
+        debug_assert!(!req_inner.is_null());
+
+        let (writer, buf, result) = File::pwrite_result(c_inner, r);
+
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let action = cb(
+            userdata_value::<UD>(unsafe { (*req_inner).userdata }),
+            l_inner,
+            c_inner,
+            writer,
+            buf,
+            result,
+        );
+
+        // Rearm requeues this request, it doesn't return rearm on the actual
+        // callback here...
+        if action == CallbackAction::Rearm {
+            unsafe { (*q_inner).push(req_inner) };
+        }
+
+        // If we have another request, add that completion next.
+        let req_next = unsafe { (*q_inner).head };
+        if !req_next.is_null() {
+            unsafe { (*l_inner).add(ptr::addr_of_mut!((*req_next).completion)) };
+        }
+
+        // We always disarm because the completion in the next request will be used.
+        CallbackAction::Disarm
+    }
+
+    /// Write to the file at the given offset. This performs a single write.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop); `buf` (if a slice) outlives
+    /// the write — the KERNEL reads it asynchronously.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn pwrite<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        buf: WriteBuffer,
+        offset: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::pwrite cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            self.pwrite_init(c, buf, offset);
+            (*c).userdata = userdata.cast::<c_void>();
+            (*c).callback = Self::pwrite_trampoline::<UD, CB>;
+            (*loop_).add(c);
+        }
+    }
+
+    fn pwrite_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                WriteBuffer,
+                core::result::Result<usize, WriteError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let (writer, buf, result) = File::pwrite_result(c_inner, r);
+        cb(userdata_value::<UD>(ud), l_inner, c_inner, writer, buf, result)
+    }
+
+    /// Extracts the result from a completion for a pwrite callback (`.pwrite` arm).
+    //
+    // PORT NOTE: `pwrite_result` (file.zig:264) — the `.pwrite` twin of
+    // `write_result`.
+    fn pwrite_result(
+        c: *mut Completion,
+        r: Result,
+    ) -> (File, WriteBuffer, core::result::Result<usize, WriteError>) {
+        let (fd, buffer) = match unsafe { &(*c).op } {
+            Operation::PWrite { fd, buffer, .. } => (*fd, *buffer),
+            _ => unreachable!(),
+        };
+        let result: core::result::Result<usize, WriteError> = match r {
+            Result::PWrite(res) => res,
+            _ => unreachable!(),
+        };
+        (File::init_fd(fd), buffer, result)
+    }
+
+    /// Initialize the completion c for a pwrite. This does NOT set userdata or a
+    /// callback.
+    //
+    // PORT NOTE: `pwriteInit` (file.zig:276). io_uring arm of the flags switch is
+    // `{}` (nothing to set).
+    //
+    // # Safety
+    // `c` must be a valid, stable `Completion` pointer.
+    unsafe fn pwrite_init(self, c: *mut Completion, buf: WriteBuffer, offset: u64) {
+        unsafe {
+            *c = Completion::new_op(
+                Operation::PWrite {
+                    fd: self.fd,
+                    buffer: buf,
+                    offset,
+                },
+                ptr::null_mut(),
+                noop_callback,
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Closeable (stream.zig:319). `options.close == true` for File.
+    // -------------------------------------------------------------------
+
+    /// Close the file.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn close<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<(), CloseError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::close cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Close { fd: self.fd },
+                userdata.cast::<c_void>(),
+                Self::close_trampoline::<UD, CB>,
+            );
+            // io_uring arm of the flags switch: `{}` (nothing to set).
+            (*loop_).add(c);
+        }
+    }
+
+    fn close_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<(), CloseError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let fd = match unsafe { &(*c_inner).op } {
+            Operation::Close { fd } => *fd,
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<(), CloseError> = match r {
+            Result::Close(res) => res,
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            File::init_fd(fd),
+            mapped,
+        )
+    }
+
+    // -------------------------------------------------------------------
+    // Pollable (stream.zig:139). `options.poll == true` for File.
+    // -------------------------------------------------------------------
+
+    /// Poll the file descriptor for the given event.
+    ///
+    /// # Safety
+    /// `c`/`loop_` valid+stable (held raw by the loop).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub unsafe fn poll<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        _event: PollEvent,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<PollEvent, PollError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(
+                size_of::<CB>() == 0,
+                "File::poll cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb"
+            )
+        };
+        let _ = cb;
+
+        unsafe {
+            *c = Completion::new_op(
+                Operation::Poll {
+                    fd: self.fd,
+                    events: libc::POLLIN as u32,
+                },
+                userdata.cast::<c_void>(),
+                Self::poll_trampoline::<UD, CB>,
+            );
+            (*loop_).add(c);
+        }
+    }
+
+    fn poll_trampoline<UD, CB>(
+        ud: *mut c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                File,
+                core::result::Result<PollEvent, PollError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
+        let fd = match unsafe { &(*c_inner).op } {
+            Operation::Poll { fd, .. } => *fd,
+            _ => unreachable!(),
+        };
+        let mapped: core::result::Result<PollEvent, PollError> = match r {
+            Result::Poll(Ok(())) => Ok(PollEvent::Read),
+            Result::Poll(Err(e)) => Err(e),
+            _ => unreachable!(),
+        };
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            File::init_fd(fd),
+            mapped,
+        )
+    }
+}
+
 // PORT NOTE: `test "Completion size"` (io_uring.zig:1117) — the layout tripwire.
 //
 // PORT NOTE: the reference asserts the Zig `@sizeOf(Completion) == 152`. Rust's
@@ -6723,5 +7647,285 @@ mod tests {
                 libc::close(self.child);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // File watcher tests (watcher/file.zig `FileTests`). On io_uring every File
+    // read/write/pread/pwrite is a NATIVE SQE (no thread pool involved), so these
+    // are plain regular-file round-trips on the live ring — the io_uring twin of
+    // epoll.rs's pool-backed File tests.
+    // -----------------------------------------------------------------------
+
+    fn temp_file() -> (fd_t, std::path::PathBuf) {
+        use std::os::unix::io::IntoRawFd;
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir()
+            .join(format!("rustty_xev_file_iouring_{}_{}", std::process::id(), n));
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        (f.into_raw_fd(), path)
+    }
+
+    fn open_read_fd(path: &std::path::Path) -> fd_t {
+        use std::os::unix::io::IntoRawFd;
+        std::fs::File::open(path).unwrap().into_raw_fd()
+    }
+
+    // test "read/write" (file.zig:596).
+    #[test]
+    fn io_uring_file_read_write() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        let (wfd, path) = temp_file();
+        let file = File::init(wfd);
+
+        let write_buf = [1u8, 1, 2, 3, 5, 8, 13];
+        let mut c_write = Completion::default();
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: File,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            assert_eq!(r.unwrap(), 7);
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.write(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                write_slice(&write_buf),
+                ptr::null_mut::<()>(),
+                write_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+
+        assert_eq!(unsafe { libc::fsync(wfd) }, 0);
+
+        let rfd = open_read_fd(&path);
+        let file2 = File::init(rfd);
+        let mut read_buf = [0u8; 128];
+        let mut read_len: usize = 0;
+        let read_cb = |ud: *mut usize,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = r.unwrap() };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file2.read(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                read_slice(&mut read_buf),
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(read_len, write_buf.len());
+        assert_eq!(&write_buf, &read_buf[0..read_len]);
+
+        unsafe {
+            libc::close(wfd);
+            libc::close(rfd);
+        }
+        loop_.deinit();
+        std::fs::remove_file(&path).ok();
+    }
+
+    // test "pread/pwrite" (file.zig:671).
+    #[test]
+    fn io_uring_file_pread_pwrite() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        let (wfd, path) = temp_file();
+        let file = File::init(wfd);
+
+        let write_buf = [1u8, 1, 2, 3, 5, 8, 13];
+        let mut c_write = Completion::default();
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: File,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            assert_eq!(r.unwrap(), 7);
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.pwrite(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                write_slice(&write_buf),
+                0,
+                ptr::null_mut::<()>(),
+                write_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+
+        assert_eq!(unsafe { libc::fsync(wfd) }, 0);
+
+        let rfd = open_read_fd(&path);
+        let file2 = File::init(rfd);
+        let mut read_buf = [0u8; 128];
+        let mut read_len: usize = 0;
+        let read_cb = |ud: *mut usize,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = r.unwrap() };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file2.pread(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_write),
+                read_slice(&mut read_buf),
+                0,
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(&write_buf, &read_buf[0..read_len]);
+
+        unsafe {
+            libc::close(wfd);
+            libc::close(rfd);
+        }
+        loop_.deinit();
+        std::fs::remove_file(&path).ok();
+    }
+
+    // test "queued writes" (file.zig:744).
+    #[test]
+    fn io_uring_file_queued_writes() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        let (wfd, path) = temp_file();
+        let file = File::init(wfd);
+
+        let mut write_queue: WriteQueue = WriteQueue::default();
+        let mut write_req: [WriteRequest; 2] =
+            [WriteRequest::default(), WriteRequest::default()];
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: File,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            r.unwrap();
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.queue_write::<(), _>(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[0]),
+                write_slice(b"1234"),
+                ptr::null_mut(),
+                write_cb,
+            );
+            file.queue_write::<(), _>(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[1]),
+                write_slice(b"5678"),
+                ptr::null_mut(),
+                write_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(write_queue.empty());
+
+        assert_eq!(unsafe { libc::fsync(wfd) }, 0);
+
+        let rfd = open_read_fd(&path);
+        let file2 = File::init(rfd);
+        let mut read_buf = [0u8; 128];
+        let mut read_len: usize = 0;
+        let mut c_read = Completion::default();
+        let read_cb = |ud: *mut usize,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = r.unwrap() };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file2.read(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_read),
+                read_slice(&mut read_buf),
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(b"12345678", &read_buf[0..read_len]);
+
+        unsafe {
+            libc::close(wfd);
+            libc::close(rfd);
+        }
+        loop_.deinit();
+        std::fs::remove_file(&path).ok();
+    }
+
+    // test "poll" (file.zig:557). A pipe with a byte already written is poll-read
+    // ready.
+    #[test]
+    fn io_uring_file_poll() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        let mut fds = [0 as fd_t; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (fds[0], fds[1]);
+        assert_eq!(unsafe { libc::write(write_fd, b"x".as_ptr().cast(), 1) }, 1);
+
+        let file = File::init_fd(read_fd);
+        let mut c = Completion::default();
+        let mut ready = false;
+        let poll_cb = |ud: *mut bool,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       r: core::result::Result<PollEvent, PollError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.poll(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c),
+                PollEvent::Read,
+                ptr::addr_of_mut!(ready),
+                poll_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(ready);
+
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        loop_.deinit();
     }
 }
