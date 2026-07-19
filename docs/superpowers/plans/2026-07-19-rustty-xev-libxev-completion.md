@@ -58,21 +58,23 @@
 - [ ] **Step 2: Wire the epoll `Loop` pool fields.** Add `thread_pool: ?*ThreadPool` + `thread_pool_completions: TaskCompletionQueue` to `epoll::Loop` (`:155`), populated from `linux::Options.thread_pool` (change its type from `Option<*mut c_void>` to `Option<*mut ThreadPool>`, `linux.rs:44-66`). Port libxev epoll's `thread_schedule`/`thread_perform` path so blocking ops (`Close`, and File's pread/pwrite) enqueue a `Task` onto the pool and drain completions — replacing the `CloseError::ThreadPoolRequired` sentinel (`epoll.rs:882-892`) with real execution when `thread_pool != null`. (The kqueue side already staged the `thread_pool_completions` aliasing fix, DEFERRALS 4396-4398 — mirror it for epoll.)
 - [ ] **Step 3: Verify + commit.** `cargo build -p rustty-xev` (Linux) green; existing xev tests still green (`cargo test -p rustty-xev`). Commit (`xev: un-gate stream/net for Linux + wire epoll Loop thread_pool (Task 2)`).
 
+> **PLAN AMENDMENT (post-Task 2, 2026-07-19):** Task 2's "un-gate stream.rs/net.rs" step was STALE — the tree already instantiates the Stream surface per-backend inline (`epoll.rs:2288`, `io_uring.rs:2949` `pub struct Stream` + WriteQueue/WriteRequest/PollEvent) and `net` as `crate::linux::net`; that is the faithful Rust shape of libxev's comptime per-backend `Stream(xev,...)` instantiation, and the top-level `stream.rs`/`net.rs` are the kqueue/macOS instantiation (stay macOS-gated). Task 2 delivered the substantive part (epoll Loop thread-pool wiring; commit 99f02ec). **Tasks 3–5 accordingly follow the established Linux watcher precedent (Timer/Async/Process): per-backend impls inline in `epoll.rs` + `io_uring.rs`, a Dynamic wrapper in `dynamic.rs` (cf. `dynamic.rs:1225 Timer`), `lib.rs` per-target exports — NOT new top-level watcher files. "Consumes: Stream (Task 2)" in Tasks 3/5 means each backend's inline Stream; "net::Address (Task 2)" means `crate::linux::net`.**
+
 ## Task 3: `TCP` watcher
 
-**Files:** Create `crates/rustty-xev/src/watcher/tcp.rs` (or `tcp.rs` per crate convention); modify `lib.rs` (add `mod tcp` + `pub use tcp::TCP` on Linux).
+**Files:** Modify `crates/rustty-xev/src/epoll.rs` + `crates/rustty-xev/src/io_uring.rs` (per-backend `TCP` inline, next to each backend's `Stream`), `crates/rustty-xev/src/dynamic.rs` (Dynamic `TCP` wrapper), `lib.rs` (Linux export seam).
 **Oracle:** `.../src/watcher/tcp.zig` (935 LOC, 6 tests). `xev.TCP` = a socket over `Stream(xev, TCP, .{.close,.read,.write})` + `Operation::{Accept,Connect,Send,Recv,Shutdown}`. Methods: `init`/`initFd`/`bind`/`listen`/`accept`/`connect`/`read`/`write`/`shutdown`/`close`.
 
 **Interfaces:**
 - Consumes: `Stream` (Task 2), `net::Address` (Task 2), the epoll/io_uring `Accept/Connect/Send/Recv/Shutdown` ops (already present on both backends).
 - Produces: `xev::TCP`.
 
-- [ ] **Step 1: Port `tcp.zig`** faithfully into `tcp.rs` — the `TCP` struct (an fd), monomorphizing `read`/`write`/`close` over rustty's `Stream(...)` generic (the same way the macOS-side would); `bind`/`listen` are plain libc; `accept`/`connect`/`shutdown` submit the existing `Operation` arms. Port the 6 `test{}` blocks (loopback accept/connect/send/recv round-trips) as `#[cfg(test)]`.
+- [ ] **Step 1: Port `tcp.zig`** faithfully (per-backend) — the `TCP` struct (an fd), monomorphizing `read`/`write`/`close` over rustty's `Stream(...)` generic (the same way the macOS-side would); `bind`/`listen` are plain libc; `accept`/`connect`/`shutdown` submit the existing `Operation` arms. Port the 6 `test{}` blocks (loopback accept/connect/send/recv round-trips) as `#[cfg(test)]`.
 - [ ] **Step 2: Export + verify.** `lib.rs`: `mod tcp;` + `pub use tcp::TCP;` on Linux. `cargo test -p rustty-xev tcp` → the 6 tests green (real loopback sockets on the epoll + io_uring backends). Commit (`xev: port TCP watcher (Task 3)`).
 
 ## Task 4: epoll `SendMsg`/`RecvMsg` ops + `UDP` watcher
 
-**Files:** Modify `crates/rustty-xev/src/epoll.rs` (add `Operation::{SendMsg,RecvMsg}` start+perform arms — io_uring already has them at `:1732`, `prep_sendmsg`/`prep_recvmsg` at `:1018/1030`); create `crates/rustty-xev/src/watcher/udp.rs`; modify `lib.rs`.
+**Files:** Modify `crates/rustty-xev/src/epoll.rs` (add `Operation::{SendMsg,RecvMsg}` start+perform arms — io_uring already has them at `:1732`, `prep_sendmsg`/`prep_recvmsg` at `:1018/1030`); add per-backend `UDP` inline in `epoll.rs` + `io_uring.rs`, Dynamic `UDP` wrapper in `dynamic.rs`, `lib.rs` Linux export seam (per the post-Task-2 amendment).
 **Oracle:** `.../src/watcher/udp.zig` (1003 LOC, 6 tests) + libxev's epoll `SendMsg`/`RecvMsg` (msghdr recvmsg/sendmsg). `xev.UDP` = a datagram socket using `Operation::{SendMsg,RecvMsg}` + `msghdr`.
 
 **Interfaces:**
@@ -80,19 +82,19 @@
 - Produces: `xev::UDP`.
 
 - [ ] **Step 1: Add epoll `SendMsg`/`RecvMsg`.** Mirror the existing epoll `Send`/`Recv` arms (`epoll.rs:858-870`) but with `libc::sendmsg`/`recvmsg` over a `*mut libc::msghdr` (matching the io_uring `Operation::SendMsg` payload shape at `:1732`). Add the `Result::{SendMsg,RecvMsg}` if not already shared.
-- [ ] **Step 2: Port `udp.zig`** faithfully into `udp.rs` — the `UDP` struct (fd), `init`/`bind`/`read`(RecvMsg)/`write`(SendMsg)/`close`, building the `msghdr` + iovec. Port the 6 `test{}` blocks (loopback datagram send/recv) as `#[cfg(test)]`.
+- [ ] **Step 2: Port `udp.zig`** faithfully (per-backend) — the `UDP` struct (fd), `init`/`bind`/`read`(RecvMsg)/`write`(SendMsg)/`close`, building the `msghdr` + iovec. Port the 6 `test{}` blocks (loopback datagram send/recv) as `#[cfg(test)]`.
 - [ ] **Step 3: Export + verify.** `lib.rs`: `mod udp;` + `pub use udp::UDP;` on Linux. `cargo test -p rustty-xev udp` → 6 tests green on BOTH backends. Commit (`xev: epoll SendMsg/RecvMsg + UDP watcher (Task 4)`).
 
 ## Task 5: `File` watcher
 
-**Files:** Create `crates/rustty-xev/src/watcher/file.rs`; modify `lib.rs`.
+**Files:** Modify `crates/rustty-xev/src/epoll.rs` + `crates/rustty-xev/src/io_uring.rs` (per-backend `File` inline), `crates/rustty-xev/src/dynamic.rs` (Dynamic `File` wrapper), `lib.rs` (Linux export seam) — per the post-Task-2 amendment.
 **Oracle:** `.../src/watcher/file.zig` (848 LOC, 8 tests). `xev.File` = a regular-fd watcher over `Stream(xev, File, .{.close,.read,.write})`; on the epoll backend `pread`/`pwrite`/`close` are BLOCKING and route through the `ThreadPool` (io_uring does them natively).
 
 **Interfaces:**
 - Consumes: `Stream` (Task 2), `ThreadPool` (Task 1), the epoll pool-routing (Task 2).
 - Produces: `xev::File`.
 
-- [ ] **Step 1: Port `file.zig`** faithfully into `file.rs` — `File` struct (fd), `init`/`initFd`/`read`/`write`/`pread`/`pwrite`/`close`, monomorphizing over `Stream(...)`. On epoll the pread/pwrite/close submit through the `thread_pool` path (Task 2); on io_uring they use the native ops. Port the 8 `test{}` blocks as `#[cfg(test)]`.
+- [ ] **Step 1: Port `file.zig`** faithfully (per-backend) — `File` struct (fd), `init`/`initFd`/`read`/`write`/`pread`/`pwrite`/`close`, monomorphizing over `Stream(...)`. On epoll the pread/pwrite/close submit through the `thread_pool` path (Task 2); on io_uring they use the native ops. Port the 8 `test{}` blocks as `#[cfg(test)]`.
 - [ ] **Step 2: Export + verify.** `lib.rs`: `mod file;` + `pub use file::File;` on Linux. `cargo test -p rustty-xev file` → 8 tests green on BOTH backends (the epoll ones exercise the ThreadPool path — this is the real integration test for Task 1's pool). Commit (`xev: port File watcher + epoll ThreadPool integration (Task 5)`).
 
 ## Task 6: Full Linux export symmetry + suite + ledger
