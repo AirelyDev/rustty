@@ -1397,4 +1397,173 @@ mod tests {
         let expect = core::ptr::addr_of_mut!(b.node);
         assert_eq!(a.node.next, Some(expect));
     }
+
+    // -----------------------------------------------------------------------
+    // Multi-worker quiesce-then-join (the REAL usage Task 5's File watcher will
+    // drive). Each callback blocks briefly BEFORE recording completion, so work
+    // backs up and the pool actually spawns >= 2 workers that run concurrently.
+    // Main then waits (condvar) for every task to finish — with NO concurrent
+    // schedule() after that point — and only then shutdown()+deinit()+joins.
+    // This distinguishes "the race needs a concurrent schedule() during
+    // shutdown" from "correct quiesce-then-join hangs too". A watchdog aborts
+    // loudly if any lifecycle deadlocks, so a hang FAILS the suite instead of
+    // blocking it forever.
+    // -----------------------------------------------------------------------
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    struct LifeCtx {
+        ran: Mutex<usize>,
+        cv: Condvar,
+        expected: usize,
+        active: AtomicUsize, // currently-executing callbacks (observed concurrency)
+        peak: AtomicUsize,   // max observed concurrency
+    }
+
+    // The task carrier: `task` MUST be recoverable from the callback's `*mut Task`
+    // via offset_of, and it carries a raw handle to the shared lifecycle context.
+    struct LifeJob {
+        task: Task,
+        ctx: *const LifeCtx,
+    }
+
+    fn life_task(t: *mut Task) {
+        // Recover the enclosing LifeJob and its ctx (the pool never moves the
+        // boxed job; deinit joins all workers before ctx is dropped).
+        let job = unsafe { (t as *mut u8).sub(core::mem::offset_of!(LifeJob, task)) as *mut LifeJob };
+        let ctx = unsafe { &*(*job).ctx };
+
+        let cur = ctx.active.fetch_add(1, Ordering::SeqCst) + 1;
+        ctx.peak.fetch_max(cur, Ordering::SeqCst);
+        // Block briefly so work backs up and forces >= 2 workers to spin up.
+        std::thread::sleep(Duration::from_millis(2));
+        ctx.active.fetch_sub(1, Ordering::SeqCst);
+
+        let mut n = ctx.ran.lock().unwrap();
+        *n += 1;
+        if *n == ctx.expected {
+            ctx.cv.notify_all();
+        }
+    }
+
+    /// One full correct lifecycle: schedule -> wait-all-ran (quiesce) -> shutdown
+    /// -> deinit (join). Returns the peak observed concurrency. NO schedule()
+    /// happens after the quiesce point.
+    fn run_one_multi_lifecycle(max_threads: u32, n: usize) -> usize {
+        let ctx = Box::new(LifeCtx {
+            ran: Mutex::new(0),
+            cv: Condvar::new(),
+            expected: n,
+            active: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        });
+        let ctx_ptr: *const LifeCtx = &*ctx;
+
+        let mut pool = ThreadPool::init(Config {
+            stack_size: 0,
+            max_threads,
+        });
+
+        let mut jobs: Vec<Box<LifeJob>> = (0..n)
+            .map(|_| {
+                Box::new(LifeJob {
+                    task: Task {
+                        node: Node::default(),
+                        callback: life_task,
+                    },
+                    ctx: ctx_ptr,
+                })
+            })
+            .collect();
+
+        for j in jobs.iter_mut() {
+            let tptr: *mut Task = &mut j.task;
+            pool.schedule(Batch::from(tptr));
+        }
+
+        // Quiesce: wait for every callback to finish. After this loop there is NO
+        // further schedule() — the ONLY thing left is shutdown()+deinit().
+        {
+            let mut ran = ctx.ran.lock().unwrap();
+            while *ran < n {
+                let (g, to) = ctx.cv.wait_timeout(ran, Duration::from_secs(30)).unwrap();
+                ran = g;
+                assert!(!to.timed_out(), "only {}/{} tasks ran within 30s", *ran, n);
+            }
+        }
+
+        pool.shutdown();
+        pool.deinit(); // <- the multi-worker join under test
+
+        assert_eq!(*ctx.ran.lock().unwrap(), n, "not all callbacks ran");
+        let peak = ctx.peak.load(Ordering::SeqCst);
+        // jobs + ctx dropped now — safe, deinit joined every worker.
+        drop(jobs);
+        peak
+    }
+
+    // EMPIRICAL VERDICT (Task 1 review, appended to task-1-report.md): this
+    // CORRECT quiesce-then-join multi-worker lifecycle DEADLOCKS ~100% of runs
+    // (watchdog aborts at 60s; gdb shows >= 3 workers stranded in
+    // `ThreadPool::wait` -> `Event::wait` on the shared idle_event, never woken by
+    // `shutdown()`, so `spawned` never reaches 0 and `join()` hangs). There is NO
+    // concurrent `schedule()` after the quiesce point — so the hang is world (b):
+    // it occurs in correct usage, NOT only under concurrent-schedule-during-
+    // shutdown. Root cause = the byte-faithful `Event::wake` guard `if state ==
+    // WAITING` skipping the `futex_wake` when a run-loop `notify()` left idle_event
+    // NOTIFIED; the ORACLE (ThreadPool.zig) has the identical guard + run-loop
+    // notify, so it hangs identically in this burst-then-immediate-shutdown
+    // pattern — this is a FAITHFUL R1 reproduction, not a port deviation, and is
+    // escalated (BLOCKED) for a deliberate-deviation decision. `#[ignore]`d so it
+    // does NOT wedge the suite; run on demand as the reproducer:
+    //   cargo test -p rustty-xev multi_worker_quiesce_then_join_50x -- --ignored
+    #[test]
+    #[ignore = "BLOCKED reproducer: correct quiesce-then-join multi-worker teardown \
+                deadlocks via the faithfully-ported Event::wake race (see task-1-report.md); \
+                run with --ignored"]
+    fn multi_worker_quiesce_then_join_50x() {
+        const LIFECYCLES: usize = 50;
+        const MAX_THREADS: u32 = 4;
+        const TASKS: usize = 64;
+
+        // Watchdog: if the whole run wedges, abort LOUDLY so a deadlock fails the
+        // suite instead of blocking it forever.
+        let done = Arc::new(AtomicBool::new(false));
+        let wd = {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let start = Instant::now();
+                while !done.load(Ordering::SeqCst) {
+                    if start.elapsed() > Duration::from_secs(60) {
+                        eprintln!(
+                            "WATCHDOG: multi_worker_quiesce_then_join exceeded 60s -> \
+                             DEADLOCK in correct quiesce-then-join teardown; aborting"
+                        );
+                        std::process::abort();
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            })
+        };
+
+        let mut max_peak = 0usize;
+        for i in 0..LIFECYCLES {
+            let peak = run_one_multi_lifecycle(MAX_THREADS, TASKS);
+            if peak > max_peak {
+                max_peak = peak;
+            }
+            let _ = i;
+        }
+
+        done.store(true, Ordering::SeqCst);
+        wd.join().unwrap();
+
+        // Prove we actually exercised real multi-worker parallelism (not a
+        // degenerate single-worker run that would sidestep the strand race).
+        assert!(
+            max_peak >= 2,
+            "expected >= 2 concurrent workers across {LIFECYCLES} lifecycles, peak was {max_peak}"
+        );
+    }
 }
