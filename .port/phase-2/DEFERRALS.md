@@ -4707,3 +4707,25 @@ Two known residuals (grounding-review):
   interface with a new `name`, `Globals::bind_global` overwrites the typed proxy but leaves the stale
   `name→tag` map entry, so a later `global_remove(old_name)` would unbind the live proxy. Compositors
   don't re-advertise these singletons in practice. (globals.rs bind_global/remove_global.)
+
+### xev ThreadPool `Event` shutdown wake — DELIBERATE DEVIATION (controller-approved) [2026-07-19, Task 1]
+`crates/rustty-xev/src/thread_pool.rs` `Event::wake` deviates from the oracle
+(`ThreadPool.zig:508-518`, kprotty's Zap pool) in two ways, both confined to `wake`:
+**(1)** the terminal SHUTDOWN transition's `futex_wake` is UNCONDITIONAL (the oracle skips it when
+the pre-swap state is not WAITING, which strands remaining parked sleepers when a trailing run-loop
+`notify()` left the event NOTIFIED — `join()` then hangs); **(2)** SHUTDOWN is STICKY (the NOTIFIED
+transition is a CAS loop that no-ops on a shutdown event, because the oracle's unconditional swap
+lets a late `notifySlow` event-write resurrect the dead event and re-park a woken sleeper forever).
+Rationale: SHUTDOWN is terminal/unrepeatable, so the extra wake is sound (sleepers re-check state;
+late arrivals fail the futex value-check) and notifying a shutdown event is already a no-op by
+`Event::wait`'s own contract; cost = one extra syscall at pool shutdown. Both oracle holes are
+ANALYTIC windows (the originally-observed 100% teardown deadlock was root-caused to a rustty port
+bug — the `futex_wake` shim passed `u32::MAX` unclamped through FUTEX_WAKE's C-int slot = `-1` =
+wake at most ONE; fixed with the oracle's own `min(i32::MAX)` clamp semantics, after which the
+VERBATIM oracle Event passed 400/400 multi-worker lifecycles). ghostty never instantiates the pool
+(all 4 xev loops are `Loop.init(.{})`), and upstream libxev `1c80766` (Dec 2024) fixed a DIFFERENT
+join race already in our pin — upstream HEAD still carries these two windows. rustty's Task-5 epoll
+File watcher WILL multi-worker-join, hence the defensive close. Full interleavings + soundness
+argument: the DELIBERATE DEVIATION note on `Event::wake`; RED/GREEN evidence + regression gate
+(`thread_pool::tests::multi_worker_quiesce_then_join_50x`, 50 lifecycles under a 60s watchdog):
+`.superpowers/sdd/task-1-report.md` addendum 2.

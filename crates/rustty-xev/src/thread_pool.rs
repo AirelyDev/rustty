@@ -747,24 +747,87 @@ impl Event {
         self.wake(Event::SHUTDOWN, u32::MAX);
     }
 
-    // PORT NOTE (faithfully-ported latent race — kept verbatim): the `if state ==
-    // WAITING` guard is exactly the oracle's (ThreadPool.zig). It relies on the
-    // "extra wakeup" chain — a `notify()`-woken thread re-arms the state to
-    // WAITING so the next `notify()`/`shutdown()` still wakes remaining sleepers.
-    // If `shutdown()`'s `swap(->SHUTDOWN)` observes NOTIFIED (a `notify()` fired,
-    // its woken thread hasn't re-armed yet) it skips the wake and a *second* idle
-    // sleeper can be stranded → `join()` hangs. This is a property of the source
-    // algorithm, reproduced faithfully; it only surfaces under active `notify()`
-    // traffic racing `shutdown()` with >= 2 idle sleepers (a burst-then-immediate-
-    // shutdown pattern). Real teardown quiesces the pool first, closing the window.
+    // DELIBERATE DEVIATION (Task 1, controller-approved 2026-07-19; ledgered in
+    // .port/phase-2/DEFERRALS.md "xev ThreadPool `Event` shutdown wake").
+    //
+    // FIRST, the corrected attribution (task-1-report.md addendum 2): the
+    // originally-reported "~100% multi-worker teardown deadlock" was ROOT-CAUSED
+    // to a port bug in this file's `futex_wake` shim (u32::MAX passed unclamped
+    // through FUTEX_WAKE's C-int slot = -1 = wake AT MOST ONE), not to this
+    // Event. With that shim fixed (see `futex_wake`), the VERBATIM oracle
+    // `wake` passed 400/400 correct-usage multi-worker lifecycles. The oracle's
+    // teardown holes below are therefore ANALYTIC (real interleavings, empirically
+    // rare), and this deviation closes them defensively for Task-5's File
+    // watcher, which multi-worker-joins under trailing notify traffic.
+    //
+    // The oracle (ThreadPool.zig:508-518) has two strand windows at shutdown,
+    // both stemming from `notifySlow` issuing `idle_event.notify()` OUTSIDE its
+    // sync CAS while `wake` swaps the event word unconditionally and wakes only
+    // `if (state == WAITING)`:
+    //
+    // (1) skip-wake: a trailing notify swaps idle_event WAITING->NOTIFIED (waking
+    // ONE of >= 2 parked sleepers); `shutdown()`'s `swap(->SHUTDOWN)` then
+    // observes NOTIFIED != WAITING and SKIPS its futex_wake — the remaining
+    // parked sleepers are never woken, `spawned` never reaches 0, `join()` hangs.
+    // Fix: the SHUTDOWN wake is UNCONDITIONAL. Sound because SHUTDOWN is the
+    // terminal, unrepeatable Event state — an extra `futex_wake(MAX)` cannot lose
+    // a token or wake anything unsoundly: (a) woken sleepers re-check
+    // `self.state` (observe SHUTDOWN, exit); (b) later arrivals fail the futex
+    // value-check (word != WAITING) and return without sleeping. Cost: one extra
+    // syscall, once, at pool shutdown.
+    //
+    // (2) resurrection: a notifier that won its sync CAS before pool-shutdown's
+    // CAS can execute its `swap(->NOTIFIED)` AFTER `idle_event.shutdown()`'s
+    // `swap(->SHUTDOWN)` + wake — overwriting the terminal state. A worker woken
+    // by the shutdown wake that loads the event AFTER the overwrite sees
+    // NOTIFIED; one consumes the bogus token (CAS re-arming the word to WAITING)
+    // and any other re-parks on WAITING forever — the shutdown wake has already
+    // fired and nothing ever wakes the event again. Fix: SHUTDOWN is STICKY —
+    // the NOTIFIED transition is a CAS loop that no-ops (no write, no wake) if it
+    // observes SHUTDOWN. Semantically "notifying a shutdown event is a no-op",
+    // which is `Event::wait`'s own contract (wait() on a SHUTDOWN event returns
+    // immediately; the notification would be meaningless). For all non-SHUTDOWN
+    // prior states the CAS loop is observably identical to the oracle's swap
+    // (WAITING->NOTIFIED wakes 1, EMPTY->NOTIFIED no wake, NOTIFIED->NOTIFIED
+    // no wake).
+    //
+    // Upstream context: ghostty itself NEVER instantiates the pool (all 4 of its
+    // xev loops are `xev.Loop.init(.{})` with no thread_pool — zero pool workers
+    // ever spawn), so these holes are latent-dead-code in the mirrored artifact.
+    // Upstream libxev's Dec 2024 `1c80766` "remove race from threadpool" fixed a
+    // DIFFERENT race (the join_event join-before-notify race) and that fix is
+    // ALREADY in our pinned oracle (`if (sync.spawned == 0) join_event.notify()`
+    // in shutdown() + the unconditional join_event.wait() in join()); upstream
+    // HEAD still carries the two windows above.
     fn wake(&self, release_with: u32, wake_threads: u32) {
         // Update the Event to notifty it with the new `release_with` state (either NOTIFIED or SHUTDOWN).
         // Release barrier to ensure any operations before this are this to happen before the wait() in the other threads.
-        let state = self.state.swap(release_with, Release);
+        // DEVIATION prong (2) (see note above): NOTIFIED must not overwrite the
+        // terminal SHUTDOWN state, so the notify transition is a CAS loop that
+        // no-ops on a shutdown event; the shutdown transition keeps the swap.
+        let state = if release_with == Event::SHUTDOWN {
+            self.state.swap(release_with, Release)
+        } else {
+            let mut state = self.state.load(Relaxed);
+            loop {
+                if state == Event::SHUTDOWN {
+                    return; // notifying a shutdown event is a no-op
+                }
+                match self
+                    .state
+                    .compare_exchange_weak(state, release_with, Release, Relaxed)
+                {
+                    Ok(_) => break state,
+                    Err(e) => state = e,
+                }
+            }
+        };
 
         // Only wake threads sleeping in futex if the state is WAITING.
         // Avoids unnecessary wake ups.
-        if state == Event::WAITING {
+        // DEVIATION prong (1) (see note above): the terminal SHUTDOWN wake is
+        // unconditional.
+        if state == Event::WAITING || release_with == Event::SHUTDOWN {
             futex_wake(&self.state, wake_threads);
         }
     }
@@ -788,6 +851,15 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
 
 #[cfg(target_os = "linux")]
 fn futex_wake(atomic: &AtomicU32, n: u32) {
+    // PORT-FIDELITY FIX (root cause of the original 100%-reproducible teardown
+    // wedge — see task-1-report.md): `std.Thread.Futex.wake` clamps the waiter
+    // count to `maxInt(i32)` before the syscall, because FUTEX_WAKE's count
+    // argument is a C `int`. Passing `u32::MAX` ("wake all") unclamped through
+    // the variadic int slot becomes `-1`, and the kernel's wake loop
+    // (`if (++ret >= nr_wake) break`) then wakes AT MOST ONE waiter — so
+    // `Event::shutdown`'s wake-all stranded every sleeper but one. The clamp IS
+    // the oracle's semantic (i32::MAX >= any possible waiter count = wake all).
+    let n = n.min(i32::MAX as u32) as libc::c_int;
     unsafe {
         libc::syscall(
             libc::SYS_futex,
@@ -1357,15 +1429,12 @@ mod tests {
 
     // The full pool lifecycle end-to-end: spawn a worker, schedule N tasks onto
     // the global run queue, run every callback, then `shutdown` + `deinit` join
-    // cleanly. Uses a single worker (max_threads = 1) so teardown is
-    // deterministic: the pool's clean-`join` path is subject to a faithfully-
-    // ported rare race in kprotty's `Event` when `shutdown()` races in-flight
-    // `notify()` traffic with >= 2 idle sleepers (see the PORT NOTE on
-    // `Event::wake` + the report's Concerns). Task *execution* is unaffected by
-    // that race (work-stealing + notify guarantee every task runs regardless);
-    // only multi-worker clean-join can strand an idle worker. Multi-threaded
-    // correctness of the lock-free containers is proven separately on
-    // `.port/phase-2/mirihar-threadpool/`.
+    // cleanly. Single worker (max_threads = 1) as the deterministic baseline;
+    // multi-worker teardown (formerly wedged by the `futex_wake` clamp bug, now
+    // fixed, with the oracle's analytic strand windows closed by the ledgered
+    // `Event::wake` deviation) is covered by `multi_worker_quiesce_then_join_50x`
+    // below, and multi-threaded correctness of the lock-free containers is proven
+    // on `.port/phase-2/mirihar-threadpool/`.
     #[test]
     fn schedule_runs_all_tasks_and_deinit_joins() {
         run_schedule_all(1, 200);
@@ -1503,25 +1572,17 @@ mod tests {
         peak
     }
 
-    // EMPIRICAL VERDICT (Task 1 review, appended to task-1-report.md): this
-    // CORRECT quiesce-then-join multi-worker lifecycle DEADLOCKS ~100% of runs
-    // (watchdog aborts at 60s; gdb shows >= 3 workers stranded in
-    // `ThreadPool::wait` -> `Event::wait` on the shared idle_event, never woken by
-    // `shutdown()`, so `spawned` never reaches 0 and `join()` hangs). There is NO
-    // concurrent `schedule()` after the quiesce point — so the hang is world (b):
-    // it occurs in correct usage, NOT only under concurrent-schedule-during-
-    // shutdown. Root cause = the byte-faithful `Event::wake` guard `if state ==
-    // WAITING` skipping the `futex_wake` when a run-loop `notify()` left idle_event
-    // NOTIFIED; the ORACLE (ThreadPool.zig) has the identical guard + run-loop
-    // notify, so it hangs identically in this burst-then-immediate-shutdown
-    // pattern — this is a FAITHFUL R1 reproduction, not a port deviation, and is
-    // escalated (BLOCKED) for a deliberate-deviation decision. `#[ignore]`d so it
-    // does NOT wedge the suite; run on demand as the reproducer:
-    //   cargo test -p rustty-xev multi_worker_quiesce_then_join_50x -- --ignored
+    // REGRESSION GATE for multi-worker teardown (the `futex_wake` clamp
+    // port-fidelity fix + the ledgered `Event::wake` deviation — see both notes
+    // above + task-1-report.md addendum 2). RED evidence: with the unclamped
+    // `futex_wake` (u32::MAX -> C int -1 -> kernel wakes at most ONE), this exact
+    // correct-usage lifecycle DEADLOCKED ~100% of runs (watchdog abort; gdb:
+    // >= 3 workers stranded parked on idle_event, `spawned` never reached 0,
+    // `join()` hung). GREEN: with the clamp it passes deterministically (incl.
+    // 400 lifecycles against the verbatim oracle Event, and with the deviation
+    // applied). The watchdog stays so any regression FAILS loudly instead of
+    // wedging the suite.
     #[test]
-    #[ignore = "BLOCKED reproducer: correct quiesce-then-join multi-worker teardown \
-                deadlocks via the faithfully-ported Event::wake race (see task-1-report.md); \
-                run with --ignored"]
     fn multi_worker_quiesce_then_join_50x() {
         const LIFECYCLES: usize = 50;
         const MAX_THREADS: u32 = 4;
