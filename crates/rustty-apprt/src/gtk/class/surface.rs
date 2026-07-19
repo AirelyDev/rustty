@@ -62,7 +62,7 @@ use rustty_apprt_api::{
 };
 use rustty_config::command::Command;
 use rustty_config::value_types::WorkingDirectory;
-use rustty_core::surface::InputEffect;
+use rustty_core::surface::{Error as CoreSurfaceError, InputEffect};
 use rustty_font_shaper::face::DesiredSize;
 use rustty_vt::input::key::{Action, Key, KeyEvent};
 use rustty_vt::input::key_mods::Mods;
@@ -562,9 +562,9 @@ mod imp {
                     // `clipboard-read` (`:495-504`).
                     glib::subclass::Signal::builder("clipboard-read").build(),
                     // `clipboard-write` (`:480-492`), params `(apprt.Clipboard,
-                    // [*:0]const u8)`. PORT NOTE (concern): `apprt.Clipboard` has no
-                    // GObject type yet, so its param rides as the enum's `i32` here;
-                    // the signal is never emitted in this tier.
+                    // [*:0]const u8)`. PORT NOTE: `apprt.Clipboard` has no GObject type
+                    // yet, so its param rides as the enum's `i32` here. Emitted by
+                    // `Clipboard::set` after a non-confirm write (surface.rs `set_clipboard`).
                     glib::subclass::Signal::builder("clipboard-write")
                         .param_types([i32::static_type(), String::static_type()])
                         .build(),
@@ -1270,28 +1270,187 @@ impl Surface {
         None
     }
 
-    /// PORTS: `surface.zig:1714-1724` `clipboardRequest`.
+    /// PORTS: `surface.zig:1714-1724` `clipboardRequest` → delegates to
+    /// `Clipboard.request` (`surface.zig:3855-3897`). Request data from the
+    /// clipboard (a READ); this completes asynchronously and delivers the result
+    /// to the core via `completeClipboardRequest`.
     ///
-    /// **Placeholder-leaf (clipboard tier):** the GTK `Clipboard` module
-    /// (`Clipboard.request`) is unported, so no read request is started yet
-    /// (returns `false`, the "did not start" result, which is safe).
+    /// Returns `Ok(true)` if the request was started, `Ok(false)` if the clipboard
+    /// doesn't contain text (letting performable keybinds pass through), matching
+    /// the reference's early-`false` return.
     pub fn clipboard_request(
         &self,
-        _clipboard_type: Clipboard,
-        _state: ClipboardRequest,
+        clipboard_type: Clipboard,
+        state: ClipboardRequest,
     ) -> Result<bool, ApprtError> {
-        Ok(false)
+        // Get our requested clipboard (`surface.zig:3861-3864`).
+        let clipboard = self.clipboard_for(clipboard_type);
+
+        // For paste requests, check if the clipboard has a text format available.
+        // This is a synchronous check that allows performable keybinds to pass
+        // through when the clipboard contains non-text content, e.g. images
+        // (`surface.zig:3869-3875`).
+        if state == ClipboardRequest::Paste
+            && !clipboard.formats().contains_type(String::static_type())
+        {
+            eprintln!("debug(gtk): clipboard has no text format, not starting paste request");
+            return Ok(false);
+        }
+
+        // Important: we ref `self` (clone the GObject — a cheap refcount bump) into
+        // the async closure so the surface can't be freed while a clipboard read is
+        // outstanding. The reference `self.ref()`s into the `Request` userdata
+        // (`surface.zig:3882-3886`); the gtk4-rs closure captures the clone instead.
+        let this = self.clone();
+
+        // Read (`surface.zig:3890-3894`). The completion mirrors `clipboardReadText`
+        // (`surface.zig:4042-4105`).
+        clipboard.read_text_async(
+            gio::Cancellable::NONE,
+            move |result| {
+                let text = match result {
+                    Ok(Some(text)) => text,
+                    // No text on the clipboard — nothing to deliver.
+                    Ok(None) => return,
+                    Err(err) => {
+                        eprintln!("warn(gtk): failed to read clipboard err={err}");
+                        return;
+                    }
+                };
+
+                // Reach the core the same way the other handlers do (a single
+                // atomic load returning `*mut CoreSurface`).
+                let Some(core) = this.core() else {
+                    return;
+                };
+
+                // `data: [:0]const u8` -> raw bytes (`&[u8]`, never a lossy String
+                // — R3). `completeClipboardRequest` takes `&mut self`; mirror the
+                // `&mut *core` deref used by the sizeCallback/occlusion handlers.
+                match unsafe { &mut *core }.completeClipboardRequest(
+                    state,
+                    text.as_bytes(),
+                    false,
+                ) {
+                    Ok(()) => {
+                        // `Surface.signals.@"clipboard-read".impl.emit(...)`
+                        // (`surface.zig:4099-4104`).
+                        this.emit_by_name::<()>("clipboard-read", &[]);
+                    }
+
+                    // error.UnsafePaste, error.UnauthorizedPaste => confirmation
+                    // (`surface.zig:4079-4088`). DEFERRED to Phase B.
+                    Err(
+                        CoreSurfaceError::UnsafePaste | CoreSurfaceError::UnauthorizedPaste,
+                    ) => {
+                        this.show_clipboard_confirmation(state, &text);
+                    }
+
+                    Err(err) => {
+                        eprintln!("warn(gtk): failed to complete clipboard request err={err}");
+                    }
+                }
+            },
+        );
+
+        // Return true (request started) (`surface.zig:3896`).
+        Ok(true)
     }
 
-    /// PORTS: `surface.zig:1726-1738` `setClipboard`.
-    ///
-    /// **Placeholder-leaf (clipboard tier):** `Clipboard.set` is unported.
+    /// PORTS: `surface.zig:1726-1738` `setClipboard` → delegates to `Clipboard.set`
+    /// (`surface.zig:3760-3847`). Set the clipboard contents (a WRITE).
     pub fn set_clipboard(
         &self,
-        _clipboard_type: Clipboard,
-        _contents: &[ClipboardContent<'_>],
-        _confirm: bool,
+        clipboard_type: Clipboard,
+        contents: &[ClipboardContent<'_>],
+        confirm: bool,
     ) {
+        // Grab our plaintext content for use in confirmation dialogs and signals.
+        // We always expect one to exist (`surface.zig:3768-3774`).
+        let Some(text_content) = contents
+            .iter()
+            .find(|c| c.mime == b"text/plain")
+        else {
+            return;
+        };
+        let text = String::from_utf8_lossy(text_content.data).into_owned();
+
+        // If no confirmation is necessary, set the clipboard (`surface.zig:3777`).
+        if !confirm {
+            let clipboard = self.clipboard_for(clipboard_type);
+
+            // Build one `ContentProvider` per content, then union them all
+            // (`surface.zig:3784-3826`). The reference falls back to
+            // `clipboard.setText(text)` only on an allocation failure; Rust's `Vec`
+            // aborts on OOM, so the fallback path is unreachable here.
+            let mut providers: Vec<gdk4::ContentProvider> = Vec::with_capacity(contents.len());
+            for content in contents {
+                let bytes = glib::Bytes::from(content.data);
+                if content.mime == b"text/plain" {
+                    // Add an explicit UTF-8 encoding parameter to the text/plain
+                    // type. The default charset when there is none is ASCII, and
+                    // lots of things look for UTF-8 specifically. Some clients pick
+                    // the FIRST match in the order we set here then garble bare
+                    // 'text/plain' with non-ASCII UTF-8, so offer UTF-8 first
+                    // (`surface.zig:3792-3817`).
+                    let text_providers = [
+                        gdk4::ContentProvider::for_bytes("text/plain;charset=utf-8", &bytes),
+                        gdk4::ContentProvider::for_bytes("text/plain", &bytes),
+                    ];
+                    providers.push(gdk4::ContentProvider::new_union(&text_providers));
+                } else {
+                    let mime = String::from_utf8_lossy(content.mime);
+                    providers.push(gdk4::ContentProvider::for_bytes(&mime, &bytes));
+                }
+            }
+
+            let all = gdk4::ContentProvider::new_union(&providers);
+            if let Err(err) = clipboard.set_content(Some(&all)) {
+                eprintln!("warn(gtk): failed to set clipboard content err={err}");
+            }
+
+            // `Surface.signals.@"clipboard-write".impl.emit(...)` with
+            // `(clipboard_type, text)` (`surface.zig:3832-3837`). PORT NOTE:
+            // `apprt.Clipboard` has no GObject type in this tier, so the param
+            // rides as the enum's `i32` (matching the signal declaration at
+            // `surface.rs:568`).
+            self.emit_by_name::<()>(
+                "clipboard-write",
+                &[&(clipboard_type as i32), &text],
+            );
+
+            return;
+        }
+
+        // confirm == true → showClipboardConfirmation (`surface.zig:3842-3846`).
+        // DEFERRED to Phase B.
+        self.show_clipboard_confirmation(ClipboardRequest::Osc52Write(clipboard_type), &text);
+    }
+
+    /// PORTS: `surface.zig:3934-3943` `Clipboard.get`. Get the specific GDK
+    /// clipboard for a widget: `.standard` → the widget's default clipboard,
+    /// `.selection`/`.primary` → the primary (selection) clipboard.
+    ///
+    /// The reference returns `?*gdk.Clipboard` (nullable), but gtk4-rs's
+    /// `WidgetExt::{clipboard,primary_clipboard}` always yield a `gdk::Clipboard`
+    /// (the display always has one), so the `orelse return` guards in the
+    /// reference callers are statically unreachable here.
+    fn clipboard_for(&self, clipboard: Clipboard) -> gdk4::Clipboard {
+        let widget = self.imp().gl_area.upcast_ref::<gtk4::Widget>();
+        match clipboard {
+            Clipboard::Standard => widget.clipboard(),
+            Clipboard::Selection | Clipboard::Primary => widget.primary_clipboard(),
+        }
+    }
+
+    /// PORTS: `surface.zig:3945-3984` `Clipboard.showClipboardConfirmation`.
+    ///
+    /// **Placeholder-leaf (Phase B):** the `ClipboardConfirmationDialog` is a
+    /// separate follow-up. For now this logs and drops the request rather than
+    /// presenting the confirmation dialog described at `surface.zig:3960`
+    /// (`showClipboardConfirmation` building the dialog + wiring confirm/deny).
+    fn show_clipboard_confirmation(&self, _req: ClipboardRequest, _text: &str) {
+        eprintln!("warn(gtk): clipboard confirmation not yet implemented (Phase B)");
     }
 
     /// PORTS: `surface.zig:1592-1641` `defaultTermioEnv`. The default environment
