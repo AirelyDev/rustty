@@ -408,10 +408,20 @@ impl Dispatch<KdeOutputOrderV1, ()> for Globals {
 ///
 /// PORT NOTE: unlike the reference (`wayland.zig:439-441`), this handler does NOT
 /// destroy the token — the owning [`super::Window`] destroys it in `set_urgent`/
-/// `deinit` (single-owner destruction avoids a double `destroy`). See the
-/// module-level DEFERRAL in `wayland.rs` about post-init event delivery: our
-/// registry queue is not yet integrated into the GLib main loop, so this fires
-/// only if the queue is cranked.
+/// `deinit` (single-owner destruction avoids a double `destroy`). The registry
+/// queue is cranked by the `WlQueueSource` GSource (`queue_source.rs`), so this
+/// now fires on a live compositor.
+///
+/// PORT NOTE (stale-token guard): the reference guards with `if token.getId() !=
+/// current_token.getId()` before activating (`wayland.zig:430-433`), because
+/// *libwayland* can still dispatch a `done` already queued for a token the client
+/// just destroyed. This handler omits that ID check because the scenario is
+/// structurally unreachable here: `set_urgent`/`deinit` call `token.destroy()`
+/// (wayland.rs, mirroring `wayland.zig:237`), and `wayland-rs` removes a destroyed
+/// proxy from its dispatch map — a stale token's `done` is never delivered. The
+/// behavior is therefore identical (a superseded token never activates) without
+/// tracking a per-surface "current token" that the reference's `*Window`-routed
+/// handler has but this `Globals`-routed one does not.
 impl Dispatch<XdgActivationTokenV1, WlSurface> for Globals {
     fn event(
         state: &mut Self,
