@@ -1149,10 +1149,15 @@ mod imp {
             palette.toggle(&obj);
         }
 
-        /// PORTS: `window.zig:2069-2072` `toggleInspector`. **INHABITED leaf (L6):**
-        /// the terminal inspector is deferred to L6; a no-op with a warning.
+        /// PORTS: `window.zig:2069-2072` `toggleInspector`. Resolve the active
+        /// surface and toggle its terminal inspector window.
         pub(super) fn toggle_inspector(&self) {
-            eprintln!("warn(gtk): terminal inspector not yet implemented (L6)");
+            // `const surface = self.getActiveSurface() orelse return;` (`:2070`).
+            let Some(surface) = self.get_active_surface() else {
+                return;
+            };
+            // `_ = surface.controlInspector(.toggle);` (`:2071`).
+            let _ = surface.control_inspector(rustty_apprt_api::action::Inspector::Toggle);
         }
     }
 

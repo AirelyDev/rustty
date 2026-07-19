@@ -78,6 +78,7 @@ use crate::gtk::surface::Surface as ApprtSurface;
 use super::application::Application;
 use super::clipboard_confirmation_dialog::{ClipboardConfirmationDialog, ClipboardRequestBoxed};
 use super::config::Config;
+use super::inspector_window::InspectorWindow;
 use super::key_state_overlay::KeyStateOverlay;
 use super::resize_overlay::ResizeOverlay;
 use super::search_overlay::SearchOverlay;
@@ -1825,16 +1826,63 @@ impl Surface {
         true
     }
 
-    /// PORTS: `surface.zig:885-909` `controlInspector`.
-    ///
-    /// **Placeholder-leaf (L6):** the reference shows/hides an `InspectorWindow`,
-    /// whose GType is not registered in rustty yet (see the `inspector` backref
-    /// field). Kept inhabited reaching the (future) inspector state and returning
-    /// `false` (unhandled) so the keybind falls through rather than lying that an
-    /// inspector was toggled. Lands with the inspector completion.
-    pub fn control_inspector(&self, _value: rustty_apprt_api::action::Inspector) -> bool {
-        let _ = &self.imp().inspector;
-        false
+    /// The [`InspectorWindow`] currently attached to this surface, if any,
+    /// upgraded from the weak backref (`surface.zig:891` `priv.inspector`). The
+    /// backing store is a weak ref (`gtk/class/surface.rs:396`); the weak-notify
+    /// (`:899`, `inspectorWeakNotify`) nulls it once the window is finalized.
+    pub(crate) fn inspector(&self) -> Option<InspectorWindow> {
+        self.imp()
+            .inspector
+            .borrow()
+            .as_ref()
+            .and_then(glib::object::WeakRef::upgrade)
+            .and_then(|obj| obj.downcast::<InspectorWindow>().ok())
+    }
+
+    /// PORTS: `surface.zig:885-907` `controlInspector`. Show, hide, or toggle the
+    /// terminal inspector window attached to this surface.
+    pub fn control_inspector(&self, value: rustty_apprt_api::action::Inspector) -> bool {
+        use rustty_apprt_api::action::Inspector;
+
+        // Let's see if we have an inspector already (`:889-891`).
+        if let Some(inspector) = self.inspector() {
+            match value {
+                Inspector::Show => {}
+                // Our weak ref will set our private value to null (`:893-894`).
+                Inspector::Toggle | Inspector::Hide => {
+                    inspector.upcast::<gtk4::Window>().destroy();
+                }
+            }
+        } else {
+            match value {
+                // `:896-901`.
+                Inspector::Toggle | Inspector::Show => {
+                    let inspector = InspectorWindow::new(self);
+                    inspector.present();
+
+                    // `inspector.as(gobject.Object).weakRef(inspectorWeakNotify,
+                    // self)` (`:899`; the notify at `:2618-2625` nulls the
+                    // backref). Discarding the returned handle keeps the notify
+                    // registered (fire-once on finalize) rather than
+                    // disconnecting it.
+                    let self_weak = self.downgrade();
+                    inspector.add_weak_ref_notify_local(move || {
+                        if let Some(this) = self_weak.upgrade() {
+                            *this.imp().inspector.borrow_mut() = None;
+                        }
+                    });
+
+                    // `priv.inspector = inspector` (`:900`), held as a weak
+                    // backref (`gtk/class/surface.rs:396`).
+                    *self.imp().inspector.borrow_mut() =
+                        Some(inspector.upcast_ref::<glib::Object>().downgrade());
+                }
+
+                Inspector::Hide => {}
+            }
+        }
+
+        true
     }
 
     /// PORTS: `Surface.zig:40-42` `cgroup` → `self.surface.cgroupPath()`.

@@ -250,13 +250,16 @@ impl Surface {
         }
     }
 
-    /// PORTS: `Surface.zig:102-104` `redrawInspector` — requests a redraw of this
-    /// surface's terminal inspector overlay.
+    /// PORTS: `Surface.zig:102-104` `redrawInspector` → `self.surface.redrawInspector()`,
+    /// which forwards to the widget's `redrawInspector` (`surface.zig:909-913`):
+    /// redraw the inspector window attached to this surface, if there is one.
     ///
-    /// **Placeholder-leaf (the inspector tier).** Reached only through
-    /// [`App::redraw_inspector`](super::app::App::redraw_inspector), dormant
-    /// until the inspector work lands.
+    /// Reached through [`App::redraw_inspector`](super::app::App::redraw_inspector).
     pub fn redraw_inspector(&self) {
-        // PORT NOTE (placeholder-leaf): `self.surface.redrawInspector()`.
+        // `if let Some(win) = self.inspector() { win.queueRender() }`
+        // (`surface.zig:911-912`).
+        if let Some(win) = self.gobj().and_then(|w| w.inspector()) {
+            win.queue_render();
+        }
     }
 }
