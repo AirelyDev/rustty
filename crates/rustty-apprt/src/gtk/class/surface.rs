@@ -1516,6 +1516,67 @@ impl Surface {
         self.emit_by_name::<()>("toggle-maximize", &[]);
     }
 
+    /// PORTS: `surface.zig:2095-2138` `estimateInitialSize`. Estimate the window's
+    /// initial pixel size from `window-width`/`window-height` × the font-grid cell
+    /// size, so the window manager can position it before the surface initializes;
+    /// stores it in the `default-size` property (read back by
+    /// `Application::init_and_show_window`).
+    pub fn estimate_initial_size(&self) {
+        // `const config = priv.config orelse return;` (`:2097-2099`).
+        let config_ref = self.imp().config.borrow();
+        let Some(config_obj) = config_ref.as_ref() else {
+            return;
+        };
+        let config = config_obj.get();
+
+        // Both dimensions must be configured (`:2101-2102`).
+        if config.window_height == 0 || config.window_width == 0 {
+            return;
+        }
+
+        // Content scale -> DPI (`:2104-2113`). `default_dpi` = 72 on macOS else 96
+        // (`rustty-font-shaper/face/mod.rs` `default_dpi`).
+        let content_scale = self.get_content_scale();
+        let default_dpi: f32 = if cfg!(target_os = "macos") { 72.0 } else { 96.0 };
+        let font_size = DesiredSize {
+            points: config.font_size,
+            xdpi: (content_scale.x * default_dpi) as u16,
+            ydpi: (content_scale.y * default_dpi) as u16,
+        };
+
+        // Get the font grid for cell metrics (`:2115-2126`). Reach the core app's
+        // `font_grid_set` the way `delete_surface` reaches the core app (above).
+        let app = Application::default();
+        let Some(core_app) = app.imp().core_app.get() else {
+            return;
+        };
+        let core_app = core_app.as_ptr().cast::<rustty_core::app::App<App>>();
+        let derived = rustty_core::surface::font_shared_grid_set_derived_config(config);
+        // SAFETY: a bound core app owns a live `App<App>`; `font_grid_set` is
+        // main-thread-only and this runs on the main thread. `ref` is balanced by
+        // the `deref` below (the reference `defer font_grid_set.deref(key)`).
+        let (font_grid_key, font_grid) =
+            match unsafe { (*core_app).font_grid_set.r#ref(&derived, font_size) } {
+                Ok(pair) => pair,
+                Err(_) => return,
+            };
+        let cell = unsafe { (*font_grid).cell_size() };
+        unsafe { (*core_app).font_grid_set.deref(font_grid_key) };
+
+        // Cells -> pixels -> logical size (`:2128-2137`). Min 10 cols × 4 rows
+        // (`CoreSurface.min_window_{width,height}_cells`).
+        let width = config.window_width.max(10) * cell.width;
+        let height = config.window_height.max(4) * cell.height;
+        let final_width = (width as f32 / content_scale.x).ceil() as u32;
+        let final_height = (height as f32 / content_scale.y).ceil() as u32;
+
+        // `self.setDefaultSize(...)` (`:2137`).
+        self.set_default_size(Some(Size {
+            width: final_width,
+            height: final_height,
+        }));
+    }
+
     /// PORTS: `surface.zig:1532-1576` `getContentScale`. The GTK widget scale
     /// factor multiplied by the `gtk-xft-dpi` font-DPI scale.
     #[must_use]

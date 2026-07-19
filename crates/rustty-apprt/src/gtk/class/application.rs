@@ -2845,13 +2845,10 @@ mod action {
         win.new_tab_for_window(parent, overrides);
 
         // Estimate the initial window size before presenting so the window manager
-        // can position it correctly (`:2315-2325`). INHABITED leaf (sizing):
-        // `surface.estimateInitialSize()` (the font-grid cell estimate,
-        // `surface.zig:2095-2138`) is unported, so `default-size` is unset here and
-        // the read below is a faithful no-op until a default size is published; the
-        // `surfaceInit` window handler (`window.rs` `handle_surface_init`) applies
-        // the size once the surface initializes.
+        // can position it correctly (`surface.estimateInitialSize()` + the
+        // `getDefaultSize`/`setDefaultSize` read, `:2315-2325`).
         if let Some(surface) = win.get_active_surface() {
+            surface.estimate_initial_size();
             if let Some(size) = surface.default_size() {
                 win.set_default_size(size.width as i32, size.height as i32);
             }

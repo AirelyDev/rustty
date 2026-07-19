@@ -1087,7 +1087,7 @@ impl DerivedConfig {
 /// `FontSyntheticStyle`), duplicated across the tier boundary by break #9;
 /// `Modifier` and `CodepointMap` are literally the same rustty-font types on
 /// both sides.
-fn font_shared_grid_set_derived_config(
+pub fn font_shared_grid_set_derived_config(
     config: &configpkg::Config,
 ) -> shared_grid_set::DerivedConfig {
     use rustty_font_shaper::config as font_config;
