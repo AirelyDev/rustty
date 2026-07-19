@@ -28,11 +28,14 @@
 //! incl. a ledgered deliberate deviation from the Zig source — see
 //! DEFERRALS.md), and Linux's `File`/`TCP`/`UDP` watchers (Tasks 3-5) route their
 //! blocking ops through it (Task 2's `epoll::Loop` pool wiring). The ONE
-//! remaining ledgered deferral is macOS-only and narrower than "the ThreadPool
-//! body": the kqueue `File` watcher's actual USE of the pool for blocking file
-//! IO is still the DEFERRALS.md "kqueue: file IO on thread pool" honest-skip
-//! stub (zero ghostty uses of `xev.File` on macOS) — the Linux `epoll`/
-//! `io_uring` `File`/`TCP`/`UDP` watchers have no such gap.
+//! remaining ledgered deferral is macOS-only: the macOS `File`/`TCP`/`UDP`
+//! watchers themselves remain UNPORTED (zero ghostty uses there — DEFERRALS.md's
+//! C7 finale entry), and the kqueue loop's pool-consumption wiring is part of
+//! that SAME deferred chunk — the "kqueue: file IO on thread pool" honest-skip
+//! stub (kqueue.rs:3660-3661: "the Zap pool + `xev.File` watcher are their own
+//! chunk"). There is no macOS `File` watcher whose pool use could be stubbed;
+//! watchers and pool-consumption defer together. The Linux `epoll`/`io_uring`
+//! `File`/`TCP`/`UDP` watchers have no such gap.
 //!
 //! CHUNK LOG: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:
 //! `Loop`/`Completion`/`Operation`/`Result`, the tick, `Async`(mach) wakeup

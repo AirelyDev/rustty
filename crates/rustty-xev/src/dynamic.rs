@@ -5186,6 +5186,32 @@ mod tests {
             assert!(connected, "backend {be:?} TCP connect did not complete");
             let server_conn_tcp = server_conn.unwrap();
 
+            // Close the server (the LISTENER closes before the send/recv below —
+            // the oracle's own sequence, tcp.zig:593-609: the accepted connection
+            // must survive its parent listener closing while data is in flight).
+            let mut server_closed = false;
+            unsafe {
+                server.close(
+                    ptr::addr_of_mut!(loop_),
+                    ptr::addr_of_mut!(c_accept),
+                    ptr::addr_of_mut!(server_closed),
+                    |ud: *mut bool,
+                     _l: *mut Loop,
+                     _c: *mut Completion,
+                     _s: TCP,
+                     r: core::result::Result<(), CloseError>| {
+                        r.unwrap();
+                        *ud = true;
+                        CallbackAction::Disarm
+                    },
+                );
+            }
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(
+                server_closed,
+                "backend {be:?} TCP listener close did not complete"
+            );
+
             // Send
             let send_buf = [1u8, 1, 2, 3, 5, 8, 13];
             let mut c_write = Completion::default();
@@ -5241,49 +5267,42 @@ mod tests {
             assert!(recv_len > 0);
             assert_eq!(send_buf.as_slice(), &recv_buf[0..recv_len]);
 
-            // Close (server_conn, server, client)
+            // Close (the accepted connection + the client — the listener already
+            // closed above, before send/recv, per the oracle's sequence).
             unsafe {
                 server_conn_tcp.close(
                     ptr::addr_of_mut!(loop_),
                     ptr::addr_of_mut!(c_read),
-                    ptr::null_mut::<()>(),
-                    |_ud: *mut (),
+                    ptr::addr_of_mut!(server_conn),
+                    |ud: *mut Option<TCP>,
                      _l: *mut Loop,
                      _c: *mut Completion,
                      _s: TCP,
                      r: core::result::Result<(), CloseError>| {
                         r.unwrap();
-                        CallbackAction::Disarm
-                    },
-                );
-                server.close(
-                    ptr::addr_of_mut!(loop_),
-                    ptr::addr_of_mut!(c_accept),
-                    ptr::null_mut::<()>(),
-                    |_ud: *mut (),
-                     _l: *mut Loop,
-                     _c: *mut Completion,
-                     _s: TCP,
-                     r: core::result::Result<(), CloseError>| {
-                        r.unwrap();
+                        *ud = None;
                         CallbackAction::Disarm
                     },
                 );
                 client.close(
                     ptr::addr_of_mut!(loop_),
                     ptr::addr_of_mut!(c_connect),
-                    ptr::null_mut::<()>(),
-                    |_ud: *mut (),
+                    ptr::addr_of_mut!(connected),
+                    |ud: *mut bool,
                      _l: *mut Loop,
                      _c: *mut Completion,
                      _s: TCP,
                      r: core::result::Result<(), CloseError>| {
                         r.unwrap();
+                        *ud = false;
                         CallbackAction::Disarm
                     },
                 );
             }
             loop_.run(RunMode::UntilDone).unwrap();
+            assert!(server_conn.is_none());
+            assert!(!connected);
+            assert!(server_closed);
 
             loop_.deinit();
             pool.shutdown();

@@ -3296,11 +3296,11 @@ verification pass, including the one net-new test this task adds —
 STILL DEFERRED on Linux (documented; each is a REFERENCE decision or a ledgered
 follow-up, not a weakening of a live path):
 
-- ~~**`watcher/file.zig` (8t), `watcher/tcp.zig` (5t), `watcher/udp.zig` (6t)** — the
-  `xev.File`/`xev.TCP`/`xev.UDP` watchers stay deferred on Linux exactly as they are
-  on macOS (the C7 finale bullet above): zero ghostty uses. `main.zig:35,38-39` +
-  `dynamic.zig:83,86-87` forward them; `lib.rs` forwards them on NEITHER target, so
-  the two surfaces stay identical in what they omit as well as what they export.~~
+- ~~**`watcher/file.zig` (8t), `watcher/tcp.zig` (5t), `watcher/udp.zig` (6t)** — the~~
+  ~~`xev.File`/`xev.TCP`/`xev.UDP` watchers stay deferred on Linux exactly as they are~~
+  ~~on macOS (the C7 finale bullet above): zero ghostty uses. `main.zig:35,38-39` +~~
+  ~~`dynamic.zig:83,86-87` forward them; `lib.rs` forwards them on NEITHER target, so~~
+  ~~the two surfaces stay identical in what they omit as well as what they export.~~
   **RESOLVED on Linux [2026-07-19, `xev-libxev-completion` branch, Tasks 3-5]:**
   `File`/`TCP`/`UDP` are now fully ported per-backend (`epoll.rs`+`io_uring.rs`),
   wrapped as the Dynamic `File`/`TCP`/`UDP` enums (`dynamic.rs`), and re-exported
@@ -3312,18 +3312,18 @@ follow-up, not a weakening of a live path):
   ghostty uses there — unchanged, out of scope for the Linux port): the two
   targets' surfaces now deliberately DIVERGE on this point, pinned by
   `tests/surface_parity.rs`'s Linux-only `needs_sized::<File/TCP/UDP>()` block.
-- ~~**`ThreadPool` (body AND type surface, on Linux only)** — macOS forwards
-  `xev::ThreadPool` (type surface, body deferred). `dynamic.zig:56` forwards
-  `main.ThreadPool` too, but the Linux side exports NOTHING: R5 forbids importing
-  the macOS-gated `thread_pool` module, and neither `epoll::Loop` nor
-  `io_uring::Loop` carries a pool (epoll.rs:149-152 — the reference's `thread_pool:
-  ?*ThreadPool` + `thread_pool_completions` fields are omitted, and
-  `linux::Options::thread_pool` is an opaque `Option<*mut c_void>` instead of the
-  macOS-gated type name). Consequence: epoll's threadpool-requiring ops yield
-  `CloseError::ThreadPoolRequired` exactly as the reference's `thread_schedule` does
-  when `Loop.thread_pool == null`. Same status as the macOS "kqueue: file IO on
-  thread pool" skip-stub — genuinely-unused functionality, not a live path. Un-defer
-  together with the macOS ThreadPool body.~~
+- ~~**`ThreadPool` (body AND type surface, on Linux only)** — macOS forwards~~
+  ~~`xev::ThreadPool` (type surface, body deferred). `dynamic.zig:56` forwards~~
+  ~~`main.ThreadPool` too, but the Linux side exports NOTHING: R5 forbids importing~~
+  ~~the macOS-gated `thread_pool` module, and neither `epoll::Loop` nor~~
+  ~~`io_uring::Loop` carries a pool (epoll.rs:149-152 — the reference's `thread_pool:`~~
+  ~~`?*ThreadPool` + `thread_pool_completions` fields are omitted, and~~
+  ~~`linux::Options::thread_pool` is an opaque `Option<*mut c_void>` instead of the~~
+  ~~macOS-gated type name). Consequence: epoll's threadpool-requiring ops yield~~
+  ~~`CloseError::ThreadPoolRequired` exactly as the reference's `thread_schedule` does~~
+  ~~when `Loop.thread_pool == null`. Same status as the macOS "kqueue: file IO on~~
+  ~~thread pool" skip-stub — genuinely-unused functionality, not a live path. Un-defer~~
+  ~~together with the macOS ThreadPool body.~~
   **RESOLVED (body ported + wired on Linux) [2026-07-19, `xev-libxev-completion`
   branch, Tasks 1-2, exported Task 6]:** the full `ThreadPool.zig` work-stealing
   body (kprotty's Zap pool) is now ported in `thread_pool.rs`, shared by BOTH
