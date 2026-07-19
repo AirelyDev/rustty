@@ -2752,14 +2752,19 @@ fn action_prompt_title(
     // PORT NOTE (placeholder-leaf): opens the `TitleDialog`; wired in T16/T17.
 }
 
-/// PORTS: `surface.zig:...` `actionNotifyOnNextCommandFinish`. **Placeholder-leaf
-/// (T16/17)**.
+/// PORTS: `surface.zig:2586-2597` `actionNotifyOnNextCommandFinish`. Flip the
+/// stateful boolean of the `notify-on-next-command-finish` gio action, arming (or
+/// disarming) the one-shot "notify me when the next command finishes" override that
+/// [`Surface::command_finished`] reads-and-resets.
 fn action_notify_on_next_command_finish(
-    _action: &gio::SimpleAction,
+    action: &gio::SimpleAction,
     _param: Option<&glib::Variant>,
     _self: &Surface,
 ) {
-    // PORT NOTE (placeholder-leaf): toggles the notify-on-next-command state.
+    use gio::prelude::*;
+    // `state.getBoolean()` (default false if unset / not a bool), then `setState(!value)`.
+    let value = action.state().and_then(|s| s.get::<bool>()).unwrap_or(false);
+    action.set_state(&(!value).to_variant());
 }
 
 // The 39 template callbacks (`surface.zig:3623-3661`). Per the placeholder-leaf
