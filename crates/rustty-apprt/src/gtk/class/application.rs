@@ -223,6 +223,20 @@ mod imp {
         /// no-op (placeholder-leaf doctrine).
         pub present_surface_thunk: RefCell<Option<Box<dyn Fn(u64)>>>,
 
+        /// rustty-only seam carrying the monomorphized color-scheme propagation
+        /// (`core_app.colorSchemeEvent(self.rt(), scheme)` plus, per surface,
+        /// `surface.core().colorSchemeCallback(scheme)`,
+        /// `application.zig:1553-1563`, `handleStyleManagerDark`). The `bool` is
+        /// `style.is_dark()` (light = `false`, dark = `true`); the thunk maps it to
+        /// `apprt::ColorScheme` before reaching the core. Same type-erasure
+        /// rationale as [`Self::new_window_thunk`]: the non-generic `Application`
+        /// cannot name the concrete `rustty_core::app::App<A>` its type-erased
+        /// `core_app`/`rt_app` pointers refer to, nor the concrete surface type, so
+        /// [`super::Application::bind_core_app`] captures both backrefs here.
+        /// `None` until bound; [`Self::handle_style_manager_dark`] then propagates
+        /// nothing (faithful to a not-yet-wired core, placeholder-leaf doctrine).
+        pub color_scheme_thunk: RefCell<Option<Box<dyn Fn(bool)>>>,
+
         /// rustty-only seam carrying the monomorphized inline core tick
         /// (`try priv.core_app.tick(priv.rt_app)`, `application.zig:552`) — **the
         /// libghostty→GTK bridge's other half**: the run loop breaks its blocking
@@ -599,19 +613,50 @@ mod imp {
         /// PORTS: `application.zig:1540-1584` `handleStyleManagerDark`. Propagates
         /// the effective light/dark scheme to libghostty-core and every surface.
         fn handle_style_manager_dark(&self, style: &libadwaita::StyleManager) {
-            let scheme = if style.is_dark() { "dark" } else { "light" };
+            let is_dark = style.is_dark();
+            let scheme = if is_dark { "dark" } else { "light" };
             eprintln!("debug(gtk): style manager changed scheme={scheme}");
 
-            // PORT NOTE (placeholder-leaf): the reference now calls
-            // `core_app.colorSchemeEvent(rt, scheme)` and, per surface,
-            // `surface.core().colorSchemeCallback(scheme)` (`:1551-1563`), plus the
-            // GTK ≥ 4.20 `css_provider "prefers-color-scheme"` push (`:1565-1583`).
-            // Both reach the type-erased `core_app`/`rt_app` (Task 8 stores them as
-            // `*mut c_void`; the concrete `App<A>`/`A` land with `gtk::App`, Task 11)
-            // and the surface list (Task 15+), and the 4.20 property type
-            // `gtk::InterfaceColorScheme` is `#[cfg(v4_20)]` (outside the pinned
-            // `v4_14` surface). The scheme computation + subscription are wired so
-            // the propagation body drops in with those dependencies.
+            // `core_app.colorSchemeEvent(self.rt(), scheme)` + per-surface
+            // `surface.core().colorSchemeCallback(scheme)` (`:1551-1563`). Both reach
+            // the type-erased `core_app`/`rt_app` (`*mut c_void`) and the concrete
+            // surface type, so [`super::Application::bind_core_app`] monomorphizes the
+            // propagation into [`color_scheme_thunk`] once the apprt `App` type `A`
+            // is known. `None` until bound → no-op push (placeholder-leaf doctrine).
+            if let Some(thunk) = self.color_scheme_thunk.borrow().as_ref() {
+                thunk(is_dark);
+            }
+
+            // The GTK ≥ 4.20 `prefers-color-scheme` push (`:1565-1583`). Ghostty
+            // gates this behind `if (gtk_version.atLeast(4, 20, 0))`, whose leading
+            // `comptime` fold collapses the whole branch away when built against a
+            // pre-4.20 header (`gtk_version.zig:58-62`). rustty mirrors that fold
+            // FAITHFULLY as a two-part gate: `#[cfg(feature = "gtk-v4_20")]` is the
+            // comptime analog (the `gtk::InterfaceColorScheme` property type is
+            // `#[cfg(feature = "v4_20")]` in gtk4-rs, outside the pinned `v4_14`
+            // ceiling — the DEFAULT build simply omits the push, exactly like
+            // ghostty built on the 4.14 floor), and the runtime `at_least(4, 20, 0)`
+            // guard is the runtime analog (a live shared-library probe — this port
+            // has no `comptime_version` header constant, so the runtime check is
+            // never folded out). See the AD-3 BASELINE PIN note in `Cargo.toml` and
+            // the `L5 GTK baseline pin` DEFERRALS row.
+            #[cfg(feature = "gtk-v4_20")]
+            if crate::gtk::gtk_version::at_least(4, 20, 0) {
+                let gtk_scheme = if is_dark {
+                    gtk4::InterfaceColorScheme::Dark
+                } else {
+                    gtk4::InterfaceColorScheme::Light
+                };
+                // `var value = gobject.ext.Value.newFrom(gtk_scheme);` — build the
+                // `Value` once and reuse it across every provider (`:1570-1582`).
+                let value = gtk_scheme.to_value();
+                if let Some(css_provider) = self.css_provider.borrow().as_ref() {
+                    css_provider.set_property_from_value("prefers-color-scheme", &value);
+                }
+                for css_provider in self.custom_css_providers.borrow().iter() {
+                    css_provider.set_property_from_value("prefers-color-scheme", &value);
+                }
+            }
         }
 
         /// PORTS: `application.zig:1400-1408` `startupSignals`. Installs the SIGUSR2
@@ -1270,6 +1315,7 @@ fn deinit_private(priv_: &imp::Application) {
     priv_.tick_thunk.replace(None);
     priv_.needs_confirm_quit_thunk.replace(None);
     priv_.update_config_thunk.replace(None);
+    priv_.color_scheme_thunk.replace(None);
 
     // `if (priv.saved_language) |language| alloc.free(language)` (`:442`) —
     // clearing drops the `CString`.
@@ -1943,6 +1989,52 @@ impl Application {
                         unsafe { &mut *core_app }.updateConfig(unsafe { &*rt_app }, config)
                     }
                     None => Ok(()),
+                }
+            })));
+
+        // The color-scheme propagation (`handleStyleManagerDark`,
+        // `application.zig:1553-1563`): `core_app.colorSchemeEvent(self.rt(),
+        // scheme)` followed by, for each surface, `surface.core()
+        // .colorSchemeCallback(scheme)`. `colorSchemeEvent` takes `&mut App<A>` and
+        // `rt_app: &A`; both `core_app` and `rt_app` are BACKREFs owned by
+        // libghostty-core / the apprt `App`, never freed here. `.core()` is the
+        // apprt `Surface` seam (in scope via the `use` below) yielding the
+        // `*mut CoreSurface`.
+        use rustty_apprt_api::Surface as _;
+        self.imp()
+            .color_scheme_thunk
+            .replace(Some(Box::new(move |is_dark: bool| {
+                let scheme = if is_dark {
+                    rustty_apprt_api::ColorScheme::Dark
+                } else {
+                    rustty_apprt_api::ColorScheme::Light
+                };
+
+                // `core_app.colorSchemeEvent(self.rt(), scheme) catch |err|
+                // log.warn("error updating app color scheme err={}", ...)`.
+                if let Some(rt_app) = rt_app {
+                    // SAFETY: as above — app-thread-only access to the two backrefs.
+                    if let Err(_err) =
+                        unsafe { &mut *core_app }.colorSchemeEvent(unsafe { &*rt_app }, scheme)
+                    {
+                        // log.warn("error updating app color scheme err={}", .{err});
+                    }
+                }
+
+                // `for (core_app.surfaces.items) |surface|
+                // surface.core().colorSchemeCallback(scheme) catch |err|
+                // log.warn("unable to tell surface about color scheme change
+                // err={}", ...)`.
+                for &surface in unsafe { &*core_app }.surfaces.iter() {
+                    // SAFETY: as above — app-thread-only access to the surface
+                    // backrefs the core app owns.
+                    let core = unsafe { &*surface }.core();
+                    if let Err(_err) = unsafe { &mut *core }.colorSchemeCallback(scheme) {
+                        // log.warn(
+                        //     "unable to tell surface about color scheme change err={}",
+                        //     .{err},
+                        // );
+                    }
                 }
             })));
     }

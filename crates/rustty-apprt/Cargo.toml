@@ -30,6 +30,19 @@ workspace = true
 # apprt-layer GUI-glue dependency (R3) that only the gtk backend needs.
 gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita", "rustty-vt/imgui"]
 
+# OPT-IN GTK 4.20 API surface — the ghostty-mirrored analog of building against a
+# >= 4.20 header. DEFAULT OFF: the AD-3 baseline (above) pins gtk4 to `v4_14`, so
+# the stock build has NO `gtk::InterfaceColorScheme` and omits the
+# `handleStyleManagerDark` `prefers-color-scheme` push entirely — byte-for-byte
+# what ghostty compiles when its build box is on the 4.14 floor (the comptime fold
+# in `gtk_version.atLeast` collapses the branch, `gtk_version.zig:58-62`). Turning
+# this on selects gtk4-rs's `v4_20` API surface (raising the compile-time CEILING
+# so `gtk4::InterfaceColorScheme` exists) and lights the `#[cfg(feature =
+# "gtk-v4_20")]` push in `class/application.rs`; that push STILL carries the live
+# runtime `gtk_version::at_least(4, 20, 0)` guard, so it self-disables at runtime
+# on a < 4.20 shared library. Recorded in the `L5 GTK baseline pin` DEFERRALS row.
+gtk-v4_20 = ["gtk", "gtk4/v4_20"]
+
 # Windowing-protocol backends behind the `gtk::winproto` union. Both are DECLARED
 # here so the `#[cfg(feature = …)]` arms in `src/gtk/winproto.rs` are recognized
 # cfgs (no `unexpected_cfgs` lint), but neither is wired into `gtk` yet: L5.1 T8

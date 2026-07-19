@@ -3705,8 +3705,30 @@ subsystem itself).
 ## L5 GTK baseline pin (AD-3) — `v4_14` API ceiling costs `prefers-color-scheme` [added 2026-07-17, L5.0 T1 review]
 
 **Ghostty source:** `src/apprt/gtk/class/application.zig:1565-1583` (inside the
-style-manager color-scheme handler). **Rustty counterpart:** `crates/rustty-apprt`
-(`gtk` feature), NOT ported. **Status:** deferred, with a named un-defer trigger.
+style-manager color-scheme handler). **Rustty counterpart:**
+`crates/rustty-apprt/src/gtk/class/application.rs` `handle_style_manager_dark`
+(`gtk` feature). **Status:** RESOLVED via a ghostty-mirrored OPT-IN feature (see
+the UPDATE below) — the DEFAULT `v4_14` build still omits the push, so the
+original deferral analysis remains the authority for that build.
+
+**UPDATE [2026-07-19, L5 T3 — ghostty-mirrored opt-in].** The push is now PORTED
+behind a `gtk-v4_20` Cargo feature (default OFF), which faithfully mirrors
+ghostty's own comptime+runtime gate rather than staying wholesale-deferred:
+* `#[cfg(feature = "gtk-v4_20")]` is the **comptime analog** of ghostty building
+  against a >= 4.20 header — it raises the gtk4-rs API CEILING to `v4_20` so
+  `gtk4::InterfaceColorScheme` exists. OFF (the default) → the branch is absent,
+  exactly like ghostty compiled on the 4.14 floor (its `comptime` fold in
+  `gtk_version.atLeast` collapses the branch away).
+* the live `gtk_version::at_least(4, 20, 0)` runtime guard is preserved INSIDE
+  that cfg — the **runtime analog** — so even the opt-in build self-disables on a
+  < 4.20 shared library. (This port has no `comptime_version` header constant, so
+  the runtime check is never folded out, unlike ghostty.)
+The AD-3 floor is UNCHANGED: `gtk4` stays pinned to `v4_14` by default, the
+minimum system gtk is still 4.14, and the stock `--features gtk` build carries no
+`v4_20` symbol. `--features gtk,gtk-v4_20` builds green on the 4.22 dev box and
+lights the push. The un-defer trigger below is thus partially discharged (path 1
+is now available as a feature flip); the DEFAULT-build loss it describes still
+holds verbatim for anyone who does not opt in.
 
 **What is deferred.** The reference runs:
 
