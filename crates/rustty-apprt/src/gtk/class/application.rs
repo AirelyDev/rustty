@@ -211,6 +211,18 @@ mod imp {
         /// no-op push (faithful to a not-yet-wired core, placeholder-leaf doctrine).
         pub new_window_thunk: RefCell<Option<Box<dyn Fn()>>>,
 
+        /// rustty-only seam carrying the monomorphized "present a surface by ID"
+        /// push (`self.core().findSurfaceByID(surface_id)` +
+        /// `self.core().mailbox.push(.{ .surface_message = .{ .surface = surface,
+        /// .message = .present_surface } }, .forever)`,
+        /// `application.zig:1839-1849`, `actionPresentSurface`). Same type-erasure
+        /// rationale as [`Self::new_window_thunk`]: the non-generic `Application`
+        /// cannot name the concrete `rustty_core::app::App<A>` its type-erased
+        /// `core_app` points at, so [`super::Application::bind_core_app`] captures
+        /// it here. `None` until bound; the `present-surface` handler is then a
+        /// no-op (placeholder-leaf doctrine).
+        pub present_surface_thunk: RefCell<Option<Box<dyn Fn(u64)>>>,
+
         /// rustty-only seam carrying the monomorphized inline core tick
         /// (`try priv.core_app.tick(priv.rt_app)`, `application.zig:552`) — **the
         /// libghostty→GTK bridge's other half**: the run loop breaks its blocking
@@ -1150,11 +1162,36 @@ fn action_open_config(
 /// `t`).
 fn action_present_surface(
     _action: &gio::SimpleAction,
-    _parameter: Option<&glib::Variant>,
-    _app: &Application,
+    parameter: Option<&glib::Variant>,
+    app: &Application,
 ) {
-    // PORT NOTE (placeholder-leaf): decode the u64 surface id, `findSurfaceByID`,
-    // and push `present_surface` (`:1824-1849`) — needs the core surface surface.
+    // `const parameter = parameter_ orelse return;` (`:1824`).
+    let Some(parameter) = parameter else {
+        return;
+    };
+
+    // Make sure that we've received a u64 from the system (`:1826-1832`). Zig
+    // builds a `VariantType.newFor(u64)` and checks `Variant.isOfType`; the glib
+    // Rust binding folds both into a typed `get::<u64>()` that returns `None`
+    // when the variant is not of type `t` (`"t"`, the u64 type string).
+    let Some(surface_id) = parameter.get::<u64>() else {
+        return;
+    };
+
+    // Convert the u64 to a core surface by using it as a surface ID. A value of
+    // zero means that there was no target surface for the notification so we
+    // don't focus any surface (`:1834-1838`).
+    if surface_id == 0 {
+        return;
+    }
+
+    // `self.core().findSurfaceByID(surface_id)` + push a `.surface_message`/
+    // `.present_surface` envelope (`:1839-1849`). The monomorphized lookup+push
+    // lives in the [`imp::Application::present_surface_thunk`], installed by
+    // [`Application::bind_core_app`]; unbound core → no-op (placeholder-leaf).
+    if let Some(thunk) = app.imp().present_surface_thunk.borrow().as_ref() {
+        thunk(surface_id);
+    }
 }
 
 /// PORTS: `application.zig:1687-1696` `actionQuit` (`quit`).
@@ -1844,6 +1881,28 @@ impl Application {
                 rustty_datastruct::blocking_queue::Timeout::Forever,
             );
         })));
+
+        // The "present a surface by ID" push (`actionPresentSurface`,
+        // `application.zig:1834-1849`): use the u64 as a surface ID, look it up in
+        // the core app, and push a `.surface_message`/`.present_surface` envelope.
+        self.imp()
+            .present_surface_thunk
+            .replace(Some(Box::new(move |id: u64| {
+                // SAFETY: `core_app` is the stable heap pointer the caller passed to
+                // `new`; the app thread drives this and validates surface pointers
+                // before use (core's threading contract).
+                if let Some(surface) = unsafe { &*core_app }.findSurfaceByID(id) {
+                    let _ = unsafe { &*core_app }.mailbox.push(
+                        rustty_core::app::Message::SurfaceMessage(
+                            rustty_apprt_api::SurfaceMessageEnvelope {
+                                surface,
+                                message: rustty_apprt_api::surface::Message::PresentSurface,
+                            },
+                        ),
+                        rustty_datastruct::blocking_queue::Timeout::Forever,
+                    );
+                }
+            })));
 
         // The inline core tick (`try priv.core_app.tick(priv.rt_app)`,
         // `application.zig:552`). `tick` takes `&mut App<A>` and `rt_app: &A`; the
