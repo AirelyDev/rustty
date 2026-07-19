@@ -4626,10 +4626,11 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
     keybind actually work. ~~Residual: `estimateInitialSize`~~ **RESOLVED**: `Surface::estimate_initial_size`
     is now ported (`surface.zig:2095-2138`) and called from `init_and_show_window` — window-width/height
     are honored (verified on real sway: `window-width=120 window-height=40` → 1204×869 px vs 804×629
-    natural; early-returns when unset, matching ghostty's `<=0` guard). Remaining residual: the D-Bus
-    `+toggle-quick-terminal` IPC path (vs the keybind) has an unconfirmed render asymmetry outside the
-    — verified-faithful — toggle/IPC code (likely a D-Bus-activation lifecycle detail; the keybind path
-    is the shipping one and works).
+    natural; early-returns when unset, matching ghostty's `<=0` guard). The D-Bus `+toggle-quick-terminal`
+    IPC path is **confirmed working** on real sway (renders the drop-down, human-observed) — the earlier
+    "IPC doesn't render" was a test-harness artifact (busy-loop "waits" that completed in µs → every grim
+    fired before the async enter-monitor render). No residual: keybind AND IPC both render; the toggle/IPC
+    code is byte-faithful to ghostty (6-point audit).
   - **Post-init async event delivery — RESOLVED [2026-07-19] via a GSource.** The registry
     `Connection` gets its OWN libwayland event queue (`Backend::from_foreign_display` ->
     `wl_display_create_queue`), which GDK's main loop does not dispatch. The init two-phase
