@@ -25,8 +25,8 @@ pub mod noop;
 #[cfg(feature = "wayland")]
 pub mod wayland;
 /// The blur-region helper ([`BlurRegion`](blur_region::BlurRegion)) is consumed
-/// only by the Wayland arm, so it is gated with it.
-#[cfg(feature = "wayland")]
+/// by the Wayland AND X11 arms, so it is gated to either.
+#[cfg(any(feature = "wayland", feature = "x11"))]
 mod blur_region;
 #[cfg(feature = "x11")]
 pub mod x11;
@@ -49,22 +49,26 @@ pub enum WinprotoError {
     /// unsupported quick terminal). See [`wayland::Error`].
     #[cfg(feature = "wayland")]
     Wayland(wayland::Error),
+    /// An X11-backend failure (surface probe / libX11 load / property request).
+    /// See [`x11::Error`].
+    #[cfg(feature = "x11")]
+    X11(x11::Error),
 }
 
-#[cfg(feature = "wayland")]
 impl core::fmt::Display for WinprotoError {
+    #[allow(unused_variables)]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Each cfg'd arm appears only when its feature is on. With NEITHER
+        // protocol feature the enum is uninhabited: the `_` arm (present only then)
+        // discharges the match via the uninhabited `match *self {}`.
         match self {
+            #[cfg(feature = "wayland")]
             WinprotoError::Wayland(e) => write!(f, "wayland winproto error: {e}"),
+            #[cfg(feature = "x11")]
+            WinprotoError::X11(e) => write!(f, "x11 winproto error: {e}"),
+            #[cfg(not(any(feature = "wayland", feature = "x11")))]
+            _ => match *self {},
         }
-    }
-}
-
-#[cfg(not(feature = "wayland"))]
-impl core::fmt::Display for WinprotoError {
-    fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // Uninhabited in a noop-only / x11-only build: this arm is never reached.
-        match *self {}
     }
 }
 

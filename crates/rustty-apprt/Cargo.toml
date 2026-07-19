@@ -35,7 +35,7 @@ gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita"]
 # `wayland` arm lands in L5.4, `x11` in L6, each turning its arm on and adding its
 # own protocol-crate deps.
 wayland = ["gtk", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols", "dep:wayland-protocols-plasma"]
-x11 = []
+x11 = ["gtk", "dep:gdk4-x11"]
 
 [dependencies]
 rustty-core = { workspace = true }
@@ -243,6 +243,10 @@ wayland-client = { version = "0.31", optional = true }
 wayland-backend = { version = "0.3", optional = true, features = ["client_system"] }
 wayland-protocols = { version = "0.32", optional = true, features = ["client", "staging"] }
 wayland-protocols-plasma = { version = "0.3", optional = true, features = ["client"] }
+# X11 winproto backend (feature = "x11"): gdk4-x11 to reach the xlib Display + the
+# window XID, x11-dl for the XChangeProperty property sets (_MOTIF_WM_HINTS CSD,
+# _KDE_NET_WM_BLUR_BEHIND_REGION blur, _NET_WM_STATE urgency).
+gdk4-x11 = { version = "0.11", features = ["xlib"], optional = true }
 
 # The gresource asset pipeline. build.rs runs blueprint-compiler over the 19
 # `.blp`, generates the gresource XML, drives `glib-compile-resources`, and
