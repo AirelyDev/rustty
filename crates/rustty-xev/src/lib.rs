@@ -142,7 +142,15 @@ mod process;
 // landed in C3; this module adds the high-level `xev.Stream` surface.
 #[cfg(target_os = "macos")]
 mod stream;
-#[cfg(target_os = "macos")]
+// XEV_BLUEPRINT §1/§6 chunk C3 -> Task 1 (`.superpowers/sdd/task-1-brief.md`): the
+// full faithful port of `ThreadPool.zig` (kprotty's Zap work-stealing pool) now
+// compiles on BOTH macOS (its original home) and Linux — the Linux epoll File
+// watcher routes blocking pread/pwrite/close through this pool. The lock-free
+// `NodeQueue`/`NodeBuffer` primitives were proven Stacked- AND Tree-Borrows clean
+// on `.port/phase-2/mirihar-threadpool/` before shipping. Zero Linux callers yet
+// (library-completeness parity), so it stays a private module (not re-exported on
+// Linux).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod thread_pool;
 #[cfg(target_os = "macos")]
 mod timer;

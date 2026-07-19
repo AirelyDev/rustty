@@ -1,0 +1,11 @@
+[package]
+name = "mirihar-threadpool"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-threadpool"
+path = "src/main.rs"
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]
