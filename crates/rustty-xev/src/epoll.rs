@@ -3863,10 +3863,18 @@ mod tests {
             "close callback never fired — the thread-pool completion was not drained"
         );
         // `st.ok` (the pool-thread `perform` returned `Result::Close(Ok(()))`) is
-        // the meaningful proof the blocking close ran on the pool. We deliberately
-        // do NOT re-close `read_fd` to prove EBADF: fd numbers are per-process, and
-        // a concurrently-running test may have already recycled this integer — the
-        // re-close would then race (or, worse, close an unrelated test's fd).
+        // the meaningful proof the blocking close ran on the pool AND that its
+        // `task_result` round-tripped through `thread_pool_completions` intact — a
+        // stale/never-written `task_result` would surface here as the default
+        // `Noop` (or an `Err`). We deliberately do NOT re-close `read_fd` to prove
+        // EBADF: fd numbers are per-process, and a concurrently-running test may
+        // have already recycled this integer — the re-close would then race (or,
+        // worse, close an unrelated test's fd).
+        assert!(
+            st.ok,
+            "close on the pool did not deliver Result::Close(Ok(())) — task_result \
+             was stale or an error"
+        );
         let _ = read_fd;
 
         unsafe { libc::close(write_fd) };
