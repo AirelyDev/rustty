@@ -87,6 +87,20 @@ rustty-os = { workspace = true }
 # lower-tier crates here: on a macOS/default build it is compiled but unreferenced
 # (the sole consumer is `#[cfg(all(target_os = "linux", feature = "gtk"))]`).
 rustty-datastruct = { workspace = true }
+# WS4 full `GlobalState.init` wiring (the BREAK #1 body, global.zig):
+# crash.init (sentry), oni.init (regex), the Logging type + ResourceLimits
+# seam, and build-config for the init info-log lines. All strictly-lower
+# members — acyclic (G7). rustty-cli is NOT here (apprt stays cli-free,
+# ADV-FIX 2: detection lives in the bin / in rustty-apprt-c).
+rustty-crash = { workspace = true }
+rustty-oniguruma = { workspace = true }
+rustty-global = { workspace = true }
+rustty-build-config = { workspace = true }
+# The init log lines `dependency harfbuzz=...` / `dependency fontconfig=...`
+# (global.zig:133-138), emitted only when the runtime font_backend has them.
+# Path deps like rustty-font-shaper's own edges (already in the build graph).
+harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
+fontconfig-sys = { path = "../../crates-sys/fontconfig-sys" }
 # `zig_string_escape` (the rustty port of `std.zig.stringEscape`) — used by
 # `embedded::Surface::init` to escape `initial_input` for the config `raw` field
 # (embedded.zig:561). Reused, not reimplemented (R3/R5). Acyclic: rustty-args deps

@@ -47,18 +47,6 @@ pub mod embedded;
 pub mod gtk;
 pub mod none;
 
-/// Error returned by [`init`] (the global-state bootstrap).
-///
-/// PORT NOTE: the reference `state.init()` returns `!void` over the union of
-/// allocator/env/cli/os errors. The E0 precursor can only fail while resolving
-/// the resources directory (the one upward call the minimal bootstrap makes); the
-/// rest of the reference error set arrives with the deferred full `state.init()`.
-#[derive(Debug)]
-pub enum InitError {
-    /// PORT NOTE: `apprt.runtime.resourcesDir(self.alloc)` failed (global.zig `init`).
-    ResourcesDir(rustty_os::resourcesdir::ResourcesDirError),
-}
-
 use rustty_core::Logging;
 
 /// PARITY: `cli.args.parsePackedStruct(Logging, v.value)` (global.zig init).
@@ -155,49 +143,174 @@ fn init_signals() {
     }
 }
 
-/// Initialize rustty global state (`rustty_core::STATE`).
+/// Error returned by [`init_with_action`] / [`init`] (the global-state bootstrap).
 ///
-/// PORT NOTE: the rustty analogue of the reference `global.zig` `state.init()`
-/// that `ghostty_init` (main_c.zig) calls. The FULL reference body — GPA /
-/// allocator selection, CLI action detection, logging config, `crash.init`,
-/// locale/i18n, POSIX signal setup — is the BREAK #1 deferred seam
-/// (`rustty_global::GlobalState::init` is commented pending this rustty-core /
-/// apprt wiring). The MINIMAL precursor the libghostty C ABI needs (EMBEDDED_BLUEPRINT
-/// §3 "Global-state precursor" + risk 4) is to SET `STATE` so `global_state()`
-/// reads (the CAPI `free_text`/`tty_name`/`Text.deinit` paths) don't panic:
-/// the process-global allocator seam is `()` (Rust's global allocator is
-/// process-wide), and `resources_dir` is resolved via the apprt-runtime
-/// `resourcesDir` call the reference `init` makes
-/// (`self.resources_dir = try apprt.runtime.resourcesDir(self.alloc)`).
-///
-/// Idempotent: a second call is a no-op (`OnceLock::set` returns `Err` once set,
-/// which is ignored) — matching the once-only `ghostty_init` contract while being
-/// robust to repeated bootstrap.
-pub fn init() -> Result<(), InitError> {
-    // reference (global.zig init, the fields set + the one upward call kept):
-    //   self.resources_dir = try apprt.runtime.resourcesDir(self.alloc);
+/// PORT NOTE: the reference `state.init()` returns `!void` over the union of
+/// allocator/env/cli/os errors. The cli `DetectError` half lives at the callers
+/// that run detection (the bin; `rustty_init` in rustty-apprt-c) — apprt stays
+/// cli-free (ADV-FIX 2). The `getenv` error is `Infallible` off-Windows and is
+/// discharged inline. `crash.init` and `i18n.init` failures are WARN-only
+/// (`catch |err| log.warn`, faithful), so they do not appear here.
+#[derive(Debug)]
+pub enum InitError {
+    /// `apprt.runtime.resourcesDir(self.alloc)` failed (global.zig `init`).
+    ResourcesDir(rustty_os::resourcesdir::ResourcesDirError),
+    /// `try internal_os.ensureLocale(self.alloc)` failed.
+    Locale(std::io::Error),
+    /// `try glslang.init()` failed.
+    Glslang(rustty_renderer::shadertoy::Error),
+    /// `try oni.init(&.{oni.Encoding.utf8})` failed.
+    Oniguruma(oni::Error),
+}
+
+/// Once-guard for the side-effecting bootstrap. The reference contract is
+/// once-only (`ghostty_init` / `main()`); the port's callers (the bin, the C
+/// ABI, and the gtk integration KATs) may re-enter, so the body runs exactly
+/// once and later calls return the already-computed logging. A failed init
+/// leaves the guard unset (retry allowed, mirroring the reference where a
+/// failed `ghostty_init` means the process exits anyway).
+static INIT_DONE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+/// Initialize rustty global state (`rustty_core::STATE`) — the FULL
+/// `global.zig` `GlobalState.init` body (BREAK #1, now wired), minus the two
+/// pieces that live at other tiers by ratified decision:
+///   * GPA/allocator selection — the allocator seam is `()` (Rust's global
+///     allocator is process-wide; allocator doctrine, PORT_RULES).
+///   * `cli.action.detectArgs` — detection lives ABOVE apprt (ADV-FIX 2); the
+///     caller passes `action_detected` and this body applies the
+///     action-implies-no-stderr rule + stashes the PRESENCE (`Option<()>`)
+///     into `STATE.action`. The concrete `cli::rustty::Action` value is held
+///     by the detecting tier (the bin's own state / rustty-apprt-c's stash).
+pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, InitError> {
+    use rustty_core::logging::{log_with, Level};
+    use rustty_build_config as build_config;
+
+    let mut done = INIT_DONE.lock().expect("init guard");
+    if *done {
+        return Ok(rustty_core::global_state().logging);
+    }
+
+    // (reference: `self.* = .{ ... }` zero-init happens implicitly — every
+    // field below is computed before the single STATE.set at the end.)
+
+    // self.gpa = ...; self.alloc = ...;
+    //   Allocator doctrine: Rust's global allocator is process-wide; the
+    //   GPA-vs-libc selection collapses (seam::Allocator = ()).
+
+    // We first try to parse any action that we may be executing.
+    //   (done by the caller; `action_detected` carries the result.)
+    // If we have an action executing, we disable logging by default ...
+    // if ((try internal_os.getenv(self.alloc, "GHOSTTY_LOG"))) |v| { ... }
+    //   R2: RUSTTY_LOG. The env error is Infallible off-Windows (discharged).
+    let env = rustty_os::env::getenv("RUSTTY_LOG").unwrap_or_else(|e| match e {});
+    let logging = compute_logging(action_detected, env.as_ref().map(|v| v.value.as_bytes()));
+
+    // Setup our signal handlers before logging
+    init_signals();
+
+    // Setup our Xev backend if we're dynamic
+    //   PORT NOTE: `xev.dynamic` is comptime-FALSE in the port on every target
+    //   (rustty-xev is the static kqueue surface on macOS; the Linux
+    //   io_uring/epoll selection is dynamic.rs's own concern) — the detect call
+    //   comptime-elides, exactly like the reference on a static backend.
+
+    // Output some debug information right away
+    log_with(Level::Info, "default", &format!("rustty version={}", build_config::VERSION_STRING), &logging);
+    log_with(Level::Info, "default", &format!("rustty build optimize={}", build_config::mode_string()), &logging);
+    log_with(Level::Info, "default", &format!("runtime={:?}", build_config::app_runtime()), &logging);
+    log_with(Level::Info, "default", &format!("font_backend={:?}", build_config::font_backend()), &logging);
+    // if (comptime build_config.font_backend.hasHarfbuzz())
+    //     std.log.info("dependency harfbuzz={s}", .{harfbuzz.versionString()});
+    if build_config::font_backend().has_harfbuzz() {
+        let (mut major, mut minor, mut micro) = (0u32, 0u32, 0u32);
+        // SAFETY: hb_version writes three u32 out-params (vendored harfbuzz).
+        unsafe { harfbuzz_sys::hb_version(&mut major, &mut minor, &mut micro) };
+        log_with(Level::Info, "default", &format!("dependency harfbuzz={major}.{minor}.{micro}"), &logging);
+    }
+    // if (comptime build_config.font_backend.hasFontconfig())
+    //     std.log.info("dependency fontconfig={d}", .{fontconfig.version()});
+    if build_config::font_backend().has_fontconfig() {
+        // SAFETY: FcGetVersion takes no args, reads a compile-time constant.
+        let v = unsafe { fontconfig_sys::FcGetVersion() };
+        log_with(Level::Info, "default", &format!("dependency fontconfig={v}"), &logging);
+    }
+    log_with(Level::Info, "default", &format!("renderer={:?}", build_config::renderer()), &logging);
+    // std.log.info("libxev default backend={t}", ...) — static per target (see
+    // the xev PORT NOTE above).
+    let xev_backend = if cfg!(target_os = "macos") { "kqueue" } else { "io_uring" };
+    log_with(Level::Info, "default", &format!("libxev default backend={xev_backend}"), &logging);
+
+    // As early as possible, initialize our resource limits.
+    // self.rlimits = .init();
+    let rlimits = rustty_global::ResourceLimits::init(rustty_os::fixMaxFiles());
+
+    // Initialize our crash reporting.
+    // crash.init(self.alloc) catch |err| log.warn(...);
+    if let Err(err) = rustty_crash::init() {
+        log_with(
+            Level::Warn,
+            "default",
+            &format!("sentry init failed, no crash capture available err={err:?}"),
+            &logging,
+        );
+    }
+
+    // We need to make sure the process locale is set properly. Locale
+    // affects a lot of behaviors in a shell.
+    // try internal_os.ensureLocale(self.alloc);
+    rustty_os::ensureLocale().map_err(InitError::Locale)?;
+
+    // Initialize glslang for shader compilation
+    // try glslang.init();
+    rustty_renderer::shadertoy::init().map_err(InitError::Glslang)?;
+
+    // Initialize oniguruma for regex
+    // try oni.init(&.{oni.Encoding.utf8});
+    //   Routed through the process-global OnceLock guard (ensure_init inits
+    //   EXACTLY `&[Encoding::utf8()]`, the reference's set) — the ratified fix
+    //   for concurrent onig_initialize (parallel-test C-init races).
+    oni::testing::ensure_init().map_err(InitError::Oniguruma)?;
+
+    // Find our resources directory once for the app so every launch
+    // hereafter can use this cached value.
+    // self.resources_dir = try apprt.runtime.resourcesDir(self.alloc);
     let resources_dir = rustty_os::resourcesDir().map_err(InitError::ResourcesDir)?;
 
-    // Populate the config crate's `.resources` theme-search seam (BREAK #1) from
-    // the SAME resources dir (list_themes.rs C6 note: both the core `STATE` and
-    // this config seam are populated by the bin's init so they stay consistent).
-    // Without this, bundled themes (`theme=NAME`) and `+list-themes` never
-    // resolve the resources-dir location. `set_resources_dir` returns `Err` if
-    // already set (idempotent bootstrap); ignore it, mirroring the `STATE.set`
-    // below.
+    // Populate the config crate's `.resources` theme-search seam (BREAK #1)
+    // from the SAME resources dir (list_themes C6 note); idempotent.
     let _ = rustty_config::theme::set_resources_dir(resources_dir.clone());
 
-    // reference: `self.* = .{ .alloc = ..., .action = null, ... }` — the
-    // seam-free field construction (rustty_global `GlobalState::new`). The
-    // allocator seam is `()` (see PORT NOTE above).
-    let state = rustty_core::GlobalState::new((), resources_dir);
+    // Setup i18n
+    // if (self.resources_dir.app()) |v| internal_os.i18n.init(v) catch |err| log.warn(...);
+    if let Some(v) = resources_dir.app() {
+        if let Err(err) = rustty_os::i18n::init(v) {
+            log_with(
+                Level::Warn,
+                "default",
+                &format!("failed to init i18n, translations will not be available err={err:?}"),
+                &logging,
+            );
+        }
+    }
 
-    // reference `global.zig` `pub var state: GlobalState = undefined;` set at
-    // `init` — the rustty `STATE` is a `OnceLock`; set it (ignore the already-set
-    // `Err`, keeping the bootstrap idempotent).
+    // reference `pub var state: GlobalState = undefined;` set at init — the
+    // rustty STATE is a OnceLock; construct the fully-populated state and set
+    // it (ignore the already-set Err, keeping the bootstrap idempotent).
+    let mut state = rustty_core::GlobalState::new((), resources_dir);
+    state.action = if action_detected { Some(()) } else { None };
+    state.logging = logging;
+    state.rlimits = rlimits;
     let _ = rustty_core::STATE.set(state);
 
-    Ok(())
+    *done = true;
+    Ok(logging)
+}
+
+/// Compat wrapper — the pre-WS4 `init()` signature (no CLI action detected:
+/// the pure GUI-launch bootstrap). The gtk integration KATs and any embedded
+/// caller that performs no detection use this.
+pub fn init() -> Result<(), InitError> {
+    init_with_action(false).map(|_| ())
 }
 
 #[cfg(test)]
@@ -258,5 +371,33 @@ mod bootstrap_tests {
         };
         assert_eq!(rc, 0);
         assert_eq!(current.sa_sigaction, libc::SIG_IGN);
+    }
+
+    #[test]
+    fn full_init_populates_state_and_is_idempotent() {
+        let logging = init_with_action(false).expect("full init");
+        // STATE is set with the same logging + a populated rlimits snapshot.
+        let state = rustty_core::global_state();
+        assert_eq!(state.logging, logging);
+        assert!(state.action.is_none());
+        // fixMaxFiles returns Some on unix in practice; assert only what the
+        // contract guarantees everywhere: the field was stamped by init.
+        #[cfg(unix)]
+        assert!(state.rlimits.nofile.is_some());
+
+        // Second call: no re-run of side effects, same logging back.
+        let again = init_with_action(false).expect("idempotent");
+        assert_eq!(again, logging);
+
+        // The init() compat wrapper also succeeds post-init.
+        init().expect("compat wrapper");
+
+        // Signals were installed by the full init.
+        #[cfg(unix)]
+        {
+            let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+            unsafe { libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut current) };
+            assert_eq!(current.sa_sigaction, libc::SIG_IGN);
+        }
     }
 }

@@ -68,9 +68,20 @@ fn main() {
         println!("cargo:rerun-if-changed={src}");
     }
     // Compiles the vendored sources into a static archive and emits the
-    // `cargo:rustc-link-lib=static=intl` + search-path directives. Because the
+    // `cargo:rustc-link-lib=static=...` + search-path directives. Because the
     // crate declares `links = "intl"`, Cargo enforces a single linkage.
-    build.compile("intl");
+    //
+    // WS4 NOTE: the archive is named `rustty_gettext_localename`, NOT `intl` —
+    // this is a DELIBERATE divergence from the `links` key (which stays
+    // "intl" as the pkg-config-style uniqueness tag for the underlying C
+    // library concept). A `-lintl` name-based link (added by rustty-os/build.rs
+    // WS4 to reach Homebrew's FULL libintl for `bindtextdomain`/`dgettext`) would
+    // otherwise resolve to THIS crate's own vendored archive first (whichever
+    // `-L` search path lands earlier), which provides only the localename
+    // canonicalizer slice — silently shadowing the real symbols and producing
+    // a link-time "undefined symbol: _bindtextdomain" instead. A unique
+    // archive name sidesteps the collision entirely.
+    build.compile("rustty_gettext_localename");
 
     // The macOS `gl_locale_name_canonicalize` consults CFPreferences for legacy
     // (NeXTstep-inherited) locale names, so the static archive references Apple
