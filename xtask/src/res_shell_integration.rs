@@ -200,4 +200,110 @@ mod tests {
         }
         out
     }
+
+    /// Per-token product rebrand (R2, rename-casing-fidelity): applied to both
+    /// file names and file contents when mapping oracle -> vendored.
+    fn rebrand(s: &str) -> String {
+        s.replace("GHOSTTY", "RUSTTY")
+            .replace("Ghostty", "Rustty")
+            .replace("ghostty", "rustty")
+    }
+
+    /// Oracle-relative paths (post-rebrand spelling) whose CONTENT is compared
+    /// VERBATIM against the oracle instead of through [`rebrand`]. Every entry
+    /// requires a written justification:
+    ///
+    /// * `bash/bash-preexec.sh` — third-party vendored file (rcaloras/bash-preexec,
+    ///   MIT). Task 13 deliberately did NOT rebrand it: its `# GHOSTTY:` comment
+    ///   lines are ghostty-upstream PATCH ANNOTATIONS inside third-party code
+    ///   (provenance markers), not product identity, and the file contains no
+    ///   `GHOSTTY_*` env vars or `ghostty` command references.
+    const VERBATIM_FILES: &[&str] = &["bash/bash-preexec.sh"];
+
+    /// R1/R2 oracle KAT (dev-only): the vendored shell-integration tree must
+    /// equal ghostty's `src/shell-integration/` tree mapped through the
+    /// per-token rebrand (names + contents), excluding `*.md` on both sides,
+    /// with [`VERBATIM_FILES`] compared byte-for-byte instead.
+    ///
+    /// Run explicitly (never in default `cargo test` — R3 no oracle dep):
+    ///   cargo test -p xtask -- --ignored oracle_shell_integration_parity
+    #[test]
+    #[ignore = "requires the read-only ghostty oracle checkout at ../ghostty (R3: dev-only)"]
+    fn oracle_shell_integration_parity() {
+        // Candidate oracle locations: `../../ghostty` next to a plain checkout
+        // of rustty, OR (when this crate is built from inside a git worktree
+        // nested under the main checkout, e.g. `.claude/worktrees/<id>/xtask`)
+        // the fixed dev-machine location `/Users/gael/projects/ghostty`.
+        let candidates = [
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ghostty/src/shell-integration"),
+            Path::new("/Users/gael/projects/ghostty/src/shell-integration").to_path_buf(),
+        ];
+        let oracle_root = candidates
+            .iter()
+            .find(|p| p.is_dir())
+            .unwrap_or_else(|| {
+                panic!(
+                    "ghostty oracle not found in any of {:?} — this KAT only runs on the dev machine",
+                    candidates
+                )
+            });
+        let vendored_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../crates/rustty-extra/shell-integration");
+
+        let mut failures: Vec<String> = Vec::new();
+        let mut mapped_set: Vec<std::path::PathBuf> = Vec::new();
+
+        // Forward direction: every oracle file (non-.md, incl. dotfiles like
+        // zsh/.zshenv) must exist vendored under the rebranded name with the
+        // expected content.
+        for oracle_path in walk(&oracle_root) {
+            if oracle_path.extension().and_then(|e| e.to_str()) == Some("md") {
+                continue; // README.md — excluded on both sides
+            }
+            let rel = oracle_path
+                .strip_prefix(&oracle_root)
+                .unwrap()
+                .to_str()
+                .expect("oracle path is UTF-8");
+            let mapped_rel = rebrand(rel);
+            let vendored_path = vendored_root.join(&mapped_rel);
+            mapped_set.push(vendored_path.clone());
+
+            let Ok(vendored) = std::fs::read_to_string(&vendored_path) else {
+                failures.push(format!("MISSING vendored file: {mapped_rel} (from oracle {rel})"));
+                continue;
+            };
+            let oracle = std::fs::read_to_string(&oracle_path)
+                .unwrap_or_else(|e| panic!("read oracle {rel}: {e}"));
+            let expected = if VERBATIM_FILES.contains(&mapped_rel.as_str()) {
+                oracle
+            } else {
+                rebrand(&oracle)
+            };
+            if vendored != expected {
+                failures.push(format!("CONTENT DIVERGES: {mapped_rel}"));
+            }
+        }
+
+        // Reverse direction: no vendored non-.md file exists that the mapped
+        // oracle set does not account for (catches stray additions).
+        for vendored_path in walk(&vendored_root) {
+            if vendored_path.extension().and_then(|e| e.to_str()) == Some("md") {
+                continue; // README.md / VENDORING.md — repo docs, never emitted
+            }
+            if !mapped_set.contains(&vendored_path) {
+                failures.push(format!(
+                    "EXTRA vendored file with no oracle counterpart: {}",
+                    vendored_path.strip_prefix(&vendored_root).unwrap().display()
+                ));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "vendored shell-integration tree diverged from the oracle under the \
+             rebrand mapping:\n  {}",
+            failures.join("\n  ")
+        );
+    }
 }
