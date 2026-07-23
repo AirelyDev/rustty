@@ -205,12 +205,31 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
                 ("len", usize, len, "u64"),
             ]),
         ),
+        // .{ "GhosttyColorPaletteMask", StructInfo.init(color_c.PaletteMask) },
+        (
+            "RusttyColorPaletteMask",
+            struct_info!(
+                crate::color::PaletteMask,
+                [("bits", [u64; 4], bits, "array"),]
+            ),
+        ),
         // .{ "GhosttyColorRgb", StructInfo.init(color.RGB.C) },
         (
             "RusttyColorRgb",
             struct_info!(
                 RgbC,
                 [("r", u8, r, "u8"), ("g", u8, g, "u8"), ("b", u8, b, "u8"),]
+            ),
+        ),
+        // .{ "GhosttyColorX11Entry", StructInfo.init(color_c.X11Entry) },
+        (
+            "RusttyColorX11Entry",
+            struct_info!(
+                crate::color::X11Entry,
+                [
+                    ("name", *const c_char, name, "opaque"),
+                    ("color", RgbC, color, "struct"),
+                ]
             ),
         ),
         // .{ "GhosttyDeviceAttributes", StructInfo.init(terminal.DeviceAttributes) },
@@ -678,6 +697,9 @@ mod tests {
         assert!(root
             .iter()
             .any(|(k, _)| k == "RusttyFormatterTerminalOptions"));
+        // WS5 T6: registration for the new color utility C types.
+        assert!(root.iter().any(|(k, _)| k == "RusttyColorPaletteMask"));
+        assert!(root.iter().any(|(k, _)| k == "RusttyColorX11Entry"));
 
         // Verify GhosttyTerminalOptions fields
         let term_opts = get(root, "RusttyTerminalOptions").as_object();

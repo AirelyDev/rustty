@@ -144,7 +144,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `b953bb346` | terminal: fix bitmap allocator chunk region sizing | **PORTED** | bitmap_allocator.rs:335 + 2 tests (§1) |
 | `3ff6d08fa` | lib-vt: report OSC and Kitty color queries (#13239) | n/a-merge | constituents below |
 | `14c829883` | terminal: report OSC color queries in lib-vt | missing BL-5 | terminal/c + osc/kitty color query surface |
-| `20a1bfa5f` | fix: pass RGB color inputs by pointer | missing BL-5 | include/ghostty/vt/color.h ABI change |
+| `20a1bfa5f` | fix: pass RGB color inputs by pointer | **PORTED** | rustty_color_rgb_get by-pointer ABI (WS5 T2) |
 | `bb0ac4c72` | termio: don't bridge pty reads while the parser is idle | missing BL-4 | rustty-termio exec |
 | `bed47168c` | termio: bound POSIX read-ahead on non-Darwin | n/a | reverted upstream by `60121a039` |
 | `77190bd02` | terminal: handful of scroll region optimizations | missing BL-4 | screen.rs/terminal.rs scroll paths (496/38, has tests) |
@@ -166,7 +166,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `258de36d1` | benchmark: terminal-stream uses full terminal handler | missing BL-4 | rustty-bench |
 | `2f0e6659d` | termio: pipeline pty reads to overlap parsing with draining | missing BL-4 | rustty-termio exec (342/57) |
 | `63e75e86c` | lib-vt: many more color utility APIs (#13206) | n/a-merge | constituent below |
-| `2970e9a2a` | lib-vt: many more color utility APIs | missing BL-5 | color.h/sgr.h + c/color + x11_color surface (1189/131) |
+| `2970e9a2a` | lib-vt: many more color utility APIs | **PORTED** | color.rs/x11_color.rs + vt-c color.rs/lib.rs/types.rs + color.h/sgr.h + config delegation (WS5 T3-T6) |
 | `4a7cabc4f` | lib-vt: color scheme report encoder (#13192) | n/a-merge | constituent below |
 | `715ef6c15` | fix: max window clamp to monitor size (#13171) | n/a-merge | constituent `004c88e41` (gtk) |
 | `f00e90694` | lib-vt: add color scheme report encoder | missing BL-5 | include/ghostty/vt/color_scheme.h + c/color_scheme |

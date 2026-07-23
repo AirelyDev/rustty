@@ -132,6 +132,114 @@ pub unsafe extern "C" fn rustty_color_rgb_get(
     unsafe { color::rgb_get(color, r, g, b) }
 }
 
+// pub const color_parse = color.parse;  (ghostty_color_parse)
+/// C: rustty_color_parse
+/// # Safety
+/// `value`, if non-null, readable for `len` bytes; `out` valid writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_parse(
+    value: *const u8,
+    len: usize,
+    out: *mut color::RgbC,
+) -> c_int {
+    // SAFETY: caller contract.
+    unsafe { color::parse(value, len, out) }.to_c_int()
+}
+
+/// C: rustty_color_parse_x11
+/// # Safety
+/// `name`, if non-null, readable for `len` bytes; `out` valid writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_parse_x11(
+    name: *const u8,
+    len: usize,
+    out: *mut color::RgbC,
+) -> c_int {
+    // SAFETY: caller contract.
+    unsafe { color::parse_x11(name, len, out) }.to_c_int()
+}
+
+/// C: rustty_color_parse_palette_entry
+/// # Safety
+/// `value`, if non-null, readable for `len`; `out_index`/`out_rgb` writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_parse_palette_entry(
+    value: *const u8,
+    len: usize,
+    out_index: *mut u8,
+    out_rgb: *mut color::RgbC,
+) -> c_int {
+    // SAFETY: caller contract.
+    unsafe { color::parse_palette_entry(value, len, out_index, out_rgb) }.to_c_int()
+}
+
+/// C: rustty_color_palette_default
+/// # Safety
+/// `out` must point to writable storage for 256 RGB values.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_palette_default(out: *mut color::PaletteC) {
+    // SAFETY: caller contract.
+    unsafe { color::palette_default(out) }
+}
+
+/// C: rustty_color_palette_generate
+/// # Safety
+/// `bg`/`fg`/`out` valid; `base`/`skip` valid or null; out may alias base.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_palette_generate(
+    base: *const color::PaletteC,
+    skip: *const color::PaletteMask,
+    bg: *const color::RgbC,
+    fg: *const color::RgbC,
+    harmonious: bool,
+    out: *mut color::PaletteC,
+) {
+    // SAFETY: caller contract.
+    unsafe { color::palette_generate(base, skip, bg, fg, harmonious, out) }
+}
+
+/// C: rustty_color_luminance
+/// # Safety
+/// `color` must be a valid readable RGB pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_luminance(color_: *const color::RgbC) -> f64 {
+    // SAFETY: caller contract.
+    unsafe { color::luminance(color_) }
+}
+
+/// C: rustty_color_perceived_luminance
+/// # Safety
+/// `color` must be a valid readable RGB pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_perceived_luminance(color_: *const color::RgbC) -> f64 {
+    // SAFETY: caller contract.
+    unsafe { color::perceived_luminance(color_) }
+}
+
+/// C: rustty_color_contrast
+/// # Safety
+/// `a`/`b` must be valid readable RGB pointers.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_contrast(
+    a: *const color::RgbC,
+    b: *const color::RgbC,
+) -> f64 {
+    // SAFETY: caller contract.
+    unsafe { color::contrast(a, b) }
+}
+
+/// C: rustty_color_x11_names
+#[no_mangle]
+pub extern "C" fn rustty_color_x11_names() -> *const color::X11Entry {
+    color::x11_names()
+}
+
+/// C: rustty_color_x11_name_count
+#[no_mangle]
+pub extern "C" fn rustty_color_x11_name_count() -> usize {
+    color::x11_name_count()
+}
+
 // ----- focus -----
 // pub const focus_encode = focus.encode;  (ghostty_focus_encode)
 /// C: rustty_focus_encode

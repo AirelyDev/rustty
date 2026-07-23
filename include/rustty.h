@@ -432,6 +432,29 @@ typedef struct TrackedGridRef TrackedGridRef;
 typedef RGB RgbC;
 
 /**
+ * C: the C-ABI palette projection.
+ */
+typedef RgbC PaletteC[256];
+
+/**
+ * C: GhosttyColorPaletteMask -> RusttyColorPaletteMask (R2)
+ */
+typedef struct {
+    uint64_t bits[4];
+} PaletteMask;
+
+/**
+ * C: GhosttyColorX11Entry -> RusttyColorX11Entry (R2)
+ */
+typedef struct {
+    /**
+     * Null-terminated color name; null marks the end of the table.
+     */
+    const char *name;
+    RgbC color;
+} X11Entry;
+
+/**
  * C: GhosttyModeReportState -> RusttyModeReportState (R2)
  */
 typedef int ReportState;
@@ -822,6 +845,80 @@ int rustty_build_info(int data, void *out);
  * `color` must be a valid readable `RgbC`; `r`/`g`/`b` valid writable `u8`.
  */
 void rustty_color_rgb_get(const RgbC *color, uint8_t *r, uint8_t *g, uint8_t *b);
+
+/**
+ * C: rustty_color_parse
+ * # Safety
+ * `value`, if non-null, readable for `len` bytes; `out` valid writable.
+ */
+int rustty_color_parse(const uint8_t *value, uintptr_t len, RgbC *out);
+
+/**
+ * C: rustty_color_parse_x11
+ * # Safety
+ * `name`, if non-null, readable for `len` bytes; `out` valid writable.
+ */
+int rustty_color_parse_x11(const uint8_t *name, uintptr_t len, RgbC *out);
+
+/**
+ * C: rustty_color_parse_palette_entry
+ * # Safety
+ * `value`, if non-null, readable for `len`; `out_index`/`out_rgb` writable.
+ */
+int rustty_color_parse_palette_entry(const uint8_t *value,
+                                     uintptr_t len,
+                                     uint8_t *out_index,
+                                     RgbC *out_rgb);
+
+/**
+ * C: rustty_color_palette_default
+ * # Safety
+ * `out` must point to writable storage for 256 RGB values.
+ */
+void rustty_color_palette_default(PaletteC *out);
+
+/**
+ * C: rustty_color_palette_generate
+ * # Safety
+ * `bg`/`fg`/`out` valid; `base`/`skip` valid or null; out may alias base.
+ */
+void rustty_color_palette_generate(const PaletteC *base,
+                                   const PaletteMask *skip,
+                                   const RgbC *bg,
+                                   const RgbC *fg,
+                                   bool harmonious,
+                                   PaletteC *out);
+
+/**
+ * C: rustty_color_luminance
+ * # Safety
+ * `color` must be a valid readable RGB pointer.
+ */
+double rustty_color_luminance(const RgbC *color_);
+
+/**
+ * C: rustty_color_perceived_luminance
+ * # Safety
+ * `color` must be a valid readable RGB pointer.
+ */
+double rustty_color_perceived_luminance(const RgbC *color_);
+
+/**
+ * C: rustty_color_contrast
+ * # Safety
+ * `a`/`b` must be valid readable RGB pointers.
+ */
+double rustty_color_contrast(const RgbC *a, const RgbC *b);
+
+/**
+ * C: rustty_color_x11_names
+ */
+const X11Entry *rustty_color_x11_names(void);
+
+/**
+ * C: rustty_color_x11_name_count
+ */
+uintptr_t rustty_color_x11_name_count(void);
 
 /**
  * C: rustty_focus_encode
