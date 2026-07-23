@@ -307,6 +307,7 @@ typedef enum {
     SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_TOP = 0,
     SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_BOTTOM = 1,
     SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_DELTA = 2,
+    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_ROW = 3,
 } ScrollViewportTag;
 
 /**
@@ -732,6 +733,10 @@ typedef struct {
  */
 typedef union {
     intptr_t delta;
+    /**
+     * Absolute row offset for the `Row` tag (oracle 3a2e28329).
+     */
+    uintptr_t row;
     /**
      * Padding to the PINNED ABI size. `[2]u64` (16 bytes) per the reference.
      */

@@ -1287,14 +1287,16 @@ pub type DeviceAttributes = CDeviceAttributes;
 pub type ScrollViewport = ScrollViewportC;
 
 /// The C ABI compatible tag for `ScrollViewport`.
-// PORT NOTE: `Tag = lib.Enum(lib.target, &.{ "top", "bottom", "delta" })`; for
-// the `.c` target a fieldless `enum(c_int)` in key order.
+// PORT NOTE: `Tag = lib.Enum(lib.target, &.{ "top", "bottom", "delta", "row" })`;
+// for the `.c` target a fieldless `enum(c_int)` in key order. `Row` is appended
+// (oracle 3a2e28329) — the union already reserves `[2]u64` so this is ABI stable.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScrollViewportTag {
     Top = 0,
     Bottom = 1,
     Delta = 2,
+    Row = 3,
 }
 
 /// The C ABI compatible union value for `ScrollViewport`.
@@ -1305,6 +1307,8 @@ pub enum ScrollViewportTag {
 #[derive(Clone, Copy)]
 pub union ScrollViewportCValue {
     pub delta: isize,
+    /// Absolute row offset for the `Row` tag (oracle 3a2e28329).
+    pub row: usize,
     /// Padding to the PINNED ABI size. `[2]u64` (16 bytes) per the reference.
     pub _padding: [u64; 2],
 }
@@ -1329,6 +1333,7 @@ const _: () = assert!(size_of::<ScrollViewportTag>() == size_of::<c_int>());
 //         .top => .top,
 //         .bottom => .bottom,
 //         .delta => .{ .delta = behavior.value.delta },
+//         .row => .{ .row = behavior.value.row },
 //     });
 // }
 /// # Safety
@@ -1346,6 +1351,8 @@ pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
         // SAFETY: the `delta` tag selects the `delta` union member (C ABI
         // contract mirrored from the reference `behavior.value.delta`).
         ScrollViewportTag::Delta => ZigScrollViewport::Delta(unsafe { behavior.value.delta }),
+        // SAFETY: the `row` tag selects the `row` union member.
+        ScrollViewportTag::Row => ZigScrollViewport::Row(unsafe { behavior.value.row }),
     };
     unsafe { (*t).scroll_viewport(zig_behavior) };
 }
@@ -2387,6 +2394,117 @@ mod tests {
                 },
             )
         };
+    }
+
+    // test "scroll_viewport row" (oracle 3a2e28329)
+    #[test]
+    fn scroll_viewport_row_test() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 5, 2, 10_000);
+            assert_eq!(Result::Success, new_result);
+
+            // Write 4 rows so rows "1" and "2" are pushed into scrollback:
+            // total rows is 4, viewport length is 2.
+            unsafe { vt_write(t, b"1\r\n2\r\n3\r\n4".as_ptr(), 10) };
+
+            let mut viewport_active: bool = false;
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(viewport_active);
+
+            // Row 0 is the top of the scrollback.
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 0 } },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(!viewport_active);
+            assert_eq!(b"1\n2", plain_string(t).as_slice());
+
+            // An absolute row within the scrollback becomes the first visible
+            // row and round-trips through the scrollbar offset.
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 1 } },
+                )
+            };
+            assert_eq!(b"2\n3", plain_string(t).as_slice());
+
+            let mut scrollbar_data: TerminalScrollbar = TerminalScrollbar { total: 0, offset: 0, len: 0 };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Scrollbar, &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void)
+            });
+            assert_eq!(4, scrollbar_data.total);
+            assert_eq!(1, scrollbar_data.offset);
+            assert_eq!(2, scrollbar_data.len);
+
+            // A row past the end clamps to the active area.
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 9999 } },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(viewport_active);
+            assert_eq!(b"3\n4", plain_string(t).as_slice());
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Scrollbar, &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void)
+            });
+            assert_eq!(2, scrollbar_data.offset);
+
+            unsafe { free(t) };
+        });
+    }
+
+    // test "scroll_viewport row alt screen" (oracle 3a2e28329)
+    #[test]
+    fn scroll_viewport_row_alt_screen_test() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 5, 2, 10_000);
+            assert_eq!(Result::Success, new_result);
+
+            // Enter the alternate screen, which has no scrollback.
+            unsafe { vt_write(t, b"\x1b[?1049h".as_ptr(), 8) };
+            let mut screen: TerminalScreen = TerminalScreen::Primary;
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ActiveScreen, &mut screen as *mut TerminalScreen as *mut c_void)
+            });
+            assert_eq!(TerminalScreen::Alternate, screen);
+
+            // Scrolling to any row keeps the viewport on the active area.
+            let mut viewport_active: bool = false;
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 0 } },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(viewport_active);
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 9999 } },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(viewport_active);
+
+            unsafe { free(t) };
+        });
     }
 
     // test "reset"
