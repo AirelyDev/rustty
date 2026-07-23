@@ -1016,6 +1016,19 @@ int rustty_paste_encode(uint8_t *data,
                         uintptr_t *out_written);
 
 /**
+ * C: rustty_unicode_codepoint_width
+ */
+uint8_t rustty_unicode_codepoint_width(uint32_t cp);
+
+/**
+ * C: rustty_unicode_grapheme_width
+ *
+ * # Safety
+ * `cps`, if non-null, must be readable for `len` u32s; `width` writable or null.
+ */
+uintptr_t rustty_unicode_grapheme_width(const uint32_t *cps, uintptr_t len, uint8_t *width);
+
+/**
  * C: rustty_size_report_encode
  *
  * # Safety

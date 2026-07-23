@@ -63,6 +63,7 @@ pub mod size_report;
 pub mod style;
 pub mod sys;
 pub mod terminal;
+pub mod unicode;
 #[cfg(test)]
 mod test_util;
 // pub const types = @import("types.zig");
@@ -414,6 +415,31 @@ pub unsafe extern "C" fn rustty_paste_encode(
 ) -> c_int {
     // SAFETY: pointer validity is the caller's contract.
     unsafe { paste::encode(data, data_len, bracketed, out, out_len, out_written) }.to_c_int()
+}
+
+// ----- unicode -----
+// pub const unicode_codepoint_width = unicode.codepoint_width;
+//   (@export name ghostty_unicode_codepoint_width)
+/// C: rustty_unicode_codepoint_width
+#[no_mangle]
+pub extern "C" fn rustty_unicode_codepoint_width(cp: u32) -> u8 {
+    unicode::codepoint_width(cp)
+}
+
+// pub const unicode_grapheme_width = unicode.grapheme_width;
+//   (@export name ghostty_unicode_grapheme_width)
+/// C: rustty_unicode_grapheme_width
+///
+/// # Safety
+/// `cps`, if non-null, must be readable for `len` u32s; `width` writable or null.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_unicode_grapheme_width(
+    cps: *const u32,
+    len: usize,
+    width: *mut u8,
+) -> usize {
+    // SAFETY: caller contract.
+    unsafe { unicode::grapheme_width(cps, len, width) }
 }
 
 // ----- size_report -----
@@ -2988,5 +3014,8 @@ mod main_tests {
         // _ = render; _ = selection_gesture;
         let _ = super::render::get as unsafe fn(_, _, _) -> _;
         let _ = super::selection_gesture::get as unsafe fn(_, _, _, _) -> _;
+        // _ = unicode; (main.zig)
+        let _ = super::unicode::codepoint_width as fn(_) -> _;
+        let _ = super::unicode::grapheme_width as unsafe fn(_, _, _) -> _;
     }
 }

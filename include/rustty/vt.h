@@ -34,6 +34,7 @@
  * - @ref osc "OSC Parser" - Parse OSC (Operating System Command) sequences
  * - @ref sgr "SGR Parser" - Parse SGR (Select Graphic Rendition) sequences
  * - @ref paste "Paste Utilities" - Validate paste data safety
+ * - @ref unicode "Unicode Utilities" - Codepoint properties for text layout
  * - @ref build_info "Build Info" - Query compile-time build configuration
  * - @ref color_scheme "Color Scheme Report Encoding" - Encode color scheme reports into terminal escape sequences
  * - @ref allocator "Memory Management" - Memory management and custom allocators
@@ -153,6 +154,7 @@ extern "C" {
 #include <rustty/vt/screen.h>
 #include <rustty/vt/selection.h>
 #include <rustty/vt/size_report.h>
+#include <rustty/vt/unicode.h>
 #include <rustty/vt/wasm.h>
 
 #ifdef __cplusplus

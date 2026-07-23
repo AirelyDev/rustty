@@ -99,6 +99,17 @@ pub mod tmux;
 // pub const x11_color = @import("x11_color.zig");
 pub mod x11_color;
 
+// lib_vt.zig: pub const unicode = struct {
+//     const unicode_pkg = @import("unicode/main.zig");
+//     pub const codepointWidth = unicode_pkg.codepointWidth;
+//     pub const graphemeWidth = unicode_pkg.graphemeWidth;
+// };
+/// Unicode utilities that match the terminal's text layout semantics.
+pub mod unicode {
+    pub use rustty_unicode::codepoint_width;
+    pub use rustty_unicode::grapheme::{grapheme_width, GraphemeWidth, GraphemeWidthEffect};
+}
+
 // pub const Charset = charsets.Charset;
 // pub const CharsetSlot = charsets.Slots;
 // pub const CharsetActiveSlot = charsets.ActiveSlot;
