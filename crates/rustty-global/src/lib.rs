@@ -367,14 +367,22 @@ impl ResourceLimits {
         }
     }
 
-    // PARITY (DEFERRED SEAM): reference body calls `internal_os.restoreMaxFiles(lim)`:
+    // PORT (WS4, formerly a deferred seam): reference body calls
+    // `internal_os.restoreMaxFiles(lim)`:
     //
     // pub fn restore(self: *const ResourceLimits) void {
     //     if (self.nofile) |lim| internal_os.restoreMaxFiles(lim);
     // }
+    //
+    // `restoreMaxFiles` is `posix.setrlimit(.NOFILE, lim) catch log warn`
+    // (rustty-os file.rs:87). rustty-os sits ABOVE this leaf crate, so the
+    // one-line syscall is mirrored here via libc (the same binding rustty-os
+    // uses) instead of an upward import — behavior-identical, R4 acyclic.
     pub fn restore(&self) {
-        if let Some(_lim) = self.nofile {
-            // restored by the os-seam wiring in rustty-core
+        #[cfg(unix)]
+        if let Some(lim) = self.nofile {
+            // failure is non-fatal, matching restoreMaxFiles' `catch` swallow.
+            let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) };
         }
     }
 }
@@ -393,9 +401,38 @@ pub mod seam {
     /// PARITY: reference `alloc: std.mem.Allocator`. Rust's global allocator is
     /// process-wide; the chosen-allocator handle is carried as this seam.
     pub type Allocator = ();
-    /// PARITY: reference `internal_os.rlimit` (the `os` crate, above us).
-    pub type Rlimit = u64;
+    /// PARITY: reference `internal_os.rlimit` — which is `posix.rlimit` where
+    /// the platform has it, `struct {}` otherwise (rustty-os `file.rs`
+    /// reproduces that as `libc::rlimit` on unix / an empty struct elsewhere).
+    /// Rebound from the former `u64` placeholder to the REAL type (WS4) so
+    /// `GlobalState.rlimits` can carry `rustty_os::fixMaxFiles()`'s value.
+    #[cfg(unix)]
+    pub type Rlimit = libc::rlimit;
+    #[cfg(not(unix))]
+    pub type Rlimit = ();
     /// PARITY: reference `pub const xev = @import("xev").Dynamic;` (event-loop
     /// backend, above us). Re-exported from `rustty-core`.
     pub type Xev = ();
+}
+
+#[cfg(all(test, unix))]
+mod rlimit_tests {
+    use super::ResourceLimits;
+
+    #[test]
+    fn restore_round_trips_nofile() {
+        // Read the current limit, then restore() it — the call must succeed and
+        // leave the limit unchanged (a self-inverse KAT that needs no privilege).
+        let mut cur = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut cur) };
+        assert_eq!(rc, 0);
+
+        let limits = ResourceLimits::init(Some(cur));
+        limits.restore();
+
+        let mut after = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut after) };
+        assert_eq!(rc, 0);
+        assert_eq!(after.rlim_cur, cur.rlim_cur);
+    }
 }

@@ -22,3 +22,9 @@ workspace = true
 # /os/xev) are DEFERRED SEAMS wired in `rustty-core` — pulling them in here would
 # re-introduce the import cycle this break exists to sever.
 rustty-build-config = { path = "../rustty-build-config" }
+# BREAK #1 seam rebind (WS4): `seam::Rlimit` is the REAL `posix.rlimit`
+# (`libc::rlimit`, the same type rustty-os `file::rlimit` aliases), and
+# `ResourceLimits::restore` performs the reference `internal_os.restoreMaxFiles`
+# setrlimit syscall directly (rustty-os sits ABOVE this leaf, so the one-line
+# syscall body is mirrored here rather than imported — R4 acyclic).
+libc = "0.2"
