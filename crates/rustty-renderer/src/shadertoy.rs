@@ -725,6 +725,13 @@ fn glslang_init() -> Result<(), Error> {
     Ok(())
 }
 
+/// The pub surface of pkg/glslang's `init` — what `global.zig` calls as
+/// `try glslang.init()` (the WS4 `GlobalState.init` wiring names it from
+/// rustty-apprt). Forwards to the file-local `glslang_init` verbatim.
+pub fn init() -> Result<(), Error> {
+    glslang_init()
+}
+
 // pkg/glslang/test.zig:
 // var initialized: bool = false;
 // pub fn ensureInit() !void {
@@ -914,5 +921,13 @@ mod tests {
         ));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // pkg/glslang init.zig `init` via the pub surface (global.zig `try glslang.init()`).
+    #[test]
+    fn public_glslang_init() {
+        // glslang_initialize_process is refcounted/thread-safe; repeated calls
+        // are safe (see the ensureInit PORT NOTE above).
+        crate::shadertoy::init().expect("glslang init");
     }
 }
