@@ -307,6 +307,7 @@ typedef enum {
     SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_TOP = 0,
     SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_BOTTOM = 1,
     SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_DELTA = 2,
+    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_ROW = 3,
 } ScrollViewportTag;
 
 /**
@@ -430,6 +431,29 @@ typedef struct TrackedGridRef TrackedGridRef;
  * C: GhosttyColorRgb -> RusttyColorRgb (R2)
  */
 typedef RGB RgbC;
+
+/**
+ * C: the C-ABI palette projection.
+ */
+typedef RgbC PaletteC[256];
+
+/**
+ * C: GhosttyColorPaletteMask -> RusttyColorPaletteMask (R2)
+ */
+typedef struct {
+    uint64_t bits[4];
+} PaletteMask;
+
+/**
+ * C: GhosttyColorX11Entry -> RusttyColorX11Entry (R2)
+ */
+typedef struct {
+    /**
+     * Null-terminated color name; null marks the end of the table.
+     */
+    const char *name;
+    RgbC color;
+} X11Entry;
 
 /**
  * C: GhosttyModeReportState -> RusttyModeReportState (R2)
@@ -710,6 +734,10 @@ typedef struct {
 typedef union {
     intptr_t delta;
     /**
+     * Absolute row offset for the `Row` tag (oracle 3a2e28329).
+     */
+    uintptr_t row;
+    /**
      * Padding to the PINNED ABI size. `[2]u64` (16 bytes) per the reference.
      */
     uint64_t _padding[2];
@@ -819,9 +847,93 @@ int rustty_build_info(int data, void *out);
  * C: rustty_color_rgb_get
  *
  * # Safety
- * `r`, `g`, and `b` must be valid, writable pointers to `u8`.
+ * `color` must be a valid readable `RgbC`; `r`/`g`/`b` valid writable `u8`.
  */
-void rustty_color_rgb_get(RgbC c, uint8_t *r, uint8_t *g, uint8_t *b);
+void rustty_color_rgb_get(const RgbC *color, uint8_t *r, uint8_t *g, uint8_t *b);
+
+/**
+ * C: rustty_color_parse
+ * # Safety
+ * `value`, if non-null, readable for `len` bytes; `out` valid writable.
+ */
+int rustty_color_parse(const uint8_t *value, uintptr_t len, RgbC *out);
+
+/**
+ * C: rustty_color_parse_x11
+ * # Safety
+ * `name`, if non-null, readable for `len` bytes; `out` valid writable.
+ */
+int rustty_color_parse_x11(const uint8_t *name, uintptr_t len, RgbC *out);
+
+/**
+ * C: rustty_color_parse_palette_entry
+ * # Safety
+ * `value`, if non-null, readable for `len`; `out_index`/`out_rgb` writable.
+ */
+int rustty_color_parse_palette_entry(const uint8_t *value,
+                                     uintptr_t len,
+                                     uint8_t *out_index,
+                                     RgbC *out_rgb);
+
+/**
+ * C: rustty_color_palette_default
+ * # Safety
+ * `out` must point to writable storage for 256 RGB values.
+ */
+void rustty_color_palette_default(PaletteC *out);
+
+/**
+ * C: rustty_color_palette_generate
+ * # Safety
+ * `bg`/`fg`/`out` valid; `base`/`skip` valid or null; out may alias base.
+ */
+void rustty_color_palette_generate(const PaletteC *base,
+                                   const PaletteMask *skip,
+                                   const RgbC *bg,
+                                   const RgbC *fg,
+                                   bool harmonious,
+                                   PaletteC *out);
+
+/**
+ * C: rustty_color_luminance
+ * # Safety
+ * `color` must be a valid readable RGB pointer.
+ */
+double rustty_color_luminance(const RgbC *color_);
+
+/**
+ * C: rustty_color_perceived_luminance
+ * # Safety
+ * `color` must be a valid readable RGB pointer.
+ */
+double rustty_color_perceived_luminance(const RgbC *color_);
+
+/**
+ * C: rustty_color_contrast
+ * # Safety
+ * `a`/`b` must be valid readable RGB pointers.
+ */
+double rustty_color_contrast(const RgbC *a, const RgbC *b);
+
+/**
+ * C: rustty_color_x11_names
+ */
+const X11Entry *rustty_color_x11_names(void);
+
+/**
+ * C: rustty_color_x11_name_count
+ */
+uintptr_t rustty_color_x11_name_count(void);
+
+/**
+ * C: rustty_color_scheme_report_encode
+ * # Safety
+ * `buf`, if non-null, writable for `buf_len`; `out_written` valid writable.
+ */
+int rustty_color_scheme_report_encode(int scheme,
+                                      uint8_t *buf,
+                                      uintptr_t buf_len,
+                                      uintptr_t *out_written);
 
 /**
  * C: rustty_focus_encode
@@ -907,6 +1019,19 @@ int rustty_paste_encode(uint8_t *data,
                         uint8_t *out,
                         uintptr_t out_len,
                         uintptr_t *out_written);
+
+/**
+ * C: rustty_unicode_codepoint_width
+ */
+uint8_t rustty_unicode_codepoint_width(uint32_t cp);
+
+/**
+ * C: rustty_unicode_grapheme_width
+ *
+ * # Safety
+ * `cps`, if non-null, must be readable for `len` u32s; `width` writable or null.
+ */
+uintptr_t rustty_unicode_grapheme_width(const uint32_t *cps, uintptr_t len, uint8_t *width);
 
 /**
  * C: rustty_size_report_encode

@@ -47,6 +47,7 @@ pub mod osc;
 // pub const point = @import("point.zig");
 pub mod point;
 // pub const color = @import("color.zig");
+pub mod clipboard;
 pub mod color;
 // PORT NOTE: `terminal/cursor.zig` has no top-level re-export in `main.zig`
 // (it is an internal sibling imported by `Screen.zig` for the cursor `Style`
@@ -98,6 +99,17 @@ pub mod tabstops;
 pub mod tmux;
 // pub const x11_color = @import("x11_color.zig");
 pub mod x11_color;
+
+// lib_vt.zig: pub const unicode = struct {
+//     const unicode_pkg = @import("unicode/main.zig");
+//     pub const codepointWidth = unicode_pkg.codepointWidth;
+//     pub const graphemeWidth = unicode_pkg.graphemeWidth;
+// };
+/// Unicode utilities that match the terminal's text layout semantics.
+pub mod unicode {
+    pub use rustty_unicode::codepoint_width;
+    pub use rustty_unicode::grapheme::{grapheme_width, GraphemeWidth, GraphemeWidthEffect};
+}
 
 // pub const Charset = charsets.Charset;
 // pub const CharsetSlot = charsets.Slots;

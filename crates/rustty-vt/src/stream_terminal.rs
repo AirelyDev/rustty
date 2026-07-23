@@ -38,6 +38,7 @@
 // const size_report = @import("size_report.zig");
 // const Terminal = @import("Terminal.zig");
 use crate::ansi;
+use crate::clipboard;
 use crate::color;
 use crate::csi;
 use crate::device_attributes;
@@ -126,6 +127,22 @@ pub struct Effects<'a> {
     // bell: ?*const fn (*Handler) void
     pub bell: Option<fn(&mut Handler<'a>)>,
 
+    /// Called when the running program writes to a clipboard. The write
+    /// has a normalized destination and one or more decoded MIME
+    /// representations. All request, MIME, and data memory is borrowed
+    /// and only valid for the duration of the callback.
+    ///
+    /// A write with no contents clears the destination. A content entry
+    /// with empty data is a distinct empty representation.
+    ///
+    /// Clipboard read requests (OSC 52 with a "?" payload) are never
+    /// forwarded: answering one would let any program running in the
+    /// terminal silently read the user's clipboard, and a VT state
+    /// library has no way to mediate that with user consent.
+    // clipboard_write: ?*const fn (*Handler, clipboard.Write) clipboard.WriteResult
+    pub clipboard_write:
+        Option<fn(&mut Handler<'a>, clipboard::Write) -> clipboard::WriteResult>,
+
     /// Called in response to a color scheme DSR query (CSI ? 996 n).
     /// Returns the current color scheme. Return null to silently
     /// ignore the query.
@@ -177,6 +194,7 @@ impl<'a> Effects<'a> {
     // pub const readonly: Effects = .{ ... all null ... };
     pub const READONLY: Effects<'a> = Effects {
         bell: None,
+        clipboard_write: None,
         color_scheme: None,
         device_attributes: None,
         enquiry: None,
@@ -513,20 +531,25 @@ impl<'a> Handler<'a> {
 
     // fn colorOperation(
     //     self: *Handler,
-    //     op: osc_color.Operation,
     //     requests: *const osc_color.List,
+    //     terminator: osc.Terminator,
     // ) !void
     fn do_color_operation(
         &mut self,
-        op: osc::color::Operation,
         requests: &osc::color::List,
+        terminator: osc::Terminator,
     ) -> Result<(), crate::pagelist::OutOfMemory> {
-        // _ = op;
-        let _ = op;
         // if (requests.count() == 0) return;
         if requests.is_empty() {
             return Ok(());
         }
+
+        // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
+        // const alloc = stack.get();
+        // var response: std.Io.Writer.Allocating = .init(alloc);
+        // defer response.deinit();
+        // const writer = &response.writer;
+        let mut response = Vec::new();
 
         // var it = requests.constIterator(0);
         // while (it.next()) |req| {
@@ -629,14 +652,86 @@ impl<'a> Handler<'a> {
                     self.term().colors.palette.mask = color::PaletteMask::init_empty();
                 }
 
-                // .query,
-                // .reset_special,
-                // => {},
-                osc::color::Request::Query(_) | osc::color::Request::ResetSpecial => {}
+                // .query => |target| {
+                //     if (self.effects.write_pty == null) continue;
+                //     const c = self.terminal.colorForXterm(target) orelse continue;
+                //     try writeXtermColorReport(writer, target, c, terminator);
+                // },
+                osc::color::Request::Query(target) => {
+                    if self.effects.write_pty.is_none() {
+                        continue;
+                    }
+                    let Some(c) = self.term().color_for_xterm(*target) else {
+                        continue;
+                    };
+                    Self::write_xterm_color_report(&mut response, target, c, terminator);
+                }
+
+                // .reset_special => {},
+                osc::color::Request::ResetSpecial => {}
             }
         }
 
+        // if (response.written().len > 0) {
+        //     const resp = try response.toOwnedSliceSentinel(0);
+        //     defer alloc.free(resp);
+        //     self.writePty(resp);
+        // }
+        if !response.is_empty() {
+            self.write_pty(&response);
+        }
+
         Ok(())
+    }
+
+    // fn writeXtermColorReport(
+    //     writer: *std.Io.Writer,
+    //     target: osc_color.Target,
+    //     c: color.RGB,
+    //     terminator: osc.Terminator,
+    // ) !void
+    fn write_xterm_color_report(
+        out: &mut Vec<u8>,
+        target: &osc::color::Target,
+        c: color::RGB,
+        terminator: osc::Terminator,
+    ) {
+        use std::io::Write as _;
+        match target {
+            // .palette => |i| {
+            //     try writer.print("\x1b]4;{d};", .{i});
+            //     try c.encodeRgb16(writer);
+            //     try writer.writeAll(terminator.string());
+            // },
+            osc::color::Target::Palette(i) => {
+                let _ = write!(out, "\x1b]4;{};", i);
+                c.encode_rgb16(out);
+                out.extend_from_slice(terminator.string());
+            }
+            // .dynamic => |dynamic| switch (dynamic) {
+            osc::color::Target::Dynamic(dynamic) => match dynamic {
+                // .foreground, .background, .cursor => {
+                //     try writer.print("\x1b]{d};", .{@intFromEnum(dynamic)});
+                //     try c.encodeRgb16(writer);
+                //     try writer.writeAll(terminator.string());
+                // },
+                color::Dynamic::Foreground | color::Dynamic::Background | color::Dynamic::Cursor => {
+                    let _ = write!(out, "\x1b]{};", *dynamic as u32);
+                    c.encode_rgb16(out);
+                    out.extend_from_slice(terminator.string());
+                }
+                // .pointer_foreground, ... => {},
+                color::Dynamic::PointerForeground
+                | color::Dynamic::PointerBackground
+                | color::Dynamic::TektronixForeground
+                | color::Dynamic::TektronixBackground
+                | color::Dynamic::HighlightBackground
+                | color::Dynamic::TektronixCursor
+                | color::Dynamic::HighlightForeground => {}
+            },
+            // .special => {},
+            osc::color::Target::Special(_) => {}
+        }
     }
 
     // fn kittyColorOperation(
@@ -647,6 +742,13 @@ impl<'a> Handler<'a> {
         &mut self,
         request: kitty::color::OSC,
     ) -> Result<(), crate::pagelist::OutOfMemory> {
+        // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
+        // const alloc = stack.get();
+        // var response: std.Io.Writer.Allocating = .init(alloc);
+        // defer response.deinit();
+        // const writer = &response.writer;
+        let mut response = Vec::new();
+
         // for (request.list.items) |item| {
         for item in &request.list {
             match item {
@@ -700,9 +802,55 @@ impl<'a> Handler<'a> {
                         _ => {}
                     },
                 },
-                // .query => {},
-                kitty::color::Request::Query(_) => {}
+                // .query => |key| {
+                //     if (self.effects.write_pty == null) continue;
+                //     const c = self.terminal.colorForKitty(key) orelse {
+                //         if (!key.hasTerminalQueryColor()) continue;
+                //         if (response.written().len == 0) try writer.writeAll("\x1b]21");
+                //         try writer.print(";{f}=", .{key});
+                //         continue;
+                //     };
+                //
+                //     if (response.written().len == 0) try writer.writeAll("\x1b]21");
+                //     try writer.print(";{f}=", .{key});
+                //     try c.encodeRgb8(writer);
+                // },
+                kitty::color::Request::Query(key) => {
+                    use std::io::Write as _;
+                    if self.effects.write_pty.is_none() {
+                        continue;
+                    }
+                    match self.term().color_for_kitty(*key) {
+                        None => {
+                            if !key.has_terminal_query_color() {
+                                continue;
+                            }
+                            if response.is_empty() {
+                                response.extend_from_slice(b"\x1b]21");
+                            }
+                            let _ = write!(response, ";{}=", key);
+                        }
+                        Some(c) => {
+                            if response.is_empty() {
+                                response.extend_from_slice(b"\x1b]21");
+                            }
+                            let _ = write!(response, ";{}=", key);
+                            c.encode_rgb8(&mut response);
+                        }
+                    }
+                }
             }
+        }
+
+        // if (response.written().len > 0) {
+        //     try writer.writeAll(request.terminator.string());
+        //     const resp = try response.toOwnedSliceSentinel(0);
+        //     defer alloc.free(resp);
+        //     self.writePty(resp);
+        // }
+        if !response.is_empty() {
+            response.extend_from_slice(request.terminator.string());
+            self.write_pty(&response);
         }
 
         Ok(())
@@ -814,10 +962,9 @@ impl<'a> Handler<'a> {
                 let Some(scheme) = func(self) else {
                     return;
                 };
-                self.write_pty(match scheme {
-                    device_status::ColorScheme::Dark => b"\x1B[?997;1n",
-                    device_status::ColorScheme::Light => b"\x1B[?997;2n",
-                });
+                let mut resp = Vec::new();
+                device_status::encode_color_scheme_report(&mut resp, scheme);
+                self.write_pty(&resp);
             }
         }
     }
@@ -1773,8 +1920,66 @@ impl<'a> stream::Handler for Handler<'a> {
     // .progress_report => {} (have no terminal-modifying effect)
     fn progress_report(&mut self, v: osc::ProgressReport) {}
 
-    // .clipboard_contents => {} (have no terminal-modifying effect)
-    fn clipboard_contents(&mut self, v: stream::ClipboardContents) {}
+    // fn clipboardContents(self: *Handler, kind: u8, data: []const u8) !void
+    //
+    // PORT NOTE: the reference is `!void` and its caller `try`s it, propagating
+    // an invalid-base64 decode error out of `nextSlice`. rustty's OSC dispatch
+    // arm is infallible, so a malformed payload is a silent no-op here — the net
+    // observable behavior is identical (the callback is simply not invoked), and
+    // the oracle stream test only asserts the un-invoked count. The reference's
+    // fallible-allocator OOM path ("clipboard_write allocation failure is
+    // ignored") has no rustty analog because the decode scratch is a `Vec` that
+    // aborts on OOM (DG5 abort policy), so that oracle test is intentionally not
+    // ported.
+    fn clipboard_contents(&mut self, v: stream::ClipboardContents) {
+        let kind = v.kind;
+        let data = v.data;
+
+        let Some(func) = self.effects.clipboard_write else {
+            return;
+        };
+
+        // Read requests are deliberately not forwarded; see the effect docs.
+        // if (data.len == 1 and data[0] == '?') return;
+        if data.len() == 1 && data[0] == b'?' {
+            return;
+        }
+
+        // const location: clipboard.Location = switch (kind) { ... };
+        let location = match kind {
+            b's' => clipboard::Location::Selection,
+            b'p' => clipboard::Location::Primary,
+            _ => clipboard::Location::Standard,
+        };
+
+        // OSC 52 uses an empty payload to clear the selected clipboard.
+        // if (data.len == 0) { _ = func(self, .{ .location, .contents = &.{} }); return; }
+        if data.is_empty() {
+            let _ = func(self, clipboard::Write { location, contents: &[] });
+            return;
+        }
+
+        // const decoder = std.base64.standard.Decoder;
+        // const decoded_len = try decoder.calcSizeForSlice(data);
+        // const decoded = try alloc.alloc(u8, decoded_len);
+        // try decoder.decode(decoded, data);
+        let decoder = crate::apc::glyph::request::std_base64_standard_decoder();
+        let Ok(decoded_len) = decoder.calc_size_for_slice(data) else {
+            return;
+        };
+        let mut decoded = vec![0u8; decoded_len];
+        if decoder.decode(&mut decoded, data).is_err() {
+            return;
+        }
+
+        // const contents = [_]clipboard.Content{.{ .mime = "text/plain", .data = decoded }};
+        // _ = func(self, .{ .location, .contents = &contents });
+        let contents = [clipboard::Content {
+            mime: b"text/plain",
+            data: &decoded,
+        }];
+        let _ = func(self, clipboard::Write { location, contents: &contents });
+    }
 
     // .mouse_shape => self.terminal.mouse_shape = value,
     fn mouse_shape(&mut self, v: crate::mouse::Shape) {
@@ -1804,9 +2009,9 @@ impl<'a> stream::Handler for Handler<'a> {
         let _ = self.do_kitty_color_operation(v);
     }
 
-    // .color_operation => try self.colorOperation(value.op, &value.requests),
+    // .color_operation => try self.colorOperation(&value.requests, value.terminator),
     fn color_operation(&mut self, v: stream::ColorOperation) {
-        let _ = self.do_color_operation(v.op, &v.requests);
+        let _ = self.do_color_operation(&v.requests, v.terminator);
     }
 
     // .semantic_prompt => try self.terminal.semanticPrompt(value),
@@ -2266,6 +2471,53 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "OSC color query responses" (oracle 14c829883)
+    #[test]
+    fn osc_color_query_responses() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        s.next_slice(b"\x1b]10;?\x1b\\");
+        assert!(cap_take().is_none());
+
+        s.next_slice(b"\x1b]11;?\x1b\\");
+        assert!(cap_take().is_none());
+
+        s.next_slice(b"\x1b]4;2;rgb:12/34/56;2;?\x1b\\");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b]4;2;rgb:1212/3434/5656\x1b\\"
+        );
+
+        s.next_slice(b"\x1b]10;rgb:01/02/03\x1b\\");
+        s.next_slice(b"\x1b]11;rgb:04/05/06\x1b\\");
+        s.next_slice(b"\x1b]12;rgb:07/08/09\x1b\\");
+        s.next_slice(b"\x1b]10;?;?;?\x1b\\");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            [
+                &b"\x1b]10;rgb:0101/0202/0303\x1b\\"[..],
+                &b"\x1b]11;rgb:0404/0505/0606\x1b\\"[..],
+                &b"\x1b]12;rgb:0707/0808/0909\x1b\\"[..],
+            ]
+            .concat()
+            .as_slice()
+        );
+
+        s.next_slice(b"\x1b]112\x1b\\");
+        s.next_slice(b"\x1b]12;?\x07");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b]12;rgb:0101/0202/0303\x07"
+        );
+
+        drop(s);
+        t.deinit(Global);
+    }
+
     // test "kitty color protocol set palette"
     #[test]
     fn kitty_color_protocol_set_palette() {
@@ -2381,6 +2633,32 @@ mod tests {
         // After reset, should be unset
         assert!(t.colors.foreground.get().is_none());
 
+        t.deinit(Global);
+    }
+
+    // test "kitty color protocol query responses" (oracle 14c829883)
+    #[test]
+    fn kitty_color_protocol_query_responses() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        s.next_slice(b"\x1b]21;background=?\x1b\\");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b]21;background=\x1b\\"
+        );
+
+        s.next_slice(b"\x1b]21;foreground=rgb:12/34/56;2=rgb:aa/bb/cc\x1b\\");
+        s.next_slice(b"\x1b]21;foreground=?;background=?;2=?\x1b\\");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b]21;foreground=rgb:12/34/56;background=;2=rgb:aa/bb/cc\x1b\\"
+        );
+
+        drop(s);
         t.deinit(Global);
     }
 
@@ -2677,6 +2955,8 @@ mod tests {
             s.next_slice(b"\x1B[c"); // Device attributes
             s.next_slice(b"\x1B[5n"); // Device status report
             s.next_slice(b"\x1B[6n"); // Cursor position report
+            s.next_slice(b"\x1B]4;0;?\x1B\\"); // OSC color query
+            s.next_slice(b"\x1B]21;foreground=?\x1B\\"); // Kitty color query
 
             // Terminal should still be functional
             s.next_slice(b"Test");
@@ -2828,6 +3108,114 @@ mod tests {
             assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?9999;0$y");
         }
 
+        t.deinit(Global);
+    }
+
+    // Capture cells for the clipboard_write effect test (the analog of the
+    // reference's per-test `S` struct; bare `fn` callbacks route through
+    // thread-locals since Rust fn pointers cannot capture).
+    thread_local! {
+        static CLIP_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static CLIP_RESULT: core::cell::Cell<clipboard::WriteResult> =
+            const { core::cell::Cell::new(clipboard::WriteResult::Success) };
+        static CLIP_LOCATION: core::cell::Cell<clipboard::Location> =
+            const { core::cell::Cell::new(clipboard::Location::Standard) };
+        static CLIP_CONTENTS_LEN: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static CLIP_MIME: core::cell::RefCell<Option<Vec<u8>>> = const { core::cell::RefCell::new(None) };
+        static CLIP_DATA: core::cell::RefCell<Option<Vec<u8>>> = const { core::cell::RefCell::new(None) };
+    }
+
+    fn clip_clear_capture() {
+        CLIP_MIME.with(|c| *c.borrow_mut() = None);
+        CLIP_DATA.with(|c| *c.borrow_mut() = None);
+        CLIP_CONTENTS_LEN.with(|c| c.set(0));
+    }
+
+    fn cap_clipboard_write(_: &mut Handler, write: clipboard::Write) -> clipboard::WriteResult {
+        clip_clear_capture();
+        CLIP_COUNT.with(|c| c.set(c.get() + 1));
+        CLIP_LOCATION.with(|c| c.set(write.location));
+        CLIP_CONTENTS_LEN.with(|c| c.set(write.contents.len()));
+        if !write.contents.is_empty() {
+            CLIP_MIME.with(|c| *c.borrow_mut() = Some(write.contents[0].mime.to_vec()));
+            CLIP_DATA.with(|c| *c.borrow_mut() = Some(write.contents[0].data.to_vec()));
+        }
+        CLIP_RESULT.with(|c| c.get())
+    }
+
+    // test "clipboard_write effect callback" (oracle 634ef7198)
+    #[test]
+    fn clipboard_write_effect_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // A null callback (the default readonly effects) silently ignores writes.
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1B]52;c;aGVsbG8=\x1B\\");
+        }
+
+        t.full_reset();
+
+        CLIP_COUNT.with(|c| c.set(0));
+        CLIP_RESULT.with(|c| c.set(clipboard::WriteResult::Denied));
+        clip_clear_capture();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.clipboard_write = Some(cap_clipboard_write);
+
+        // Selectors are normalized and payloads are decoded before the callback.
+        let cases: &[(&[u8], clipboard::Location, &[u8])] = &[
+            (b"\x1B]52;c;aGVsbG8=\x1B\\", clipboard::Location::Standard, b"hello"),
+            (b"\x1B]52;s;d29ybGQ=\x07", clipboard::Location::Selection, b"world"),
+            (b"\x1B]52;p;cHJpbWFyeQ==\x1B\\", clipboard::Location::Primary, b"primary"),
+            (b"\x1B]52;0;Y3V0\x1B\\", clipboard::Location::Standard, b"cut"),
+            (b"\x1B]52;x;ZmFsbGJhY2s=\x1B\\", clipboard::Location::Standard, b"fallback"),
+            (b"\x1B]52;c;YQBi\x1B\\", clipboard::Location::Standard, b"a\x00b"),
+        ];
+
+        for (i, (sequence, location, data)) in cases.iter().enumerate() {
+            s.next_slice(sequence);
+            assert_eq!(i + 1, CLIP_COUNT.with(|c| c.get()));
+            assert_eq!(*location, CLIP_LOCATION.with(|c| c.get()));
+            assert_eq!(1, CLIP_CONTENTS_LEN.with(|c| c.get()));
+            assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
+            assert_eq!(*data, CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+        }
+
+        // Empty data is a clear, represented by an empty contents slice.
+        s.next_slice(b"\x1B]52;s;\x1B\\");
+        assert_eq!(cases.len() + 1, CLIP_COUNT.with(|c| c.get()));
+        assert_eq!(clipboard::Location::Selection, CLIP_LOCATION.with(|c| c.get()));
+        assert_eq!(0, CLIP_CONTENTS_LEN.with(|c| c.get()));
+        assert!(CLIP_MIME.with(|c| c.borrow().is_none()));
+        assert!(CLIP_DATA.with(|c| c.borrow().is_none()));
+
+        // Reads and malformed base64 are ignored.
+        s.next_slice(b"\x1B]52;c;?\x1B\\");
+        s.next_slice(b"\x1B]52;c;***\x1B\\");
+        assert_eq!(cases.len() + 1, CLIP_COUNT.with(|c| c.get()));
+
+        // OSC 1337 Copy shares the normalized clipboard write path.
+        s.next_slice(b"\x1B]1337;Copy=:aVRlcm0y\x1B\\");
+        assert_eq!(cases.len() + 2, CLIP_COUNT.with(|c| c.get()));
+        assert_eq!(clipboard::Location::Standard, CLIP_LOCATION.with(|c| c.get()));
+        assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
+        assert_eq!(b"iTerm2".as_slice(), CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+
+        // Parsing across write boundaries still invokes exactly one atomic write.
+        s.next_slice(b"\x1B]52;p;ZnJh");
+        s.next_slice(b"Z21lbnRlZA==\x1B");
+        s.next_slice(b"\\");
+        assert_eq!(cases.len() + 3, CLIP_COUNT.with(|c| c.get()));
+        assert_eq!(clipboard::Location::Primary, CLIP_LOCATION.with(|c| c.get()));
+        assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
+        assert_eq!(b"fragmented".as_slice(), CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+
+        // Callback results are intentionally ignored for protocols without a
+        // write acknowledgement. The denied result above did not stop later writes.
+        assert_eq!(clipboard::WriteResult::Denied, CLIP_RESULT.with(|c| c.get()));
+
+        clip_clear_capture();
         t.deinit(Global);
     }
 

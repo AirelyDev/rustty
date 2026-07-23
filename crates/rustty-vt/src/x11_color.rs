@@ -90,6 +90,54 @@ fn build_color_keys() -> Vec<String> {
     keys
 }
 
+/// A single X11 color entry.
+// pub const Entry = struct { name: [:0]const u8, color: RGB };
+// PORT NOTE: the reference name is null-terminated for the C API. In rustty the
+// static C table (with its own null-terminated copies) is built in
+// rustty-vt-c::color; here `name` is the plain rgb.txt name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub name: &'static str,
+    pub color: RGB,
+}
+
+/// All X11 colors in rgb.txt file order.
+///
+/// This is kept separate from `map` because the C API needs stable file order.
+// pub const entries: []const Entry = entriesArray();
+pub fn entries() -> &'static [Entry] {
+    static ENTRIES: OnceLock<Vec<Entry>> = OnceLock::new();
+    ENTRIES.get_or_init(build_entries)
+}
+
+// PORT NOTE: shares the same rgb.txt line parse as `build_color_map` (columns
+// 0..3, 4..7, 8..11 are r/g/b, name from column 12 to the trailing-whitespace-
+// trimmed end) but in FILE ORDER, no case folding, duplicates kept — matching
+// the reference `entriesArray()` comptime build.
+fn build_entries() -> Vec<Entry> {
+    let mut result: Vec<Entry> = Vec::new();
+    for raw_line in DATA.split('\n') {
+        // Trim \r so this works with both LF and CRLF line endings.
+        let line = if !raw_line.is_empty() && raw_line.as_bytes()[raw_line.len() - 1] == b'\r' {
+            &raw_line[0..raw_line.len() - 1]
+        } else {
+            raw_line
+        };
+        if line.is_empty() {
+            continue;
+        }
+        let r: u8 = line[0..3].trim_matches(' ').parse().unwrap();
+        let g: u8 = line[4..7].trim_matches(' ').parse().unwrap();
+        let b: u8 = line[8..11].trim_matches(' ').parse().unwrap();
+        let name = line[12..].trim_matches(|c| c == ' ' || c == '\t');
+        result.push(Entry {
+            name,
+            color: RGB { r, g, b },
+        });
+    }
+    result
+}
+
 // PORT NOTE: ported from the reference `fn colorMap() ColorMap`. The reference
 // runs this at comptime with `@setEvalBranchQuota(500_000)`; in Rust it runs
 // once at first access. The `const KV = struct { []const u8, RGB };` declaration
@@ -139,6 +187,26 @@ const DATA: &str = include_str!("res/rgb.txt");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // entries table: rgb.txt order, matches the map (oracle 2970e9a2a)
+    #[test]
+    fn x11_entries_order_and_map_parity() {
+        let ents = entries();
+        assert!(ents.len() > 700);
+        for e in ents {
+            assert_eq!(map.get(e.name), Some(e.color));
+        }
+        // rgb.txt starts with "snow"
+        assert_eq!(ents[0].name, "snow");
+        assert_eq!(
+            ents[0].color,
+            RGB {
+                r: 255,
+                g: 250,
+                b: 250
+            }
+        );
+    }
 
     #[test]
     fn x11_color_map() {

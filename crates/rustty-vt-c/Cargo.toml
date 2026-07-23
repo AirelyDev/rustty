@@ -35,6 +35,9 @@ simd = ["rustty-vt/simd"]
 
 [dependencies]
 rustty-vt = { workspace = true }
+# R4: rustty-unicode is a leaf below rustty-vt (acyclic). Needed for the
+# unicode codepoint/grapheme width C exports (BL-5 fc5a72772 + 65e61282a).
+rustty-unicode = { workspace = true }
 rustty-lib = { workspace = true }
 rustty-render-types = { workspace = true }
 allocator-api2 = { workspace = true }

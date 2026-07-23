@@ -38,6 +38,7 @@ pub mod allocator;
 pub mod build_info;
 pub mod cell;
 pub mod color;
+pub mod color_scheme;
 mod cwrap;
 pub mod focus;
 pub mod formatter;
@@ -62,6 +63,7 @@ pub mod size_report;
 pub mod style;
 pub mod sys;
 pub mod terminal;
+pub mod unicode;
 #[cfg(test)]
 mod test_util;
 // pub const types = @import("types.zig");
@@ -120,11 +122,149 @@ pub unsafe extern "C" fn rustty_build_info(data: c_int, out: *mut std::ffi::c_vo
 /// C: rustty_color_rgb_get
 ///
 /// # Safety
-/// `r`, `g`, and `b` must be valid, writable pointers to `u8`.
+/// `color` must be a valid readable `RgbC`; `r`/`g`/`b` valid writable `u8`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_color_rgb_get(c: color::RgbC, r: *mut u8, g: *mut u8, b: *mut u8) {
-    // SAFETY: `r`/`g`/`b` validity is the caller's contract.
-    unsafe { color::rgb_get(c, r, g, b) }
+pub unsafe extern "C" fn rustty_color_rgb_get(
+    color: *const color::RgbC,
+    r: *mut u8,
+    g: *mut u8,
+    b: *mut u8,
+) {
+    // SAFETY: caller contract (see # Safety).
+    unsafe { color::rgb_get(color, r, g, b) }
+}
+
+// pub const color_parse = color.parse;  (ghostty_color_parse)
+/// C: rustty_color_parse
+/// # Safety
+/// `value`, if non-null, readable for `len` bytes; `out` valid writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_parse(
+    value: *const u8,
+    len: usize,
+    out: *mut color::RgbC,
+) -> c_int {
+    // SAFETY: caller contract.
+    unsafe { color::parse(value, len, out) }.to_c_int()
+}
+
+/// C: rustty_color_parse_x11
+/// # Safety
+/// `name`, if non-null, readable for `len` bytes; `out` valid writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_parse_x11(
+    name: *const u8,
+    len: usize,
+    out: *mut color::RgbC,
+) -> c_int {
+    // SAFETY: caller contract.
+    unsafe { color::parse_x11(name, len, out) }.to_c_int()
+}
+
+/// C: rustty_color_parse_palette_entry
+/// # Safety
+/// `value`, if non-null, readable for `len`; `out_index`/`out_rgb` writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_parse_palette_entry(
+    value: *const u8,
+    len: usize,
+    out_index: *mut u8,
+    out_rgb: *mut color::RgbC,
+) -> c_int {
+    // SAFETY: caller contract.
+    unsafe { color::parse_palette_entry(value, len, out_index, out_rgb) }.to_c_int()
+}
+
+/// C: rustty_color_palette_default
+/// # Safety
+/// `out` must point to writable storage for 256 RGB values.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_palette_default(out: *mut color::PaletteC) {
+    // SAFETY: caller contract.
+    unsafe { color::palette_default(out) }
+}
+
+/// C: rustty_color_palette_generate
+/// # Safety
+/// `bg`/`fg`/`out` valid; `base`/`skip` valid or null; out may alias base.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_palette_generate(
+    base: *const color::PaletteC,
+    skip: *const color::PaletteMask,
+    bg: *const color::RgbC,
+    fg: *const color::RgbC,
+    harmonious: bool,
+    out: *mut color::PaletteC,
+) {
+    // SAFETY: caller contract.
+    unsafe { color::palette_generate(base, skip, bg, fg, harmonious, out) }
+}
+
+/// C: rustty_color_luminance
+/// # Safety
+/// `color` must be a valid readable RGB pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_luminance(color_: *const color::RgbC) -> f64 {
+    // SAFETY: caller contract.
+    unsafe { color::luminance(color_) }
+}
+
+/// C: rustty_color_perceived_luminance
+/// # Safety
+/// `color` must be a valid readable RGB pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_perceived_luminance(color_: *const color::RgbC) -> f64 {
+    // SAFETY: caller contract.
+    unsafe { color::perceived_luminance(color_) }
+}
+
+/// C: rustty_color_contrast
+/// # Safety
+/// `a`/`b` must be valid readable RGB pointers.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_contrast(
+    a: *const color::RgbC,
+    b: *const color::RgbC,
+) -> f64 {
+    // SAFETY: caller contract.
+    unsafe { color::contrast(a, b) }
+}
+
+/// C: rustty_color_x11_names
+#[no_mangle]
+pub extern "C" fn rustty_color_x11_names() -> *const color::X11Entry {
+    color::x11_names()
+}
+
+/// C: rustty_color_x11_name_count
+#[no_mangle]
+pub extern "C" fn rustty_color_x11_name_count() -> usize {
+    color::x11_name_count()
+}
+
+// ----- color_scheme -----
+// pub const color_scheme_report_encode = color_scheme.report_encode;
+//   (@export name ghostty_color_scheme_report_encode)
+/// C: rustty_color_scheme_report_encode
+/// # Safety
+/// `buf`, if non-null, writable for `buf_len`; `out_written` valid writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_scheme_report_encode(
+    scheme: c_int,
+    buf: *mut u8,
+    buf_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    use rustty_vt::device_status::ColorScheme;
+    // Integer-range guard on the raw c_int crossing the C boundary
+    // (RusttyColorScheme: LIGHT=0, DARK=1 — see include/rustty/vt/device.h).
+    let scheme = match scheme {
+        0 => ColorScheme::Light,
+        1 => ColorScheme::Dark,
+        _ => return result::Result::InvalidValue.to_c_int(),
+    };
+    // SAFETY: caller contract.
+    unsafe { color_scheme::report_encode(scheme, buf, buf_len, out_written) }.to_c_int()
 }
 
 // ----- focus -----
@@ -275,6 +415,31 @@ pub unsafe extern "C" fn rustty_paste_encode(
 ) -> c_int {
     // SAFETY: pointer validity is the caller's contract.
     unsafe { paste::encode(data, data_len, bracketed, out, out_len, out_written) }.to_c_int()
+}
+
+// ----- unicode -----
+// pub const unicode_codepoint_width = unicode.codepoint_width;
+//   (@export name ghostty_unicode_codepoint_width)
+/// C: rustty_unicode_codepoint_width
+#[no_mangle]
+pub extern "C" fn rustty_unicode_codepoint_width(cp: u32) -> u8 {
+    unicode::codepoint_width(cp)
+}
+
+// pub const unicode_grapheme_width = unicode.grapheme_width;
+//   (@export name ghostty_unicode_grapheme_width)
+/// C: rustty_unicode_grapheme_width
+///
+/// # Safety
+/// `cps`, if non-null, must be readable for `len` u32s; `width` writable or null.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_unicode_grapheme_width(
+    cps: *const u32,
+    len: usize,
+    width: *mut u8,
+) -> usize {
+    // SAFETY: caller contract.
+    unsafe { unicode::grapheme_width(cps, len, width) }
 }
 
 // ----- size_report -----
@@ -1026,7 +1191,7 @@ fn terminal_data_from_c_int(v: c_int) -> Option<terminal::TerminalData> {
     }
 }
 
-const TERMINAL_OPTION_COUNT: c_int = 26; // contiguous 0..=25
+const TERMINAL_OPTION_COUNT: c_int = 27; // contiguous 0..=26 (26 = clipboard_write, WS5 T17)
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
     if (0..TERMINAL_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
@@ -2838,6 +3003,7 @@ mod main_tests {
         // We want to make sure we run the tests for the C allocator interface.
         let _ = super::result::Result::Success;
         let _ = super::color::rgb_get as unsafe fn(_, _, _, _);
+        let _ = super::color_scheme::report_encode as unsafe fn(_, _, _, _) -> _;
         let _ = super::focus::encode as unsafe fn(_, _, _, _) -> _;
         let _ = super::modes::report_encode as unsafe fn(_, _, _, _, _) -> _;
         let _ = super::build_info::get as unsafe fn(_, _) -> _;
@@ -2848,5 +3014,8 @@ mod main_tests {
         // _ = render; _ = selection_gesture;
         let _ = super::render::get as unsafe fn(_, _, _) -> _;
         let _ = super::selection_gesture::get as unsafe fn(_, _, _, _) -> _;
+        // _ = unicode; (main.zig)
+        let _ = super::unicode::codepoint_width as fn(_) -> _;
+        let _ = super::unicode::grapheme_width as unsafe fn(_, _, _) -> _;
     }
 }

@@ -699,10 +699,19 @@ impl<'a> Parser<'a> {
                     v.deinit();
                 }
             }
+            // .color_operation => |*v| color_operation: {
+            //     v.requests.deinit(self.alloc orelse break :color_operation);
+            // },
+            // PORT NOTE (oracle 14c829883): the reference frees the
+            // `SegmentedList` backing `requests` here to avoid an allocation
+            // leak on reset. The port's `color::List` is a plain `Vec<Request>`
+            // (see osc/parsers/color.rs), which Rust drops (and frees) when
+            // `self.command` is overwritten by `Command::Invalid` below — no
+            // manual release is needed or possible to express here.
+            Command::ColorOperation { .. } => {}
             Command::ChangeWindowIcon(_)
             | Command::ChangeWindowTitle(_)
             | Command::ClipboardContents { .. }
-            | Command::ColorOperation { .. }
             | Command::ConemuChangeTabTitle(_)
             | Command::ConemuComment(_)
             | Command::ConemuGuimacro(_)

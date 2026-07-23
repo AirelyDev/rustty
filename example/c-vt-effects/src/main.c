@@ -39,6 +39,37 @@ void on_title_changed(RusttyTerminal terminal, void* userdata) {
 }
 //! [effects-title-changed]
 
+//! [effects-clipboard-write]
+RusttyClipboardWriteResult on_clipboard_write(
+    RusttyTerminal terminal,
+    void* userdata,
+    const RusttyClipboardWrite* write) {
+  (void)terminal;
+  (void)userdata;
+
+  printf("  clipboard write (location=%d, contents=%zu)\n",
+         (int)write->location, write->contents_len);
+  if (write->contents_len == 0) {
+    printf("    clear\n");
+  }
+
+  for (size_t i = 0; i < write->contents_len; i++) {
+    const RusttyClipboardContent* content = &write->contents[i];
+    printf("    ");
+    if (content->mime.len > 0) {
+      fwrite(content->mime.ptr, 1, content->mime.len, stdout);
+    }
+    printf(" (%zu bytes): ", content->data.len);
+    if (content->data.len > 0) {
+      fwrite(content->data.ptr, 1, content->data.len, stdout);
+    }
+    printf("\n");
+  }
+
+  return RUSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
+}
+//! [effects-clipboard-write]
+
 //! [effects-register]
 int main() {
   // Create a terminal
@@ -64,6 +95,8 @@ int main() {
       (const void *)on_bell);
   rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_TITLE_CHANGED,
       (const void *)on_title_changed);
+  rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
+      (const void *)on_clipboard_write);
 
   // Feed VT data that triggers effects:
 
@@ -85,7 +118,14 @@ int main() {
   rustty_terminal_vt_write(terminal, (const uint8_t*)decrqm,
                             strlen(decrqm));
 
-  // 4. Another bell to show the counter increments
+  // 4. Clipboard write (OSC 52 ; c ; <base64 data> ST)
+  printf("Sending clipboard write:\n");
+  const char* clipboard_seq =
+      "\x1B]52;c;SGVsbG8gY2xpcGJvYXJk\x1B\\";
+  rustty_terminal_vt_write(terminal, (const uint8_t*)clipboard_seq,
+                            strlen(clipboard_seq));
+
+  // 5. Another bell to show the counter increments
   printf("Sending another BEL:\n");
   rustty_terminal_vt_write(terminal, &bel, 1);
 

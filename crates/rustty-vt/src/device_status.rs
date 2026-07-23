@@ -108,6 +108,22 @@ pub fn req_from_int(v: u16, question: bool) -> Option<Request> {
     None
 }
 
+/// Maximum number of bytes that `encode_color_scheme_report` will write.
+// PORT NOTE: the reference computes this at comptime by dry-running the encoder
+// over every enum field; both arms write 9 bytes, frozen here with a test
+// asserting the value matches a dry run.
+pub const MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE: usize = 9;
+
+/// Encode a color scheme report response for CSI ? 996 n queries.
+pub fn encode_color_scheme_report(writer: &mut Vec<u8>, scheme: ColorScheme) {
+    writer.extend_from_slice(match scheme {
+        // .dark => "\x1B[?997;1n",
+        ColorScheme::Dark => b"\x1B[?997;1n",
+        // .light => "\x1B[?997;2n",
+        ColorScheme::Light => b"\x1B[?997;2n",
+    });
+}
+
 /// A single entry of a possible device status request we support. The
 /// "question" field determines if it is valid with or without the "?"
 /// prefix.
@@ -152,6 +168,18 @@ mod tests {
         for entry in ENTRIES {
             assert!(!entry.name.is_empty());
         }
+    }
+
+    // test "encode color scheme report dark" / "light" (oracle f00e90694)
+    #[test]
+    fn encode_color_scheme_report_dark_light() {
+        assert_eq!(9, MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE);
+        let mut buf = Vec::new();
+        encode_color_scheme_report(&mut buf, ColorScheme::Dark);
+        assert_eq!(b"\x1B[?997;1n", &buf[..]);
+        buf.clear();
+        encode_color_scheme_report(&mut buf, ColorScheme::Light);
+        assert_eq!(b"\x1B[?997;2n", &buf[..]);
     }
 
     #[test]

@@ -1888,34 +1888,25 @@ impl Color {
     }
 
     // pub fn parseCLI(input_: ?[]const u8) !Color
+    // PORT NOTE (oracle 2970e9a2a Config.zig hunk): delegates to the shared
+    // `terminal.color.RGB.parse` so CLI/config and the C ABI stay in lockstep
+    // (was: local trim + x11-map lookup + fromHex).
     pub fn parse_cli(input_: Option<&[u8]>) -> Result<Color, ParseError> {
         // const input = input_ orelse return error.ValueRequired;
         let input = input_.ok_or(Error::ValueRequired)?;
-        // Trim any whitespace before processing
-        // const trimmed = std.mem.trim(u8, input, " \t");
-        let trimmed = trim_ws(input);
-
-        // if (terminal.x11_color.map.get(trimmed)) |rgb| return .{
-        //     .r = rgb.r,
-        //     .g = rgb.g,
-        //     .b = rgb.b,
-        // };
+        // const rgb: terminal.color.RGB = terminal.color.RGB.parse(input) catch return error.InvalidValue;
         //
-        // PORT NOTE: `x11_color.map.get` takes a `&str`; X11 color names are ASCII,
-        // so non-UTF-8 input simply has no match (the reference's byte map likewise
-        // never matches such input), preserving behavior.
-        if let Ok(s) = core::str::from_utf8(trimmed) {
-            if let Some(rgb) = rustty_vt::x11_color::map.get(s) {
-                return Ok(Color {
-                    r: rgb.r,
-                    g: rgb.g,
-                    b: rgb.b,
-                });
-            }
-        }
-
-        // return fromHex(trimmed);
-        Color::from_hex(trimmed)
+        // PORT NOTE: `RGB::parse` takes `&str`; non-UTF-8 input has no valid
+        // parse in any accepted form (hex/name/rgb:), so it maps to InvalidValue,
+        // matching the reference (whose byte-level parse likewise rejects it).
+        let s = core::str::from_utf8(input).map_err(|_| Error::InvalidValue)?;
+        let rgb = rustty_vt::color::RGB::parse(s).map_err(|_| Error::InvalidValue)?;
+        // return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b };
+        Ok(Color {
+            r: rgb.r,
+            g: rgb.g,
+            b: rgb.b,
+        })
     }
 
     /// Deep copy of the struct. Required by Config.
@@ -1957,90 +1948,10 @@ impl Color {
         format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b).into_bytes()
     }
 
-    /// fromHex parses a color from a hex value such as #RRGGBB. The "#"
-    /// is optional.
-    // pub fn fromHex(input: []const u8) !Color
-    pub fn from_hex(input: &[u8]) -> Result<Color, ParseError> {
-        // Trim the beginning '#' if it exists
-        // const trimmed = if (input.len != 0 and input[0] == '#') input[1..] else input;
-        let trimmed = if !input.is_empty() && input[0] == b'#' {
-            &input[1..]
-        } else {
-            input
-        };
-        // if (trimmed.len != 6 and trimmed.len != 3) return error.InvalidValue;
-        if trimmed.len() != 6 && trimmed.len() != 3 {
-            return Err(Error::InvalidValue);
-        }
-
-        // Expand short hex values to full hex values
-        // const rgb: []const u8 = if (trimmed.len == 3) &.{
-        //     trimmed[0], trimmed[0],
-        //     trimmed[1], trimmed[1],
-        //     trimmed[2], trimmed[2],
-        // } else trimmed;
-        let expanded: [u8; 6];
-        let rgb: &[u8] = if trimmed.len() == 3 {
-            expanded = [
-                trimmed[0], trimmed[0], trimmed[1], trimmed[1], trimmed[2], trimmed[2],
-            ];
-            &expanded
-        } else {
-            trimmed
-        };
-
-        // Parse the colors two at a time.
-        // var result: Color = undefined;
-        let mut result = Color { r: 0, g: 0, b: 0 };
-        // comptime var i: usize = 0;
-        // inline while (i < 6) : (i += 2) {
-        let mut i: usize = 0;
-        while i < 6 {
-            // const v: u8 = ((try std.fmt.charToDigit(rgb[i], 16)) * 16) +
-            //     try std.fmt.charToDigit(rgb[i + 1], 16);
-            let hi = char_to_digit(rgb[i], 16)?;
-            let lo = char_to_digit(rgb[i + 1], 16)?;
-            let v: u8 = hi * 16 + lo;
-
-            // @field(result, switch (i) { 0 => "r", 2 => "g", 4 => "b", else => unreachable }) = v;
-            match i {
-                0 => result.r = v,
-                2 => result.g = v,
-                4 => result.b = v,
-                _ => unreachable!(),
-            }
-            i += 2;
-        }
-
-        // return result;
-        Ok(result)
-    }
-}
-
-/// PORTS: `std.fmt.charToDigit(c, radix)` — returns the digit value of `c` in
-/// the given radix, or `error.InvalidCharacter`. The reference maps any parse
-/// failure here into `error.InvalidValue` at the call site (via `try`), but
-/// `charToDigit` itself returns `InvalidCharacter`; `fromHex` propagates that as
-/// the function's error union, which `parseIntoField` collapses to InvalidValue.
-fn char_to_digit(c: u8, radix: u8) -> Result<u8, ParseError> {
-    // const value = switch (c) {
-    //     '0'...'9' => c - '0',
-    //     'A'...'Z' => c - 'A' + 10,
-    //     'a'...'z' => c - 'a' + 10,
-    //     else => return error.InvalidCharacter,
-    // };
-    let value = match c {
-        b'0'..=b'9' => c - b'0',
-        b'A'..=b'Z' => c - b'A' + 10,
-        b'a'..=b'z' => c - b'a' + 10,
-        _ => return Err(Error::InvalidValue),
-    };
-    // if (value >= radix) return error.InvalidCharacter;
-    if value >= radix {
-        return Err(Error::InvalidValue);
-    }
-    // return value;
-    Ok(value)
+    // PORT NOTE (oracle 2970e9a2a): `fromHex` was deleted upstream — `parseCLI`
+    // now delegates to `terminal.color.RGB.parse`, which accepts the same hex
+    // forms (with/without leading '#', 3 or 6 digits) plus more. See
+    // `test "parseCLI hex"` below (was `test "fromHex"`).
 }
 
 impl FormatEntry for Color {
@@ -2728,33 +2639,26 @@ impl Palette {
     }
 
     // pub fn parseCLI(self: *Self, input: ?[]const u8) !void
+    // PORT NOTE (oracle 2970e9a2a Config.zig hunk): delegates to the shared
+    // `terminal.color.parsePaletteEntry` so CLI/config and the C ABI stay in
+    // lockstep (was: local `=`-split + parseInt + Color.parseCLI).
     pub fn parse_cli(&mut self, input: Option<&[u8]>) -> Result<(), PaletteParseError> {
         // const value = input orelse return error.ValueRequired;
         let value = input.ok_or(PaletteParseError::ValueRequired)?;
-        // const eqlIdx = std.mem.indexOf(u8, value, "=") orelse return error.InvalidValue;
-        let eql_idx = index_of(value, b'=').ok_or(PaletteParseError::InvalidValue)?;
-
-        // Parse the key part (trim whitespace)
-        // const key = try std.fmt.parseInt(u8, std.mem.trim(u8, value[0..eqlIdx], " \t"), 0);
-        let key = parse_int_u8_base0(trim_ws(&value[0..eql_idx])).map_err(|e| match e {
-            ParseIntError::Overflow => PaletteParseError::Overflow,
-            ParseIntError::InvalidCharacter => PaletteParseError::InvalidCharacter,
+        // const entry = terminal.color.parsePaletteEntry(value) catch |err| switch (err) {
+        //     error.Overflow => return error.Overflow,
+        //     error.InvalidFormat => return error.InvalidValue,
+        // };
+        let entry = rustty_vt::color::parse_palette_entry(value).map_err(|e| match e {
+            rustty_vt::color::ParsePaletteEntryError::Overflow => PaletteParseError::Overflow,
+            rustty_vt::color::ParsePaletteEntryError::InvalidFormat => {
+                PaletteParseError::InvalidValue
+            }
         })?;
-
-        // Parse the color part (Color.parseCLI will handle whitespace)
-        // const rgb = try Color.parseCLI(value[eqlIdx + 1 ..]);
-        let rgb = Color::parse_cli(Some(&value[eql_idx + 1..])).map_err(|e| match e {
-            Error::ValueRequired => PaletteParseError::ValueRequired,
-            _ => PaletteParseError::InvalidValue,
-        })?;
-        // self.value[key] = .{ .r = rgb.r, .g = rgb.g, .b = rgb.b };
-        self.value[key as usize] = rustty_vt::color::RGB {
-            r: rgb.r,
-            g: rgb.g,
-            b: rgb.b,
-        };
-        // self.mask.set(key);
-        self.mask.set(key as usize);
+        // self.value[entry.index] = entry.color;
+        self.value[entry.index as usize] = entry.color;
+        // self.mask.set(entry.index);
+        self.mask.set(entry.index as usize);
         Ok(())
     }
 
@@ -6887,59 +6791,91 @@ mod tests {
     // Color
     // -----------------------------------------------------------------------
 
-    // test "fromHex"
+    // test "parseCLI hex" (was "fromHex" — oracle 2970e9a2a deleted fromHex;
+    // parseCLI now covers the same hex forms via RGB::parse delegation)
     #[test]
-    fn color_from_hex() {
-        // try testing.expectEqual(Color{ .r = 0, .g = 0, .b = 0 }, try Color.fromHex("#000000"));
+    fn color_parse_cli_hex() {
+        // try testing.expectEqual(Color{ .r = 0, .g = 0, .b = 0 }, try Color.parseCLI("#000000"));
         assert_eq!(
             Color { r: 0, g: 0, b: 0 },
-            Color::from_hex(b"#000000").unwrap()
+            Color::parse_cli(Some(b"#000000")).unwrap()
         );
-        // try testing.expectEqual(Color{ .r = 10, .g = 11, .b = 12 }, try Color.fromHex("#0A0B0C"));
+        // try testing.expectEqual(Color{ .r = 10, .g = 11, .b = 12 }, try Color.parseCLI("#0A0B0C"));
         assert_eq!(
             Color {
                 r: 10,
                 g: 11,
                 b: 12
             },
-            Color::from_hex(b"#0A0B0C").unwrap()
+            Color::parse_cli(Some(b"#0A0B0C")).unwrap()
         );
-        // try testing.expectEqual(Color{ .r = 10, .g = 11, .b = 12 }, try Color.fromHex("0A0B0C"));
+        // try testing.expectEqual(Color{ .r = 10, .g = 11, .b = 12 }, try Color.parseCLI("0A0B0C"));
         assert_eq!(
             Color {
                 r: 10,
                 g: 11,
                 b: 12
             },
-            Color::from_hex(b"0A0B0C").unwrap()
+            Color::parse_cli(Some(b"0A0B0C")).unwrap()
         );
-        // try testing.expectEqual(Color{ .r = 255, .g = 255, .b = 255 }, try Color.fromHex("FFFFFF"));
+        // try testing.expectEqual(Color{ .r = 255, .g = 255, .b = 255 }, try Color.parseCLI("FFFFFF"));
         assert_eq!(
             Color {
                 r: 255,
                 g: 255,
                 b: 255
             },
-            Color::from_hex(b"FFFFFF").unwrap()
+            Color::parse_cli(Some(b"FFFFFF")).unwrap()
         );
-        // try testing.expectEqual(Color{ .r = 255, .g = 255, .b = 255 }, try Color.fromHex("FFF"));
+        // try testing.expectEqual(Color{ .r = 255, .g = 255, .b = 255 }, try Color.parseCLI("FFF"));
         assert_eq!(
             Color {
                 r: 255,
                 g: 255,
                 b: 255
             },
-            Color::from_hex(b"FFF").unwrap()
+            Color::parse_cli(Some(b"FFF")).unwrap()
         );
-        // try testing.expectEqual(Color{ .r = 51, .g = 68, .b = 85 }, try Color.fromHex("#345"));
+        // try testing.expectEqual(Color{ .r = 51, .g = 68, .b = 85 }, try Color.parseCLI("#345"));
         assert_eq!(
             Color {
                 r: 51,
                 g: 68,
                 b: 85
             },
-            Color::from_hex(b"#345").unwrap()
+            Color::parse_cli(Some(b"#345")).unwrap()
         );
+    }
+
+    // color/palette parsing now delegates to the shared rustty-vt helpers
+    // (oracle 2970e9a2a Config.zig hunk); "rgb:R/G/B" is not accepted by the
+    // old config-local fromHex/x11-map-only parseCLI, but IS accepted by
+    // rustty_vt::color::RGB::parse — this asserts the delegation landed.
+    #[test]
+    fn color_config_accepts_bare_hex_and_prefixed_palette_index() {
+        assert_eq!(
+            Color {
+                r: 10,
+                g: 11,
+                b: 12
+            },
+            Color::parse_cli(Some(b"0A0B0C")).unwrap()
+        );
+        assert_eq!(
+            Color {
+                r: 17,
+                g: 34,
+                b: 51
+            },
+            Color::parse_cli(Some(b"rgb:1/2/3")).unwrap()
+        );
+
+        let mut p = Palette::default();
+        p.parse_cli(Some(b"0x10=#282c34")).unwrap();
+        assert_eq!(p.value[16].r, 0x28);
+        assert_eq!(p.value[16].g, 0x2c);
+        assert_eq!(p.value[16].b, 0x34);
+        assert!(p.mask.is_set(16));
     }
 
     // test "parseCLI from name"

@@ -92,6 +92,81 @@ const fn build_default() -> Palette {
 /// Palette is the 256 color palette.
 pub type Palette = [RGB; 256];
 
+/// A parsed palette entry from Rustty's config "N=COLOR" syntax.
+// pub const PaletteEntry = struct { index: u8, color: RGB };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaletteEntry {
+    pub index: u8,
+    pub color: RGB,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParsePaletteEntryError {
+    InvalidFormat,
+    Overflow,
+}
+
+/// Parse a palette entry in Rustty config syntax: "N=COLOR" where N is
+/// a palette index 0-255 (decimal, or 0x/0o/0b-prefixed per Zig's
+/// parseInt base-0 rules) and COLOR is anything RGB::parse accepts.
+/// Whitespace (spaces/tabs) around N and COLOR is ignored.
+// pub fn parsePaletteEntry(value: []const u8) error{ InvalidFormat, Overflow }!PaletteEntry
+pub fn parse_palette_entry(value: &[u8]) -> Result<PaletteEntry, ParsePaletteEntryError> {
+    // const eql_idx = std.mem.indexOfScalar(u8, value, '=') orelse return error.InvalidFormat;
+    let eql_idx = value
+        .iter()
+        .position(|&b| b == b'=')
+        .ok_or(ParsePaletteEntryError::InvalidFormat)?;
+    // const index = std.fmt.parseInt(u8, std.mem.trim(u8, value[0..eql_idx], " \t"), 0) catch ...
+    let index_str = trim_space_tab(&value[..eql_idx]);
+    let index = parse_int_u8_base0(index_str)?;
+    // const rgb = try RGB.parse(value[eql_idx + 1 ..]);
+    let rest = &value[eql_idx + 1..];
+    let rest_str = std::str::from_utf8(rest).map_err(|_| ParsePaletteEntryError::InvalidFormat)?;
+    let rgb = RGB::parse(rest_str).map_err(|_| ParsePaletteEntryError::InvalidFormat)?;
+    Ok(PaletteEntry { index, color: rgb })
+}
+
+/// Zig `std.fmt.parseInt(u8, s, 0)`: base-0 = auto-detect 0x/0o/0b prefix,
+/// else decimal. `Overflow` (value > 255) is distinguished from
+/// `InvalidCharacter` (mapped to InvalidFormat), matching the oracle.
+fn parse_int_u8_base0(s: &[u8]) -> Result<u8, ParsePaletteEntryError> {
+    let (digits, radix): (&[u8], u32) = if s.len() > 2 && s[0] == b'0' {
+        match s[1] {
+            b'x' | b'X' => (&s[2..], 16),
+            b'o' | b'O' => (&s[2..], 8),
+            b'b' | b'B' => (&s[2..], 2),
+            _ => (s, 10),
+        }
+    } else {
+        (s, 10)
+    };
+    if digits.is_empty() {
+        return Err(ParsePaletteEntryError::InvalidFormat);
+    }
+    let mut acc: u32 = 0;
+    for &b in digits {
+        // Zig parseInt allows '_' separators; preserve that.
+        if b == b'_' {
+            continue;
+        }
+        let d = (b as char)
+            .to_digit(radix)
+            .ok_or(ParsePaletteEntryError::InvalidFormat)?;
+        acc = acc * radix + d;
+        if acc > 255 {
+            return Err(ParsePaletteEntryError::Overflow);
+        }
+    }
+    Ok(acc as u8)
+}
+
+fn trim_space_tab(s: &[u8]) -> &[u8] {
+    let start = s.iter().position(|&b| b != b' ' && b != b'\t').unwrap_or(s.len());
+    let end = s.iter().rposition(|&b| b != b' ' && b != b'\t').map_or(start, |i| i + 1);
+    &s[start..end]
+}
+
 // PORT NOTE: `pub const PaletteC = [256]RGB.C;` and `paletteCval`/`paletteZval`
 // convert between the native and C-ABI palette. The C ABI surface (`RGB.C`) is
 // ported in the rustty-vt-c crate; since `RGB` and `RGB.C` carry identical r/g/b
@@ -756,6 +831,28 @@ impl RGB {
         self.r == other.r && self.g == other.g && self.b == other.b
     }
 
+    // pub fn encodeRgb8(self: RGB, writer: *std.Io.Writer) !void
+    /// Encode as the 8-bit-per-channel `rgb:xx/xx/xx` xterm wire form.
+    pub fn encode_rgb8(&self, out: &mut Vec<u8>) {
+        // try writer.print("rgb:{x:0>2}/{x:0>2}/{x:0>2}", .{self.r, self.g, self.b});
+        use std::io::Write as _;
+        let _ = write!(out, "rgb:{:02x}/{:02x}/{:02x}", self.r, self.g, self.b);
+    }
+
+    // pub fn encodeRgb16(self: RGB, writer: *std.Io.Writer) !void
+    /// Encode as the 16-bit-per-channel `rgb:xxxx/xxxx/xxxx` xterm wire form.
+    pub fn encode_rgb16(&self, out: &mut Vec<u8>) {
+        // 8->16 bit expansion: v * 257 (0xFF -> 0xFFFF)
+        use std::io::Write as _;
+        let _ = write!(
+            out,
+            "rgb:{:04x}/{:04x}/{:04x}",
+            u16::from(self.r) * 257,
+            u16::from(self.g) * 257,
+            u16::from(self.b) * 257,
+        );
+    }
+
     /// Calculates the contrast ratio between two colors. The contrast
     /// ration is a value between 1 and 21 where 1 is the lowest contrast
     /// and 21 is the highest contrast.
@@ -834,6 +931,8 @@ impl RGB {
 
     /// Parse a color specification.
     ///
+    /// Leading and trailing spaces and tabs are ignored.
+    ///
     /// Any of the following forms are accepted:
     ///
     /// 1. rgb:<red>/<green>/<blue>
@@ -847,52 +946,74 @@ impl RGB {
     ///    where <red>, <green>, and <blue> are floating point values between
     ///    0.0 and 1.0 (inclusive).
     ///
-    /// 3. #rgb, #rrggbb, #rrrgggbbb #rrrrggggbbbb
+    /// 3. #rgb, #rrggbb, rgb, rrggbb, #rrrgggbbb, #rrrrggggbbbb
     ///
-    ///    where `r`, `g`, and `b` are a single hexadecimal digit.
-    ///    These specify a color with 4, 8, 12, and 16 bits of precision
-    ///    per color channel.
+    ///    where `r`, `g`, and `b` are hexadecimal digits. The forms with a
+    ///    leading # specify a color with 4, 8, 12, and 16 bits of precision
+    ///    per color channel. The forms without a leading # are accepted for
+    ///    compatibility with Rustty config/theme color values.
+    ///
+    /// 4. X11 color names
     pub fn parse(value: &str) -> Result<RGB, InvalidFormat> {
-        if value.is_empty() {
+        // const input = std.mem.trim(u8, value, " \t");
+        let input = value.trim_matches(|c| c == ' ' || c == '\t');
+        if input.is_empty() {
             return Err(InvalidFormat);
         }
 
-        let bytes = value.as_bytes();
+        let bytes = input.as_bytes();
         if bytes[0] == b'#' {
-            return match value.len() {
+            return match input.len() {
                 4 => Ok(RGB {
-                    r: RGB::from_hex(&value[1..2])?,
-                    g: RGB::from_hex(&value[2..3])?,
-                    b: RGB::from_hex(&value[3..4])?,
+                    r: RGB::from_hex(&input[1..2])?,
+                    g: RGB::from_hex(&input[2..3])?,
+                    b: RGB::from_hex(&input[3..4])?,
                 }),
                 7 => Ok(RGB {
-                    r: RGB::from_hex(&value[1..3])?,
-                    g: RGB::from_hex(&value[3..5])?,
-                    b: RGB::from_hex(&value[5..7])?,
+                    r: RGB::from_hex(&input[1..3])?,
+                    g: RGB::from_hex(&input[3..5])?,
+                    b: RGB::from_hex(&input[5..7])?,
                 }),
                 10 => Ok(RGB {
-                    r: RGB::from_hex(&value[1..4])?,
-                    g: RGB::from_hex(&value[4..7])?,
-                    b: RGB::from_hex(&value[7..10])?,
+                    r: RGB::from_hex(&input[1..4])?,
+                    g: RGB::from_hex(&input[4..7])?,
+                    b: RGB::from_hex(&input[7..10])?,
                 }),
                 13 => Ok(RGB {
-                    r: RGB::from_hex(&value[1..5])?,
-                    g: RGB::from_hex(&value[5..9])?,
-                    b: RGB::from_hex(&value[9..13])?,
+                    r: RGB::from_hex(&input[1..5])?,
+                    g: RGB::from_hex(&input[5..9])?,
+                    b: RGB::from_hex(&input[9..13])?,
                 }),
 
                 _ => Err(InvalidFormat),
             };
         }
 
-        // Check for X11 named colors. We allow whitespace around the edges
-        // of the color because Kitty allows whitespace. This is not part of
-        // any spec I could find.
-        if let Some(rgb) = x11_color::map.get(value.trim_matches(' ')) {
+        // Check for X11 named colors. We allow whitespace around the edges.
+        if let Some(rgb) = x11_color::map.get(input) {
             return Ok(rgb);
         }
 
-        if value.len() < "rgb:a/a/a".len() || &value[0..3] != "rgb" {
+        // switch (input.len) { 3 => ..., 6 => ..., else => {} }
+        match input.len() {
+            3 => {
+                return Ok(RGB {
+                    r: RGB::from_hex(&input[0..1])?,
+                    g: RGB::from_hex(&input[1..2])?,
+                    b: RGB::from_hex(&input[2..3])?,
+                })
+            }
+            6 => {
+                return Ok(RGB {
+                    r: RGB::from_hex(&input[0..2])?,
+                    g: RGB::from_hex(&input[2..4])?,
+                    b: RGB::from_hex(&input[4..6])?,
+                })
+            }
+            _ => {}
+        }
+
+        if input.len() < "rgb:a/a/a".len() || &input[0..3] != "rgb" {
             return Err(InvalidFormat);
         }
 
@@ -912,9 +1033,9 @@ impl RGB {
         i += 1;
 
         let r = {
-            // PORT NOTE: `std.mem.indexOfScalarPos(u8, value, i, '/')`.
-            let slice = match value[i..].find('/') {
-                Some(end_rel) => &value[i..i + end_rel],
+            // PORT NOTE: `std.mem.indexOfScalarPos(u8, input, i, '/')`.
+            let slice = match input[i..].find('/') {
+                Some(end_rel) => &input[i..i + end_rel],
                 None => return Err(InvalidFormat),
             };
 
@@ -928,8 +1049,8 @@ impl RGB {
         };
 
         let g = {
-            let slice = match value[i..].find('/') {
-                Some(end_rel) => &value[i..i + end_rel],
+            let slice = match input[i..].find('/') {
+                Some(end_rel) => &input[i..i + end_rel],
                 None => return Err(InvalidFormat),
             };
 
@@ -943,9 +1064,9 @@ impl RGB {
         };
 
         let b = if use_intensity {
-            RGB::from_intensity(&value[i..])?
+            RGB::from_intensity(&input[i..])?
         } else {
-            RGB::from_hex(&value[i..])?
+            RGB::from_hex(&input[i..])?
         };
 
         Ok(RGB { r, g, b })
@@ -1136,6 +1257,92 @@ impl LAB {
 #[allow(clippy::bool_assert_comparison)]
 mod tests {
     use super::*;
+
+    // test "RGB: encode" (oracle 14c829883)
+    #[test]
+    fn rgb_encode() {
+        let rgb = RGB {
+            r: 0x01,
+            g: 0x23,
+            b: 0xff,
+        };
+        let mut buf = Vec::new();
+        rgb.encode_rgb8(&mut buf);
+        assert_eq!(b"rgb:01/23/ff", &buf[..]);
+        buf.clear();
+        rgb.encode_rgb16(&mut buf);
+        assert_eq!(b"rgb:0101/2323/ffff", &buf[..]);
+    }
+
+    // test "parsePaletteEntry" (oracle 2970e9a2a)
+    #[test]
+    fn parse_palette_entry_cases() {
+        let e = parse_palette_entry(b"0=#AABBCC").unwrap();
+        assert_eq!(e.index, 0);
+        assert_eq!(e.color, RGB { r: 170, g: 187, b: 204 });
+        let e = parse_palette_entry(b"0b1=#014589").unwrap();
+        assert_eq!((e.index, e.color), (1, RGB { r: 1, g: 69, b: 137 }));
+        let e = parse_palette_entry(b"0o7=#234567").unwrap();
+        assert_eq!((e.index, e.color), (7, RGB { r: 35, g: 69, b: 103 }));
+        let e = parse_palette_entry(b"0xF=#ABCDEF").unwrap();
+        assert_eq!((e.index, e.color), (15, RGB { r: 171, g: 205, b: 239 }));
+        let e = parse_palette_entry(b"0 =  #AABBCC").unwrap();
+        assert_eq!((e.index, e.color), (0, RGB { r: 170, g: 187, b: 204 }));
+        let e = parse_palette_entry(b" 1= #DDEEFF    ").unwrap();
+        assert_eq!((e.index, e.color), (1, RGB { r: 221, g: 238, b: 255 }));
+        let e = parse_palette_entry(b"  2  =  #123456 ").unwrap();
+        assert_eq!((e.index, e.color), (2, RGB { r: 18, g: 52, b: 86 }));
+        let e = parse_palette_entry(b"1=black").unwrap();
+        assert_eq!((e.index, e.color), (1, RGB { r: 0, g: 0, b: 0 }));
+
+        assert_eq!(
+            parse_palette_entry(b" "),
+            Err(ParsePaletteEntryError::InvalidFormat)
+        );
+        assert_eq!(
+            parse_palette_entry(b"a"),
+            Err(ParsePaletteEntryError::InvalidFormat)
+        );
+        assert_eq!(
+            parse_palette_entry(b"256=#AABBCC"),
+            Err(ParsePaletteEntryError::Overflow)
+        );
+        assert_eq!(
+            parse_palette_entry(b"1=notacolor"),
+            Err(ParsePaletteEntryError::InvalidFormat)
+        );
+    }
+
+    // new "RGB.parse" assertions (oracle 2970e9a2a)
+    #[test]
+    fn rgb_parse_bare_hex_and_trim() {
+        assert_eq!(RGB { r: 10, g: 11, b: 12 }, RGB::parse("0A0B0C").unwrap());
+        assert_eq!(
+            RGB {
+                r: 255,
+                g: 255,
+                b: 255
+            },
+            RGB::parse("FFFFFF").unwrap()
+        );
+        assert_eq!(
+            RGB {
+                r: 255,
+                g: 255,
+                b: 255
+            },
+            RGB::parse("FFF").unwrap()
+        );
+        assert_eq!(RGB { r: 51, g: 68, b: 85 }, RGB::parse("#345").unwrap());
+        assert_eq!(
+            RGB {
+                r: 170,
+                g: 187,
+                b: 204
+            },
+            RGB::parse(" #AABBCC   ").unwrap()
+        );
+    }
 
     #[test]
     fn rgb_layout() {

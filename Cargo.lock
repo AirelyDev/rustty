@@ -1640,6 +1640,7 @@ dependencies = [
  "allocator-api2",
  "rustty-lib",
  "rustty-render-types",
+ "rustty-unicode",
  "rustty-vt",
 ]
 

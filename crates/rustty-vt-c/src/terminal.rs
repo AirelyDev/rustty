@@ -50,6 +50,7 @@ use crate::point::PointC;
 use crate::result::Result;
 use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_lib::String as LibString;
+use rustty_vt::clipboard;
 use rustty_vt::device_attributes;
 use rustty_vt::device_status;
 use rustty_vt::modes;
@@ -114,6 +115,7 @@ pub struct Effects {
     pub title_changed: Option<TitleChangedFn>,
     pub pwd_changed: Option<PwdChangedFn>,
     pub size_cb: Option<SizeFn>,
+    pub clipboard_write: Option<ClipboardWriteFn>,
 
     /// Scratch buffer for DA1 feature codes. The device attributes
     /// trampoline converts C feature codes into this buffer and returns
@@ -141,6 +143,7 @@ impl Default for Effects {
             title_changed: None,
             pwd_changed: None,
             size_cb: None,
+            clipboard_write: None,
             da_features_buf: [rustty_vt::device_attributes::Feature::AnsiColor; 64],
         }
     }
@@ -193,6 +196,37 @@ pub type SizeFn = extern "C" fn(Terminal, *mut c_void, *mut size_report::Size) -
 /// or returns false to silently ignore the query.
 // pub const DeviceAttributesFn = *const fn (Terminal, ?*anyopaque, *CDeviceAttributes) callconv(lib.calling_conv) bool;
 pub type DeviceAttributesFn = extern "C" fn(Terminal, *mut c_void, *mut CDeviceAttributes) -> bool;
+
+/// A single MIME representation in a clipboard write.
+///
+/// C: GhosttyClipboardContent -> RusttyClipboardContent (R2)
+// pub const ClipboardContent = extern struct { mime: lib.String, data: lib.String };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ClipboardContent {
+    pub mime: LibString,
+    pub data: LibString,
+}
+
+/// A protocol-neutral request to replace or clear clipboard contents.
+///
+/// C: GhosttyClipboardWrite -> RusttyClipboardWrite (R2)
+// pub const ClipboardWrite = extern struct { size, location, contents, contents_len };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ClipboardWrite {
+    pub size: usize,
+    pub location: clipboard::Location,
+    /// Null when `contents_len` is 0 (an empty write clears the destination).
+    pub contents: *const ClipboardContent,
+    pub contents_len: usize,
+}
+
+/// C function pointer type for the clipboard_write callback. The request
+/// and its contents are borrowed and only valid for the callback duration.
+// pub const ClipboardWriteFn = *const fn (Terminal, ?*anyopaque, *const ClipboardWrite) callconv(lib.calling_conv) clipboard.WriteResult;
+pub type ClipboardWriteFn =
+    extern "C" fn(Terminal, *mut c_void, *const ClipboardWrite) -> clipboard::WriteResult;
 
 /// C-compatible device attributes struct.
 /// C: GhosttyDeviceAttributes -> RusttyDeviceAttributes (R2)
@@ -469,6 +503,59 @@ impl Effects {
         }
         None
     }
+
+    // fn clipboardWriteTrampoline(handler: *Handler, write: clipboard.Write) clipboard.WriteResult {
+    //     const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
+    //     const wrapper: *TerminalWrapper = @fieldParentPtr("stream", stream_ptr);
+    //     const func = wrapper.effects.clipboard_write orelse return .unsupported;
+    //     ...stack-first (<=4) content conversion, gpa fallback...
+    //     return func(@ptrCast(wrapper), wrapper.effects.userdata, &request);
+    // }
+    pub(crate) fn clipboard_write_trampoline(
+        handler: &mut Handler<'static>,
+        write: clipboard::Write<'_>,
+    ) -> clipboard::WriteResult {
+        use clipboard::WriteResult;
+        let wrapper = wrapper_from_handler(handler);
+        let func = match unsafe { (*wrapper).effects.clipboard_write } {
+            Some(f) => f,
+            None => return WriteResult::Unsupported,
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+
+        // Most protocols currently produce one representation, so keep that
+        // path allocation-free while supporting arbitrary multi-MIME writes.
+        // PORT NOTE: the reference's `gpa().alloc(...) catch return .io_error`
+        // OOM arm has no rustty analog — a `Vec` aborts on OOM (DG5 abort
+        // policy), so the past-4 path is an infallible `Vec`.
+        let to_c = |content: &clipboard::Content<'_>| ClipboardContent {
+            mime: LibString { ptr: content.mime.as_ptr(), len: content.mime.len() },
+            data: LibString { ptr: content.data.as_ptr(), len: content.data.len() },
+        };
+
+        let mut stack_contents: [ClipboardContent; 4] = [ClipboardContent {
+            mime: LibString { ptr: std::ptr::null(), len: 0 },
+            data: LibString { ptr: std::ptr::null(), len: 0 },
+        }; 4];
+        let heap_contents: Vec<ClipboardContent>;
+        let contents: &[ClipboardContent] = if write.contents.len() <= stack_contents.len() {
+            for (dst, content) in stack_contents.iter_mut().zip(write.contents) {
+                *dst = to_c(content);
+            }
+            &stack_contents[..write.contents.len()]
+        } else {
+            heap_contents = write.contents.iter().map(to_c).collect();
+            &heap_contents
+        };
+
+        let request = ClipboardWrite {
+            size: std::mem::size_of::<ClipboardWrite>(),
+            location: write.location,
+            contents: if contents.is_empty() { std::ptr::null() } else { contents.as_ptr() },
+            contents_len: contents.len(),
+        };
+        func(wrapper, userdata, &request)
+    }
 }
 
 // PORT NOTE: the reference uses `@enumFromInt` on the DA enums (always safe
@@ -698,6 +785,7 @@ fn new_(alloc_: Option<&CAllocator>, opts: Options) -> std::result::Result<Termi
         title_changed: Some(Effects::title_changed_trampoline),
         pwd_changed: Some(Effects::pwd_changed_trampoline),
         size: Some(Effects::size_trampoline),
+        clipboard_write: Some(Effects::clipboard_write_trampoline),
     };
 
     // wrapper.* = .{ .terminal = t, .stream = .initAlloc(alloc, handler) };
@@ -773,6 +861,7 @@ pub enum Option_ {
     DefaultCursorBlink = 23,
     GlyphProtocol = 24,
     PwdChanged = 25,
+    ClipboardWrite = 26,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -907,6 +996,11 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         Option_::SizeCb => unsafe {
             (*terminal_).effects.size_cb =
                 std::mem::transmute::<*const c_void, Option<SizeFn>>(value);
+        },
+        // .clipboard_write => wrapper.effects.clipboard_write = value,
+        Option_::ClipboardWrite => unsafe {
+            (*terminal_).effects.clipboard_write =
+                std::mem::transmute::<*const c_void, Option<ClipboardWriteFn>>(value);
         },
 
         // .title => {
@@ -1287,14 +1381,16 @@ pub type DeviceAttributes = CDeviceAttributes;
 pub type ScrollViewport = ScrollViewportC;
 
 /// The C ABI compatible tag for `ScrollViewport`.
-// PORT NOTE: `Tag = lib.Enum(lib.target, &.{ "top", "bottom", "delta" })`; for
-// the `.c` target a fieldless `enum(c_int)` in key order.
+// PORT NOTE: `Tag = lib.Enum(lib.target, &.{ "top", "bottom", "delta", "row" })`;
+// for the `.c` target a fieldless `enum(c_int)` in key order. `Row` is appended
+// (oracle 3a2e28329) — the union already reserves `[2]u64` so this is ABI stable.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScrollViewportTag {
     Top = 0,
     Bottom = 1,
     Delta = 2,
+    Row = 3,
 }
 
 /// The C ABI compatible union value for `ScrollViewport`.
@@ -1305,6 +1401,8 @@ pub enum ScrollViewportTag {
 #[derive(Clone, Copy)]
 pub union ScrollViewportCValue {
     pub delta: isize,
+    /// Absolute row offset for the `Row` tag (oracle 3a2e28329).
+    pub row: usize,
     /// Padding to the PINNED ABI size. `[2]u64` (16 bytes) per the reference.
     pub _padding: [u64; 2],
 }
@@ -1329,6 +1427,7 @@ const _: () = assert!(size_of::<ScrollViewportTag>() == size_of::<c_int>());
 //         .top => .top,
 //         .bottom => .bottom,
 //         .delta => .{ .delta = behavior.value.delta },
+//         .row => .{ .row = behavior.value.row },
 //     });
 // }
 /// # Safety
@@ -1346,6 +1445,8 @@ pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
         // SAFETY: the `delta` tag selects the `delta` union member (C ABI
         // contract mirrored from the reference `behavior.value.delta`).
         ScrollViewportTag::Delta => ZigScrollViewport::Delta(unsafe { behavior.value.delta }),
+        // SAFETY: the `row` tag selects the `row` union member.
+        ScrollViewportTag::Row => ZigScrollViewport::Row(unsafe { behavior.value.row }),
     };
     unsafe { (*t).scroll_viewport(zig_behavior) };
 }
@@ -2387,6 +2488,117 @@ mod tests {
                 },
             )
         };
+    }
+
+    // test "scroll_viewport row" (oracle 3a2e28329)
+    #[test]
+    fn scroll_viewport_row_test() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 5, 2, 10_000);
+            assert_eq!(Result::Success, new_result);
+
+            // Write 4 rows so rows "1" and "2" are pushed into scrollback:
+            // total rows is 4, viewport length is 2.
+            unsafe { vt_write(t, b"1\r\n2\r\n3\r\n4".as_ptr(), 10) };
+
+            let mut viewport_active: bool = false;
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(viewport_active);
+
+            // Row 0 is the top of the scrollback.
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 0 } },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(!viewport_active);
+            assert_eq!(b"1\n2", plain_string(t).as_slice());
+
+            // An absolute row within the scrollback becomes the first visible
+            // row and round-trips through the scrollbar offset.
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 1 } },
+                )
+            };
+            assert_eq!(b"2\n3", plain_string(t).as_slice());
+
+            let mut scrollbar_data: TerminalScrollbar = TerminalScrollbar { total: 0, offset: 0, len: 0 };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Scrollbar, &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void)
+            });
+            assert_eq!(4, scrollbar_data.total);
+            assert_eq!(1, scrollbar_data.offset);
+            assert_eq!(2, scrollbar_data.len);
+
+            // A row past the end clamps to the active area.
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 9999 } },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(viewport_active);
+            assert_eq!(b"3\n4", plain_string(t).as_slice());
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Scrollbar, &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void)
+            });
+            assert_eq!(2, scrollbar_data.offset);
+
+            unsafe { free(t) };
+        });
+    }
+
+    // test "scroll_viewport row alt screen" (oracle 3a2e28329)
+    #[test]
+    fn scroll_viewport_row_alt_screen_test() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 5, 2, 10_000);
+            assert_eq!(Result::Success, new_result);
+
+            // Enter the alternate screen, which has no scrollback.
+            unsafe { vt_write(t, b"\x1b[?1049h".as_ptr(), 8) };
+            let mut screen: TerminalScreen = TerminalScreen::Primary;
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ActiveScreen, &mut screen as *mut TerminalScreen as *mut c_void)
+            });
+            assert_eq!(TerminalScreen::Alternate, screen);
+
+            // Scrolling to any row keeps the viewport on the active area.
+            let mut viewport_active: bool = false;
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 0 } },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(viewport_active);
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 9999 } },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+            });
+            assert!(viewport_active);
+
+            unsafe { free(t) };
+        });
     }
 
     // test "reset"
@@ -3770,6 +3982,46 @@ mod tests {
         });
     }
 
+    // test "write_pty receives OSC color query response" (oracle 14c829883)
+    #[test]
+    fn write_pty_receives_osc_color_query_response() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe {
+                LAST_DATA = Some(data);
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                LAST_DATA = None;
+            }
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            let set_fg = b"\x1B]10;rgb:01/02/03\x1B\\";
+            vtw(t, set_fg);
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_none());
+
+            let query_fg = b"\x1B]10;?\x1B\\";
+            vtw(t, query_fg);
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1B]10;rgb:0101/0202/0303\x1B\\".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+
+            unsafe { free(t) };
+        });
+    }
+
     // test "set write_pty without callback ignores queries"
     #[test]
     fn set_write_pty_without_callback_ignores_queries() {
@@ -4115,6 +4367,147 @@ mod tests {
                 (*zig_terminal(t)).get_pwd().unwrap()
             });
             unsafe { free(t) };
+        });
+    }
+
+    // test "set clipboard_write callback" (oracle 634ef7198)
+    #[test]
+    fn set_clipboard_write_callback() {
+        static mut COUNT: usize = 0;
+        static mut LAST_TERMINAL: Terminal = std::ptr::null_mut();
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        static mut LAST_SIZE: usize = 0;
+        static mut LAST_LOCATION: clipboard::Location = clipboard::Location::Standard;
+        static mut LAST_CONTENTS_NULL: bool = false;
+        static mut LAST_CONTENTS_LEN: usize = 0;
+        static mut LAST_MIMES: Vec<Vec<u8>> = Vec::new();
+        static mut LAST_DATA: Vec<Vec<u8>> = Vec::new();
+        static mut NEXT_RESULT: clipboard::WriteResult = clipboard::WriteResult::Success;
+
+        extern "C" fn clipboard_write(
+            terminal_: Terminal,
+            ud: *mut c_void,
+            request: *const ClipboardWrite,
+        ) -> clipboard::WriteResult {
+            unsafe {
+                COUNT += 1;
+                LAST_TERMINAL = terminal_;
+                LAST_USERDATA = ud;
+                LAST_SIZE = (*request).size;
+                LAST_LOCATION = (*request).location;
+                LAST_CONTENTS_NULL = (*request).contents.is_null();
+                LAST_CONTENTS_LEN = (*request).contents_len;
+                let mut mimes: Vec<Vec<u8>> = Vec::new();
+                let mut data: Vec<Vec<u8>> = Vec::new();
+                if !(*request).contents.is_null() {
+                    let contents =
+                        std::slice::from_raw_parts((*request).contents, (*request).contents_len);
+                    for c in contents {
+                        mimes.push(std::slice::from_raw_parts(c.mime.ptr, c.mime.len).to_vec());
+                        data.push(std::slice::from_raw_parts(c.data.ptr, c.data.len).to_vec());
+                    }
+                }
+                LAST_MIMES = mimes;
+                LAST_DATA = data;
+                NEXT_RESULT
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                COUNT = 0;
+                LAST_TERMINAL = std::ptr::null_mut();
+                LAST_USERDATA = std::ptr::null_mut();
+                NEXT_RESULT = clipboard::WriteResult::Denied;
+            }
+
+            let mut sentinel: u8 = 88;
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Userdata, &mut sentinel as *mut u8 as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
+            });
+
+            // Split OSC 52 write whose decoded payload contains an embedded NUL.
+            vtw(t, b"\x1B]52;c;aGVs");
+            vtw(t, b"bG8Ad29ybGQ=\x1B\\");
+            assert_eq!(1, unsafe { COUNT });
+            assert_eq!(t, unsafe { LAST_TERMINAL });
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe { LAST_USERDATA });
+            assert_eq!(std::mem::size_of::<ClipboardWrite>(), unsafe { LAST_SIZE });
+            assert_eq!(clipboard::Location::Standard, unsafe { LAST_LOCATION });
+            assert!(!unsafe { LAST_CONTENTS_NULL });
+            assert_eq!(1, unsafe { LAST_CONTENTS_LEN });
+            assert_eq!(b"text/plain".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_MIMES))[0].as_slice() });
+            assert_eq!(b"hello\x00world".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice() });
+
+            // OSC 52 destinations are normalized rather than exposed as wire bytes.
+            for (selector, expected) in [
+                (b's', clipboard::Location::Selection),
+                (b'p', clipboard::Location::Primary),
+                (b'q', clipboard::Location::Standard),
+            ] {
+                let seq = [
+                    0x1B, b']', b'5', b'2', b';', selector, b';', b'e', b'A', b'=', b'=', 0x1B, b'\\',
+                ];
+                vtw(t, &seq);
+                assert_eq!(expected, unsafe { LAST_LOCATION });
+            }
+            assert_eq!(4, unsafe { COUNT });
+
+            // An empty content list is a clear and retains a null descriptor pointer.
+            vtw(t, b"\x1B]52;s;\x1B\\");
+            assert_eq!(5, unsafe { COUNT });
+            assert_eq!(clipboard::Location::Selection, unsafe { LAST_LOCATION });
+            assert!(unsafe { LAST_CONTENTS_NULL });
+            assert_eq!(0, unsafe { LAST_CONTENTS_LEN });
+
+            // Read requests and malformed base64 must never reach the callback.
+            vtw(t, b"\x1B]52;c;?\x1B\\");
+            vtw(t, b"\x1B]52;c;%%%\x1B\\");
+            assert_eq!(5, unsafe { COUNT });
+
+            // iTerm2 Copy reaches the same normalized callback.
+            vtw(t, b"\x1B]1337;Copy=:aVRlcm0=\x1B\\");
+            assert_eq!(6, unsafe { COUNT });
+            assert_eq!(clipboard::Location::Standard, unsafe { LAST_LOCATION });
+            assert_eq!(b"text/plain".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_MIMES))[0].as_slice() });
+            assert_eq!(b"iTerm".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice() });
+
+            // Every representation is converted, and callback results propagate
+            // through the C trampoline for protocols that can acknowledge writes.
+            // (Direct invoke of the installed trampoline, mirroring the oracle.)
+            let internal_contents = [
+                clipboard::Content { mime: b"text/plain", data: b"plain" },
+                clipboard::Content { mime: b"application/octet-stream", data: b"a\x00b" },
+                clipboard::Content { mime: b"text/html", data: b"<b>plain</b>" },
+                clipboard::Content { mime: b"text/rtf", data: b"{\\rtf1 plain}" },
+                clipboard::Content { mime: b"image/png", data: b"\x89PNG" },
+            ];
+            unsafe { NEXT_RESULT = clipboard::WriteResult::Busy };
+            let write_result = Effects::clipboard_write_trampoline(
+                unsafe { &mut (*t).stream.handler },
+                clipboard::Write {
+                    location: clipboard::Location::Primary,
+                    contents: &internal_contents,
+                },
+            );
+            assert_eq!(clipboard::WriteResult::Busy, write_result);
+            assert_eq!(7, unsafe { COUNT });
+            assert_eq!(5, unsafe { LAST_CONTENTS_LEN });
+            assert_eq!(b"application/octet-stream".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_MIMES))[1].as_slice() });
+            assert_eq!(b"a\x00b".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_DATA))[1].as_slice() });
+            assert_eq!(b"image/png".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_MIMES))[4].as_slice() });
+            assert_eq!(b"\x89PNG".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_DATA))[4].as_slice() });
+
+            unsafe {
+                LAST_MIMES = Vec::new();
+                LAST_DATA = Vec::new();
+                free(t);
+            }
         });
     }
 
