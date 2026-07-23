@@ -3947,7 +3947,14 @@ impl Surface {
         // behind a glib feature this build does not enable, so the group is built
         // and connected via the libgobject-2.0 C symbols directly (see the FFI
         // block by `g_signal_group_set_target`).
-        let group = if let Some(group) = imp.vadj_signal_group.borrow().clone() {
+        // Bind the current group out of the RefCell in its OWN statement first:
+        // a `borrow()` temporary in an `if let` scrutinee lives for the whole
+        // `if/else` (temporary lifetime extension), so borrowing inline would
+        // still be alive when the `else` branch calls `replace()` below — a
+        // guaranteed "RefCell already borrowed" abort. The `let` drops the `Ref`
+        // at the semicolon.
+        let existing = imp.vadj_signal_group.borrow().clone();
+        let group = if let Some(group) = existing {
             group
         } else {
             // `gobject.SignalGroup.new(gtk.Adjustment.getGObjectType())` (`:2452`).
