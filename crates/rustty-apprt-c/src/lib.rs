@@ -347,7 +347,11 @@ pub unsafe extern "C" fn rustty_cli_try_action() {
     };
 
     // std.log.info("executing CLI action={}", .{action});
-    log(Level::Info, "default", &format!("executing CLI action={action:?}"));
+    log(
+        Level::Info,
+        "default",
+        &format!("executing CLI action={action:?}"),
+    );
 
     // posix.exit(action.run(state.alloc) catch |err| {
     //     std.log.err("CLI action failed error={}", .{err});
@@ -360,7 +364,11 @@ pub unsafe extern "C" fn rustty_cli_try_action() {
     std::process::exit(match action.run() {
         Ok(code) => i32::from(code),
         Err(err) => {
-            log(Level::Err, "default", &format!("CLI action failed error={err:?}"));
+            log(
+                Level::Err,
+                "default",
+                &format!("CLI action failed error={err:?}"),
+            );
             std::process::exit(1);
         }
     });
@@ -2763,11 +2771,9 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     // `content_scale.y` f32; the quotient widens to the `CGFloat` (f64) argument.
     // SAFETY: `matrix` is a null `*const CGAffineTransform`; `attributes` is None.
     let copy: CFRetained<CTFont> = unsafe {
-        (*face).font.copy_with_attributes(
-            (size / content_scale.y) as f64,
-            core::ptr::null(),
-            None,
-        )
+        (*face)
+            .font
+            .copy_with_attributes((size / content_scale.y) as f64, core::ptr::null(), None)
     };
 
     // return copy;
@@ -2807,8 +2813,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
 ) -> bool {
     // const surface = &ptr.core_surface;
     // SAFETY: `ptr` validity is the caller's contract.
-    let core_surface: *mut CoreSurface =
-        unsafe { core::ptr::addr_of_mut!((*ptr).core_surface) };
+    let core_surface: *mut CoreSurface = unsafe { core::ptr::addr_of_mut!((*ptr).core_surface) };
 
     // surface.renderer_state.mutex.lock();
     // defer surface.renderer_state.mutex.unlock();
@@ -2833,9 +2838,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     // `bool`-returning export; rustty's `get_cursor_pos` is infallible (returns
     // `Ok(self.cursor_pos)`), so the `Err` arm is effectively dead — mapped to the
     // faithful degrade (`unlock` + `return false`: no cursor → no quicklook word).
-    let pos = match unsafe {
-        <Surface as rustty_apprt_api::Surface>::get_cursor_pos(&*ptr)
-    } {
+    let pos = match unsafe { <Surface as rustty_apprt_api::Surface>::get_cursor_pos(&*ptr) } {
         Ok(v) => v,
         Err(_) => {
             unsafe { (*mutex).unlock() };
@@ -2847,8 +2850,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     //
     // PORT NOTE: `posToViewport` takes `f64`; apprt `CursorPos` carries `f32`, so the
     // fields widen at the call (the reference's implicit float coercion).
-    let pt_viewport =
-        unsafe { (*core_surface).posToViewport(f64::from(pos.x), f64::from(pos.y)) };
+    let pt_viewport = unsafe { (*core_surface).posToViewport(f64::from(pos.x), f64::from(pos.y)) };
 
     //     const pin = screen.pages.pin(.{
     //         .viewport = .{
@@ -2863,12 +2865,14 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     // PORT NOTE: `pages.pin` takes a read-only `&self`; the `orelse` block's
     // `if (comptime std.debug.runtime_safety) unreachable` is an invariant assert —
     // it aborts in debug (`cfg!(debug_assertions)`), and release returns `false`.
-    let pin = match unsafe { (*screen).pages.pin(rustty_vt::point::Point::Viewport(
-        rustty_vt::point::Coordinate {
-            x: pt_viewport.x,
-            y: pt_viewport.y,
-        },
-    )) } {
+    let pin = match unsafe {
+        (*screen).pages.pin(rustty_vt::point::Point::Viewport(
+            rustty_vt::point::Coordinate {
+                x: pt_viewport.x,
+                y: pt_viewport.y,
+            },
+        ))
+    } {
         Some(p) => p,
         None => {
             if cfg!(debug_assertions) {
@@ -3140,8 +3144,7 @@ mod quicklook_word_tests {
                 rows: 5,
                 max_scrollback: 0,
                 kitty_image_storage_limit: 0,
-                kitty_image_loading_limits:
-                    rustty_vt::kitty::graphics_image::Limits::DIRECT,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
         )
         .unwrap();
@@ -3153,7 +3156,10 @@ mod quicklook_word_tests {
         let pt = Point::Viewport(Coordinate { x: 7, y: 0 });
 
         // screen.pages.pin(...) orelse return false;
-        let pin = s.pages.pin(pt).expect("viewport point must resolve to a pin");
+        let pin = s
+            .pages
+            .pin(pt)
+            .expect("viewport point must resolve to a pin");
 
         // screen.selectWord(pin, config.selection_word_chars) orelse return false;
         let sel = s
@@ -3189,14 +3195,16 @@ mod quicklook_word_tests {
                 rows: 5,
                 max_scrollback: 0,
                 kitty_image_storage_limit: 0,
-                kitty_image_loading_limits:
-                    rustty_vt::kitty::graphics_image::Limits::DIRECT,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
         )
         .unwrap();
 
         let pt = Point::Viewport(Coordinate { x: 3, y: 0 });
-        let pin = s.pages.pin(pt).expect("viewport point must resolve to a pin");
+        let pin = s
+            .pages
+            .pin(pt)
+            .expect("viewport point must resolve to a pin");
         assert!(s.select_word(pin, &WORD_BOUNDARY).is_none());
 
         s.deinit();
@@ -3231,7 +3239,8 @@ mod quicklook_font_tests {
 
         // Mirror the export's tail exactly: resize via copyWithAttributes → +1.
         // SAFETY: `matrix` null; `attributes` None.
-        let copy: CFRetained<CTFont> = unsafe { base.copy_with_attributes(13.0, core::ptr::null(), None) };
+        let copy: CFRetained<CTFont> =
+            unsafe { base.copy_with_attributes(13.0, core::ptr::null(), None) };
 
         // Hold an EXTRA retain so the object survives the "host" release and we
         // can observe the count afterward (this `keeper` is NOT part of the
@@ -3299,8 +3308,7 @@ mod tests {
 
     #[test]
     fn detect_from_argv_multiple() {
-        let argv: Vec<Vec<u8>> =
-            vec![b"rustty".to_vec(), b"+version".to_vec(), b"+help".to_vec()];
+        let argv: Vec<Vec<u8>> = vec![b"rustty".to_vec(), b"+version".to_vec(), b"+help".to_vec()];
         assert_eq!(
             crate::detect_from_argv(&argv),
             Err(rustty_cli::action::DetectError::MultipleActions),
@@ -3313,10 +3321,7 @@ mod tests {
     fn rustty_init_invalid_action_returns_1() {
         let argv0 = std::ffi::CString::new("rustty").unwrap();
         let arg1 = std::ffi::CString::new("+bogus").unwrap();
-        let mut argv = [
-            argv0.as_ptr() as *mut c_char,
-            arg1.as_ptr() as *mut c_char,
-        ];
+        let mut argv = [argv0.as_ptr() as *mut c_char, arg1.as_ptr() as *mut c_char];
         // SAFETY: argv points at 2 valid NUL-terminated strings.
         let rc = unsafe { crate::rustty_init(2, argv.as_mut_ptr()) };
         assert_eq!(rc, 1);
@@ -3334,10 +3339,7 @@ mod tests {
             // Child: exactly what the Swift host does (main.swift:8,31).
             let argv0 = std::ffi::CString::new("rustty").unwrap();
             let arg1 = std::ffi::CString::new("+version").unwrap();
-            let mut argv = [
-                argv0.as_ptr() as *mut c_char,
-                arg1.as_ptr() as *mut c_char,
-            ];
+            let mut argv = [argv0.as_ptr() as *mut c_char, arg1.as_ptr() as *mut c_char];
             // SAFETY: argv points at 2 valid NUL-terminated strings.
             let rc = unsafe { crate::rustty_init(2, argv.as_mut_ptr()) };
             assert_eq!(rc, 0, "rustty_init with +version must succeed");
@@ -3347,7 +3349,11 @@ mod tests {
         }
         let exe = std::env::current_exe().expect("current_exe");
         let out = std::process::Command::new(exe)
-            .args(["--exact", "tests::cli_try_action_version_runs_and_exits", "--nocapture"])
+            .args([
+                "--exact",
+                "tests::cli_try_action_version_runs_and_exits",
+                "--nocapture",
+            ])
             .env(MARKER, "1")
             .output()
             .expect("spawn child test process");

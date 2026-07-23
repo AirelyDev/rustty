@@ -69,8 +69,8 @@ pub fn log_with(level: Level, scope: &str, message: &str, logging: &Logging) {
         };
         // Initialize a logger. This is slow to do on every operation
         // but we shouldn't be logging too much.
-        let subsystem = std::ffi::CString::new(rustty_identity::BUNDLE_ID)
-            .expect("bundle id is NUL-free");
+        let subsystem =
+            std::ffi::CString::new(rustty_identity::BUNDLE_ID).expect("bundle id is NUL-free");
         let category = std::ffi::CString::new(scope).unwrap_or_default();
         let logger = Log::create(&subsystem, &category);
         logger.log(mac_level, &format!("{prefix}{message}"));
@@ -121,7 +121,10 @@ mod tests {
     fn log_with_gates_on_stderr_flag() {
         // Both sinks off: must be a silent no-op (no panic, no output side
         // effects we can observe — this pins the flag gating compiles + runs).
-        let off = Logging { stderr: false, macos: false };
+        let off = Logging {
+            stderr: false,
+            macos: false,
+        };
         log_with(Level::Info, "default", "suppressed", &off);
         log_with(Level::Err, "test_scope", "suppressed", &off);
     }

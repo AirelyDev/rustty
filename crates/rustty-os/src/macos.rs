@@ -272,8 +272,7 @@ mod oslog {
         //   reference cannot produce one from its format machinery either).
         pub fn log(&self, typ: LogType, message: &str) {
             let Ok(cmsg) = CString::new(message.as_bytes()) else {
-                let cleaned: Vec<u8> =
-                    message.bytes().take_while(|&b| b != 0).collect();
+                let cleaned: Vec<u8> = message.bytes().take_while(|&b| b != 0).collect();
                 let cmsg = CString::new(cleaned).expect("NUL-free by construction");
                 // SAFETY: live handle + valid C string.
                 unsafe { rustty_os_log_with_type(self.0, typ as u8, cmsg.as_ptr()) };

@@ -423,14 +423,20 @@ mod rlimit_tests {
     fn restore_round_trips_nofile() {
         // Read the current limit, then restore() it — the call must succeed and
         // leave the limit unchanged (a self-inverse KAT that needs no privilege).
-        let mut cur = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let mut cur = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
         let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut cur) };
         assert_eq!(rc, 0);
 
         let limits = ResourceLimits::init(Some(cur));
         limits.restore();
 
-        let mut after = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let mut after = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
         let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut after) };
         assert_eq!(rc, 0);
         assert_eq!(after.rlim_cur, cur.rlim_cur);

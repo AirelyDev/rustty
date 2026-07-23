@@ -53,14 +53,8 @@ use rustty_core::Logging;
 /// `Logging` is a foreign type to rustty-args' `PackedStruct` trait (orphan
 /// rule), so the packed-field contract is threaded through this local newtype.
 /// Field order/names mirror the reference packed struct: `stderr`, `macos`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct LoggingParse(Logging);
-
-impl Default for LoggingParse {
-    fn default() -> Self {
-        Self(Logging::default())
-    }
-}
 
 impl rustty_args::args::PackedStruct for LoggingParse {
     // inline for (info.fields) |field| @field(result, field.name) = b;
@@ -182,8 +176,8 @@ static INIT_DONE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 ///     into `STATE.action`. The concrete `cli::rustty::Action` value is held
 ///     by the detecting tier (the bin's own state / rustty-apprt-c's stash).
 pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, InitError> {
-    use rustty_core::logging::{log_with, Level};
     use rustty_build_config as build_config;
+    use rustty_core::logging::{log_with, Level};
 
     let mut done = INIT_DONE.lock().expect("init guard");
     if *done {
@@ -215,30 +209,74 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     //   comptime-elides, exactly like the reference on a static backend.
 
     // Output some debug information right away
-    log_with(Level::Info, "default", &format!("rustty version={}", build_config::VERSION_STRING), &logging);
-    log_with(Level::Info, "default", &format!("rustty build optimize={}", build_config::mode_string()), &logging);
-    log_with(Level::Info, "default", &format!("runtime={:?}", build_config::app_runtime()), &logging);
-    log_with(Level::Info, "default", &format!("font_backend={:?}", build_config::font_backend()), &logging);
+    log_with(
+        Level::Info,
+        "default",
+        &format!("rustty version={}", build_config::VERSION_STRING),
+        &logging,
+    );
+    log_with(
+        Level::Info,
+        "default",
+        &format!("rustty build optimize={}", build_config::mode_string()),
+        &logging,
+    );
+    log_with(
+        Level::Info,
+        "default",
+        &format!("runtime={:?}", build_config::app_runtime()),
+        &logging,
+    );
+    log_with(
+        Level::Info,
+        "default",
+        &format!("font_backend={:?}", build_config::font_backend()),
+        &logging,
+    );
     // if (comptime build_config.font_backend.hasHarfbuzz())
     //     std.log.info("dependency harfbuzz={s}", .{harfbuzz.versionString()});
     if build_config::font_backend().has_harfbuzz() {
         let (mut major, mut minor, mut micro) = (0u32, 0u32, 0u32);
         // SAFETY: hb_version writes three u32 out-params (vendored harfbuzz).
         unsafe { harfbuzz_sys::hb_version(&mut major, &mut minor, &mut micro) };
-        log_with(Level::Info, "default", &format!("dependency harfbuzz={major}.{minor}.{micro}"), &logging);
+        log_with(
+            Level::Info,
+            "default",
+            &format!("dependency harfbuzz={major}.{minor}.{micro}"),
+            &logging,
+        );
     }
     // if (comptime build_config.font_backend.hasFontconfig())
     //     std.log.info("dependency fontconfig={d}", .{fontconfig.version()});
     if build_config::font_backend().has_fontconfig() {
         // SAFETY: FcGetVersion takes no args, reads a compile-time constant.
         let v = unsafe { fontconfig_sys::FcGetVersion() };
-        log_with(Level::Info, "default", &format!("dependency fontconfig={v}"), &logging);
+        log_with(
+            Level::Info,
+            "default",
+            &format!("dependency fontconfig={v}"),
+            &logging,
+        );
     }
-    log_with(Level::Info, "default", &format!("renderer={:?}", build_config::renderer()), &logging);
+    log_with(
+        Level::Info,
+        "default",
+        &format!("renderer={:?}", build_config::renderer()),
+        &logging,
+    );
     // std.log.info("libxev default backend={t}", ...) — static per target (see
     // the xev PORT NOTE above).
-    let xev_backend = if cfg!(target_os = "macos") { "kqueue" } else { "io_uring" };
-    log_with(Level::Info, "default", &format!("libxev default backend={xev_backend}"), &logging);
+    let xev_backend = if cfg!(target_os = "macos") {
+        "kqueue"
+    } else {
+        "io_uring"
+    };
+    log_with(
+        Level::Info,
+        "default",
+        &format!("libxev default backend={xev_backend}"),
+        &logging,
+    );
 
     // As early as possible, initialize our resource limits.
     // self.rlimits = .init();
@@ -366,9 +404,7 @@ mod bootstrap_tests {
     fn init_signals_ignores_sigpipe() {
         init_signals();
         let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
-        let rc = unsafe {
-            libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut current)
-        };
+        let rc = unsafe { libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut current) };
         assert_eq!(rc, 0);
         assert_eq!(current.sa_sigaction, libc::SIG_IGN);
     }
