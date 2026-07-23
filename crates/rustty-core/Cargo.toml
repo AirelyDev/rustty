@@ -22,7 +22,10 @@ workspace = true
 # binary tier) turns the feature on. Per-crate `cargo test -p rustty-vt` still
 # runs the default feature set (the 3 gated string_map tests stay
 # feature-gated, faithful to the Zig `SkipZigTest` arms).
-rustty-vt = { workspace = true, features = ["oniguruma"] }
+#
+# `wuffs` = the sys.zig decodePngWuffs default for the app tier (SharedDeps
+# `.ghostty` terminalOptions analog; the standalone rustty-vt-c stays `.lib`/None).
+rustty-vt = { workspace = true, features = ["oniguruma", "wuffs"] }
 rustty-config = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-font = { workspace = true }

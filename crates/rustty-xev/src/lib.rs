@@ -72,6 +72,17 @@ use rustty_global::xev as _DeferredXevBackend;
 mod backend;
 pub use backend::Backend;
 
+/// The backend in use (the reference `xev.backend` read).
+///
+/// PORT NOTE: on macOS the crate surface IS the static kqueue `Api()`
+/// (XEV_BLUEPRINT §0 — `Backend::candidates()` is the single-element
+/// `&[kqueue]`, comptime-eliding the Dynamic layer), and libxev's `Xev(be, T)`
+/// declares `pub const backend = be;` — so this is the comptime `.kqueue`.
+#[cfg(target_os = "macos")]
+pub fn backend() -> Backend {
+    Backend::Kqueue
+}
+
 // XEV_BLUEPRINT §1 Linux port: the io_uring/epoll/Dynamic backends (backend.zig's
 // `.linux => &.{ .io_uring, .epoll }` candidates, wired above in `backend.rs`).
 // LT1 landed these as empty stubs; LT3–LT7 filled each in place, and LT8 wires the
@@ -581,5 +592,29 @@ mod deferred_backend_seam {
                 "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod backend_accessor_tests {
+    /// WS3-B: `xev.backend` — macOS is the flat static kqueue Api
+    /// (`pub const backend = be;` in libxev main.zig's Xev(be, T)), so the
+    /// accessor is the comptime `.kqueue`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn backend_is_kqueue_on_macos() {
+        assert_eq!(crate::Backend::Kqueue, crate::backend());
+    }
+
+    /// WS3-B: on Linux the accessor is the Dynamic layer's runtime global
+    /// (dynamic.zig:91) — always one of the Linux candidates.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn backend_is_a_linux_candidate() {
+        let be = crate::backend();
+        assert!(matches!(
+            be,
+            crate::Backend::IoUring | crate::Backend::Epoll
+        ));
     }
 }

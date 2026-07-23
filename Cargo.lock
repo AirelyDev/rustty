@@ -1304,6 +1304,7 @@ dependencies = [
  "rustty-terminfo",
  "rustty-vaxis",
  "rustty-vt",
+ "rustty-xev",
  "rustty-zf",
  "zlib-sys",
 ]
@@ -1618,6 +1619,7 @@ dependencies = [
  "rustty-simd",
  "rustty-unicode",
  "rustty-util",
+ "rustty-wuffs",
  "rustty-zigstd",
  "zlib-sys",
 ]
