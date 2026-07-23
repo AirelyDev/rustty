@@ -223,41 +223,76 @@ fn detect_from_argv(
 /// }
 /// ```
 /// The reference `assert(builtin.link_libc)` is a no-op here (Rust's `std`
-/// always links libc). The `std.os.argv = argv[0..argc]` store is consumed only
-/// by the deferred CLI-action detection inside the full `state.init()` (the
-/// BREAK #1 global-state seam, not yet ported — see `rustty_apprt::init`); until
-/// that lands, `argv` is accepted but not stored. `state.init()` maps to the
-/// `rustty_apprt::init()` bootstrap, which sets `rustty_core::STATE` (the
-/// `global.zig` `state` analogue) so the CAPI's `global.alloc`-reading paths
-/// (`ghostty_surface_free_text`/`_tty_name`/`Text.deinit`) have a live state.
-/// EMBEDDED_BLUEPRINT §3 "Global-state precursor" + risk 4: the smoke KAT (E11)
-/// MUST call this before `ghostty_app_new`.
+/// always links libc). The `std.os.argv = argv[0..argc]` store feeds the
+/// CLI-action detection inside the full `state.init()` (WS4, wired below);
+/// `state.init()` maps to the `rustty_apprt::init_with_action()` bootstrap,
+/// which sets `rustty_core::STATE` (the `global.zig` `state` analogue) so the
+/// CAPI's `global.alloc`-reading paths (`ghostty_surface_free_text`/
+/// `_tty_name`/`Text.deinit`) have a live state. EMBEDDED_BLUEPRINT §3
+/// "Global-state precursor" + risk 4: the smoke KAT (E11) MUST call this
+/// before `ghostty_app_new`.
 ///
 /// # Safety
 /// `argv` must point to `argc` valid, NUL-terminated C strings (the process
-/// argv), as the reference `ghostty_init` requires. This scaffold body does not
-/// dereference `argv`, but the contract is fixed now for the deferred
-/// argv-storage port.
+/// argv), as the reference `ghostty_init` requires.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_int {
-    // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
-    // reference: std.os.argv = argv[0..argc];
-    //   Stored for the deferred CLI-action detection in the full state.init()
-    //   (BREAK #1 seam); not yet ported, so accepted-but-unused for now.
-    let _ = (argc, argv);
+    use rustty_core::logging::{log, Level};
 
-    // reference:
-    //   state.init() catch |err| {
-    //       std.log.err("failed to initialize ghostty error={}", .{err});
-    //       return 1;
-    //   };
-    //   return 0;
-    match rustty_apprt::init() {
-        Ok(()) => 0,
+    // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
+
+    // reference: std.os.argv = argv[0..argc];
+    let stored: Vec<Vec<u8>> = if argv.is_null() {
+        Vec::new()
+    } else {
+        (0..argc)
+            .map(|i| {
+                // SAFETY: caller contract — argv points to argc valid
+                // NUL-terminated C strings (the process argv).
+                let p = unsafe { *argv.add(i) };
+                if p.is_null() {
+                    Vec::new()
+                } else {
+                    unsafe { std::ffi::CStr::from_ptr(p) }.to_bytes().to_vec()
+                }
+            })
+            .collect()
+    };
+    // Once-only like the reference `ghostty_init`; a repeat call keeps the
+    // first argv (ignore the Err). Detection below uses the LOCAL copy so a
+    // (contract-violating) second call cannot observe torn state.
+    let _ = ARGV.set(stored.clone());
+
+    // state.init():
+    //   self.action = try cli.action.detectArgs(cli.ghostty.Action, self.alloc);
+    //   (the try: a DetectError fails state.init() → main_c logs + returns 1.)
+    let action = match detect_from_argv(&stored) {
+        Ok(action) => action,
         Err(err) => {
-            // std.log.err(...) — no scoped-log sink in this leaf (vt-c
-            // `rustty_build_info` precedent): emit to stderr.
-            eprintln!("failed to initialize rustty error={err:?}");
+            // std.log.err("failed to initialize ghostty error={}", .{err});
+            log(
+                Level::Err,
+                "default",
+                &format!("failed to initialize rustty error={err:?}"),
+            );
+            return 1;
+        }
+    };
+    let _ = CLI_ACTION.set(action);
+
+    //   ... the remainder of state.init() (logging config with the
+    //   action-implies-no-stderr rule, signals, log lines, rlimits, crash,
+    //   locale, glslang, oniguruma, resourcesDir, i18n) — the wired BREAK #1
+    //   body; `action.is_some()` mirrors presence into STATE.action.
+    match rustty_apprt::init_with_action(action.is_some()) {
+        Ok(_) => 0,
+        Err(err) => {
+            // std.log.err("failed to initialize ghostty error={}", .{err});
+            log(
+                Level::Err,
+                "default",
+                &format!("failed to initialize rustty error={err:?}"),
+            );
             1
         }
     }
@@ -3238,6 +3273,8 @@ mod quicklook_font_tests {
 
 #[cfg(test)]
 mod tests {
+    use libc::c_char;
+
     // The detectArgs slice of the C-path `state.init()`: detection over the
     // argv STORED by `rustty_init` (reference `std.os.argv = argv[0..argc]`
     // then `cli.action.detectArgs` walking std.process.args == std.os.argv).
@@ -3274,5 +3311,20 @@ mod tests {
             crate::detect_from_argv(&argv),
             Err(rustty_cli::action::DetectError::MultipleActions),
         );
+    }
+
+    // reference `ghostty_init`: a detect failure means `state.init()` fails →
+    // log err + return 1 (main_c.zig:105). No global state is stamped.
+    #[test]
+    fn rustty_init_invalid_action_returns_1() {
+        let argv0 = std::ffi::CString::new("rustty").unwrap();
+        let arg1 = std::ffi::CString::new("+bogus").unwrap();
+        let mut argv = [
+            argv0.as_ptr() as *mut c_char,
+            arg1.as_ptr() as *mut c_char,
+        ];
+        // SAFETY: argv points at 2 valid NUL-terminated strings.
+        let rc = unsafe { crate::rustty_init(2, argv.as_mut_ptr()) };
+        assert_eq!(rc, 1);
     }
 }
