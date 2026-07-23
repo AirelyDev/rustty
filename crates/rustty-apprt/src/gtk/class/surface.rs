@@ -857,17 +857,50 @@ mod imp {
     }
 }
 
-// PORTS: `gobject.SignalGroup.setTarget` (`surface.zig:1869`). The `glib`
-// crate's typed `SignalGroup` and its `gobject_ffi::g_signal_group_set_target`
-// binding are both gated behind the `v2_72` glib feature this build does not
-// enable (see the `vadj_signal_group` field note), so `dispose` binds the
-// libgobject-2.0 C symbol directly. It has existed since GLib 2.72; this build
-// links 2.88. `GSignalGroup*` is ABI-compatible with `GObject*`.
+// PORTS: `gobject.SignalGroup.{new,connect,setTarget}` (`surface.zig:2452-2464`,
+// `1869`). The `glib` crate's typed `SignalGroup` and its `gobject_ffi`
+// bindings are all gated behind the `v2_72` glib feature this build does not
+// enable (see the `vadj_signal_group` field note), so `on_notify_vadjustment`
+// (build/connect) and `dispose` (detach) bind the libgobject-2.0 C symbols
+// directly. They have existed since GLib 2.72; this build links 2.88.
+// `GSignalGroup*` is ABI-compatible with `GObject*`.
 extern "C" {
+    fn g_signal_group_new(target_type: glib::ffi::GType) -> *mut glib::gobject_ffi::GObject;
+    fn g_signal_group_connect_closure(
+        self_: *mut glib::gobject_ffi::GObject,
+        detailed_signal: *const std::os::raw::c_char,
+        closure: *mut glib::gobject_ffi::GClosure,
+        after: glib::ffi::gboolean,
+    );
     fn g_signal_group_set_target(
         self_: *mut glib::gobject_ffi::GObject,
         target: *mut glib::gobject_ffi::GObject,
     );
+    fn g_signal_group_block(self_: *mut glib::gobject_ffi::GObject);
+    fn g_signal_group_unblock(self_: *mut glib::gobject_ffi::GObject);
+}
+
+/// RAII guard reproducing the reference's `group.block(); defer group.unblock();`
+/// around `setScrollbar`'s `configure` (`surface.zig:1017-1018`). Holds a strong
+/// ref to the untyped `GSignalGroup` for the guard's life so the unblock always
+/// targets the same live group.
+struct SignalGroupBlock(glib::Object);
+
+impl SignalGroupBlock {
+    fn new(group: glib::Object) -> Self {
+        // SAFETY: `group` is a live `GSignalGroup` (`GSignalGroup*` is
+        // ABI-compatible with `GObject*`); `g_signal_group_block` is always valid.
+        unsafe { g_signal_group_block(group.as_ptr().cast()) };
+        Self(group)
+    }
+}
+
+impl Drop for SignalGroupBlock {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is the same live `GSignalGroup` we blocked in `new`;
+        // block/unblock are refcounted and balanced.
+        unsafe { g_signal_group_unblock(self.0.as_ptr().cast()) };
+    }
 }
 
 /// Removes a glib source id in `dispose`, warning (not panicking) on failure —
@@ -1795,16 +1828,24 @@ impl Surface {
             return;
         }
 
-        // PORT NOTE (deviation, crash-safety): the reference asserts
-        // `priv.vadj_signal_group.?` and blocks it around `configure` to suppress
-        // the `value-changed` feedback loop (`:1009-1023`), relying on the
-        // invariant that a vadjustment implies a wired signal group. In rustty that
-        // invariant is not yet established — `on_notify_vadjustment` (the scroll
-        // `SignalGroup` wiring, L5.2 T15) is still a placeholder, so
-        // `vadj_signal_group` is `None` and there are no connected handlers to
-        // loop. We therefore configure directly; when T15 wires the group it MUST
-        // add the block/unblock here.
-        let _ = &imp.vadj_signal_group;
+        // If we have a vadjustment we MUST have the signal group since it is
+        // setup in the prop handler (`:1009-1011`, `const group =
+        // priv.vadj_signal_group.?`). rustty's `on_notify_vadjustment` builds the
+        // group whenever a vadjustment is set, so it is present here; we tolerate
+        // `None` (configure directly) rather than assert, since there is then no
+        // connected handler to loop.
+        //
+        // During manual scrollbar changes from Ghostty core we don't want to emit
+        // value-changed signals so we block them. This would cause a waste of
+        // resources at best and infinite loops at worst (`:1013-1019`). The
+        // scope-end `SignalGroupBlock` guard is the reference's `defer
+        // group.unblock()`. The typed binding is behind a glib feature this build
+        // does not enable, so block/unblock go through the libgobject-2.0 symbols.
+        let _block_guard = imp
+            .vadj_signal_group
+            .borrow()
+            .clone()
+            .map(SignalGroupBlock::new);
 
         // `vadj.configure(value, 0, upper, 1, page_size, page_size)` (`:1024-1031`).
         vadj.configure(value, 0.0, upper, 1.0, page_size, page_size);
@@ -3846,14 +3887,89 @@ impl Surface {
     fn on_notify_mouse_shape(&self) {
         self.apply_mouse_shape_cursor();
     }
-    /// PORTS: `surface.zig:2540-...` `propVAdjustment`. **Reached during
+    /// PORTS: `surface.zig:2441-2465` `propVAdjustment`. **Reached during
     /// construction** — GtkScrollable's `vadjustment` is a construct property GTK
     /// sets to a default adjustment, firing `notify::vadjustment` — so this must
-    /// not panic. No-op until L5.2 T15 wires the scroll `SignalGroup`.
+    /// not panic. Lazily builds the vadj `SignalGroup`, connects `value-changed`
+    /// to [`vadjValueChanged`](Self::on_notify_vadjustment) (dragging the
+    /// scrollbar performs `.scroll_to_row`), and points the group at the current
+    /// adjustment. Idempotent: the group is built once, then re-targeted.
     #[template_callback(name = "notify_vadjustment")]
     fn on_notify_vadjustment(&self) {
-        // PORT NOTE (placeholder, reachable): installs the vadj `SignalGroup` and
-        // syncs the scrollbar (`surface.zig` `propVAdjustment`); wired in T15.
+        let imp = self.imp();
+
+        // When vadjustment is first set, we setup the signal group lazily. This
+        // makes it so that if we don't use scrollbars, we never pay the memory
+        // cost of this (`:2448-2461`). The typed `gobject.SignalGroup` binding is
+        // behind a glib feature this build does not enable, so the group is built
+        // and connected via the libgobject-2.0 C symbols directly (see the FFI
+        // block by `g_signal_group_set_target`).
+        let group = if let Some(group) = imp.vadj_signal_group.borrow().clone() {
+            group
+        } else {
+            // `gobject.SignalGroup.new(gtk.Adjustment.getGObjectType())` (`:2452`).
+            // `g_signal_group_new` transfers full ownership of the new group.
+            let group: glib::Object = unsafe {
+                glib::translate::from_glib_full(g_signal_group_new(
+                    glib::translate::IntoGlib::into_glib(gtk4::Adjustment::static_type()),
+                ))
+            };
+
+            // `group.connect("value-changed", &vadjValueChanged, self)`
+            // (`:2453-2457`). The reference passes the raw `self` pointer as the
+            // untyped user-data (no ref, sidestepping a cycle); rustty captures a
+            // WEAK backref to the widget in the closure for the same reason — the
+            // group is owned by the widget (`vadj_signal_group`), so a strong
+            // capture would leak.
+            let weak = self.downgrade();
+            let closure = glib::Closure::new_local(move |values| {
+                // PORTS: `vadjValueChanged` (`:2430-2439`). This will trigger for
+                // every single pixel change in the adjustment, but our core
+                // surface handles the noise from this so that identical rows are
+                // cheap. `values[0]` is the emitting `gtk.Adjustment`.
+                let this: Surface = weak.upgrade()?;
+                // `const core_surface = self.core() orelse return` (`:2434`).
+                let core = this.core()?;
+                let adj: gtk4::Adjustment = values.first()?.get().ok()?;
+                // `const row: usize = @intFromFloat(@round(adj.getValue()))`
+                // (`:2435`).
+                let row = adj.value().round() as usize;
+                // `surface.performBindingAction(.{ .scroll_to_row = row })`
+                // (`:2436-2438`).
+                if let Err(err) = unsafe { &mut *core }
+                    .performBindingAction(rustty_input::binding::Action::ScrollToRow(row))
+                {
+                    eprintln!("warn(gtk): error performing scroll_to_row action err={err:?}");
+                }
+                None
+            });
+            // SAFETY: `group` is a live `GSignalGroup`; `closure` is a live
+            // `GClosure`. `g_signal_group_connect_closure` takes its own ref on
+            // the closure, so the local `closure`'s scope-end unref is balanced.
+            unsafe {
+                g_signal_group_connect_closure(
+                    group.as_ptr().cast(),
+                    c"value-changed".as_ptr(),
+                    closure.as_ptr(),
+                    glib::ffi::GFALSE,
+                );
+            }
+
+            imp.vadj_signal_group.replace(Some(group.clone()));
+            group
+        };
+
+        // Setup our signal group target (`:2463-2464`).
+        let target = imp.vadjustment.borrow().clone();
+        // SAFETY: `group` is a live `GSignalGroup`; the target is a live
+        // `gtk.Adjustment` (or null). `GSignalGroup*`/`GtkAdjustment*` are
+        // ABI-compatible with `GObject*`; `set_target` is always valid.
+        unsafe {
+            g_signal_group_set_target(
+                group.as_ptr().cast(),
+                target.map_or(std::ptr::null_mut(), |t| t.as_ptr().cast()),
+            );
+        }
     }
 
     // -- bind-time closures — MUST return safe values (evaluated at init) ---
