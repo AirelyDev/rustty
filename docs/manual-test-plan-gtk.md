@@ -121,7 +121,10 @@ gtk,wayland --test gtk_wayland_winproto -- --ignored` and the `gtk,x11` counterp
       decorations. On GNOME/mutter these are inert by design (mutter lacks the protocols — matches Ghostty).
 - [ ] **W.2:** a backgrounded terminal's bell requests attention (taskbar flash). Works on X11; on
       **Wayland** now via a GSource that pumps the registry queue so the `xdg-activation` token `done`
-      completes (RESOLVED 2026-07-19).
+      completes (RESOLVED 2026-07-19; machine-verified on a live wlroots compositor (headless sway) by the
+      `wayland_set_urgent_dispatches_activation_token` KAT — real token request → `done` → `activate`:
+      `cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_winproto -- --ignored
+      --exact wayland_set_urgent_dispatches_activation_token`).
 - [ ] **[implemented 2026-07-19] wlr layer-shell quick-terminal** (drop-down): bind a key to
       `toggle_quick_terminal` (e.g. `keybind = super+grave_accent=toggle_quick_terminal`), build
       `--features gtk,wayland`, and run on a **wlroots** compositor (sway/Hyprland) or KDE → a

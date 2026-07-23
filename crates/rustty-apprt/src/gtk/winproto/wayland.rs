@@ -30,18 +30,23 @@
 //!   anyway. The per-sync `syncQuickTerminal` (layer/anchor/margin + the KDE slide)
 //!   and `enteredMonitor` sizing (`wayland.zig:310-421`) are the remaining arm; the
 //!   [`Window`] keeps the `slide` field + destroy path for the KDE slide.
-//! * **Post-init async event delivery — CRANKED via a GSource.** The registry
-//!   [`Connection`] gets its own libwayland event queue
-//!   (`Backend::from_foreign_display` calls `wl_display_create_queue`), which GDK's
-//!   main loop does not dispatch. The initial two-phase roundtrip in [`App::init`]
-//!   captures all bind-time state (default decoration mode, blur caps, output
-//!   order); events that arrive LATER (notably an `xdg_activation` token `done`,
-//!   the reply [`Window::set_urgent`] needs to flash the taskbar) are dispatched
-//!   only if the queue is cranked. [`queue_source::WlQueueSource`] integrates the
-//!   connection fd into the GLib main loop as a `GSource` so the queue is cranked
-//!   (`dispatch_pending` on readable) and `set_urgent` completes — the wayland-rs
-//!   analogue of the reference relying on GDK's default-queue dispatch
-//!   (`Globals.zig:82`). Requests we SEND still go out on the shared display fd via
+//! * **Post-init async event delivery — CRANKED via a GSource (RESOLVED
+//!   2026-07-19, runtime-verified).** The registry [`Connection`] gets its own
+//!   libwayland event queue (`Backend::from_foreign_display` calls
+//!   `wl_display_create_queue`), which GDK's main loop does not dispatch. The
+//!   initial two-phase roundtrip in [`App::init`] captures all bind-time state
+//!   (default decoration mode, blur caps, output order); events that arrive LATER
+//!   (notably an `xdg_activation` token `done`, the reply [`Window::set_urgent`]
+//!   needs to flash the taskbar) are dispatched only if the queue is cranked.
+//!   [`queue_source::WlQueueSource`] is a GLib `GSource` whose prepare/check report
+//!   ready exactly when the private queue has pending events (GDK reads the shared
+//!   fd and demarshals onto our queue; we never read the socket) and whose dispatch
+//!   runs `dispatch_pending` — the wayland-rs analogue of the reference relying on
+//!   GDK's default-queue dispatch (`Globals.zig:82`). Verified end-to-end on a live
+//!   wlroots compositor (headless sway; xdg_activation, same protocol mutter
+//!   implements) by the `wayland_set_urgent_dispatches_activation_token` KAT
+//!   (`tests/gtk_wayland_winproto.rs`): set_urgent → real token `done` → `activate`.
+//!   Requests we SEND still go out on the shared display fd via
 //!   [`Connection::flush`]. (A live compositor decoration-mode change would ALSO
 //!   crank now, but [`Window`] still snapshots the decoration mode at init — making
 //!   that read live is a separate, tracked deferral.)
@@ -277,6 +282,18 @@ impl App {
     #[must_use]
     pub fn primary_output_name(&self) -> Option<String> {
         self.pump.borrow().globals.state.primary_output_name.clone()
+    }
+
+    /// OBSERVABILITY (not in the reference): the number of `xdg_activation_token_v1`
+    /// `done` replies the [`queue_source::WlQueueSource`] has dispatched so far. Lets
+    /// the live-session KAT prove the post-init dispatch seam actually cranks — after
+    /// [`Window::set_urgent(true)`](Window::set_urgent) and a few main-loop turns, the
+    /// compositor's token `done` must have run [`globals`]' handler, bumping this. It
+    /// exists ONLY to give that round-trip an assertion point (the reference relies on
+    /// GDK's default-queue dispatch and needs no such proof, `Globals.zig:82`).
+    #[must_use]
+    pub fn activation_done_count(&self) -> u32 {
+        self.pump.borrow().globals.activation_done_count
     }
 
     /// PORTS: `wayland.zig:80-88` `App.initQuickTerminal`. Turn the quick-terminal

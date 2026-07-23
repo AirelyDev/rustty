@@ -22,24 +22,38 @@
 //! dispatch handlers can only be invoked by wayland-rs' own machinery, not
 //! libwayland's C default-dispatch, so rustty must crank its private queue itself.
 //!
-//! # How it cranks the queue
+//! # How it cranks the queue (queue-pending prepare/check, NOT fd revents)
 //!
-//! A `GSource` watches the connection fd for readability. GLib runs a single poll
-//! per main-loop iteration and dispatches EVERY source made ready by it, in
-//! priority order — so on any iteration where the fd is readable, GDK's source
-//! (priority `G_PRIORITY_DEFAULT` + 10) AND this source both dispatch. This source
-//! runs at `G_PRIORITY_DEFAULT_IDLE` (a larger number → lower priority) so GDK's
-//! read has already demarshalled the incoming events onto our queue by the time our
-//! callback runs; the callback then [`EventQueue::dispatch_pending`]s our queue and
-//! [`flush`](EventQueue::flush)es the requests those handlers send. We deliberately
-//! do NOT `read_events` ourselves — a second reader on GDK's `wl_display` would fight
-//! GDK's own prepare/read cycle; letting GDK own the socket read and cranking only
-//! `dispatch_pending` is the safe libwayland multi-queue pattern.
+//! `prepare`/`check` report the source ready iff OUR private queue has pending
+//! events, tested with the libwayland read protocol:
+//! [`EventQueue::prepare_read`] returns `None` exactly when events are already
+//! pending (`wl_display_prepare_read_queue` fails with non-empty queue); when it
+//! returns a guard the queue is empty and dropping the guard cancels the read
+//! intention (`wl_display_cancel_read`) — we NEVER read the socket ourselves,
+//! GDK owns the read (a second reader would fight GDK's own prepare/read cycle).
+//! `dispatch` then runs [`EventQueue::dispatch_pending`] and
+//! [`flush`](EventQueue::flush)es the requests the handlers sent.
+//!
+//! The source needs NO fd watch: events for our queue arrive on the shared
+//! `wl_display` fd that GDK's source already polls, so any such arrival wakes the
+//! main loop, GDK reads + demarshals onto our queue during ITS dispatch, and the
+//! very next loop iteration our `prepare` sees the pending events and dispatches.
+//!
+//! A previous revision of this source instead watched the connection fd
+//! (`g_source_add_unix_fd`) and keyed `check` on `G_IO_IN`. That NEVER fires: GLib
+//! dispatches only the highest-priority READY band per iteration (`gmain.c`
+//! `g_main_context_check` stops collecting once a higher band is ready), and GDK's
+//! source — same fd, higher priority — is ready in exactly the iterations ours
+//! would be, wins the band, and drains the socket; next poll the revents are gone.
+//! The live-session KAT (`gtk_wayland_winproto.rs`,
+//! `wayland_set_urgent_dispatches_activation_token`) caught this: the token `done`
+//! sat demarshalled-but-undispatched on the private queue. Queue-pending readiness
+//! is level-triggered, so being band-skipped one iteration just defers dispatch to
+//! the next one.
 
 use std::cell::RefCell;
 use std::ffi::{c_int, c_uint};
 use std::mem::size_of;
-use std::os::fd::{AsFd, AsRawFd};
 use std::ptr;
 use std::rc::Rc;
 
@@ -62,37 +76,58 @@ pub struct Pump {
     pub globals: Box<Globals>,
 }
 
-/// A `GSource` subclass: `GSource` header followed by the `g_source_add_unix_fd`
-/// tag, so [`check`] can query the fd's readiness. `#[repr(C)]` with `GSource`
-/// first is the standard GLib source-subclassing layout.
+/// A `GSource` subclass: `GSource` header followed by a raw pointer to the shared
+/// [`Pump`], so `prepare`/`check` (which receive only the source pointer, no user
+/// data) can test whether the private queue has pending events. `#[repr(C)]` with
+/// `GSource` first is the standard GLib source-subclassing layout. The pointee is
+/// kept alive by the `Rc` clone stored as the source's callback data (freed by
+/// [`destroy_user_data`] at finalize, after which GLib never calls these funcs).
 #[repr(C)]
 struct WlGSource {
     source: glib::ffi::GSource,
-    /// The tag returned by `g_source_add_unix_fd`, used by [`check`].
-    tag: glib::ffi::gpointer,
+    pump: *const RefCell<Pump>,
 }
 
-/// `GSourceFuncs.prepare`: never ready without a poll — block in poll until the fd
-/// signals (`*timeout = -1`).
+/// Ready iff the private queue has pending events. `prepare_read()` returns `None`
+/// exactly then; a returned guard (empty queue) is dropped immediately, cancelling
+/// the read intention — the socket read stays GDK's alone.
+unsafe fn queue_has_pending(source: *mut glib::ffi::GSource) -> glib::ffi::gboolean {
+    let pump = unsafe { (*source.cast::<WlGSource>()).pump };
+    if pump.is_null() {
+        return glib::ffi::GFALSE;
+    }
+    // Never nested with the trampoline (GLib calls prepare/check/dispatch
+    // sequentially) nor with App's shared borrows (main-thread, non-reentrant);
+    // fail closed (not-ready) if a borrow is somehow live.
+    match unsafe { &*pump }.try_borrow_mut() {
+        Ok(mut p) => match p.event_queue.prepare_read() {
+            None => glib::ffi::GTRUE,
+            Some(guard) => {
+                drop(guard);
+                glib::ffi::GFALSE
+            }
+        },
+        Err(_) => glib::ffi::GFALSE,
+    }
+}
+
+/// `GSourceFuncs.prepare`: ready iff our queue has pending events; otherwise poll
+/// without a timeout on our account (`*timeout = -1`) — GDK's fd source wakes the
+/// loop when wayland data arrives.
 unsafe extern "C" fn prepare(
-    _source: *mut glib::ffi::GSource,
+    source: *mut glib::ffi::GSource,
     timeout: *mut c_int,
 ) -> glib::ffi::gboolean {
     if !timeout.is_null() {
         unsafe { *timeout = -1 };
     }
-    glib::ffi::GFALSE
+    unsafe { queue_has_pending(source) }
 }
 
-/// `GSourceFuncs.check`: ready iff the connection fd is readable.
+/// `GSourceFuncs.check`: same level-triggered test as [`prepare`] (GDK's dispatch
+/// this iteration may have demarshalled new events onto our queue).
 unsafe extern "C" fn check(source: *mut glib::ffi::GSource) -> glib::ffi::gboolean {
-    let wl = source.cast::<WlGSource>();
-    let cond = unsafe { glib::ffi::g_source_query_unix_fd(source, (*wl).tag) };
-    if cond & glib::ffi::G_IO_IN != 0 {
-        glib::ffi::GTRUE
-    } else {
-        glib::ffi::GFALSE
-    }
+    unsafe { queue_has_pending(source) }
 }
 
 /// `GSourceFuncs.dispatch`: invoke the registered callback (the [`trampoline`]).
@@ -122,7 +157,11 @@ static FUNCS: glib::ffi::GSourceFuncs = glib::ffi::GSourceFuncs {
 /// [`Globals`]' token-`done` handler issues). Returns `G_SOURCE_CONTINUE` to keep
 /// the source alive for the app's lifetime.
 unsafe extern "C" fn trampoline(user_data: glib::ffi::gpointer) -> glib::ffi::gboolean {
-    let pump = unsafe { &*(user_data as *const RefCell<Pump>) };
+    // `user_data` is the `Box<Rc<RefCell<Pump>>>` raw pointer installed by
+    // `attach` (and freed by `destroy_user_data`) — deref the OUTER Rc first.
+    // Casting it straight to `*const RefCell<Pump>` would misread the Rc's heap
+    // pointer as the RefCell borrow flag and fail every borrow.
+    let pump: &Rc<RefCell<Pump>> = unsafe { &*(user_data as *const Rc<RefCell<Pump>>) };
     // Not nested with Window::init's shared borrow (both main-thread, non-reentrant).
     if let Ok(mut p) = pump.try_borrow_mut() {
         let p = &mut *p;
@@ -147,33 +186,28 @@ pub struct WlQueueSource {
 }
 
 impl WlQueueSource {
-    /// Create the source over the [`Pump`]'s connection fd and attach it to the
-    /// default main context. `pump` is cloned into the source's callback data.
+    /// Create the source over the [`Pump`]'s private queue and attach it to the
+    /// default main context. `pump` is cloned into the source's callback data (which
+    /// keeps the pointee of the `WlGSource.pump` pointer alive until finalize).
     pub fn attach(pump: &Rc<RefCell<Pump>>) -> Self {
-        // The connection fd is stable for the app's lifetime (GDK owns the display).
-        let fd = pump
-            .borrow()
-            .event_queue
-            .as_fd()
-            .as_raw_fd();
-
         unsafe {
-            // Allocate the GSource subclass (GSource header + our `tag`).
+            // Allocate the GSource subclass (GSource header + our `pump` pointer).
             let source = glib::ffi::g_source_new(
                 ptr::addr_of!(FUNCS) as *mut glib::ffi::GSourceFuncs,
                 size_of::<WlGSource>() as c_uint,
             );
 
-            // Watch the connection fd for readability; stash the tag for `check`.
-            let tag = glib::ffi::g_source_add_unix_fd(source, fd, glib::ffi::G_IO_IN);
-            (*source.cast::<WlGSource>()).tag = tag;
+            // Callback data = an owning `Rc<RefCell<Pump>>` clone, freed on finalize;
+            // `prepare`/`check` reach the same RefCell through the struct pointer.
+            let data = Box::into_raw(Box::new(pump.clone()));
+            (*source.cast::<WlGSource>()).pump = Rc::as_ptr(&*data);
 
             // Lower priority than GDK's event source so GDK reads the socket first
-            // and our `dispatch_pending` sees the already-demarshalled events.
+            // and our `dispatch_pending` sees the already-demarshalled events. GLib
+            // dispatches one priority band per iteration, but our readiness is
+            // level-triggered (queue-pending), so we run on the next iteration.
             glib::ffi::g_source_set_priority(source, glib::ffi::G_PRIORITY_DEFAULT_IDLE);
 
-            // Callback data = an owning `Rc<RefCell<Pump>>` clone, freed on finalize.
-            let data = Box::into_raw(Box::new(pump.clone()));
             glib::ffi::g_source_set_callback(
                 source,
                 Some(trampoline),
@@ -193,7 +227,8 @@ impl Drop for WlQueueSource {
     fn drop(&mut self) {
         unsafe {
             // Detach from the context, then release our ref → finalize → destroy the
-            // callback data (drops the Rc clone). GLib removes the unix fd on finalize.
+            // callback data (drops the Rc clone; prepare/check are never called on a
+            // destroyed source, so the struct's pump pointer cannot dangle in use).
             glib::ffi::g_source_destroy(self.source);
             glib::ffi::g_source_unref(self.source);
         }

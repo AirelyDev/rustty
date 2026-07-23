@@ -132,6 +132,15 @@ pub struct Globals {
 
     /// Routes `global_remove(name)` back to the field it bound (`Globals.zig:180-188`).
     names: HashMap<u32, Tag>,
+
+    /// OBSERVABILITY (not in the reference): count of `xdg_activation_token_v1.done`
+    /// events dispatched by the token handler below. The reference has no analogue —
+    /// its handler runs on GDK's default queue with no need to prove it fired. rustty
+    /// cranks a PRIVATE queue via [`super::queue_source::WlQueueSource`], so the
+    /// live-session KAT reads this counter to prove that post-init token replies
+    /// actually dispatch on the real compositor (the whole point of the GSource).
+    /// Read through [`super::App::activation_done_count`].
+    pub activation_done_count: u32,
 }
 
 impl std::fmt::Debug for Globals {
@@ -176,6 +185,7 @@ impl Globals {
             kde_output_order: None,
             ext_background_effect: None,
             names: HashMap::new(),
+            activation_done_count: 0,
         }
     }
 
@@ -432,6 +442,9 @@ impl Dispatch<XdgActivationTokenV1, WlSurface> for Globals {
         _: &QueueHandle<Globals>,
     ) {
         if let xdg_activation_token_v1::Event::Done { token } = event {
+            // Count the dispatched reply BEFORE activating so the KAT observes the
+            // handler firing even on a compositor that would reject the activate.
+            state.activation_done_count = state.activation_done_count.saturating_add(1);
             if let Some(activation) = state.xdg_activation.as_ref() {
                 activation.activate(token, surface);
             }
