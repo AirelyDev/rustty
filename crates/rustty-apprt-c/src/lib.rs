@@ -165,6 +165,47 @@ extern crate rustty_bench as _;
 // the C ABI is crossed.
 // ===================================================================
 
+/// PARITY: reference `std.os.argv = argv[0..argc]` (`ghostty_init`,
+/// main_c.zig) — the process argv the C host hands us, stored once. Consumed
+/// by the CLI-action detection below (its only reference consumer).
+static ARGV: std::sync::OnceLock<Vec<Vec<u8>>> = std::sync::OnceLock::new();
+
+/// The concrete detected CLI action (`state.action`'s VALUE). rustty-core's
+/// `GlobalState<Action>` is bound `Action = ()` (rustty-cli deps rustty-core —
+/// the concrete type CANNOT live there without a cycle; R4). The ratified
+/// split: `rustty_core::STATE.action: Option<()>` carries PRESENCE (set by
+/// `init_with_action`), and this top-sink stash carries the VALUE for
+/// `rustty_cli_try_action` — together they are the reference's one field.
+static CLI_ACTION: std::sync::OnceLock<Option<rustty_cli::rustty::Action>> =
+    std::sync::OnceLock::new();
+
+/// The stored-argv view of the reference `std.process.args` iterator that
+/// `cli.action.detectArgs` walks (all args INCLUDING argv0 — argv0 never
+/// starts with `+` and never matches a special case, so it is harmless).
+struct ArgvIter<'a> {
+    argv: &'a [Vec<u8>],
+    i: usize,
+}
+
+impl rustty_cli::action::ArgsIter for ArgvIter<'_> {
+    fn next(&mut self) -> Option<Vec<u8>> {
+        let v = self.argv.get(self.i)?.clone();
+        self.i += 1;
+        Some(v)
+    }
+}
+
+/// `self.action = try cli.action.detectArgs(cli.ghostty.Action, self.alloc);`
+/// (global.zig init) — the C-path variant over the STORED argv (the reference
+/// detectArgs walks std.process.args, which on posix IS the stored
+/// `std.os.argv`).
+fn detect_from_argv(
+    argv: &[Vec<u8>],
+) -> Result<Option<rustty_cli::rustty::Action>, rustty_cli::action::DetectError> {
+    let mut iter = ArgvIter { argv, i: 0 };
+    rustty_cli::action::detect_iter::<rustty_cli::rustty::Action, _>(&mut iter)
+}
+
 /// C: rustty_init
 ///
 /// Initialize rustty global state.
@@ -3191,6 +3232,47 @@ mod quicklook_font_tests {
             keeper.retain_count(),
             rc_before - 1,
             "the host's one CFRelease must consume exactly the export's +1 (no leak, no double-free)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // The detectArgs slice of the C-path `state.init()`: detection over the
+    // argv STORED by `rustty_init` (reference `std.os.argv = argv[0..argc]`
+    // then `cli.action.detectArgs` walking std.process.args == std.os.argv).
+    // Pure over its input — no process-global involved — so it is directly
+    // unit-testable (the global-state paths are pinned by subprocess KATs).
+    #[test]
+    fn detect_from_argv_plus_version() {
+        let argv: Vec<Vec<u8>> = vec![b"rustty".to_vec(), b"+version".to_vec()];
+        let action = crate::detect_from_argv(&argv).unwrap();
+        assert_eq!(action, Some(rustty_cli::rustty::Action::Version));
+    }
+
+    #[test]
+    fn detect_from_argv_none() {
+        let argv: Vec<Vec<u8>> = vec![b"rustty".to_vec()];
+        assert_eq!(crate::detect_from_argv(&argv).unwrap(), None);
+        assert_eq!(crate::detect_from_argv(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn detect_from_argv_invalid() {
+        let argv: Vec<Vec<u8>> = vec![b"rustty".to_vec(), b"+bogus".to_vec()];
+        assert_eq!(
+            crate::detect_from_argv(&argv),
+            Err(rustty_cli::action::DetectError::InvalidAction),
+        );
+    }
+
+    #[test]
+    fn detect_from_argv_multiple() {
+        let argv: Vec<Vec<u8>> =
+            vec![b"rustty".to_vec(), b"+version".to_vec(), b"+help".to_vec()];
+        assert_eq!(
+            crate::detect_from_argv(&argv),
+            Err(rustty_cli::action::DetectError::MultipleActions),
         );
     }
 }
