@@ -33,21 +33,26 @@ Ordered by dependency. Only **B1** is a true blocker for pixels; **B2–B4** are
 - **File:** `crates/rustty-renderer/src/metal/metal_impl.rs:800` (`None => Ok(())`).
 - **What to wire:** Nothing. The `Some(layer)` arm (`:786`) is correct and goes live the instant `layer=Some`. **Verify** `present` errors (`ObjCFailed`) propagate once live.
 - **Depends on:** B1.
+- **VERIFIED (WS2-D, 2026-07-23):** live-arm propagation confirmed — metal_impl.rs:815-829 maps setSurface's ObjCFailed into Error::ObjCFailed and ?-propagates; generic.rs:5195 catch+logs on the async completion (oracle parity), generic.rs:5525 ?-propagates on the sync path. Presents exercised live by the macos_window_host suite.
 
 ### B3 — display callback install (auto-resolves with B1, ordering-sensitive)
 - **File:** `crates/rustty-renderer/src/metal/metal_impl.rs:505` (`if let Some(layer) … set_display_callback`).
 - **What to wire:** Nothing new — but the CoreAnimation-commit redraw (resize / `needsDisplayOnBoundsChange`) only installs when `layer=Some` at `loop_enter` time. Guaranteed by B1's ordering constraint. If attach is wired *after* the thread ran `loop_enter`, add a re-arm.
 - **Depends on:** B1 (+ ordering).
+- **VERIFIED (WS2-D, 2026-07-23):** installed at loop_enter with layer=Some (attach precedes thread spawn); the -display-driven present path is exercised every pump tick of the (un-ignored) hosts_view_layer_and_presents_live_frame KAT.
 
 ### B4 — surface_size frozen on the None arm (auto-resolves with B1; post-attach verify)
 - **File:** `crates/rustty-renderer/src/metal/metal_impl.rs:732` (None arm returns fixed `offscreen_size`).
 - **What to wire:** Nothing — the `Some(layer)` arm (`:720`) reads `layer.bounds * contentsScale`. **Verify** on live resize that the hosted layer frame auto-tracks the NSView bounds (AppKit manages a layer-hosting view's frame; the golden test sets it manually at `generic.rs:6586`). If it does not auto-track, wire the view resize to update the layer frame.
 - **Depends on:** B1.
+- **VERIFIED (WS2-D, 2026-07-23):** resize_tracks_host_layer_bounds KAT — presented IOSurface follows layer.bounds × contentsScale through a live 128×64→200×100 pt resize.
 
 ### B5 — ALWAYS-reached live `unimplemented!()`: **NONE on the normal path**
 - Confirmed by all auditors: `performBindingAction` (~90 arms), all key/mouse/scroll/text/preedit/IME callbacks, `cval()` (~65 action variants), clipboard, resize, config, close — **zero** `unimplemented!()`/`todo!()` on launch/render/type/resize/close/scroll/select. The only renderer `unimplemented!()` (`generic.rs:4566`, inspector `overlayFeatures`) is statically dead (uninhabited enum). **No crash-guard work is required for pixels + normal use.** The crashers below (§3) are all on-feature.
 
 **Net:** the blocker chain for pixels is effectively **B1 alone**; B2–B4 are verifications that fall out of it.
+
+On-device visible-window KAT: remains #[ignore] (needs the process main thread); manual runbook: `cargo test -p rustty-apprt-c --test macos_window_host -- --ignored --test-threads=1` (run green/skipped 2026-07-23).
 
 ---
 
@@ -56,17 +61,17 @@ Ordered by dependency. Only **B1** is a true blocker for pixels; **B2–B4** are
 ### HIGH — on-feature crashes (abort under `panic=abort`)
 | Item | File | Trigger | Note |
 |---|---|---|---|
-| **quicklook_font** | `rustty-apprt-c/src/lib.rs:2628` | Force-click "Look Up" **and** any VoiceOver / accessibility query (`SurfaceView_AppKit.swift:1521,1949,2361`) | Borderline blocker: accessibility path fires without explicit user intent. Interim: return `null` (Swift already handles `fontRaw==nil`). |
-| **quicklook_word** | `rustty-apprt-c/src/lib.rs:2688` | QuickLook/Look-Up word gesture (`SurfaceView_AppKit.swift:1512`) | Interim: return `false` so Swift falls back to `super.quickLook`. Body is objc-free (renderer_state.mutex + selectWord + readTextLocked). |
+| **quicklook_font** | `rustty-apprt-c/src/lib.rs:2628` | Force-click "Look Up" **and** any VoiceOver / accessibility query (`SurfaceView_AppKit.swift:1521,1949,2361`) | RESOLVED-STALE (WS2-A, 2026-07-23): fully ported in P2.1/P2.2 before this audit's line refs went stale (now lib.rs:2595/2734, zero unimplemented!()); pinned by quicklook_exports_are_abort_free_on_live_surface + the P2.1/P2.2 unit KATs. |
+| **quicklook_word** | `rustty-apprt-c/src/lib.rs:2688` | QuickLook/Look-Up word gesture (`SurfaceView_AppKit.swift:1512`) | RESOLVED-STALE (WS2-A, 2026-07-23): fully ported in P2.1/P2.2 before this audit's line refs went stale (now lib.rs:2595/2734, zero unimplemented!()); pinned by quicklook_exports_are_abort_free_on_live_surface + the P2.1/P2.2 unit KATs. |
 | **Inspector subsystem** | `rustty-apprt/embedded.rs:1833+`; `rustty-apprt-c/lib.rs` `inspector_metal_*`; `rustty-core/surface.rs:2842/2877` (`activate/deactivateInspector`) | User opens the terminal inspector (cmd-opt-i) | MILESTONE.md lists live inspector as DEFERRED; Swift likely leaves the keybind unbound this milestone. Interim: no-op/return-null leaves. Full fix = dcimgui-sys + ImGui_ImplMetal (Phase-3). |
 
 ### MEDIUM — degraded, post-attach
 | Item | File | Note |
 |---|---|---|
-| **contentsScale not re-stamped** on cross-DPI monitor move | `rustty-core/surface.rs:7721` (`contentScaleCallback`) | Only after B1; blurry render on Retina↔non-Retina drag. Mirrors Ghostty structure — may be host-owned (Swift view sets layer scale). **Verify against oracle**; if rustty owns it, add a Metal `set_content_scale(scale)` mailbox message. |
+| **contentsScale not re-stamped** on cross-DPI monitor move | `rustty-core/surface.rs:7721` (`contentScaleCallback`) | RESOLVED (WS2-B, 2026-07-23): oracle-ownership verified — the HOST owns the re-stamp (SurfaceView_AppKit.swift viewDidChangeBackingProperties: layer.contentsScale + ghostty_surface_set_content_scale + backing-size resend; NO renderer mailbox message exists in the oracle). Rustty's Swift host + chain (lib.rs:1563 → embedded.rs:1436 → surface.rs:7852 (was :7721, ref stale) → metal_impl.rs:751) were already faithful; pinned by content_scale_restamp_tracks_cross_dpi_move. No Metal mailbox message added (would deviate from the oracle). |
 
 ### LOW — polish / correctly-dead / off-platform
-- **drainMailbox autoreleasepool** ported as no-op scope (`renderer_seam.rs:949`) — slow ObjC leak under sustained mailbox traffic, no correctness/blank impact. Fix via a `rustty_os` autoreleasepool shim.
+- **drainMailbox autoreleasepool** ported as no-op scope (`renderer_seam.rs:949`) — slow ObjC leak under sustained mailbox traffic, no correctness/blank impact. Fix via a `rustty_os` autoreleasepool shim. — RESOLVED (WS2-C, 2026-07-23) via rustty_os::autorelease::autoreleasepool wired at renderer_seam.rs drainMailbox.
 - **renderer inspector `overlayFeatures`** (`generic.rs:4566`) — statically unreachable (uninhabited enum); fills with Phase-3 inspector.
 - **Backend::childExitedAbnormally** (`termio/backend.rs:180`) — no callers; real path is `Surface::childExitedAbnormally` (`surface.rs:3601`, implemented).
 - **xev ThreadPool** (`thread_pool.rs:77`) — type-surface only; PTY uses `EVFILT_READ`, never the pool.
