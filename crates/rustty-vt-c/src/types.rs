@@ -196,6 +196,30 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
                 ("len", usize, len, "u64"),
             ]),
         ),
+        // .{ "GhosttyClipboardContent", StructInfo.init(terminal.ClipboardContent) },
+        (
+            "RusttyClipboardContent",
+            struct_info!(
+                crate::terminal::ClipboardContent,
+                [
+                    ("mime", LibString, mime, "struct"),
+                    ("data", LibString, data, "struct"),
+                ]
+            ),
+        ),
+        // .{ "GhosttyClipboardWrite", StructInfo.init(terminal.ClipboardWrite) },
+        (
+            "RusttyClipboardWrite",
+            struct_info!(
+                crate::terminal::ClipboardWrite,
+                [
+                    ("size", usize, size, "u64"),
+                    ("location", rustty_vt::clipboard::Location, location, "i32"),
+                    ("contents", *const crate::terminal::ClipboardContent, contents, "opaque"),
+                    ("contents_len", usize, contents_len, "u64"),
+                ]
+            ),
+        ),
         // .{ "GhosttyCodepoints", StructInfo.init(Codepoints) },
         (
             "RusttyCodepoints",
@@ -700,6 +724,19 @@ mod tests {
         // WS5 T6: registration for the new color utility C types.
         assert!(root.iter().any(|(k, _)| k == "RusttyColorPaletteMask"));
         assert!(root.iter().any(|(k, _)| k == "RusttyColorX11Entry"));
+        // WS5 T17: clipboard write C types.
+        assert!(root.iter().any(|(k, _)| k == "RusttyClipboardContent"));
+        assert!(root.iter().any(|(k, _)| k == "RusttyClipboardWrite"));
+        let clip_content = get(root, "RusttyClipboardContent").as_object();
+        let clip_content_fields = get(clip_content, "fields").as_object();
+        assert!(clip_content_fields.iter().any(|(k, _)| k == "mime"));
+        assert!(clip_content_fields.iter().any(|(k, _)| k == "data"));
+        let clip_write = get(root, "RusttyClipboardWrite").as_object();
+        let clip_write_fields = get(clip_write, "fields").as_object();
+        assert!(clip_write_fields.iter().any(|(k, _)| k == "size"));
+        assert!(clip_write_fields.iter().any(|(k, _)| k == "location"));
+        assert!(clip_write_fields.iter().any(|(k, _)| k == "contents"));
+        assert!(clip_write_fields.iter().any(|(k, _)| k == "contents_len"));
 
         // Verify GhosttyTerminalOptions fields
         let term_opts = get(root, "RusttyTerminalOptions").as_object();

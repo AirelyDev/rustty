@@ -1191,7 +1191,7 @@ fn terminal_data_from_c_int(v: c_int) -> Option<terminal::TerminalData> {
     }
 }
 
-const TERMINAL_OPTION_COUNT: c_int = 26; // contiguous 0..=25
+const TERMINAL_OPTION_COUNT: c_int = 27; // contiguous 0..=26 (26 = clipboard_write, WS5 T17)
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
     if (0..TERMINAL_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).

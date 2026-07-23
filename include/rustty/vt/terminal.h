@@ -82,6 +82,7 @@ extern "C" {
  * | `RUSTTY_TERMINAL_OPT_SIZE`             | `RusttyTerminalSizeFn`           | XTWINOPS size query (CSI 14/16/18 t)      |
  * | `RUSTTY_TERMINAL_OPT_COLOR_SCHEME`     | `RusttyTerminalColorSchemeFn`    | Color scheme query (CSI ? 996 n)          |
  * | `RUSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES`| `RusttyTerminalDeviceAttributesFn`| Device attributes query (CSI c / > c / = c)|
+ * | `RUSTTY_TERMINAL_OPT_CLIPBOARD_WRITE`  | `RusttyTerminalClipboardWriteFn` | Clipboard write via OSC 52 / OSC 1337     |
  *
  * ### Defining a write_pty callback
  * @snippet c-vt-effects/src/main.c effects-write-pty
@@ -91,6 +92,9 @@ extern "C" {
  *
  * ### Defining a title_changed callback
  * @snippet c-vt-effects/src/main.c effects-title-changed
+ *
+ * ### Defining a clipboard_write callback
+ * @snippet c-vt-effects/src/main.c effects-clipboard-write
  *
  * ### Registering effects and processing VT data
  * @snippet c-vt-effects/src/main.c effects-register
@@ -301,6 +305,125 @@ typedef struct {
  */
 typedef void (*RusttyTerminalBellFn)(RusttyTerminal terminal,
                                       void* userdata);
+
+/**
+ * Clipboard destination for a clipboard write.
+ *
+ * Protocol-specific destination identifiers are normalized to these values
+ * before the clipboard write callback is invoked.
+ *
+ * @ingroup terminal
+ */
+typedef enum RUSTTY_ENUM_TYPED {
+  /** The standard system clipboard. */
+  RUSTTY_CLIPBOARD_LOCATION_STANDARD = 0,
+
+  /** The selection clipboard. */
+  RUSTTY_CLIPBOARD_LOCATION_SELECTION = 1,
+
+  /** The primary selection clipboard. */
+  RUSTTY_CLIPBOARD_LOCATION_PRIMARY = 2,
+  RUSTTY_CLIPBOARD_LOCATION_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
+} RusttyClipboardLocation;
+
+/**
+ * One MIME representation in a clipboard write.
+ *
+ * Both strings are borrowed and valid only for the duration of the callback.
+ * The data is binary-safe and has already been decoded from any protocol-level
+ * encoding. A zero-length data string is an explicit empty representation; it
+ * does not clear the clipboard.
+ *
+ * This struct has a frozen layout and will not gain fields in future versions.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** MIME type of the representation. */
+  RusttyString mime;
+
+  /** Decoded, binary-safe representation data. */
+  RusttyString data;
+} RusttyClipboardContent;
+
+/**
+ * A semantic, atomic clipboard write.
+ *
+ * This is a sized struct. The callback must only access fields present in the
+ * size reported by `size`. The request, contents array, MIME strings, and
+ * data strings are all borrowed and valid only for the callback duration.
+ *
+ * All entries in `contents` are representations of the same logical value
+ * and must be committed atomically. A `contents_len` of zero requests that
+ * the destination be cleared. This is distinct from a content entry whose data
+ * has zero length.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** Size of this struct in bytes. */
+  size_t size;
+
+  /** Clipboard destination. */
+  RusttyClipboardLocation location;
+
+  /** Borrowed array of MIME representations. */
+  const RusttyClipboardContent* contents;
+
+  /** Number of entries in contents; zero means clear the destination. */
+  size_t contents_len;
+} RusttyClipboardWrite;
+
+/**
+ * Result of a clipboard write callback.
+ *
+ * Protocols without write acknowledgements, including OSC 52 and iTerm2
+ * OSC 1337 Copy, ignore this result.
+ *
+ * @ingroup terminal
+ */
+typedef enum RUSTTY_ENUM_TYPED {
+  /** The clipboard write completed successfully. */
+  RUSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS = 0,
+
+  /** The clipboard write was denied by policy or the user. */
+  RUSTTY_CLIPBOARD_WRITE_RESULT_DENIED = 1,
+
+  /** The destination or one or more representations are unsupported. */
+  RUSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED = 2,
+
+  /** The clipboard is temporarily unavailable. */
+  RUSTTY_CLIPBOARD_WRITE_RESULT_BUSY = 3,
+
+  /** One or more representations contain invalid data. */
+  RUSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA = 4,
+
+  /** The clipboard write failed due to an I/O error. */
+  RUSTTY_CLIPBOARD_WRITE_RESULT_IO_ERROR = 5,
+  RUSTTY_CLIPBOARD_WRITE_RESULT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
+} RusttyClipboardWriteResult;
+
+/**
+ * Callback function type for clipboard_write.
+ *
+ * Called synchronously for a complete logical clipboard write. Protocol
+ * details such as OSC 52 selectors, base64 encoding, multipart chunks,
+ * aliases, and terminators are normalized before this callback is invoked.
+ * OSC 52 and iTerm2 OSC 1337 Copy writes therefore use the same callback
+ * shape. OSC 52 clipboard read requests ("?") are always ignored and never
+ * forwarded to this callback.
+ *
+ * @param terminal The terminal handle
+ * @param userdata The userdata pointer set via RUSTTY_TERMINAL_OPT_USERDATA
+ * @param write Borrowed atomic clipboard write request
+ * @return The result of attempting the clipboard write
+ *
+ * @ingroup terminal
+ */
+typedef RusttyClipboardWriteResult (*RusttyTerminalClipboardWriteFn)(
+    RusttyTerminal terminal,
+    void* userdata,
+    const RusttyClipboardWrite* write);
 
 /**
  * Callback function type for color scheme queries (CSI ? 996 n).
@@ -711,6 +834,17 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Input type: RusttyTerminalPwdChangedFn
    */
   RUSTTY_TERMINAL_OPT_PWD_CHANGED = 25,
+
+  /**
+   * Callback invoked when the running program performs a clipboard write.
+   * OSC 52 and iTerm2 OSC 1337 Copy writes are normalized to an atomic set
+   * of decoded MIME representations. Set to NULL to ignore clipboard writes.
+   * Clipboard read requests are always ignored; see
+   * RusttyTerminalClipboardWriteFn.
+   *
+   * Input type: RusttyTerminalClipboardWriteFn
+   */
+  RUSTTY_TERMINAL_OPT_CLIPBOARD_WRITE = 26,
   RUSTTY_TERMINAL_OPT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyTerminalOption;
 
