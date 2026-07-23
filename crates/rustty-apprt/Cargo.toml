@@ -54,6 +54,9 @@ wayland = ["gtk", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend
 x11 = ["gtk", "dep:gdk4-x11"]
 
 [dependencies]
+# WS4 `initSignals` (global.zig): the SIGPIPE-ignore sigaction. R3: libc binds
+# the SAME syscalls the reference's std.posix wraps (the rustty-cli precedent).
+libc = "0.2"
 rustty-core = { workspace = true }
 rustty-apprt-api = { workspace = true }
 # R2 single-source-of-truth for the product identity. `gtk::build_info` sources

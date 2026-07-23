@@ -128,6 +128,33 @@ fn compute_logging(action_detected: bool, env_value: Option<&[u8]>) -> Logging {
     logging
 }
 
+// fn initSignals() void { ... } (global.zig — see the verbatim body preserved
+// in rustty-global's lib.rs seam comment; this is its live wiring.)
+fn init_signals() {
+    // Only posix systems.
+    // if (comptime builtin.os.tag == .windows) return;
+    #[cfg(unix)]
+    unsafe {
+        // var sa: p.Sigaction = .{
+        //     .handler = .{ .handler = p.SIG.IGN },
+        //     .mask = p.sigemptyset(),
+        //     .flags = 0,
+        // };
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = libc::SIG_IGN;
+        libc::sigemptyset(&mut sa.sa_mask);
+        sa.sa_flags = 0;
+
+        // We ignore SIGPIPE because it is a common signal we may get
+        // due to how we implement termio. When a terminal is closed we
+        // often write to a broken pipe to exit the read thread. This should
+        // be fixed one day but for now this helps make this a bit more
+        // robust.
+        // p.sigaction(p.SIG.PIPE, &sa, null);
+        libc::sigaction(libc::SIGPIPE, &sa, std::ptr::null_mut());
+    }
+}
+
 /// Initialize rustty global state (`rustty_core::STATE`).
 ///
 /// PORT NOTE: the rustty analogue of the reference `global.zig` `state.init()`
@@ -219,5 +246,17 @@ mod bootstrap_tests {
         // action-adjusted value).
         let l = compute_logging(true, Some(b"bogus-flag"));
         assert_eq!(l, rustty_core::Logging::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_signals_ignores_sigpipe() {
+        init_signals();
+        let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut current)
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(current.sa_sigaction, libc::SIG_IGN);
     }
 }
