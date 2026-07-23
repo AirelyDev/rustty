@@ -96,3 +96,20 @@ RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/debug/rustty
 **Out of scope by decision (not debt):** the WebGL/wasm apprt (owner decision,
 2026-07); macOS `File`/`TCP`/`UDP` watcher instantiations (tracked in `DEFERRALS.md`
 as the C7 follow-up chunk — an implementation deferral, not verification debt).
+
+## V4. `set_urgent` KAT on the primary GNOME/mutter session (avoided: crash correlation)
+
+**Context.** The set_urgent activation-token dispatch seam is RESOLVED and
+runtime-verified on an ISOLATED headless sway (see `DEFERRALS.md` 2026-07-19 entry;
+`wayland_set_urgent_dispatches_activation_token`). Two hard machine crashes on this VM
+coincided with live-compositor KAT activity on the PRIMARY GNOME session (abrupt
+journal end, no guest OOM/panic — hypervisor-style death; root cause not attributed),
+so the mutter-session run was deliberately not repeated. mutter implements the same
+`xdg_activation_v1` protocol; this is belt-and-suspenders, not a correctness gap.
+
+**Recipe (any stable GNOME Wayland session):**
+```
+cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_winproto \
+  -- --ignored --exact wayland_set_urgent_dispatches_activation_token
+```
+**Expected:** `ok` in ~1 s (bounded at ~10 s — a broken seam fails, never hangs).
