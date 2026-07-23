@@ -819,9 +819,9 @@ int rustty_build_info(int data, void *out);
  * C: rustty_color_rgb_get
  *
  * # Safety
- * `r`, `g`, and `b` must be valid, writable pointers to `u8`.
+ * `color` must be a valid readable `RgbC`; `r`/`g`/`b` valid writable `u8`.
  */
-void rustty_color_rgb_get(RgbC c, uint8_t *r, uint8_t *g, uint8_t *b);
+void rustty_color_rgb_get(const RgbC *color, uint8_t *r, uint8_t *g, uint8_t *b);
 
 /**
  * C: rustty_focus_encode

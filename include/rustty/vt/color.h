@@ -78,14 +78,14 @@ typedef uint8_t RusttyColorPaletteIndex;
  * from a RusttyColorRgb value. Primarily useful in WebAssembly environments
  * where accessing struct fields directly is difficult.
  *
- * @param color The RGB color value
+ * @param color Pointer to the RGB color value
  * @param r Pointer to store the red component (0-255)
  * @param g Pointer to store the green component (0-255)
  * @param b Pointer to store the blue component (0-255)
  *
  * @ingroup sgr
  */
-RUSTTY_API void rustty_color_rgb_get(RusttyColorRgb color,
+RUSTTY_API void rustty_color_rgb_get(const RusttyColorRgb* color,
                            uint8_t* r,
                            uint8_t* g,
                            uint8_t* b);

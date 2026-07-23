@@ -63,21 +63,37 @@ pub unsafe fn palette_zval(palette: *const PaletteC) -> Palette {
     unsafe { *palette }
 }
 
-/// PORT NOTE: `pub fn rgb_get(c: color.RGB.C, r: *u8, g: *u8, b: *u8)
-/// callconv(lib.calling_conv) void`. The C calling convention is the
+/// PORT NOTE: `pub fn rgb_get(c: *const color.RGB.C, r: *u8, g: *u8, b: *u8)
+/// callconv(lib.calling_conv) void` (oracle 20a1bfa5f: RGB inputs pass by
+/// pointer for wasm/FFI friendliness). The C calling convention is the
 /// `extern "C"` wrapper authored in `lib.rs` (`rustty_color_rgb_get`); the body
 /// is a 1:1 port. Out-pointers are raw (`*mut u8`) per the raw-ptr discipline.
 ///
 /// # Safety
-/// `r`, `g`, and `b` must be valid, writable pointers to `u8`.
-pub unsafe fn rgb_get(c: RgbC, r: *mut u8, g: *mut u8, b: *mut u8) {
-    // SAFETY: `r`/`g`/`b` are valid writable `u8` pointers (caller contract).
+/// `c` must be a valid readable `RgbC` pointer; `r`, `g`, and `b` must be
+/// valid, writable pointers to `u8`.
+pub unsafe fn rgb_get(c: *const RgbC, r: *mut u8, g: *mut u8, b: *mut u8) {
+    // SAFETY: pointer validity is the caller's contract.
     unsafe {
         // r.* = c.r;
-        *r = c.r;
+        *r = (*c).r;
         // g.* = c.g;
-        *g = c.g;
+        *g = (*c).g;
         // b.* = c.b;
-        *b = c.b;
+        *b = (*c).b;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // test coverage for the by-pointer form (oracle 20a1bfa5f)
+    #[test]
+    fn rgb_get_by_pointer() {
+        let c = RgbC { r: 1, g: 2, b: 3 };
+        let (mut r, mut g, mut b) = (0u8, 0u8, 0u8);
+        unsafe { rgb_get(&c as *const RgbC, &mut r, &mut g, &mut b) };
+        assert_eq!((r, g, b), (1, 2, 3));
     }
 }

@@ -120,11 +120,16 @@ pub unsafe extern "C" fn rustty_build_info(data: c_int, out: *mut std::ffi::c_vo
 /// C: rustty_color_rgb_get
 ///
 /// # Safety
-/// `r`, `g`, and `b` must be valid, writable pointers to `u8`.
+/// `color` must be a valid readable `RgbC`; `r`/`g`/`b` valid writable `u8`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_color_rgb_get(c: color::RgbC, r: *mut u8, g: *mut u8, b: *mut u8) {
-    // SAFETY: `r`/`g`/`b` validity is the caller's contract.
-    unsafe { color::rgb_get(c, r, g, b) }
+pub unsafe extern "C" fn rustty_color_rgb_get(
+    color: *const color::RgbC,
+    r: *mut u8,
+    g: *mut u8,
+    b: *mut u8,
+) {
+    // SAFETY: caller contract (see # Safety).
+    unsafe { color::rgb_get(color, r, g, b) }
 }
 
 // ----- focus -----
