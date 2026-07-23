@@ -940,42 +940,16 @@ impl Terminal {
             // If we can NOT break, this means that "c" is part of a grapheme
             // with the previous char.
             if !grapheme_break {
-                // enum { no_change, wide, narrow }
-                enum DesiredWide {
-                    NoChange,
-                    Wide,
-                    Narrow,
-                }
-                let mut desired_wide: DesiredWide = DesiredWide::NoChange;
-
-                // If this is an emoji variation selector then we need to modify
-                // the cell width accordingly. VS16 makes the character wide and
-                // VS15 makes it narrow.
-                if c == 0xFE0F || c == 0xFE0E {
-                    let prev_props = unicode::table().get(previous_codepoint);
-                    // Check if it is a valid variation sequence in
-                    // emoji-variation-sequences.txt, and if not, ignore the char.
-                    if !prev_props.emoji_vs_base {
-                        return Ok(true);
-                    }
-
-                    match c {
-                        0xFE0F => desired_wide = DesiredWide::Wide,
-                        0xFE0E => desired_wide = DesiredWide::Narrow,
-                        _ => unreachable!(),
-                    }
-                } else if !unicode::table().get(c).width_zero_in_grapheme {
-                    // If we have a code point that contributes to the width of a
-                    // grapheme, it necessarily means that we're at least at width
-                    // 2, since the first code point must be at least width 1 to
-                    // start. (Note that Prepend code points could effectively mean
-                    // the first code point should be width 0, but we don't handle
-                    // that yet.)
-                    desired_wide = DesiredWide::Wide;
-                }
-
-                match desired_wide {
-                    DesiredWide::Wide => 'wide: {
+                // The width-decision kernel is shared with the buffered
+                // `unicode::grapheme::grapheme_width` API so the streaming
+                // printer and the measurement API stay in lockstep. The
+                // `Ignore` result covers invalid emoji variation selectors:
+                // the terminal does not store them, so we return without
+                // appending (leaving break state / prev as they were).
+                use unicode::grapheme::GraphemeWidthEffect;
+                match unicode::grapheme::grapheme_width_effect(previous_codepoint, c) {
+                    GraphemeWidthEffect::Ignore => return Ok(true),
+                    GraphemeWidthEffect::Wide => 'wide: {
                         if unsafe { (*prev_cell).wide() } == pagepkg::Wide::Wide {
                             break 'wide;
                         }
@@ -1110,7 +1084,7 @@ impl Terminal {
                         }
                     }
 
-                    DesiredWide::Narrow => 'narrow: {
+                    GraphemeWidthEffect::Narrow => 'narrow: {
                         // Prev cell is no longer wide
                         if unsafe { (*prev_cell).wide() } != pagepkg::Wide::Wide {
                             break 'narrow;
@@ -1146,7 +1120,7 @@ impl Terminal {
                         }
                     }
 
-                    DesiredWide::NoChange => {}
+                    GraphemeWidthEffect::NoChange => {}
                 }
 
                 // log.debug("c={X} grapheme attach to left={} primary_cp={X}", ...);
@@ -5084,6 +5058,47 @@ mod tests {
         }
 
         t.deinit(Global);
+    }
+
+    // Terminal.print receives one codepoint at a time, so it can't use
+    // unicode::grapheme::grapheme_width directly; that API requires a complete
+    // buffered cluster or string end. This keeps the streaming printer's
+    // cursor advance in sync with the buffered measurement API. (oracle 65e61282a)
+    fn expect_grapheme_width_parity(cps: &[u32]) {
+        let mut t = Terminal::init(Global, opts(80, 5)).unwrap();
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        let mut expected: usize = 0;
+        let mut i: usize = 0;
+        while i < cps.len() {
+            let result = unicode::grapheme::grapheme_width(&cps[i..]);
+            assert!(result.len > 0);
+            i += result.len;
+            expected += result.width as usize;
+        }
+
+        for &cp in cps {
+            t.print(cp).unwrap();
+        }
+        assert_eq!(0, unsafe { (*t.screens.active).cursor.y });
+        assert_eq!(expected, unsafe { (*t.screens.active).cursor.x } as usize);
+        t.deinit(Global);
+    }
+
+    // test "Terminal: graphemeWidth parity" (oracle 65e61282a)
+    #[test]
+    fn terminal_grapheme_width_parity() {
+        expect_grapheme_width_parity(&[0x2764, 0xFE0F]);
+        expect_grapheme_width_parity(&['x' as u32, 0xFE0F, 0xFE0F]);
+        expect_grapheme_width_parity(&[0x231A, 0xFE0E, 0xFE0F]);
+        expect_grapheme_width_parity(&[0x1F3F4, 0x200D, 0x2620, 0xFE0F]);
+        expect_grapheme_width_parity(&[0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467]);
+        expect_grapheme_width_parity(&[0x23, 0xFE0F, 0x20E3]);
+        expect_grapheme_width_parity(&['1' as u32, 0x20E3]);
+        expect_grapheme_width_parity(&[0x1F44B, 0x1F3FF]);
+        expect_grapheme_width_parity(&[0x1F1E6, 0x1F1E7, 0x1F1E8]);
+        expect_grapheme_width_parity(&['a' as u32, 'b' as u32]);
+        expect_grapheme_width_parity(&[0x0301, 0x0302]);
     }
 
     // test "Terminal: print invalid VS16 non-grapheme"

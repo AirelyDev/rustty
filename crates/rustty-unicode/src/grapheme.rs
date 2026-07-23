@@ -53,6 +53,142 @@ pub fn grapheme_break(cp1: u32, cp2: u32, state: &mut BreakState) -> bool {
     value.result
 }
 
+/// Width change requested by a codepoint that continues a grapheme cluster.
+// pub const GraphemeWidthEffect = enum { ignore, no_change, wide, narrow };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphemeWidthEffect {
+    /// Do not append the codepoint to the cluster and leave break state as it
+    /// was before seeing it.
+    Ignore,
+
+    /// Append the codepoint but leave the current cluster width unchanged.
+    NoChange,
+
+    /// Make the cluster occupy two terminal cells.
+    Wide,
+
+    /// Make the cluster occupy one terminal cell.
+    Narrow,
+}
+
+/// Result of measuring the first grapheme cluster in a codepoint slice.
+// pub const GraphemeWidth = struct { len: usize, width: u2 };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphemeWidth {
+    /// Number of codepoints consumed from the input slice.
+    pub len: usize,
+
+    /// Display width in terminal cells.
+    pub width: u8,
+}
+
+/// Returns the width effect of appending cp after prev within a grapheme.
+///
+/// This is the shared width-decision kernel for the streaming terminal
+/// printer and for [`grapheme_width`]. It assumes [`grapheme_break`] has
+/// already said there is no break between prev and cp; it does not perform
+/// segmentation.
+///
+/// The `Ignore` result is important for invalid emoji variation selectors.
+/// The terminal does not store those selectors in the cell, so callers must
+/// also restore their grapheme break state and leave prev unchanged when they
+/// see `Ignore`.
+// pub inline fn graphemeWidthEffect(prev: u21, cp: u21) GraphemeWidthEffect
+#[inline]
+pub fn grapheme_width_effect(prev: u32, cp: u32) -> GraphemeWidthEffect {
+    // Emoji variation selectors modify the width of a valid base:
+    // VS16 makes the grapheme wide and VS15 makes it narrow. Check that
+    // prev forms a valid variation sequence in emoji-variation-sequences.txt;
+    // if it does not, ignore the selector entirely.
+    if cp == 0xFE0F || cp == 0xFE0E {
+        let prev_props = table().get(prev);
+        if !prev_props.emoji_vs_base {
+            return GraphemeWidthEffect::Ignore;
+        }
+        return match cp {
+            0xFE0F => GraphemeWidthEffect::Wide,
+            0xFE0E => GraphemeWidthEffect::Narrow,
+            _ => unreachable!(),
+        };
+    }
+
+    // If a code point contributes to the width of a grapheme, the whole
+    // grapheme is at least width 2 because the first code point must be at
+    // least width 1 to start. Prepend code points could effectively mean
+    // the first code point should be width 0, but we don't handle that yet.
+    if !table().get(cp).width_zero_in_grapheme {
+        return GraphemeWidthEffect::Wide;
+    }
+
+    GraphemeWidthEffect::NoChange
+}
+
+#[inline]
+fn invalid_codepoint(cp: u32) -> bool {
+    cp > 0x10FFFF
+}
+
+/// Measures the first grapheme cluster in cps using the same segmentation and
+/// width rules as `Terminal::print` with mode 2027.
+///
+/// This is not a streaming API: cps must contain a complete first grapheme
+/// cluster or the logical end of the string. If codepoints arrive in chunks,
+/// keep buffering when this consumes all available codepoints and more input
+/// may still arrive.
+///
+/// PORT NOTE: the reference is generic over the codepoint type `T` with the
+/// `check_invalid` guards comptime-dead for u21. Rustty callers are all u32,
+/// so the guards are live: values greater than U+10FFFF are accepted (an
+/// invalid value consumes one codepoint at width 1 when it starts the slice,
+/// and terminates the current cluster when it appears later).
+// pub fn graphemeWidth(comptime T: type, cps: []const T) GraphemeWidth
+pub fn grapheme_width(cps: &[u32]) -> GraphemeWidth {
+    if cps.is_empty() {
+        return GraphemeWidth { len: 0, width: 0 };
+    }
+
+    // Guard invalid input before the table lookup.
+    if invalid_codepoint(cps[0]) {
+        return GraphemeWidth { len: 1, width: 1 };
+    }
+
+    let mut len: usize = 1;
+    let mut width = table().get(cps[0]).width;
+    let mut prev: u32 = cps[0];
+    let mut state = BreakState::Default;
+
+    while len < cps.len() {
+        // Treat invalid input as a boundary so a valid prefix cluster can
+        // still be returned.
+        if invalid_codepoint(cps[len]) {
+            break;
+        }
+
+        let cp = cps[len];
+        let state_before = state;
+        if grapheme_break(prev, cp, &mut state) {
+            break;
+        }
+
+        match grapheme_width_effect(prev, cp) {
+            GraphemeWidthEffect::Ignore => state = state_before,
+            GraphemeWidthEffect::NoChange => prev = cp,
+            GraphemeWidthEffect::Wide => {
+                width = 2;
+                prev = cp;
+            }
+            GraphemeWidthEffect::Narrow => {
+                width = 1;
+                prev = cp;
+            }
+        }
+
+        len += 1;
+    }
+
+    GraphemeWidth { len, width }
+}
+
 /// This is all the structures and data for the precomputed lookup table
 /// for all possible permutations of state and grapheme break properties.
 /// Precomputation requires 2^13 keys of 4 bit values so the whole table is
@@ -244,5 +380,79 @@ mod tests {
         cp2 = it.next().unwrap();
         assert!(cp1 == 0x1F466); // 👦
         assert!(grapheme_break(cp1, cp2, &mut state)); // break
+    }
+
+    // test "grapheme width: variation selectors" (oracle 65e61282a)
+    #[test]
+    fn grapheme_width_variation_selectors() {
+        assert_eq!(GraphemeWidthEffect::Wide, grapheme_width_effect(0x2764, 0xFE0F));
+        assert_eq!(GraphemeWidthEffect::Narrow, grapheme_width_effect(0x23, 0xFE0E));
+        assert_eq!(GraphemeWidthEffect::Ignore, grapheme_width_effect('x' as u32, 0xFE0F));
+
+        assert_eq!(GraphemeWidth { len: 2, width: 2 }, grapheme_width(&[0x2764, 0xFE0F]));
+        assert_eq!(GraphemeWidth { len: 2, width: 2 }, grapheme_width(&[0x23, 0xFE0F]));
+        assert_eq!(GraphemeWidth { len: 2, width: 1 }, grapheme_width(&['x' as u32, 0xFE0F]));
+        assert_eq!(GraphemeWidth { len: 3, width: 1 }, grapheme_width(&['x' as u32, 0xFE0F, 0xFE0F]));
+        assert_eq!(GraphemeWidth { len: 2, width: 1 }, grapheme_width(&[0x23, 0xFE0E]));
+        assert_eq!(GraphemeWidth { len: 2, width: 1 }, grapheme_width(&[0x231A, 0xFE0E]));
+        assert_eq!(GraphemeWidth { len: 3, width: 1 }, grapheme_width(&[0x231A, 0xFE0E, 0xFE0F]));
+        assert_eq!(
+            GraphemeWidth { len: 4, width: 2 },
+            grapheme_width(&[0x1F3F4, 0x200D, 0x2620, 0xFE0F])
+        );
+    }
+
+    // test "grapheme width: emoji sequences" (oracle 65e61282a)
+    #[test]
+    fn grapheme_width_emoji_sequences() {
+        assert_eq!(
+            GraphemeWidth { len: 5, width: 2 },
+            grapheme_width(&[0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467])
+        );
+        assert_eq!(GraphemeWidth { len: 3, width: 2 }, grapheme_width(&[0x23, 0xFE0F, 0x20E3]));
+        assert_eq!(GraphemeWidth { len: 2, width: 1 }, grapheme_width(&['1' as u32, 0x20E3]));
+        assert_eq!(GraphemeWidth { len: 2, width: 2 }, grapheme_width(&[0x1F44B, 0x1F3FF]));
+    }
+
+    // test "grapheme width: spacing marks can widen narrow clusters" (oracle 65e61282a)
+    #[test]
+    fn grapheme_width_spacing_marks_widen() {
+        let mut mark: Option<u32> = None;
+        for cp in 0..0x110000u32 {
+            let props = table().get(cp);
+            if props.width != 1 || props.width_zero_in_grapheme {
+                continue;
+            }
+            let mut state = BreakState::Default;
+            if !grapheme_break('a' as u32, cp, &mut state) {
+                mark = Some(cp);
+                break;
+            }
+        }
+        let cp = mark.expect("a spacing mark should exist");
+        assert_eq!(1, table().get(cp).width);
+        assert!(!table().get(cp).width_zero_in_grapheme);
+        assert_eq!(GraphemeWidth { len: 2, width: 2 }, grapheme_width(&['a' as u32, cp]));
+    }
+
+    // test "grapheme width: segmentation" (oracle 65e61282a)
+    #[test]
+    fn grapheme_width_segmentation() {
+        assert_eq!(GraphemeWidth { len: 1, width: 1 }, grapheme_width(&['a' as u32]));
+        assert_eq!(GraphemeWidth { len: 1, width: 1 }, grapheme_width(&['a' as u32, 'b' as u32]));
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 2 },
+            grapheme_width(&[0x1F1E6, 0x1F1E7, 0x1F1E8])
+        );
+        assert_eq!(GraphemeWidth { len: 1, width: 2 }, grapheme_width(&[0x1F1E8]));
+        assert_eq!(GraphemeWidth { len: 0, width: 0 }, grapheme_width(&[]));
+        assert_eq!(GraphemeWidth { len: 2, width: 0 }, grapheme_width(&[0x0301, 0x0302]));
+    }
+
+    // test "grapheme width: u32 invalid codepoints stand alone" (oracle 65e61282a)
+    #[test]
+    fn grapheme_width_u32_invalid() {
+        assert_eq!(GraphemeWidth { len: 1, width: 1 }, grapheme_width(&[0x110000, 0x0301]));
+        assert_eq!(GraphemeWidth { len: 1, width: 1 }, grapheme_width(&['a' as u32, 0x110000]));
     }
 }
