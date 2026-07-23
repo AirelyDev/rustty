@@ -50,7 +50,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 - **BL-2 — `896aca499` return free-listed page memory to the OS** (madvise/decommit on the page pool; 172 ins). Standalone but platform-conditional memory work; interacts with BL-1's reclamation generalization (`f6fd4cb08`).
 - **BL-3 — pending-small queue** — see §3 table rows marked `pending-small`. Each is a small/medium single-concern fix to pin-era ported code; port assertion-for-assertion WITH its test hunks, one commit per upstream commit, next parity pass.
 - **BL-4 — stream/terminal/termio performance series** (#13206-era + later: SIMD ESC/ASCII inline, CSI bulk parse/dispatch, print run batching, scroll-region opts, render-state lock-hold opts, APC bulk dispatch, pty read pipelining, per-run style release, once-per-value logging). Perf-intent work over ported code; several commits interlock (stream fast paths ↔ terminal handlers ↔ bench harness). Port as a series with the bench corpus commits (`4c5b1d5d5`, `258de36d1`).
-- **BL-5 — lib-vt C-API expansion** (color utility APIs, color-scheme report encoder, OSC/Kitty color-query reporting, unicode width APIs, scroll-to-row tag, clipboard_set/OSC-52 effects, RGB-by-pointer ABI fix, selection-gesture export). Touches `include/ghostty/vt/*`, `src/terminal/c/*`, `src/lib_vt.zig` → `rustty-vt-c`/`rustty-lib`. ABI-shaped: port as a coordinated batch against the C header contract (G4 byte-parity gates apply). Evidence: `ScrollViewport` at `crates/rustty-vt/src/terminal.rs:318` has no `Row` variant; `grep -r clipboard_set crates/rustty-vt*` → 0 hits.
+- **BL-5 — lib-vt C-API expansion** — **CLOSED by WS5** (color utility APIs, color-scheme report encoder, OSC/Kitty color-query reporting, unicode width APIs, scroll-to-row tag, protocol-neutral clipboard_write/OSC-52 effect, RGB-by-pointer ABI fix, selection-gesture export). All 10 BL-5 oracle commits ported (WS5 T2-T18); the 13 new `rustty_*` exports + `clipboard_write` option 26 are live and header-gated. `ScrollViewport` now has a `Row` variant (`crates/rustty-vt/src/terminal.rs`); `clipboard` is now a live rustty-vt module (the protocol-neutral `clipboard_write` effect supersedes the intermediate `clipboard_set` form).
 - **BL-6 — kitty/gfx generation stamps** (`bdc0b6c19` + build fix `8fe5913f7`). Deletes transmit-time in favor of generation stamps across graphics storage/exec/image/renderer + C API. Evidence: `grep -rn transmit_time crates/rustty-vt/src/kitty` → 8 hits (pre-change shape).
 - **BL-7 — OSC 72 kitty drag-and-drop parser** (`91c87e2cf` + doc/test follow-ups `dd6c09bcf`, `a6132c18b`, `c488ccda6`). New `osc/parsers/kitty_dnd_protocol.zig`. Evidence: `grep -r kitty_dnd crates/rustty-vt/src` → 0 hits.
 - **BL-8 — GTK tier** (`004c88e41`, `0a117e079`, `5ea45919d` + config option docs `b5f5ca078`). GTK apprt is not yet ported (heavy-tier plan: GTK last); these belong to that tier's pre-port commit sweep, including the `gtk-horizontal-tab-scroll` Config option.
@@ -65,7 +65,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `89eca063e` | terminal/search: avoid pruning history on reload | missing BL-1 | search/screen.rs; fix is against BL-1 generation machinery |
 | `0bad91adb` | terminal: renew generations for direct row shifts | missing BL-1 | pagelist has no page-generation field |
 | `d4ac93a03` | clipboard_set effect for OSC 52 (#13182) | n/a-merge | constituents below |
-| `634ef7198` | terminal: make clipboard writes protocol neutral | missing BL-5 | no `clipboard.zig` analogue / clipboard_set in rustty-vt(-c) |
+| `634ef7198` | terminal: make clipboard writes protocol neutral | **PORTED** | clipboard.rs (Location/Content/Write/WriteResult) + clipboard_write effect + vt-c trampoline/Option 26/types/terminal.h/example (WS5 T16-T17) |
 | `f6d9a582e` | terminal: rename page serial floor as epoch | missing BL-1 | serial-floor concept lands with BL-1 |
 | `dd956f37c` | terminal: renew generations for shifted rows | missing BL-1 | — |
 | `d0a26d146` | terminal: reschedule compression after page replacement | missing BL-1 | — |
@@ -143,7 +143,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `16e4b5e98` | terminal: track page ownership explicitly on pagelist nodes | missing BL-1 | compression-prep restructure (209/72) |
 | `b953bb346` | terminal: fix bitmap allocator chunk region sizing | **PORTED** | bitmap_allocator.rs:335 + 2 tests (§1) |
 | `3ff6d08fa` | lib-vt: report OSC and Kitty color queries (#13239) | n/a-merge | constituents below |
-| `14c829883` | terminal: report OSC color queries in lib-vt | missing BL-5 | terminal/c + osc/kitty color query surface |
+| `14c829883` | terminal: report OSC color queries in lib-vt | **PORTED** | encode_rgb8/16 + color_for_xterm/kitty + has_terminal_query_color + osc reset fix + stream reporting + vt-c KATs (WS5 T9-T10) |
 | `20a1bfa5f` | fix: pass RGB color inputs by pointer | **PORTED** | rustty_color_rgb_get by-pointer ABI (WS5 T2) |
 | `bb0ac4c72` | termio: don't bridge pty reads while the parser is idle | missing BL-4 | rustty-termio exec |
 | `bed47168c` | termio: bound POSIX read-ahead on non-Darwin | n/a | reverted upstream by `60121a039` |
@@ -169,17 +169,17 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `2970e9a2a` | lib-vt: many more color utility APIs | **PORTED** | color.rs/x11_color.rs + vt-c color.rs/lib.rs/types.rs + color.h/sgr.h + config delegation (WS5 T3-T6) |
 | `4a7cabc4f` | lib-vt: color scheme report encoder (#13192) | n/a-merge | constituent below |
 | `715ef6c15` | fix: max window clamp to monitor size (#13171) | n/a-merge | constituent `004c88e41` (gtk) |
-| `f00e90694` | lib-vt: add color scheme report encoder | missing BL-5 | include/ghostty/vt/color_scheme.h + c/color_scheme |
+| `f00e90694` | lib-vt: add color scheme report encoder | **PORTED** | device_status::encode_color_scheme_report + vt-c color_scheme.rs + rustty_color_scheme_report_encode + color_scheme.h + example (WS5 T7-T8) |
 | `004c88e41` | fix: set max window clamp to current monitor size | n/a-tier BL-8 | src/apprt/gtk — tier unported |
-| `65e61282a` | lib-vt: add unicode grapheme width API | missing BL-5 | c/unicode + unicode/grapheme surface |
+| `65e61282a` | lib-vt: add unicode grapheme width API | **PORTED** | grapheme::grapheme_width_effect/grapheme_width (print-path shared) + vt-c unicode.rs + rustty_unicode_grapheme_width + unicode.h (WS5 T12-T13) |
 | `688750903` | Kitty dnd parser (#13029) | n/a-merge | constituents = BL-7 |
 | `cca51729a` | lib-vt: scroll-to-row viewport scrolling (#13179) | n/a-merge | constituent below |
-| `3a2e28329` | lib-vt: add scroll-to-row viewport scrolling | missing BL-5 | PageList `Scroll::Row` core pre-exists at pin (scroll.rs:91); missing piece is the `ScrollViewport` `Row` tag (terminal.rs:318 has Top/Bottom/Delta only) + C tag/docs |
-| `fc5a72772` | lib-vt: add unicode codepoint width API | missing BL-5 | c/unicode |
-| `0a410f18e` | terminal: clipboard_set effect for OSC 52 writes | missing BL-5 | `grep -r clipboard_set crates/rustty-vt*` → 0 |
+| `3a2e28329` | lib-vt: add scroll-to-row viewport scrolling | **PORTED** | ScrollViewport::Row @ terminal.rs + scroll_viewport mapping + vt-c Row tag/union + RUSTTY_SCROLL_VIEWPORT_ROW terminal.h (WS5 T14-T15) |
+| `fc5a72772` | lib-vt: add unicode codepoint width API | **PORTED** | rustty_unicode::codepoint_width + vt-c unicode::codepoint_width + rustty_unicode_codepoint_width + unicode.h (WS5 T11-T13) |
+| `0a410f18e` | terminal: clipboard_set effect for OSC 52 writes | **PORTED (subsumed)** | superseded by `634ef7198`; ported directly to the protocol-neutral clipboard_write shape (WS5 T16-T17) |
 | `8fe5913f7` | kitty/gfx: fix build without 64-bit atomics | missing BL-6 | fix over `bdc0b6c19`'s generation stamps |
 | `bdc0b6c19` | kitty/gfx: generation stamps, delete transmit time | missing BL-6 | `transmit_time` still present in rustty kitty (8 hits) |
-| `f245cdc66` | lib-vt: expose selection gesture to Zig | missing BL-5 | 1-line lib_vt.zig export |
+| `f245cdc66` | lib-vt: expose selection gesture to Zig | **PORTED (already covered)** | Zig-module re-export only; vt-c `rustty_selection_gesture_*` + rustty-vt `selection_gesture` module already live (WS5 T18 verified) |
 | `aea63d71f` | libghostty: fix utf-8 grapheme length overflow | pending-small BL-3 | rustty-vt-c render seam (79/20, has tests) |
 | `e5b65a2ce` | config: gtk-horizontal-tab-scroll option (#12659) | n/a-merge | constituents = BL-8 |
 | `0a117e079` | gtk: fix missing dbus connection causing crash | n/a-tier BL-8 | gtk tier unported |
