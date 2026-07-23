@@ -3855,27 +3855,46 @@ impl Surface {
         imp.resize_overlay.set_overlay_halign(halign);
         imp.resize_overlay.set_overlay_valign(valign);
     }
-    /// PORTS: `surface.zig:2310-...` `propError`. **Reached from
-    /// [`Surface::set_error`]** (the T15 GL-error path), so this must not panic.
-    /// Ports the opaque-background CSS toggle (`:2318-2331`); the idle-tick child
-    /// swap between the GLArea and the `error_page` (`onIdleRechild`, `:2333-...`)
-    /// is deferred to T16 with the resize-overlay / error-page display work.
+    /// PORTS: `surface.zig:2310-2348` `propError` + `onIdleRechild`. **Reached
+    /// from [`Surface::set_error`]** (the GL-error path), so this must not panic.
+    /// Toggles the opaque-background CSS (`:2316-2326`) and schedules an idle-tick
+    /// child swap between the `terminal_page` and the `error_page` (`:2328-2348`).
     #[template_callback(name = "notify_error")]
     fn on_notify_error(&self) {
         let widget = self.upcast_ref::<gtk4::Widget>();
         if self.imp().error.get() {
             // Ensure an opaque background so the error message is readable
-            // (`:2318-2322`).
+            // (`:2316-2322`).
             widget.add_css_class("background");
         } else {
-            // Parent widgets set it appropriately otherwise (`:2325-2330`).
+            // Parent widgets set it appropriately otherwise (`:2323-2326`).
             widget.remove_css_class("background");
         }
 
-        // PORT NOTE (placeholder, T16): schedule `idle_rechild` to swap the visible
-        // child to the `error_page` on an idle tick (`surface.zig:2333-...`,
-        // `onIdleRechild`) — deferred with the error-page display work. The `error`
-        // property + CSS are already authoritative for listeners.
+        // We need to set our child property on an idle tick, because the error
+        // property can be triggered by signals that are in the middle of widget
+        // mapping and changing our child during that time results in a hard gtk
+        // crash (`:2328-2335`). A weak backref keeps the source non-owning (removed
+        // in `dispose`, **invariant 11**).
+        let imp = self.imp();
+        if imp.idle_rechild.borrow().is_none() {
+            let weak = self.downgrade();
+            let id = glib::idle_add_local(move || {
+                // PORTS: `onIdleRechild` (`:2338-2348`). Re-reads `error` at idle
+                // time (not capture time), matching the reference.
+                if let Some(this) = weak.upgrade() {
+                    let imp = this.imp();
+                    imp.idle_rechild.replace(None);
+                    if imp.error.get() {
+                        this.set_child(Some(&*imp.error_page));
+                    } else {
+                        this.set_child(Some(&*imp.terminal_page));
+                    }
+                }
+                glib::ControlFlow::Break
+            });
+            imp.idle_rechild.replace(Some(id));
+        }
     }
     /// PORTS: `surface.zig:2350-2358` `propMouseHoverUrl`. Reveal `url_left` (the
     /// bottom-left URL overlay label, whose text is bound to `mouse-hover-url` in the
