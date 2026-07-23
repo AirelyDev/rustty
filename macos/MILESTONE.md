@@ -52,8 +52,7 @@ AppKit app, running as a real macOS terminal.
   = Rustty`), and the on-disk product/executable name (`Rustty.app`/`rustty`) are all rebranded —
   see `REBRAND.md`. Secondary component bundle ids are `io.airely.rustty*` (dock-tile plugin, unit/
   UI test bundles) — no `com.mitchellh.*`/`Ghostty` remnants left on the macOS side.
-- **Deployment target**: staticlib built for macOS 26.5 vs app target 13.0 (harmless warnings;
-  set MACOSX_DEPLOYMENT_TARGET on the cargo build to match).
+- **Deployment target**: ✅ DONE (WS3, 2026-07-23) — xtask pins MACOSX_DEPLOYMENT_TARGET=13.0 on the xcframework cargo build; clean rebuild verified via otool (our own crates' + `-sys` build-script objects all minos 13.0; 383 pre-built Rust-sysroot objects — compiler_builtins/alloc/adler2/etc., not compiled by our build — carry the toolchain's own 11.0 stamp, which is OLDER than 13.0 and so never triggers the linker warning) and a warning-free build-rustty.sh xcodebuild log (`grep -c "was built for newer macOS version"` = 0).
 - **Deferred features**: quicklook, live inspector, the 5 non-display Darwin exports.
 
 ## ✅ CORRECTED (2026-07-12) — the window ACTUALLY RENDERS now (W-ATTACH fixed)
@@ -75,5 +74,4 @@ window + render + shell + input, all driven by rustty's ported Rust core.
 - **P2 on-feature crashers (panic=abort):** `quicklook_font`/`quicklook_word` abort on Look-Up /
   force-click / accessibility; the inspector aborts if opened. Cheap interim: swap the
   `unimplemented!()` leaves for graceful null/false returns, then port the bodies.
-- **P3 polish:** autoreleasepool shim, self-contained zlib+gettext lib, R2 identity rebrand, the
-  deployment-target warning.
+- **P3 polish:** autoreleasepool shim, self-contained zlib+gettext lib, R2 identity rebrand.
