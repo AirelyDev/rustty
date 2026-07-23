@@ -3822,14 +3822,38 @@ impl Surface {
 
     // -- notify:: property handlers (surface.blp:235-240) ------------------
     /// PORTS: `surface.zig:2258-2308` `propConfig`. **Reached during `init`**
-    /// (`:1832`), so this must not panic. No-op until L5.2 T16 applies the config
-    /// to the resize-overlay (duration / position).
+    /// (`:1832`), so this must not panic. Pushes `resize-overlay-duration` and
+    /// `resize-overlay-position` from the config onto the `resize_overlay`.
     // Renamed `on_notify_*` (blueprint name kept via `name = …`) so they don't
     // clash with the `glib::Properties`-generated `notify_<prop>()` emitters.
     #[template_callback(name = "notify_config")]
     fn on_notify_config(&self) {
-        // PORT NOTE (placeholder, reachable): applies `config` to `resize_overlay`
-        // (`surface.zig:2266-2307`); wired in T16.
+        use rustty_config::value_types::ResizeOverlayPosition;
+
+        let imp = self.imp();
+        // `const config = if (priv.config) |c| c.get() else return` (`:2263-2264`).
+        let cfg_ref = imp.config.borrow();
+        let Some(config) = cfg_ref.as_ref() else {
+            return;
+        };
+        let config = config.get();
+
+        // resize-overlay-duration (`:2266-2276`).
+        imp.resize_overlay
+            .set_duration(config.resize_overlay_duration.as_milliseconds());
+
+        // resize-overlay-position (`:2278-2307`).
+        let (halign, valign): (gtk4::Align, gtk4::Align) = match config.resize_overlay_position {
+            ResizeOverlayPosition::Center => (gtk4::Align::Center, gtk4::Align::Center),
+            ResizeOverlayPosition::TopLeft => (gtk4::Align::Start, gtk4::Align::Start),
+            ResizeOverlayPosition::TopRight => (gtk4::Align::End, gtk4::Align::Start),
+            ResizeOverlayPosition::TopCenter => (gtk4::Align::Center, gtk4::Align::Start),
+            ResizeOverlayPosition::BottomLeft => (gtk4::Align::Start, gtk4::Align::End),
+            ResizeOverlayPosition::BottomRight => (gtk4::Align::End, gtk4::Align::End),
+            ResizeOverlayPosition::BottomCenter => (gtk4::Align::Center, gtk4::Align::End),
+        };
+        imp.resize_overlay.set_overlay_halign(halign);
+        imp.resize_overlay.set_overlay_valign(valign);
     }
     /// PORTS: `surface.zig:2310-...` `propError`. **Reached from
     /// [`Surface::set_error`]** (the T15 GL-error path), so this must not panic.
