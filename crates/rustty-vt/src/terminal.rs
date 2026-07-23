@@ -324,6 +324,13 @@ pub enum ScrollViewport {
 
     /// Scroll by some delta amount, up is negative.
     Delta(isize),
+
+    /// Scroll to the given absolute row offset from the top of the
+    /// scrollable area. A value of zero is the top row. The requested
+    /// row becomes the first visible row of the viewport, clamped so
+    /// the viewport never scrolls beyond the top of the active area.
+    /// This is the same row space as `Scrollbar` offset.
+    Row(usize),
 }
 
 /// The modes for DECCOLM.
@@ -2769,11 +2776,13 @@ impl Terminal {
         //     .top => .{ .top = {} },
         //     .bottom => .{ .active = {} },
         //     .delta => |delta| .{ .delta_row = delta },
+        //     .row => |row| .{ .row = row },
         // });
         self.active_mut().scroll(match behavior {
             ScrollViewport::Top => crate::screen::Scroll::Top,
             ScrollViewport::Bottom => crate::screen::Scroll::Active,
             ScrollViewport::Delta(delta) => crate::screen::Scroll::DeltaRow(delta),
+            ScrollViewport::Row(row) => crate::screen::Scroll::Row(row),
         });
     }
 
@@ -6703,6 +6712,48 @@ mod tests {
             }
                 as u32))
         );
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scroll_viewport row" — engine-level mirror of the C API
+    // scroll_viewport-row KAT (oracle 3a2e28329).
+    #[test]
+    fn terminal_scroll_viewport_row() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        // Write 4 rows so rows "1" and "2" are pushed into scrollback:
+        // total rows is 4, viewport length is 2. (The oracle drives this via
+        // vt_write "1\r\n2\r\n3\r\n4"; here we invoke the engine primitives
+        // directly since print_string does not process control bytes.)
+        for (i, ch) in ['1', '2', '3', '4'].iter().enumerate() {
+            t.print(*ch as u32).unwrap();
+            if i != 3 {
+                t.carriage_return();
+                t.linefeed().unwrap();
+            }
+        }
+
+        // Row 0 is the top of the scrollback.
+        t.scroll_viewport(ScrollViewport::Row(0));
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1\n2".as_bytes());
+        }
+
+        // An absolute row within the scrollback becomes the first visible row.
+        t.scroll_viewport(ScrollViewport::Row(1));
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "2\n3".as_bytes());
+        }
+
+        // A row past the end clamps to the active area.
+        t.scroll_viewport(ScrollViewport::Row(9999));
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "3\n4".as_bytes());
+        }
 
         t.deinit(Global);
     }
