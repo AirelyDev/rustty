@@ -4477,7 +4477,7 @@ carries the equivalent dead-path `self.wakeup()` idiom. Joint follow-up: apply t
 copied-fd notify to the kqueue twin and audit the full `task_loop`-pointer lineage under
 SB/TB (mirihar) once the pool paths go live on both backends.
 
-### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity (LOW, fidelity gap)
+### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity — ✅ RESOLVED (2026-07-23, WS3)
 
 The reference comptime-defaults the module-global to `&decodePngWuffs` for
 non-lib artifacts (sys.zig:18-24); the port defaults `None` with
@@ -4488,6 +4488,16 @@ non-lib artifacts (sys.zig:18-24); the port defaults `None` with
 sys.rs:239-243). **Un-defer trigger:** wiring the built-in PNG decode default
 for non-lib builds (kitty-graphics PNG parity pass, or any consumer hitting
 `decode_png == None` where ghostty-the-app would have had wuffs).
+
+**RESOLVED (2026-07-23, `ws3-small-parity-fills`):** `decodePngWuffs` is live in
+sys.rs behind the `wuffs` cargo feature (optional `rustty-wuffs` dep); the
+default is the faithful comptime map — `Artifact::Lib` (or featureless) → None,
+else `Some(decode_png_wuffs)`. rustty-core enables the feature for the app tier
+(SharedDeps `.ghostty` analog); rustty-vt-c keeps the `.lib` None default.
+KATs: sys.rs `default_decoder_*` + stream_terminal.rs
+`kitty_graphics_png_transmit_decodes_via_default_hook` (run with
+`--features wuffs`); graphics_image.rs `image_load_png_not_compressed_regular_file`
+no longer skips under the feature.
 
 ### 3. rustty-termio `shell_integration.rs` — lossy path byte source (LOW, cleanup)
 
