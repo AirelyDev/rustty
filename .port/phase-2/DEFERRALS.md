@@ -3560,6 +3560,13 @@ drain itself + every message arm is REAL. Re-arm the pool when core gains an
 objc2 edge (or via a `rustty_os` autoreleasepool shim). This is the same
 class as the io-thread's deferred autoreleasepool.
 
+**RESOLVED (WS2-C, 2026-07-23):** realized exactly via the named re-arm path — the
+`rustty_os::autorelease::autoreleasepool` shim (objc2-backed on macOS, identity
+elsewhere; core still has no objc2 edge). `drainMailbox` is now the pool wrapper
+around the hoisted `drainMailboxBody`; drain semantics unchanged (rustty-core +
+macos_window_host suites green). Pool-drain property pinned by
+`rustty-os/src/autorelease.rs` `pool_drains_autoreleased_references`.
+
 No other W3 E2 deferrals: `cursorBlinkInterval`'s valgrind `* 5` branch is kept
 verbatim-inert (no `std.valgrind` shim, in-place comment + PORT NOTE, not a
 DEFERRALS entry); the `MUST_DRAW_FROM_APP_THREAD` app-mailbox `drawFrame` arm is
