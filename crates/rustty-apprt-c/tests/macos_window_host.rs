@@ -656,6 +656,41 @@ fn content_scale_restamp_tracks_cross_dpi_move() {
     );
 }
 
+// --- WS2-D B4 KAT ---
+// MACOS_APP_GAPS §2 B4: post-attach, `surfaceSize()` = layer.bounds ×
+// contentsScale must FOLLOW a live resize. AppKit re-lays a layer-hosting view's
+// layer on resize; the harness stands in (set_host_layer_bounds), then performs
+// the Swift host's resize handshake (`setSurfaceSize` → rustty_surface_set_size
+// with the BACKING pixel size, SurfaceView_AppKit.swift:869-871). The
+// IOSurfaceLayer discards wrong-sized surfaces (IOSurfaceLayer.zig:104-116 ==
+// iosurface_layer.rs), so convergence to the new size proves the whole reflow:
+// core resize → renderer rebuild → present at bounds × scale.
+#[test]
+fn resize_tracks_host_layer_bounds() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    host.pump_bounded();
+    assert!(host.layer_has_contents(), "no first frame presented");
+    assert_eq!(
+        host.presented_size(),
+        Some((256, 128)),
+        "first frame must be 128×64 pt @2x"
+    );
+
+    // Live resize to 200×100 pt (@2x ⇒ 400×200 px backing size).
+    host.set_host_layer_bounds(200.0, 100.0);
+    // SAFETY: `host.surface` is live.
+    unsafe { rustty_surface_set_size(host.surface, 400, 200) };
+    let sz = host.pump_until_presented_size((400, 200));
+    assert_eq!(
+        sz,
+        Some((400, 200)),
+        "presented IOSurface must track the layer resize (B4 reflow)"
+    );
+}
+
 // --- on-device visible variant (#[ignore]): a REAL NSWindow, run ON THE MAIN THREAD ---
 // This is the ONLY test that uses AppKit (`objc2-app-kit`, dev-only). It is #[ignore]
 // and NOT part of the headless gate: it needs a live WindowServer/GUI session AND the
