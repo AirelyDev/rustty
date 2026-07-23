@@ -140,6 +140,15 @@ pub const VERSION: &str = rustty_identity::VERSION;
 /// Reference: `pub const version_string = options.app_version_string;`.
 pub const VERSION_STRING: &str = rustty_identity::VERSION;
 
+/// The Rust toolchain version this build was compiled with (bare version, e.g.
+/// `1.93.1 (…)`).
+///
+/// Reference analog: `builtin.zig_version_string` — the reference has no
+/// build_config member for this (Zig provides it as a builtin); it lives here
+/// because build-config is the port's home for build-environment constants.
+/// Captured by `build.rs` from `$RUSTC --version`.
+pub const RUSTC_VERSION: &str = env!("RUSTTY_RUSTC_VERSION");
+
 /// Returns the pre-release component of [`VERSION`], if any.
 ///
 /// A semantic version `MAJOR.MINOR.PATCH[-PRE][+BUILD]` has a pre-release
@@ -320,5 +329,22 @@ impl Artifact {
             return Artifact::WasmModule;
         }
         Artifact::Exe
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// WS3-B: the toolchain version captured by build.rs. The workspace pins
+    /// rustc via rust-toolchain.toml, so the string starts with a 1.x version
+    /// and carries no "rustc " prefix (mirrors `builtin.zig_version_string`
+    /// being a bare version string).
+    #[test]
+    fn rustc_version_is_captured() {
+        assert!(
+            crate::RUSTC_VERSION.starts_with("1."),
+            "RUSTC_VERSION should be a bare version, got: {:?}",
+            crate::RUSTC_VERSION
+        );
+        assert!(!crate::RUSTC_VERSION.contains("rustc "));
     }
 }
