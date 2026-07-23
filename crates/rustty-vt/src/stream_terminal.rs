@@ -38,6 +38,7 @@
 // const size_report = @import("size_report.zig");
 // const Terminal = @import("Terminal.zig");
 use crate::ansi;
+use crate::clipboard;
 use crate::color;
 use crate::csi;
 use crate::device_attributes;
@@ -126,6 +127,22 @@ pub struct Effects<'a> {
     // bell: ?*const fn (*Handler) void
     pub bell: Option<fn(&mut Handler<'a>)>,
 
+    /// Called when the running program writes to a clipboard. The write
+    /// has a normalized destination and one or more decoded MIME
+    /// representations. All request, MIME, and data memory is borrowed
+    /// and only valid for the duration of the callback.
+    ///
+    /// A write with no contents clears the destination. A content entry
+    /// with empty data is a distinct empty representation.
+    ///
+    /// Clipboard read requests (OSC 52 with a "?" payload) are never
+    /// forwarded: answering one would let any program running in the
+    /// terminal silently read the user's clipboard, and a VT state
+    /// library has no way to mediate that with user consent.
+    // clipboard_write: ?*const fn (*Handler, clipboard.Write) clipboard.WriteResult
+    pub clipboard_write:
+        Option<fn(&mut Handler<'a>, clipboard::Write) -> clipboard::WriteResult>,
+
     /// Called in response to a color scheme DSR query (CSI ? 996 n).
     /// Returns the current color scheme. Return null to silently
     /// ignore the query.
@@ -177,6 +194,7 @@ impl<'a> Effects<'a> {
     // pub const readonly: Effects = .{ ... all null ... };
     pub const READONLY: Effects<'a> = Effects {
         bell: None,
+        clipboard_write: None,
         color_scheme: None,
         device_attributes: None,
         enquiry: None,
@@ -1902,8 +1920,66 @@ impl<'a> stream::Handler for Handler<'a> {
     // .progress_report => {} (have no terminal-modifying effect)
     fn progress_report(&mut self, v: osc::ProgressReport) {}
 
-    // .clipboard_contents => {} (have no terminal-modifying effect)
-    fn clipboard_contents(&mut self, v: stream::ClipboardContents) {}
+    // fn clipboardContents(self: *Handler, kind: u8, data: []const u8) !void
+    //
+    // PORT NOTE: the reference is `!void` and its caller `try`s it, propagating
+    // an invalid-base64 decode error out of `nextSlice`. rustty's OSC dispatch
+    // arm is infallible, so a malformed payload is a silent no-op here — the net
+    // observable behavior is identical (the callback is simply not invoked), and
+    // the oracle stream test only asserts the un-invoked count. The reference's
+    // fallible-allocator OOM path ("clipboard_write allocation failure is
+    // ignored") has no rustty analog because the decode scratch is a `Vec` that
+    // aborts on OOM (DG5 abort policy), so that oracle test is intentionally not
+    // ported.
+    fn clipboard_contents(&mut self, v: stream::ClipboardContents) {
+        let kind = v.kind;
+        let data = v.data;
+
+        let Some(func) = self.effects.clipboard_write else {
+            return;
+        };
+
+        // Read requests are deliberately not forwarded; see the effect docs.
+        // if (data.len == 1 and data[0] == '?') return;
+        if data.len() == 1 && data[0] == b'?' {
+            return;
+        }
+
+        // const location: clipboard.Location = switch (kind) { ... };
+        let location = match kind {
+            b's' => clipboard::Location::Selection,
+            b'p' => clipboard::Location::Primary,
+            _ => clipboard::Location::Standard,
+        };
+
+        // OSC 52 uses an empty payload to clear the selected clipboard.
+        // if (data.len == 0) { _ = func(self, .{ .location, .contents = &.{} }); return; }
+        if data.is_empty() {
+            let _ = func(self, clipboard::Write { location, contents: &[] });
+            return;
+        }
+
+        // const decoder = std.base64.standard.Decoder;
+        // const decoded_len = try decoder.calcSizeForSlice(data);
+        // const decoded = try alloc.alloc(u8, decoded_len);
+        // try decoder.decode(decoded, data);
+        let decoder = crate::apc::glyph::request::std_base64_standard_decoder();
+        let Ok(decoded_len) = decoder.calc_size_for_slice(data) else {
+            return;
+        };
+        let mut decoded = vec![0u8; decoded_len];
+        if decoder.decode(&mut decoded, data).is_err() {
+            return;
+        }
+
+        // const contents = [_]clipboard.Content{.{ .mime = "text/plain", .data = decoded }};
+        // _ = func(self, .{ .location, .contents = &contents });
+        let contents = [clipboard::Content {
+            mime: b"text/plain",
+            data: &decoded,
+        }];
+        let _ = func(self, clipboard::Write { location, contents: &contents });
+    }
 
     // .mouse_shape => self.terminal.mouse_shape = value,
     fn mouse_shape(&mut self, v: crate::mouse::Shape) {
@@ -3032,6 +3108,114 @@ mod tests {
             assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?9999;0$y");
         }
 
+        t.deinit(Global);
+    }
+
+    // Capture cells for the clipboard_write effect test (the analog of the
+    // reference's per-test `S` struct; bare `fn` callbacks route through
+    // thread-locals since Rust fn pointers cannot capture).
+    thread_local! {
+        static CLIP_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static CLIP_RESULT: core::cell::Cell<clipboard::WriteResult> =
+            const { core::cell::Cell::new(clipboard::WriteResult::Success) };
+        static CLIP_LOCATION: core::cell::Cell<clipboard::Location> =
+            const { core::cell::Cell::new(clipboard::Location::Standard) };
+        static CLIP_CONTENTS_LEN: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static CLIP_MIME: core::cell::RefCell<Option<Vec<u8>>> = const { core::cell::RefCell::new(None) };
+        static CLIP_DATA: core::cell::RefCell<Option<Vec<u8>>> = const { core::cell::RefCell::new(None) };
+    }
+
+    fn clip_clear_capture() {
+        CLIP_MIME.with(|c| *c.borrow_mut() = None);
+        CLIP_DATA.with(|c| *c.borrow_mut() = None);
+        CLIP_CONTENTS_LEN.with(|c| c.set(0));
+    }
+
+    fn cap_clipboard_write(_: &mut Handler, write: clipboard::Write) -> clipboard::WriteResult {
+        clip_clear_capture();
+        CLIP_COUNT.with(|c| c.set(c.get() + 1));
+        CLIP_LOCATION.with(|c| c.set(write.location));
+        CLIP_CONTENTS_LEN.with(|c| c.set(write.contents.len()));
+        if !write.contents.is_empty() {
+            CLIP_MIME.with(|c| *c.borrow_mut() = Some(write.contents[0].mime.to_vec()));
+            CLIP_DATA.with(|c| *c.borrow_mut() = Some(write.contents[0].data.to_vec()));
+        }
+        CLIP_RESULT.with(|c| c.get())
+    }
+
+    // test "clipboard_write effect callback" (oracle 634ef7198)
+    #[test]
+    fn clipboard_write_effect_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // A null callback (the default readonly effects) silently ignores writes.
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1B]52;c;aGVsbG8=\x1B\\");
+        }
+
+        t.full_reset();
+
+        CLIP_COUNT.with(|c| c.set(0));
+        CLIP_RESULT.with(|c| c.set(clipboard::WriteResult::Denied));
+        clip_clear_capture();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.clipboard_write = Some(cap_clipboard_write);
+
+        // Selectors are normalized and payloads are decoded before the callback.
+        let cases: &[(&[u8], clipboard::Location, &[u8])] = &[
+            (b"\x1B]52;c;aGVsbG8=\x1B\\", clipboard::Location::Standard, b"hello"),
+            (b"\x1B]52;s;d29ybGQ=\x07", clipboard::Location::Selection, b"world"),
+            (b"\x1B]52;p;cHJpbWFyeQ==\x1B\\", clipboard::Location::Primary, b"primary"),
+            (b"\x1B]52;0;Y3V0\x1B\\", clipboard::Location::Standard, b"cut"),
+            (b"\x1B]52;x;ZmFsbGJhY2s=\x1B\\", clipboard::Location::Standard, b"fallback"),
+            (b"\x1B]52;c;YQBi\x1B\\", clipboard::Location::Standard, b"a\x00b"),
+        ];
+
+        for (i, (sequence, location, data)) in cases.iter().enumerate() {
+            s.next_slice(sequence);
+            assert_eq!(i + 1, CLIP_COUNT.with(|c| c.get()));
+            assert_eq!(*location, CLIP_LOCATION.with(|c| c.get()));
+            assert_eq!(1, CLIP_CONTENTS_LEN.with(|c| c.get()));
+            assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
+            assert_eq!(*data, CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+        }
+
+        // Empty data is a clear, represented by an empty contents slice.
+        s.next_slice(b"\x1B]52;s;\x1B\\");
+        assert_eq!(cases.len() + 1, CLIP_COUNT.with(|c| c.get()));
+        assert_eq!(clipboard::Location::Selection, CLIP_LOCATION.with(|c| c.get()));
+        assert_eq!(0, CLIP_CONTENTS_LEN.with(|c| c.get()));
+        assert!(CLIP_MIME.with(|c| c.borrow().is_none()));
+        assert!(CLIP_DATA.with(|c| c.borrow().is_none()));
+
+        // Reads and malformed base64 are ignored.
+        s.next_slice(b"\x1B]52;c;?\x1B\\");
+        s.next_slice(b"\x1B]52;c;***\x1B\\");
+        assert_eq!(cases.len() + 1, CLIP_COUNT.with(|c| c.get()));
+
+        // OSC 1337 Copy shares the normalized clipboard write path.
+        s.next_slice(b"\x1B]1337;Copy=:aVRlcm0y\x1B\\");
+        assert_eq!(cases.len() + 2, CLIP_COUNT.with(|c| c.get()));
+        assert_eq!(clipboard::Location::Standard, CLIP_LOCATION.with(|c| c.get()));
+        assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
+        assert_eq!(b"iTerm2".as_slice(), CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+
+        // Parsing across write boundaries still invokes exactly one atomic write.
+        s.next_slice(b"\x1B]52;p;ZnJh");
+        s.next_slice(b"Z21lbnRlZA==\x1B");
+        s.next_slice(b"\\");
+        assert_eq!(cases.len() + 3, CLIP_COUNT.with(|c| c.get()));
+        assert_eq!(clipboard::Location::Primary, CLIP_LOCATION.with(|c| c.get()));
+        assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
+        assert_eq!(b"fragmented".as_slice(), CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+
+        // Callback results are intentionally ignored for protocols without a
+        // write acknowledgement. The denied result above did not stop later writes.
+        assert_eq!(clipboard::WriteResult::Denied, CLIP_RESULT.with(|c| c.get()));
+
+        clip_clear_capture();
         t.deinit(Global);
     }
 

@@ -1061,7 +1061,10 @@ fn parse_float(value: &[u8]) -> Option<f64> {
 // so the standard decoder is re-derived here from `std/base64.zig` (Zig 0.15.2)
 // with the standard alphabet and `'='` pad char — the exact decoder the
 // reference's `decodeGlyfPayload` uses.
-fn std_base64_standard_decoder() -> Base64Decoder {
+// PORT NOTE: exposed `pub(crate)` so the protocol-neutral clipboard_write
+// effect (stream_terminal, BL-5 634ef7198) can share the exact same strict
+// `std.base64.standard.Decoder` the reference `clipboardContents` uses.
+pub(crate) fn std_base64_standard_decoder() -> Base64Decoder {
     Base64Decoder::init(std_base64_standard_alphabet_chars(), Some(b'='))
 }
 
@@ -1075,7 +1078,7 @@ fn std_base64_standard_alphabet_chars() -> [u8; 64] {
 // NoSpaceLeft }`. The decode paths below only construct `InvalidCharacter` /
 // `InvalidPadding`; `NoSpaceLeft` is preserved for fidelity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Base64Error {
+pub(crate) enum Base64Error {
     InvalidCharacter,
     InvalidPadding,
     #[allow(dead_code)]
@@ -1083,7 +1086,7 @@ enum Base64Error {
 }
 
 /// Faithful port of `std/base64.zig`'s `Base64Decoder` (Zig 0.15.2).
-struct Base64Decoder {
+pub(crate) struct Base64Decoder {
     char_to_index: [u8; 256],
     fast_char_to_index: [[u32; 256]; 4],
     pad_char: Option<u8>,
@@ -1142,7 +1145,7 @@ impl Base64Decoder {
         Ok(result)
     }
 
-    fn calc_size_for_slice(&self, source: &[u8]) -> Result<usize, Base64Error> {
+    pub(crate) fn calc_size_for_slice(&self, source: &[u8]) -> Result<usize, Base64Error> {
         let source_len = source.len();
         let mut result = self.calc_size_upper_bound(source_len)?;
         if let Some(pad_char) = self.pad_char {
@@ -1159,7 +1162,7 @@ impl Base64Decoder {
     // PORT NOTE: `source.len() % 4 != 0` mirrors `std/base64.zig`'s modulo check;
     // `#[allow(clippy::manual_is_multiple_of)]` keeps it verbatim.
     #[allow(clippy::manual_is_multiple_of)]
-    fn decode(&self, dest: &mut [u8], source: &[u8]) -> Result<(), Base64Error> {
+    pub(crate) fn decode(&self, dest: &mut [u8], source: &[u8]) -> Result<(), Base64Error> {
         // if (decoder.pad_char != null and source.len % 4 != 0) return error.InvalidPadding;
         if self.pad_char.is_some() && source.len() % 4 != 0 {
             return Err(Base64Error::InvalidPadding);

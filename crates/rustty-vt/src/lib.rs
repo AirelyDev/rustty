@@ -47,6 +47,7 @@ pub mod osc;
 // pub const point = @import("point.zig");
 pub mod point;
 // pub const color = @import("color.zig");
+pub mod clipboard;
 pub mod color;
 // PORT NOTE: `terminal/cursor.zig` has no top-level re-export in `main.zig`
 // (it is an internal sibling imported by `Screen.zig` for the cursor `Style`
