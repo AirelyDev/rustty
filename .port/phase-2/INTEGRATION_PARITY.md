@@ -176,7 +176,7 @@ Ranked by severity, then reachability.
   does produce is what TERM resolution uses). Not covered by the R5 note, so
   recorded here though behaviorally moot for the Release app.
 
-### 2.9 [LOW / UNVERIFIED] `host_view` field access on `Platform::MacOS` may not compile on non-darwin — ✅ FIXED, Linux VERIFICATION PENDING (WS3: `platform_host_view` arms are `#[cfg]`-gated per target with a `non_darwin_returns_null` regression KAT added; this macOS worktree session did not run the `ssh rvm` non-darwin build/test per its execution constraints — run the WS8-style both-platform gate to confirm `non_darwin_returns_null` passes on Linux before calling this fully closed)
+### 2.9 [LOW] `host_view` field access on `Platform::MacOS` may not compile on non-darwin — ✅ RESOLVED (WS3: `platform_host_view` arms are `#[cfg]`-gated per target with a `non_darwin_returns_null` regression KAT; Linux both-platform gate GREEN on main 57a63d0 — `cargo build --workspace` exit 0 on aarch64 Fedora, 2026-07-23)
 - **rustty**: `embedded.rs:2230` `Platform::MacOS(m) => m.nsview` in an
   un-cfg-gated impl; on non-darwin `MacOS` is a fieldless unit struct
   (`embedded.rs:711-712`).
