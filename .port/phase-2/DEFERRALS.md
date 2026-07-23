@@ -4801,3 +4801,26 @@ File watcher WILL multi-worker-join, hence the defensive close. Full interleavin
 argument: the DELIBERATE DEVIATION note on `Event::wake`; RED/GREEN evidence + regression gate
 (`thread_pool::tests::multi_worker_quiesce_then_join_50x`, 50 lifecycles under a 60s watchdog):
 `.superpowers/sdd/task-1-report.md` addendum 2.
+
+### `share/{APP}` resource root — shell-integration + themes SHIPPED ✅ RESOLVED [2026-07-23, WS1]
+The R5 placeholder (`share/{APP}/DEFERRALS.md`, written by
+`xtask/src/res_terminfo.rs::gen_app_root`) that stood in for the
+shell-integration and themes subtrees is DELETED — both trees ship real
+vendored content: `crates/rustty-extra/shell-integration/` (7 scripts,
+R2-rebranded to `RUSTTY_*`/`rustty-*`, matching `rustty-termio`'s
+`env_name()`/`APP_NAME` runtime lookups; oracle-parity KAT
+`xtask res_shell_integration::tests::oracle_shell_integration_parity`,
+dev-only `#[ignore]`, rebrand-mapped byte-compare with `bash-preexec.sh`
+verbatim) and `crates/rustty-extra/themes/` (534 files, verbatim from ghostty's
+pinned `iterm2_themes` tarball `ghostty-themes-release-20260608-160426-8c84dd1.tgz`;
+MIT attribution vendored at `themes/LICENSE.md`, `.md`-excluded from emission
+so the shipped count stays exactly 534). `gen_app_root` now scrubs stale
+placeholder notes from old output dirs. Verified: clean-regen byte-compare,
+rebuilt `Rustty.app` bundle carries 534 themes + all 7 scripts + zero
+`DEFERRALS.md`; headless zsh injection smoke green
+(`ZDOTDIR=<share>/shell-integration/zsh zsh -i` registers
+`_rustty_deferred_init` in `precmd_functions`); `identity-oracle` profile
+emits the `share/ghostty/` parity dir. Residual: live `+list-themes` CLI
+count + in-window OSC7 observation re-queued to WS4 (blocked on
+`rustty_cli_try_action`'s non-null arm). Ledger: INTEGRATION_PARITY.md
+§2.1/§2.2 struck RESOLVED same-commit.

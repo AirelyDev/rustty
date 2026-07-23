@@ -22,10 +22,12 @@ order, same values) — is behavior-identical to the reference. **No fidelity bu
 crashes or corrupts the ported terminal logic.** The real divergences are all in
 the *artifact-packaging* and *deferred-resource* layers, not in terminal
 behavior: the shipped xcframework is not self-contained (patched at app-link
-with system `-lz` / Homebrew `-lintl`), and the `share/ghostty/shell-integration`
-and `share/ghostty/themes` trees are stubbed empty, shipping those features
-dark. All are documented R5 deferrals — sanctioned and non-silent — but the
-runtime behaviors they gate are genuinely absent versus a stock ghostty build.
+with system `-lz` / Homebrew `-lintl`). (The `share/{app}/shell-integration`
+and `share/{app}/themes` trees were RESOLVED by WS1 [2026-07-23]: vendored in
+`crates/rustty-extra/`, emitted by `xtask resources`, oracle-parity KAT'd —
+see §2.1/§2.2.) The remaining divergence is a documented R5 deferral —
+sanctioned and non-silent — but the packaging behavior it gates is genuinely
+absent versus a stock ghostty build.
 One true R1 dropped-mapping (host_view nulls the iOS uiview) exists but is
 latent-to-unreachable on the macOS-first target. No blocker.
 
@@ -35,7 +37,7 @@ latent-to-unreachable on the macOS-first target. No blocker.
 
 Ranked by severity, then reachability.
 
-### 2.1 [HIGH] `share/ghostty/shell-integration/` stubbed empty — shell integration silently disabled
+### 2.1 [RESOLVED 2026-07-23, WS1] `share/{app}/shell-integration/` — now vendored + emitted (was: stubbed empty)
 - **rustty**: `xtask/src/res_terminfo.rs:141-170` (`gen_ghostty_root`) writes only
   `share/ghostty/DEFERRALS.md`; no `shell-integration/` subtree emitted.
 - **ghostty**: `src/build/GhosttyResources.zig:117-126` installs the full
@@ -50,8 +52,16 @@ Ranked by severity, then reachability.
 - **Fix sketch**: vendor ghostty's `src/shell-integration/` tree as rustty data
   (identity-oracle spelling) and copy it into `share/ghostty/shell-integration/`
   from `gen_ghostty_root`, mirroring `addInstallDirectory(exclude .md)`.
+- **RESOLUTION (WS1, 2026-07-23)**: vendored at `crates/rustty-extra/shell-integration/`
+  (R2-rebranded: `rustty.bash`, `rustty-integration`, `RUSTTY_*` env vars —
+  matching `rustty-termio`'s `env_name()`/`APP_NAME` lookups), emitted to
+  `share/{APP}/shell-integration/` by `xtask/src/res_shell_integration.rs`
+  excluding `.md` (Tasks 13/14); WS1 added the dev-only oracle-parity KAT
+  (`oracle_shell_integration_parity`, rebrand-mapped byte-compare, `bash-preexec.sh`
+  verbatim), deleted the `DEFERRALS.md` placeholder emission, and verified the
+  headless zsh injection smoke + bundle contents.
 
-### 2.2 [HIGH] `share/ghostty/themes/` not shipped though ghostty defaults emit-themes ON
+### 2.2 [RESOLVED 2026-07-23, WS1] `share/{app}/themes/` — now vendored + emitted (was: not shipped)
 - **rustty**: `xtask/src/res_terminfo.rs:141-170` emits no `themes/`.
 - **ghostty**: `src/build/GhosttyResources.zig:128-139` installs the
   `iterm2_themes` corpus into `share/ghostty/themes`, gated on `emit_themes`
@@ -61,6 +71,14 @@ Ranked by severity, then reachability.
   and the `theme` config setting enumerate/apply an **empty set** at runtime.
 - **Fix sketch**: vendor the iTerm2-Color-Schemes ghostty themes as rustty data
   and emit them to `share/ghostty/themes` in `gen_ghostty_root`.
+- **RESOLUTION (WS1, 2026-07-23)**: the 534-file corpus is vendored verbatim at
+  `crates/rustty-extra/themes/` (provenance: ghostty's pinned `iterm2_themes`
+  tarball `ghostty-themes-release-20260608-160426-8c84dd1.tgz`; MIT attribution
+  vendored in `LICENSE.md`, excluded from emission), emitted to
+  `share/{APP}/themes/` by `xtask/src/res_themes.rs` excluding `.md` (Task 14);
+  WS1 verified count=534 in the rebuilt app bundle and the regeneration is
+  byte-reproducible from a clean `zig-out`. Live `+list-themes` CLI count check
+  re-queued to WS4 (blocked on `rustty_cli_try_action`).
 
 ### 2.3 [MEDIUM] Combined archive is NOT self-contained — full-deflate zlib + full gettext omitted, patched with system `-lz` / Homebrew `-lintl`
 - **rustty**: `xtask/src/main.rs:242-273` folds only whatever `.a` sit under
@@ -295,13 +313,10 @@ Each attested behavior-preserving unless flagged.
 Terminal runtime logic needs no fix. The following restore missing/absent
 behavior or harden the artifact, ordered by user-visible impact then robustness:
 
-1. **Ship `share/ghostty/shell-integration/`** (§2.1, HIGH) — vendor ghostty's
-   `src/shell-integration/` tree; copy into the resource root in
-   `gen_ghostty_root`. Restores OSC7/cwd, prompt marking, cursor-shape, sudo
-   wrapping, title updates.
-2. **Ship `share/ghostty/themes/`** (§2.2, HIGH) — vendor the iTerm2-Color-Schemes
-   corpus; emit to `share/ghostty/themes`. Makes `list_themes` + the `theme`
-   setting functional.
+1. ~~**Ship `share/ghostty/shell-integration/`** (§2.1, HIGH)~~ — ✅ DONE
+   (WS1, 2026-07-23; see §2.1 RESOLUTION).
+2. ~~**Ship `share/ghostty/themes/`** (§2.2, HIGH)~~ — ✅ DONE
+   (WS1, 2026-07-23; see §2.2 RESOLUTION).
 3. **Make the xcframework self-contained** (§2.3, MEDIUM) — vendor full
    deflate-zlib + full gettext into the `-sys` crates; drop `-lz`/`-lintl` from
    `build-rustty.sh`. Removes the hard Homebrew/host dependency.
