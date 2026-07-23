@@ -1112,12 +1112,17 @@ where
         //     void;
         // defer if (builtin.os.tag.isDarwin()) pool.deinit();
         //
-        // DEFERRED (W3 renderer-Thread leaf; .port/phase-2/DEFERRALS.md): rustty-core
-        // does NOT dep objc2 (only rustty-renderer/os do), so this Darwin
-        // memory-hygiene autoreleasepool (not semantics) is ported as a no-op
-        // scope carrying the verbatim reference block above. Re-arm when core
-        // gains an objc2 edge (or via a `rustty_os` autoreleasepool shim).
+        // REALIZED (WS2-C, closes the W3 deferral): the pool is live via the
+        // `rustty_os::autorelease::autoreleasepool` shim (objc2-backed on macOS,
+        // identity elsewhere — the exact re-arm path the deferral named; core
+        // still has NO objc2 edge). The drain body is hoisted to
+        // `drainMailboxBody` so the pool scopes the whole drain; the closure
+        // exit IS the reference `defer pool.deinit()`.
+        rustty_os::autorelease::autoreleasepool(|| Self::drainMailboxBody(self_))
+    }
 
+    /// The reference `drainMailbox` body (see the pool wrapper above).
+    fn drainMailboxBody(self_: *mut Thread<A>) -> Result<(), RendererError> {
         // while (self.mailbox.pop()) |message| {
         while let Some(message) = unsafe { (*(*self_).mailbox).pop() } {
             // log.debug("mailbox message={}", .{message});

@@ -62,10 +62,13 @@ use rustty_apprt::embedded::{
 };
 use rustty_apprt_api::action::{ActionC, TargetC};
 use rustty_apprt_api::{ClipboardRequest, ClipboardRequestType};
+use rustty_apprt_c::capi::Text;
 use rustty_apprt_c::{
     rustty_app_free, rustty_app_new, rustty_app_tick, rustty_app_update_config, rustty_init,
     rustty_set_window_background_blur, rustty_surface_config_new, rustty_surface_free,
-    rustty_surface_new, rustty_surface_set_display_id,
+    rustty_surface_free_text, rustty_surface_new, rustty_surface_quicklook_font,
+    rustty_surface_quicklook_word, rustty_surface_set_content_scale,
+    rustty_surface_set_display_id, rustty_surface_set_size,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -381,6 +384,77 @@ impl HostedSurface {
         }
         Some(out)
     }
+
+    // The presented IOSurface's pixel dimensions (None until a frame presented).
+    fn presented_size(&self) -> Option<(usize, usize)> {
+        use objc2_io_surface::IOSurfaceRef;
+        // SAFETY: `self.view` is a live MockHostView answering `layer`.
+        let l: *mut AnyObject = unsafe { msg_send![&*self.view, layer] };
+        if l.is_null() {
+            return None;
+        }
+        // SAFETY: `l` is the live layer id; `contents` returns nil or the IOSurface id.
+        let contents: *mut AnyObject = unsafe { msg_send![l, contents] };
+        if contents.is_null() {
+            return None;
+        }
+        // SAFETY: `contents` IS the presented IOSurfaceRef (see read_presented_bgra).
+        let surface: &IOSurfaceRef = unsafe { &*(contents as *const IOSurfaceRef) };
+        Some((surface.width(), surface.height()))
+    }
+
+    // AppKit-layout stand-in for a RESIZE: re-lay the hosted layer to the new view
+    // bounds (points). A real layer-hosting NSView does this on live resize.
+    fn set_host_layer_bounds(&self, w_pt: f64, h_pt: f64) {
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+        // SAFETY: `self.view` is a live MockHostView answering `layer`.
+        let l: *mut AnyObject = unsafe { msg_send![&*self.view, layer] };
+        if l.is_null() {
+            return;
+        }
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w_pt, h_pt));
+        // SAFETY: `l` is the live CALayer; `setBounds:` takes a CGRect (== NSRect).
+        unsafe {
+            let _: () = msg_send![l, setBounds: bounds];
+        }
+    }
+
+    // Swift-host stand-in for a CROSS-DPI MONITOR MOVE: re-stamp the hosted layer's
+    // contentsScale exactly as `viewDidChangeBackingProperties` does
+    // (`layer?.contentsScale = window.backingScaleFactor`,
+    // macos/Sources/RusttyKit/Surface View/SurfaceView_AppKit.swift:857).
+    fn set_host_layer_contents_scale(&self, scale: f64) {
+        // SAFETY: `self.view` is a live MockHostView answering `layer`.
+        let l: *mut AnyObject = unsafe { msg_send![&*self.view, layer] };
+        if l.is_null() {
+            return;
+        }
+        // SAFETY: `l` is the live CALayer; `setContentsScale:` takes a CGFloat.
+        unsafe {
+            let _: () = msg_send![l, setContentsScale: scale];
+        }
+    }
+
+    // Bounded pump until the presented IOSurface reaches `expected` px dimensions.
+    // Unlike `pump_bounded`, does NOT touch the layer geometry (the caller owns it —
+    // `pump_bounded` would reset bounds to 128×64 and defeat resize/DPI tests).
+    fn pump_until_presented_size(&self, expected: (usize, usize)) -> Option<(usize, usize)> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        for _ in 0..2000 {
+            // SAFETY: `self.app` is a live App pointer for the surface's lifetime.
+            unsafe { rustty_app_tick(self.app) };
+            self.drive_display();
+            let sz = self.presented_size();
+            if sz == Some(expected) {
+                return sz;
+            }
+            if Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        self.presented_size()
+    }
 }
 impl Drop for HostedSurface {
     fn drop(&mut self) {
@@ -482,6 +556,139 @@ fn set_display_id_pushes_to_render_thread_panic_free() {
     unsafe { rustty_surface_set_display_id(host.surface, display_id) };
     host.pump_bounded(); // drain runs
     drop(host);
+}
+
+// --- WS2-A regression KAT ---
+// The two Look-Up/accessibility exports must be ABORT-FREE on a LIVE surface:
+// `quicklook_font` fires from force-click Look-Up AND every VoiceOver/accessibility
+// query (SurfaceView_AppKit.swift:1521,1949,2361 in the oracle app), `quicklook_word`
+// from the Look-Up gesture (:1512) — no explicit user intent required, so under the
+// DG5 panic=abort policy any leftover `unimplemented!()` here is app-fatal.
+// MACOS_APP_GAPS.md §3 listed both as open abort risks; the exports were in fact
+// fully ported in P2.1/P2.2 (DEFERRALS.md P2 section). This KAT pins that they STAY
+// real: it drives the actual C-ABI exports against a live surface (running render
+// thread + populated CoreText font grid).
+#[test]
+fn quicklook_exports_are_abort_free_on_live_surface() {
+    use objc2_core_foundation::{CFRetained, CFType};
+
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    host.pump_bounded(); // live render thread; the shared font grid is populated
+
+    // quicklook_font: the live grid's primary CoreText face resolves ⇒ a +1
+    // CTFontRef crosses the ABI (I16); the host balances it with exactly ONE
+    // CFRelease — modeled as CFRetained::from_raw + drop (the P2.2 KAT's inverse).
+    // SAFETY: `host.surface` is the live surface from `rustty_surface_new`.
+    let font = unsafe { rustty_surface_quicklook_font(host.surface) };
+    assert!(
+        !font.is_null(),
+        "primary CoreText face must resolve on a live surface"
+    );
+    // SAFETY: `font` is the +1 CTFontRef the export handed over; reclaiming it
+    // consumes exactly that one reference (the host's CFRelease).
+    drop(unsafe {
+        CFRetained::<CFType>::from_raw(std::ptr::NonNull::new(font.cast::<CFType>()).unwrap())
+    });
+
+    // quicklook_word: MUST return without abort. `true` ⇒ `text` owns a heap
+    // C-string freed via rustty_surface_free_text; `false` (no word under the
+    // mouse-cursor cell — the harness never moved the mouse, so (0,0) is
+    // typically empty) is a VALID no-word degrade. The assertion IS abort-freedom.
+    let mut text = Text {
+        tl_px_x: 0.0,
+        tl_px_y: 0.0,
+        offset_start: 0,
+        offset_len: 0,
+        text: core::ptr::null(),
+        text_len: 0,
+    };
+    // SAFETY: `host.surface` is live; `text` is a writable Text for the call.
+    let has_word = unsafe { rustty_surface_quicklook_word(host.surface, &mut text) };
+    if has_word {
+        assert!(!text.text.is_null(), "true return must populate the text");
+        // SAFETY: `text` was populated by the export just above; freed exactly once.
+        unsafe { rustty_surface_free_text(host.surface, &mut text) };
+    }
+}
+
+// --- WS2-B cross-DPI KAT ---
+// ORACLE OWNERSHIP (resolved, ghostty@4749c4e): the HOST owns the contentsScale
+// re-stamp on a cross-DPI monitor move — `viewDidChangeBackingProperties` sets
+// `layer.contentsScale = backingScaleFactor`, then calls
+// `ghostty_surface_set_content_scale` + sends the new backing size
+// (macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift:836-872; re-driven
+// on `windowDidChangeScreen`, :780-795). NO renderer mailbox content-scale message
+// exists in the oracle (src/renderer/message.zig has none) — the renderer just
+// READS `layer.contentsScale` in `surfaceSize()` (Metal.zig:217-218 ==
+// metal_impl.rs `surface_size`). Rustty's Swift host is the faithful port
+// (SurfaceView_AppKit.swift:837-871), so this KAT drives that exact host sequence
+// through the C-ABI and asserts the presented frame follows: Retina (2.0) →
+// non-Retina (1.0) at constant 128×64 pt must halve the pixel dimensions.
+#[test]
+fn content_scale_restamp_tracks_cross_dpi_move() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    host.pump_bounded();
+    assert_eq!(
+        host.presented_size(),
+        Some((256, 128)),
+        "first frame must be 128×64 pt @2x"
+    );
+
+    // The monitor move to a 1x display, exactly as the Swift host performs it:
+    // (1) re-stamp the layer scale, (2) update the core content scale (font DPI),
+    // (3) send the new backing pixel size.
+    host.set_host_layer_contents_scale(1.0);
+    // SAFETY: `host.surface` is live for both calls.
+    unsafe { rustty_surface_set_content_scale(host.surface, 1.0, 1.0) };
+    unsafe { rustty_surface_set_size(host.surface, 128, 64) };
+    let sz = host.pump_until_presented_size((128, 64));
+    assert_eq!(
+        sz,
+        Some((128, 64)),
+        "presented IOSurface must track the re-stamped contentsScale (no blurry \
+         stale-scale frame)"
+    );
+}
+
+// --- WS2-D B4 KAT ---
+// MACOS_APP_GAPS §2 B4: post-attach, `surfaceSize()` = layer.bounds ×
+// contentsScale must FOLLOW a live resize. AppKit re-lays a layer-hosting view's
+// layer on resize; the harness stands in (set_host_layer_bounds), then performs
+// the Swift host's resize handshake (`setSurfaceSize` → rustty_surface_set_size
+// with the BACKING pixel size, SurfaceView_AppKit.swift:869-871). The
+// IOSurfaceLayer discards wrong-sized surfaces (IOSurfaceLayer.zig:104-116 ==
+// iosurface_layer.rs), so convergence to the new size proves the whole reflow:
+// core resize → renderer rebuild → present at bounds × scale.
+#[test]
+fn resize_tracks_host_layer_bounds() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    host.pump_bounded();
+    assert!(host.layer_has_contents(), "no first frame presented");
+    assert_eq!(
+        host.presented_size(),
+        Some((256, 128)),
+        "first frame must be 128×64 pt @2x"
+    );
+
+    // Live resize to 200×100 pt (@2x ⇒ 400×200 px backing size).
+    host.set_host_layer_bounds(200.0, 100.0);
+    // SAFETY: `host.surface` is live.
+    unsafe { rustty_surface_set_size(host.surface, 400, 200) };
+    let sz = host.pump_until_presented_size((400, 200));
+    assert_eq!(
+        sz,
+        Some((400, 200)),
+        "presented IOSurface must track the layer resize (B4 reflow)"
+    );
 }
 
 // --- on-device visible variant (#[ignore]): a REAL NSWindow, run ON THE MAIN THREAD ---

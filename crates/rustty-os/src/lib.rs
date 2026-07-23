@@ -36,6 +36,7 @@
 // is the whole point of a wasm build. Every other target compiles all modules
 // unchanged. See the workstream report (B2) for the full-workspace follow-up.
 pub mod args;
+pub mod autorelease;
 pub mod cf_release_thread;
 pub mod cgroup;
 pub mod dbus;
