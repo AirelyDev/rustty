@@ -1173,6 +1173,7 @@ dependencies = [
  "allocator-api2",
  "cc",
  "dcimgui-sys",
+ "fontconfig-sys",
  "gdk4",
  "gdk4-wayland",
  "gdk4-x11",
@@ -1180,18 +1181,24 @@ dependencies = [
  "glib",
  "gtk4",
  "gtk4-layer-shell",
+ "harfbuzz-sys",
  "libadwaita",
+ "libc",
  "objc2",
  "rustty-apprt-api",
  "rustty-args",
+ "rustty-build-config",
  "rustty-config",
  "rustty-core",
+ "rustty-crash",
  "rustty-datastruct",
  "rustty-font",
  "rustty-font-shaper",
+ "rustty-global",
  "rustty-identity",
  "rustty-input",
  "rustty-inspector",
+ "rustty-oniguruma",
  "rustty-os",
  "rustty-renderer",
  "rustty-termio",
@@ -1235,6 +1242,7 @@ dependencies = [
  "rustty-apprt-api",
  "rustty-bench",
  "rustty-build-config",
+ "rustty-cli",
  "rustty-config",
  "rustty-core",
  "rustty-datastruct",
@@ -1419,6 +1427,7 @@ dependencies = [
 name = "rustty-global"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustty-build-config",
 ]
 

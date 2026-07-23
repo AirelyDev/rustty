@@ -52,6 +52,13 @@ identity-oracle = [
 simd = ["rustty-vt/simd"]
 
 [dependencies]
+# WS4 CLI-action-from-C (main_c.zig `ghostty_cli_try_action` non-null path):
+# the action DETECTOR (`cli.action.detectIter`) + the concrete
+# `cli.ghostty.Action` runner. rustty-cli deps rustty-core (so core can never
+# name the Action type — the BREAK #1 generic stays `()` there); this TOP-SINK
+# crate legitimately deps cli (no crate deps apprt-c) — acyclic (G7), the same
+# ADV-FIX 2 shape as the `rustty` bin.
+rustty-cli = { workspace = true }
 rustty-apprt = { workspace = true }
 # The `identity-oracle` feature above flips this crate's string identity directly
 # (app name/version/etc.), independent of whatever rustty-config/rustty-bench do with

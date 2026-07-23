@@ -24,7 +24,8 @@
 // const posix = std.posix;
 // const build_config = @import("build_config.zig");
 use rustty_build_config as build_config;
-// const macos = @import("macos");           -> logFn unified-logging (deferred seam)
+// const macos = @import("macos");           -> logFn unified-logging (WS4:
+//   `rustty_core::logging::log_with`'s macOS sink, via `rustty_os::macos::Log`)
 // const cli = @import("cli.zig");
 use rustty_cli::action::{self, DetectError};
 use rustty_cli::rustty::Action;
@@ -58,36 +59,31 @@ use std::io::Write;
 /// The bin's `state.init()` failure set — a faithful projection of the reference
 /// `GlobalState.init` error union that `main()`'s `state.init() catch` switches
 /// on. Only the two live upward calls can fail: CLI action detection
-/// ([`DetectError`]) and resources-dir resolution ([`rustty_apprt::InitError`],
-/// the reference `apprt.runtime.resourcesDir`). The remaining reference init
-/// failures (GHOSTTY_LOG parse, locale, glslang, oniguruma, i18n) are deferred
-/// seams (see `state_init`).
+/// ([`DetectError`]) and the FULL `rustty_apprt::init_with_action` failure set
+/// (WS4 — [`rustty_apprt::InitError`]).
 enum InitError {
     // error.MultipleActions / error.InvalidAction (cli.action.detectArgs).
     Detect(DetectError),
-    // The `try apprt.runtime.resourcesDir(self.alloc)` failure — surfaced by the
-    // reference `else =>` arm ("invalid CLI invocation err={}").
-    ResourcesDir(rustty_apprt::InitError),
+    // The FULL `rustty_apprt::init_with_action` failure set (WS4) — surfaced by
+    // the reference `else =>` arm ("invalid CLI invocation err={}").
+    Init(rustty_apprt::InitError),
 }
 
 /// Initialize our global state (the bin's own `GlobalState<Action>`).
 ///
-/// PORTS: the slice of `global.zig` `GlobalState.init` that is LIVE for the
-/// headless bin — action detection (ADV-FIX 2), the action-implies-no-stderr-log
-/// rule, and resources-dir resolution. The rest of the reference `init` body is a
-/// BREAK #1 deferred seam preserved verbatim in `rustty_global::GlobalState::init`
-/// (GPA/allocator selection, GHOSTTY_LOG parse, signal setup, xev detect, the
-/// version/optimize/runtime/font/renderer/libxev log lines, rlimit init,
-/// crash.init, ensureLocale, glslang.init, oni.init, i18n.init) — those land as
-/// rustty-core / apprt wiring (Phase-3). Reference body for the live slice:
+/// PORTS: `global.zig` `GlobalState.init` — action detection (ADV-FIX 2, LIVE
+/// here) plus the FULL reference init body (GPA/allocator selection collapse,
+/// GHOSTTY_LOG parse, signal setup, xev detect, the version/optimize/runtime/
+/// font/renderer/libxev log lines, rlimit init, crash.init, ensureLocale,
+/// glslang.init, oni.init, resourcesDir, i18n.init) — wired in
+/// `rustty_apprt::init_with_action` (WS4, the BREAK #1 seam landed). Reference
+/// body for the slice this fn drives directly:
 ///
 ///   // We first try to parse any action that we may be executing.
 ///   self.action = try cli.action.detectArgs(cli.ghostty.Action, self.alloc);
 ///   // If we have an action executing, we disable logging by default ...
 ///   if (self.action != null) self.logging.stderr = false;
-///   ...
-///   // Find our resources directory once ...
-///   self.resources_dir = try apprt.runtime.resourcesDir(self.alloc);
+///   ... (the rest — see `rustty_apprt::init_with_action`'s doc)
 fn state_init() -> Result<GlobalState<Action>, InitError> {
     // Initialize ourself to nothing so we don't have any extra state.
     // (reference `self.* = .{ .gpa = null, .alloc = undefined, .action = null,
@@ -103,24 +99,19 @@ fn state_init() -> Result<GlobalState<Action>, InitError> {
     //   reference performed inside `global.zig`, relocated to the bin.
     state.action = action::detect_args::<Action>().map_err(InitError::Detect)?;
 
-    // If we have an action executing, we disable logging by default
-    // since we write to stderr we don't want logs messing up our
-    // output.
-    // if (self.action != null) self.logging.stderr = false;
-    if state.action.is_some() {
-        state.logging.stderr = false;
-    }
+    // If we have an action executing, we disable logging by default ... —
+    // WS4: the rule now lives INSIDE `init_with_action` (compute_logging),
+    // which also applies the RUSTTY_LOG override; the bin mirrors the result
+    // into its own GlobalState<Action> so `log_fn` reads one source of truth.
+    // (The pre-WS4 inline `if state.action.is_some() { stderr = false }` is
+    // deleted — it is now dead duplication.)
 
-    // Find our resources directory once for the app so every launch
-    // hereafter can use this cached value.
-    // self.resources_dir = try apprt.runtime.resourcesDir(self.alloc);
-    //   PORT NOTE: `rustty_apprt::init` performs exactly this one upward call and
-    //   sets the process-global `rustty_core::STATE.resources_dir` (the seam that
-    //   list_themes' `.resources` warning path reads — DEFERRALS.md "cli C5"). The
-    //   bin's own `GlobalState<Action>` carries the action; core STATE carries the
-    //   resources dir. Both are populated here (the "C6 bin wiring" the C5 note
-    //   scheduled). i18n.init off the resolved dir is a deferred seam.
-    rustty_apprt::init().map_err(InitError::ResourcesDir)?;
+    // The FULL reference init body (GHOSTTY_LOG parse, signals, xev, the
+    // version/... log lines, rlimits, crash.init, ensureLocale, glslang.init,
+    // oni.init, resourcesDir, i18n.init) — the BREAK #1 seam, wired in
+    // rustty_apprt::init_with_action (WS4).
+    state.logging =
+        rustty_apprt::init_with_action(state.action.is_some()).map_err(InitError::Init)?;
 
     Ok(state)
 }
@@ -166,7 +157,7 @@ pub fn main() {
                     let _ = stderr.write_all(msg.as_bytes());
                 }
                 // else => try stderr.print("invalid CLI invocation err={}\n", .{err}),
-                InitError::ResourcesDir(e) => {
+                InitError::Init(e) => {
                     let _ =
                         stderr.write_all(format!("invalid CLI invocation err={e:?}\n").as_bytes());
                 }
@@ -421,18 +412,9 @@ enum LogLevel {
     Err,
 }
 
-impl LogLevel {
-    // `level.asText()` — the reference severity text (`.warn` -> "warning",
-    // `.err` -> "error").
-    fn as_text(self) -> &'static str {
-        match self {
-            LogLevel::Debug => "debug",
-            LogLevel::Info => "info",
-            LogLevel::Warn => "warning",
-            LogLevel::Err => "error",
-        }
-    }
-}
+// PORT NOTE (WS4): `level.asText()` used to live here; `log_fn` now delegates
+// to the shared `rustty_core::logging::Level::as_text` (Task 8) — this local
+// copy is dead and removed.
 
 /// The function std.log will call.
 // fn logFn(
@@ -450,54 +432,17 @@ impl LogLevel {
 // read from the process-global `state` — here they come from the bin's own
 // `GlobalState<Action>.logging`, passed in.
 fn log_fn(level: LogLevel, message: &str, logging: &Logging) {
-    // On Mac, we use unified logging. To view this:
-    //
-    //   sudo log stream --level debug --predicate 'subsystem=="io.airely.rustty"'
-    //     R2: the reference predicate names the bundle id `com.mitchellh.ghostty`.
-    //
-    // macOS logging is thread safe so no need for locks/mutexes
-    // macos: {
-    //     if (comptime !builtin.target.os.tag.isDarwin()) break :macos;
-    //     if (!state.logging.macos) break :macos;
-    //     const prefix = if (scope == .default) "" else @tagName(scope) ++ ": ";
-    //     // Convert our levels to Mac levels
-    //     const mac_level: macos.os.LogType = switch (level) {
-    //         .debug => .debug, .info => .info, .warn => .err, .err => .fault,
-    //     };
-    //     // Initialize a logger. This is slow to do on every operation
-    //     // but we shouldn't be logging too much.
-    //     const logger = macos.os.Log.create(build_config.bundle_id, @tagName(scope));
-    //     defer logger.release();
-    //     logger.log(std.heap.c_allocator, mac_level, prefix ++ format, args);
-    // }
-    //
-    // PORT NOTE (deferred seam): macOS unified logging (`macos.os.Log`) is the same
-    // log-facade seam the rest of the tree defers (rustty-os stubs `std.log.scoped`).
-
-    // stderr: {
-    //     // don't log debug messages to stderr unless we are a debug build
-    //     if (comptime builtin.mode != .Debug and level == .debug) break :stderr;
-    if !cfg!(debug_assertions) && matches!(level, LogLevel::Debug) {
-        return;
-    }
-    //     // skip if we are not logging to stderr
-    //     if (!state.logging.stderr) break :stderr;
-    if !logging.stderr {
-        return;
-    }
-    //     // Lock so we are thread-safe
-    //     var buf: [64]u8 = undefined;
-    //     const stderr = std.debug.lockStderrWriter(&buf);
-    //     defer std.debug.unlockStderrWriter();
-    //     const level_txt = comptime level.asText();
-    //     const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
-    //     nosuspend stderr.print(level_txt ++ prefix ++ format ++ "\n", args) catch break :stderr;
-    //     nosuspend stderr.flush() catch break :stderr;
-    // }
-    //   All `main_ghostty.zig` log sites use the `.default` scope -> the ": " prefix.
-    let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "{}: {message}", level.as_text());
-    let _ = stderr.flush();
+    // WS4: the full logFn (macOS unified-logging + stderr sinks) is the shared
+    // rustty_core::logging port; the bin delegates with its own state's
+    // logging (ADV-FIX 2: the bin's GlobalState<Action> is separate from
+    // rustty_core::STATE). All main_ghostty.zig sites use the `.default` scope.
+    let core_level = match level {
+        LogLevel::Debug => rustty_core::logging::Level::Debug,
+        LogLevel::Info => rustty_core::logging::Level::Info,
+        LogLevel::Warn => rustty_core::logging::Level::Warn,
+        LogLevel::Err => rustty_core::logging::Level::Err,
+    };
+    rustty_core::logging::log_with(core_level, "default", message, logging);
 }
 
 // pub const std_options: std.Options = .{

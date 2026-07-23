@@ -38,6 +38,10 @@ pub mod renderer_seam;
 // function bodies land C6..C15 IN PLACE.
 pub mod surface;
 
+// PORT NOTE (WS4): src/main_ghostty.zig `logFn` — the shared process log sink,
+// hosted at the core wiring tier (below apprt/apprt-c/bin, above os/global).
+pub mod logging;
+
 // PORT NOTE: Surface.zig:38 `const SurfaceMouse = @import("surface_mouse.zig");`
 // — the future surface.rs (C5+) reaches the module as `crate::surface_mouse`.
 pub mod surface_mouse;
@@ -51,6 +55,11 @@ pub mod surface_mouse;
 // internal_os.ResourcesDir`); `Action` stays the deferred cli seam (`()`)
 // until rustty-cli lands and specializes it IN PLACE.
 pub type GlobalState = rustty_global::GlobalState<(), rustty_os::resourcesdir::ResourcesDir>;
+
+/// PARITY: reference `GlobalState.Logging` (global.zig `pub const Logging =
+/// packed struct`). Re-exported at the core wiring tier so upward crates
+/// (apprt, apprt-c, the bin) name it without a direct rustty-global edge.
+pub use rustty_global::Logging;
 
 /// PARITY: reference `pub var state: GlobalState = undefined;` (global.zig)
 /// at the core-wired type — the `OnceLock` analogue of the

@@ -165,6 +165,47 @@ extern crate rustty_bench as _;
 // the C ABI is crossed.
 // ===================================================================
 
+/// PARITY: reference `std.os.argv = argv[0..argc]` (`ghostty_init`,
+/// main_c.zig) — the process argv the C host hands us, stored once. Consumed
+/// by the CLI-action detection below (its only reference consumer).
+static ARGV: std::sync::OnceLock<Vec<Vec<u8>>> = std::sync::OnceLock::new();
+
+/// The concrete detected CLI action (`state.action`'s VALUE). rustty-core's
+/// `GlobalState<Action>` is bound `Action = ()` (rustty-cli deps rustty-core —
+/// the concrete type CANNOT live there without a cycle; R4). The ratified
+/// split: `rustty_core::STATE.action: Option<()>` carries PRESENCE (set by
+/// `init_with_action`), and this top-sink stash carries the VALUE for
+/// `rustty_cli_try_action` — together they are the reference's one field.
+static CLI_ACTION: std::sync::OnceLock<Option<rustty_cli::rustty::Action>> =
+    std::sync::OnceLock::new();
+
+/// The stored-argv view of the reference `std.process.args` iterator that
+/// `cli.action.detectArgs` walks (all args INCLUDING argv0 — argv0 never
+/// starts with `+` and never matches a special case, so it is harmless).
+struct ArgvIter<'a> {
+    argv: &'a [Vec<u8>],
+    i: usize,
+}
+
+impl rustty_cli::action::ArgsIter for ArgvIter<'_> {
+    fn next(&mut self) -> Option<Vec<u8>> {
+        let v = self.argv.get(self.i)?.clone();
+        self.i += 1;
+        Some(v)
+    }
+}
+
+/// `self.action = try cli.action.detectArgs(cli.ghostty.Action, self.alloc);`
+/// (global.zig init) — the C-path variant over the STORED argv (the reference
+/// detectArgs walks std.process.args, which on posix IS the stored
+/// `std.os.argv`).
+fn detect_from_argv(
+    argv: &[Vec<u8>],
+) -> Result<Option<rustty_cli::rustty::Action>, rustty_cli::action::DetectError> {
+    let mut iter = ArgvIter { argv, i: 0 };
+    rustty_cli::action::detect_iter::<rustty_cli::rustty::Action, _>(&mut iter)
+}
+
 /// C: rustty_init
 ///
 /// Initialize rustty global state.
@@ -182,41 +223,76 @@ extern crate rustty_bench as _;
 /// }
 /// ```
 /// The reference `assert(builtin.link_libc)` is a no-op here (Rust's `std`
-/// always links libc). The `std.os.argv = argv[0..argc]` store is consumed only
-/// by the deferred CLI-action detection inside the full `state.init()` (the
-/// BREAK #1 global-state seam, not yet ported — see `rustty_apprt::init`); until
-/// that lands, `argv` is accepted but not stored. `state.init()` maps to the
-/// `rustty_apprt::init()` bootstrap, which sets `rustty_core::STATE` (the
-/// `global.zig` `state` analogue) so the CAPI's `global.alloc`-reading paths
-/// (`ghostty_surface_free_text`/`_tty_name`/`Text.deinit`) have a live state.
-/// EMBEDDED_BLUEPRINT §3 "Global-state precursor" + risk 4: the smoke KAT (E11)
-/// MUST call this before `ghostty_app_new`.
+/// always links libc). The `std.os.argv = argv[0..argc]` store feeds the
+/// CLI-action detection inside the full `state.init()` (WS4, wired below);
+/// `state.init()` maps to the `rustty_apprt::init_with_action()` bootstrap,
+/// which sets `rustty_core::STATE` (the `global.zig` `state` analogue) so the
+/// CAPI's `global.alloc`-reading paths (`ghostty_surface_free_text`/
+/// `_tty_name`/`Text.deinit`) have a live state. EMBEDDED_BLUEPRINT §3
+/// "Global-state precursor" + risk 4: the smoke KAT (E11) MUST call this
+/// before `ghostty_app_new`.
 ///
 /// # Safety
 /// `argv` must point to `argc` valid, NUL-terminated C strings (the process
-/// argv), as the reference `ghostty_init` requires. This scaffold body does not
-/// dereference `argv`, but the contract is fixed now for the deferred
-/// argv-storage port.
+/// argv), as the reference `ghostty_init` requires.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_int {
-    // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
-    // reference: std.os.argv = argv[0..argc];
-    //   Stored for the deferred CLI-action detection in the full state.init()
-    //   (BREAK #1 seam); not yet ported, so accepted-but-unused for now.
-    let _ = (argc, argv);
+    use rustty_core::logging::{log, Level};
 
-    // reference:
-    //   state.init() catch |err| {
-    //       std.log.err("failed to initialize ghostty error={}", .{err});
-    //       return 1;
-    //   };
-    //   return 0;
-    match rustty_apprt::init() {
-        Ok(()) => 0,
+    // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
+
+    // reference: std.os.argv = argv[0..argc];
+    let stored: Vec<Vec<u8>> = if argv.is_null() {
+        Vec::new()
+    } else {
+        (0..argc)
+            .map(|i| {
+                // SAFETY: caller contract — argv points to argc valid
+                // NUL-terminated C strings (the process argv).
+                let p = unsafe { *argv.add(i) };
+                if p.is_null() {
+                    Vec::new()
+                } else {
+                    unsafe { std::ffi::CStr::from_ptr(p) }.to_bytes().to_vec()
+                }
+            })
+            .collect()
+    };
+    // Once-only like the reference `ghostty_init`; a repeat call keeps the
+    // first argv (ignore the Err). Detection below uses the LOCAL copy so a
+    // (contract-violating) second call cannot observe torn state.
+    let _ = ARGV.set(stored.clone());
+
+    // state.init():
+    //   self.action = try cli.action.detectArgs(cli.ghostty.Action, self.alloc);
+    //   (the try: a DetectError fails state.init() → main_c logs + returns 1.)
+    let action = match detect_from_argv(&stored) {
+        Ok(action) => action,
         Err(err) => {
-            // std.log.err(...) — no scoped-log sink in this leaf (vt-c
-            // `rustty_build_info` precedent): emit to stderr.
-            eprintln!("failed to initialize rustty error={err:?}");
+            // std.log.err("failed to initialize ghostty error={}", .{err});
+            log(
+                Level::Err,
+                "default",
+                &format!("failed to initialize rustty error={err:?}"),
+            );
+            return 1;
+        }
+    };
+    let _ = CLI_ACTION.set(action);
+
+    //   ... the remainder of state.init() (logging config with the
+    //   action-implies-no-stderr rule, signals, log lines, rlimits, crash,
+    //   locale, glslang, oniguruma, resourcesDir, i18n) — the wired BREAK #1
+    //   body; `action.is_some()` mirrors presence into STATE.action.
+    match rustty_apprt::init_with_action(action.is_some()) {
+        Ok(_) => 0,
+        Err(err) => {
+            // std.log.err("failed to initialize ghostty error={}", .{err});
+            log(
+                Level::Err,
+                "default",
+                &format!("failed to initialize rustty error={err:?}"),
+            );
             1
         }
     }
@@ -242,14 +318,11 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 /// ```
 /// The reference `state.action` is `rustty_core::global_state().action`
 /// (`Option<Action>`), stashed by `state.init()` (via `rustty_init`). rustty-core
-/// currently binds the `GlobalState<Action>` type parameter to `()` — the BREAK #1
-/// deferred seam: `cli.action.detectArgs` is NOT yet wired into
-/// `rustty_apprt::init`, which hard-codes `action: None` — so no CLI action is ever
-/// stashed and this is the pure GUI-launch path: the `orelse return` fires and a
-/// windowed launch (the macOS Swift-app milestone's actual need) returns cleanly
-/// WITHOUT exiting. The non-null CLI-action-from-C path is a documented
-/// `TODO(port)` below (DEFERRALS "rustty-apprt-c `rustty_cli_try_action` — CLI
-/// action from C").
+/// binds the `GlobalState<Action>` type parameter to `()` (BREAK #1: rustty-cli
+/// deps rustty-core, so core can never name the concrete Action type without a
+/// cycle) — so presence lives in `rustty_core::STATE.action: Option<()>` and the
+/// concrete VALUE lives in this crate's own `CLI_ACTION` stash (set together by
+/// `rustty_init`); together they realize the reference's one field (WS4).
 ///
 /// # Safety
 /// Marked `unsafe extern` only for signature uniformity with the rest of the C API.
@@ -257,44 +330,49 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 /// reference `ghostty_init` → `ghostty_cli_try_action` ordering).
 #[no_mangle]
 pub unsafe extern "C" fn rustty_cli_try_action() {
+    use rustty_core::logging::{log, Level};
+
     // const action = state.action orelse return;
-    let _action = match rustty_core::global_state().action {
-        Some(action) => action,
-        // (no action → GUI launch: return WITHOUT exiting — the milestone path)
+    //   Presence lives in core STATE (`Option<()>`); the concrete value lives
+    //   in the top-sink CLI_ACTION stash (see its doc) — set together by
+    //   `rustty_init`, so a Some presence ALWAYS has a Some stash.
+    let action = match rustty_core::global_state().action {
+        Some(()) => CLI_ACTION
+            .get()
+            .copied()
+            .flatten()
+            .expect("CLI_ACTION is stashed by rustty_init whenever state.action is Some"),
+        // (no action → GUI launch: return WITHOUT exiting — the windowed path)
         None => return,
     };
 
     // std.log.info("executing CLI action={}", .{action});
-    // (no scoped-log sink in this leaf — vt-c `rustty_build_info` precedent — so
-    // emit to stderr, as `rustty_init` does for its error log.)
-    eprintln!("executing CLI action");
+    log(
+        Level::Info,
+        "default",
+        &format!("executing CLI action={action:?}"),
+    );
 
     // posix.exit(action.run(state.alloc) catch |err| {
     //     std.log.err("CLI action failed error={}", .{err});
     //     posix.exit(1);
     // });
     // posix.exit(0);
-    //
-    // TODO(port): the CLI-action-from-C path. The action RUNNER already exists
-    // (`rustty_cli::rustty::Action::run(self) -> Result<u8, Error>`); the missing
-    // wiring is the `GlobalState<Action>` type parameter (rustty-core binds it to
-    // `()`) plus `cli.action.detectArgs` in the `rustty_apprt::init` bootstrap
-    // (BREAK #1). Once wired, `_action` is a `rustty_cli::rustty::Action` and this
-    // tail becomes, faithful to the reference:
-    //     std::process::exit(match action.run() {
-    //         Ok(code) => code as c_int,
-    //         Err(err) => {
-    //             eprintln!("CLI action failed error={err:?}");
-    //             std::process::exit(1);
-    //         }
-    //     });
-    //     std::process::exit(0);
-    // Until then, `Action = ()` makes this arm unreachable (init never stashes a
-    // `Some`), so the GUI-launch `orelse return` above is the only live path.
-    unreachable!(
-        "CLI-action-from-C path is deferred: GlobalState<Action> = (), \
-         cli.action.detectArgs not yet wired into rustty_apprt::init (BREAK #1)"
-    )
+    //   PORT NOTE: `action.run()` takes no allocator (dropped tree-wide);
+    //   `posix.exit(action.run(...))` exits with the action's u8 code, and the
+    //   reference's trailing `posix.exit(0)` is unreachable (kept as comment).
+    std::process::exit(match action.run() {
+        Ok(code) => i32::from(code),
+        Err(err) => {
+            log(
+                Level::Err,
+                "default",
+                &format!("CLI action failed error={err:?}"),
+            );
+            std::process::exit(1);
+        }
+    });
+    // posix.exit(0); — unreachable after the exit above (reference dead tail).
 }
 
 // ===================================================================
@@ -2693,11 +2771,9 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     // `content_scale.y` f32; the quotient widens to the `CGFloat` (f64) argument.
     // SAFETY: `matrix` is a null `*const CGAffineTransform`; `attributes` is None.
     let copy: CFRetained<CTFont> = unsafe {
-        (*face).font.copy_with_attributes(
-            (size / content_scale.y) as f64,
-            core::ptr::null(),
-            None,
-        )
+        (*face)
+            .font
+            .copy_with_attributes((size / content_scale.y) as f64, core::ptr::null(), None)
     };
 
     // return copy;
@@ -2737,8 +2813,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
 ) -> bool {
     // const surface = &ptr.core_surface;
     // SAFETY: `ptr` validity is the caller's contract.
-    let core_surface: *mut CoreSurface =
-        unsafe { core::ptr::addr_of_mut!((*ptr).core_surface) };
+    let core_surface: *mut CoreSurface = unsafe { core::ptr::addr_of_mut!((*ptr).core_surface) };
 
     // surface.renderer_state.mutex.lock();
     // defer surface.renderer_state.mutex.unlock();
@@ -2763,9 +2838,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     // `bool`-returning export; rustty's `get_cursor_pos` is infallible (returns
     // `Ok(self.cursor_pos)`), so the `Err` arm is effectively dead — mapped to the
     // faithful degrade (`unlock` + `return false`: no cursor → no quicklook word).
-    let pos = match unsafe {
-        <Surface as rustty_apprt_api::Surface>::get_cursor_pos(&*ptr)
-    } {
+    let pos = match unsafe { <Surface as rustty_apprt_api::Surface>::get_cursor_pos(&*ptr) } {
         Ok(v) => v,
         Err(_) => {
             unsafe { (*mutex).unlock() };
@@ -2777,8 +2850,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     //
     // PORT NOTE: `posToViewport` takes `f64`; apprt `CursorPos` carries `f32`, so the
     // fields widen at the call (the reference's implicit float coercion).
-    let pt_viewport =
-        unsafe { (*core_surface).posToViewport(f64::from(pos.x), f64::from(pos.y)) };
+    let pt_viewport = unsafe { (*core_surface).posToViewport(f64::from(pos.x), f64::from(pos.y)) };
 
     //     const pin = screen.pages.pin(.{
     //         .viewport = .{
@@ -2793,12 +2865,14 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     // PORT NOTE: `pages.pin` takes a read-only `&self`; the `orelse` block's
     // `if (comptime std.debug.runtime_safety) unreachable` is an invariant assert —
     // it aborts in debug (`cfg!(debug_assertions)`), and release returns `false`.
-    let pin = match unsafe { (*screen).pages.pin(rustty_vt::point::Point::Viewport(
-        rustty_vt::point::Coordinate {
-            x: pt_viewport.x,
-            y: pt_viewport.y,
-        },
-    )) } {
+    let pin = match unsafe {
+        (*screen).pages.pin(rustty_vt::point::Point::Viewport(
+            rustty_vt::point::Coordinate {
+                x: pt_viewport.x,
+                y: pt_viewport.y,
+            },
+        ))
+    } {
         Some(p) => p,
         None => {
             if cfg!(debug_assertions) {
@@ -3070,8 +3144,7 @@ mod quicklook_word_tests {
                 rows: 5,
                 max_scrollback: 0,
                 kitty_image_storage_limit: 0,
-                kitty_image_loading_limits:
-                    rustty_vt::kitty::graphics_image::Limits::DIRECT,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
         )
         .unwrap();
@@ -3083,7 +3156,10 @@ mod quicklook_word_tests {
         let pt = Point::Viewport(Coordinate { x: 7, y: 0 });
 
         // screen.pages.pin(...) orelse return false;
-        let pin = s.pages.pin(pt).expect("viewport point must resolve to a pin");
+        let pin = s
+            .pages
+            .pin(pt)
+            .expect("viewport point must resolve to a pin");
 
         // screen.selectWord(pin, config.selection_word_chars) orelse return false;
         let sel = s
@@ -3119,14 +3195,16 @@ mod quicklook_word_tests {
                 rows: 5,
                 max_scrollback: 0,
                 kitty_image_storage_limit: 0,
-                kitty_image_loading_limits:
-                    rustty_vt::kitty::graphics_image::Limits::DIRECT,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
         )
         .unwrap();
 
         let pt = Point::Viewport(Coordinate { x: 3, y: 0 });
-        let pin = s.pages.pin(pt).expect("viewport point must resolve to a pin");
+        let pin = s
+            .pages
+            .pin(pt)
+            .expect("viewport point must resolve to a pin");
         assert!(s.select_word(pin, &WORD_BOUNDARY).is_none());
 
         s.deinit();
@@ -3161,7 +3239,8 @@ mod quicklook_font_tests {
 
         // Mirror the export's tail exactly: resize via copyWithAttributes → +1.
         // SAFETY: `matrix` null; `attributes` None.
-        let copy: CFRetained<CTFont> = unsafe { base.copy_with_attributes(13.0, core::ptr::null(), None) };
+        let copy: CFRetained<CTFont> =
+            unsafe { base.copy_with_attributes(13.0, core::ptr::null(), None) };
 
         // Hold an EXTRA retain so the object survives the "host" release and we
         // can observe the count afterward (this `keeper` is NOT part of the
@@ -3191,6 +3270,103 @@ mod quicklook_font_tests {
             keeper.retain_count(),
             rc_before - 1,
             "the host's one CFRelease must consume exactly the export's +1 (no leak, no double-free)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use libc::c_char;
+
+    // The detectArgs slice of the C-path `state.init()`: detection over the
+    // argv STORED by `rustty_init` (reference `std.os.argv = argv[0..argc]`
+    // then `cli.action.detectArgs` walking std.process.args == std.os.argv).
+    // Pure over its input — no process-global involved — so it is directly
+    // unit-testable (the global-state paths are pinned by subprocess KATs).
+    #[test]
+    fn detect_from_argv_plus_version() {
+        let argv: Vec<Vec<u8>> = vec![b"rustty".to_vec(), b"+version".to_vec()];
+        let action = crate::detect_from_argv(&argv).unwrap();
+        assert_eq!(action, Some(rustty_cli::rustty::Action::Version));
+    }
+
+    #[test]
+    fn detect_from_argv_none() {
+        let argv: Vec<Vec<u8>> = vec![b"rustty".to_vec()];
+        assert_eq!(crate::detect_from_argv(&argv).unwrap(), None);
+        assert_eq!(crate::detect_from_argv(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn detect_from_argv_invalid() {
+        let argv: Vec<Vec<u8>> = vec![b"rustty".to_vec(), b"+bogus".to_vec()];
+        assert_eq!(
+            crate::detect_from_argv(&argv),
+            Err(rustty_cli::action::DetectError::InvalidAction),
+        );
+    }
+
+    #[test]
+    fn detect_from_argv_multiple() {
+        let argv: Vec<Vec<u8>> = vec![b"rustty".to_vec(), b"+version".to_vec(), b"+help".to_vec()];
+        assert_eq!(
+            crate::detect_from_argv(&argv),
+            Err(rustty_cli::action::DetectError::MultipleActions),
+        );
+    }
+
+    // reference `ghostty_init`: a detect failure means `state.init()` fails →
+    // log err + return 1 (main_c.zig:105). No global state is stamped.
+    #[test]
+    fn rustty_init_invalid_action_returns_1() {
+        let argv0 = std::ffi::CString::new("rustty").unwrap();
+        let arg1 = std::ffi::CString::new("+bogus").unwrap();
+        let mut argv = [argv0.as_ptr() as *mut c_char, arg1.as_ptr() as *mut c_char];
+        // SAFETY: argv points at 2 valid NUL-terminated strings.
+        let rc = unsafe { crate::rustty_init(2, argv.as_mut_ptr()) };
+        assert_eq!(rc, 1);
+    }
+
+    // The NON-NULL path of `rustty_cli_try_action` (main_c.zig): with `+version`
+    // in argv, `rustty_init` stashes the action and `rustty_cli_try_action`
+    // RUNS it and EXITS with its code — so the whole flow runs in a CHILD
+    // process (the panic_policy.rs re-exec pattern); the parent asserts exit 0
+    // and the version output. This is the CLI-action-THROUGH-C KAT.
+    #[test]
+    fn cli_try_action_version_runs_and_exits() {
+        const MARKER: &str = "RUSTTY_CLI_ACTION_CHILD";
+        if std::env::var_os(MARKER).is_some() {
+            // Child: exactly what the Swift host does (main.swift:8,31).
+            let argv0 = std::ffi::CString::new("rustty").unwrap();
+            let arg1 = std::ffi::CString::new("+version").unwrap();
+            let mut argv = [argv0.as_ptr() as *mut c_char, arg1.as_ptr() as *mut c_char];
+            // SAFETY: argv points at 2 valid NUL-terminated strings.
+            let rc = unsafe { crate::rustty_init(2, argv.as_mut_ptr()) };
+            assert_eq!(rc, 0, "rustty_init with +version must succeed");
+            // SAFETY: global state initialized by rustty_init above.
+            unsafe { crate::rustty_cli_try_action() };
+            unreachable!("+version must exit the process");
+        }
+        let exe = std::env::current_exe().expect("current_exe");
+        let out = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                "tests::cli_try_action_version_runs_and_exits",
+                "--nocapture",
+            ])
+            .env(MARKER, "1")
+            .output()
+            .expect("spawn child test process");
+        assert!(
+            out.status.success(),
+            "child failed: status={:?} stderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(rustty_identity::VERSION),
+            "version output missing from: {stdout}",
         );
     }
 }
