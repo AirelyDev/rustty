@@ -882,15 +882,84 @@ mod imp {
             gtk_app.set_accels_for_action(gtk_action, &[accel.as_str()]);
         }
 
-        /// PORTS: `application.zig` `loadRuntimeCss`. Regenerates the app-level CSS
-        /// (font size, window theme, etc.) into the shared `css_provider`.
+        /// PORTS: `application.zig:867-928` `loadRuntimeCss`. Regenerates the
+        /// app-level runtime CSS (window theme, split styling, title font) into
+        /// the shared `css_provider`, replacing any previously loaded CSS. This
+        /// is what paints the `windowhandle` (headerbar) opaque on an RGBA
+        /// window.
         fn load_runtime_css(&self) {
-            // PORT NOTE (placeholder-leaf): the runtime CSS generator walks the
-            // config into a CSS string and feeds `priv.css_provider.loadFromString`.
-            // It depends on the config→CSS surface (adwaita styling tier) that lands
-            // with the window/surface CSS work. The provider itself is created +
-            // registered on the display in Task 8's `new`; this loader is wired into
-            // `prop_config` so it activates when that surface exists.
+            use gtk4::prelude::*;
+            use std::fmt::Write as _;
+
+            // Read the current config (`:870`); nothing to do without one
+            // (mirrors `start_quit_timer`).
+            let cfg = self.config.borrow();
+            let Some(cfg) = cfg.as_ref() else {
+                return;
+            };
+            let config = cfg.get();
+
+            // `std.Io.Writer.Allocating` seeded at 2048 bytes (`:872`).
+            let mut css = String::with_capacity(2048);
+
+            // Load standard css first as it can override some of the user
+            // configured styling (`:877-879`).
+            load_runtime_css_414(config, &mut css);
+            load_runtime_css_416(config, &mut css);
+
+            // `widget.unfocused-split` (`:881-894`).
+            let unfocused_fill = config.unfocused_split_fill.unwrap_or(config.background);
+            write!(
+                css,
+                "widget.unfocused-split {{\n opacity: {:.2};\n background-color: rgb({},{},{});\n}}\n",
+                1.0 - config.unfocused_split_opacity,
+                unfocused_fill.r,
+                unfocused_fill.g,
+                unfocused_fill.b,
+            )
+            .unwrap();
+
+            // `.window .split paned > separator` divider color, when set
+            // (`:896-908`).
+            if let Some(color) = config.split_divider_color {
+                write!(
+                    css,
+                    ".window .split paned > separator {{\n  color: rgb({r},{g},{b});\n  background: rgb({r},{g},{b});\n}}\n",
+                    r = color.r,
+                    g = color.g,
+                    b = color.b,
+                )
+                .unwrap();
+            }
+
+            // `.window headerbar` title font family, when set (`:910-917`).
+            // `window-title-font-family` is `Option<Vec<u8>>` here, so render it
+            // via `String::from_utf8_lossy`.
+            if let Some(font_family) = config.window_title_font_family.as_ref() {
+                let font_family = String::from_utf8_lossy(font_family);
+                write!(
+                    css,
+                    ".window headerbar {{\n  font-family: \"{font_family}\";\n}}\n",
+                )
+                .unwrap();
+            }
+
+            // `log.debug("runtime CSS is {d} bytes", .{contents.len})` (`:921`).
+            // PORT NOTE: this port has no debug-logging shim (the same doctrine
+            // recorded at `embedded.rs:648-649`), so the reference log line is
+            // preserved as a comment rather than emitted. Byte count is
+            // `css.len()`.
+
+            // Clears any previously loaded CSS from this provider (`:923-927`).
+            // gtk4-rs 0.11 `CssProvider::load_from_string` has the same
+            // clear-then-load semantics as the oracle's `loadFromBytes`. If the
+            // provider isn't installed yet, return without loading (placeholder-
+            // leaf doctrine — the provider is created in `new`).
+            let provider = self.css_provider.borrow();
+            let Some(provider) = provider.as_ref() else {
+                return;
+            };
+            provider.load_from_string(&css);
         }
 
         /// PORTS: `application.zig` `loadCustomCss`. Loads each user
@@ -1003,6 +1072,165 @@ mod imp {
         #[allow(dead_code)]
         pub(super) fn handle_quit_timer_expired(&self) {
             *self.quit_timer.borrow_mut() = QuitTimer::Expired;
+        }
+    }
+
+    /// PORTS: `application.zig:930-964` `loadRuntimeCss414`. Load runtime CSS for
+    /// older than GTK 4.16.
+    fn load_runtime_css_414(config: &CoreConfig, css: &mut String) {
+        use rustty_config::value_types::WindowTheme;
+        use std::fmt::Write as _;
+
+        // GTK 4.16+ uses the CSS-variable path in `load_runtime_css_416`
+        // instead (`:935`).
+        if crate::gtk::gtk_version::runtime_at_least(4, 16, 0) {
+            return;
+        }
+
+        let headerbar_background = config
+            .window_titlebar_background
+            .unwrap_or(config.background);
+        let headerbar_foreground = config
+            .window_titlebar_foreground
+            .unwrap_or(config.foreground);
+
+        // Only the rustty (ghostty) window theme paints the headerbar; every
+        // other theme defers to the system/libadwaita styling (`:941-963`).
+        // (`WindowTheme::Rustty` is this port's rename of the oracle's
+        // `.ghostty`.)
+        match config.window_theme {
+            WindowTheme::Rustty => {
+                write!(
+                    css,
+                    "windowhandle {{\n  background-color: rgb({},{},{});\n  color: rgb({},{},{});\n}}\nwindowhandle:backdrop {{\n background-color: oklab(from rgb({},{},{}) calc(l * 0.9) a b / alpha);\n}}\n",
+                    headerbar_background.r,
+                    headerbar_background.g,
+                    headerbar_background.b,
+                    headerbar_foreground.r,
+                    headerbar_foreground.g,
+                    headerbar_foreground.b,
+                    headerbar_background.r,
+                    headerbar_background.g,
+                    headerbar_background.b,
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+    }
+
+    /// PORTS: `application.zig:966-1064` `loadRuntimeCss416`. Load runtime CSS
+    /// for GTK 4.16 and newer.
+    fn load_runtime_css_416(config: &CoreConfig, css: &mut String) {
+        use rustty_config::value_types::WindowTheme;
+        use std::fmt::Write as _;
+
+        // Older than GTK 4.16 uses the direct-rgb path in
+        // `load_runtime_css_414` instead (`:971`).
+        if crate::gtk::gtk_version::runtime_until(4, 16, 0) {
+            return;
+        }
+
+        let headerbar_background = config
+            .window_titlebar_background
+            .unwrap_or(config.background);
+        let headerbar_foreground = config
+            .window_titlebar_foreground
+            .unwrap_or(config.foreground);
+
+        // Static block, emitted verbatim (`writeAll`, `:977-1030`).
+        css.push_str(
+            "/*\n\
+             \x20* Child Exited Overlay\n\
+             \x20*/\n\
+             \n\
+             .child-exited.normal revealer widget {\n\
+             \x20 background-color: color-mix(\n\
+             \x20   in srgb,\n\
+             \x20   var(--success-bg-color),\n\
+             \x20   transparent 50%\n\
+             \x20 );\n\
+             }\n\
+             \n\
+             .child-exited.abnormal revealer widget {\n\
+             \x20 background-color: color-mix(\n\
+             \x20   in srgb,\n\
+             \x20   var(--error-bg-color),\n\
+             \x20   transparent 50%\n\
+             \x20 );\n\
+             }\n\
+             \n\
+             /*\n\
+             \x20* Surface\n\
+             \x20*/\n\
+             \n\
+             .surface progressbar.error trough progress {\n\
+             \x20 background-color: color-mix(\n\
+             \x20   in srgb,\n\
+             \x20   var(--error-bg-color),\n\
+             \x20   transparent 50%\n\
+             \x20 );\n\
+             }\n\
+             \n\
+             .surface .bell-overlay {\n\
+             \x20 border-color: color-mix(\n\
+             \x20   in srgb,\n\
+             \x20   var(--accent-color),\n\
+             \x20   transparent 50%\n\
+             \x20 );\n\
+             }\n\
+             \n\
+             /*\n\
+             \x20* Splits\n\
+             \x20*/\n\
+             \n\
+             .window .split paned > separator {\n\
+             \x20 background-color: color-mix(\n\
+             \x20   in srgb,\n\
+             \x20   var(--window-bg-color),\n\
+             \x20   transparent 0%\n\
+             \x20 );\n\
+             }\n",
+        );
+
+        // Only the rustty (ghostty) window theme overrides the libadwaita
+        // color variables + headerbar (`:1032-1063`). (`WindowTheme::Rustty`
+        // is this port's rename of the oracle's `.ghostty`.) Note: this block
+        // intentionally has no trailing newline, matching the oracle bytes.
+        match config.window_theme {
+            WindowTheme::Rustty => {
+                write!(
+                    css,
+                    ":root {{\n  \
+                     --ghostty-fg: rgb({},{},{});\n  \
+                     --ghostty-bg: rgb({},{},{});\n  \
+                     --headerbar-fg-color: var(--ghostty-fg);\n  \
+                     --headerbar-bg-color: var(--ghostty-bg);\n  \
+                     --headerbar-backdrop-color: oklab(from var(--headerbar-bg-color) calc(l * 0.9) a b / alpha);\n  \
+                     --overview-fg-color: var(--ghostty-fg);\n  \
+                     --overview-bg-color: var(--ghostty-bg);\n  \
+                     --popover-fg-color: var(--ghostty-fg);\n  \
+                     --popover-bg-color: var(--ghostty-bg);\n  \
+                     --window-fg-color: var(--ghostty-fg);\n  \
+                     --window-bg-color: var(--ghostty-bg);\n\
+                     }}\n\
+                     windowhandle {{\n  \
+                     background-color: var(--headerbar-bg-color);\n  \
+                     color: var(--headerbar-fg-color);\n\
+                     }}\n\
+                     windowhandle:backdrop {{\n \
+                     background-color: var(--headerbar-backdrop-color);\n\
+                     }}",
+                    headerbar_foreground.r,
+                    headerbar_foreground.g,
+                    headerbar_foreground.b,
+                    headerbar_background.r,
+                    headerbar_background.g,
+                    headerbar_background.b,
+                )
+                .unwrap();
+            }
+            _ => {}
         }
     }
 }
