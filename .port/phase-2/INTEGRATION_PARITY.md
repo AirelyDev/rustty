@@ -216,13 +216,14 @@ Each attested behavior-preserving unless flagged.
    preserving *only* while no message catalog is bound. In a localized locale it
    loses translations. Sanctioned deferral, scope = "no translations applied".
 
-5. **`rustty_cli_try_action` null-action path faithful; CLI-action-from-C
-   deferred** (`lib.rs:268-307`) — reachable GUI path (`None => return`) is
-   byte-faithful; the `Some => unreachable!()` can never fire (GlobalState binds
-   `Action=()`, init never stashes Some), so no crash. **FLAGGED**: broader than
-   the null path — `detectArgs` is omitted, so a CLI action forwarded to the
-   embedded lib would run+exit under ghostty but be treated as a plain GUI launch
-   under rustty. Sanctioned two-part deferral.
+5. **`rustty_cli_try_action` — both null AND non-null paths now faithful**
+   (`lib.rs`, WS4 2026-07-23). `rustty_init` runs `detectArgs` over the stored
+   argv (`detect_from_argv`) and stashes the result (presence in
+   `rustty_core::STATE.action: Option<()>`, the concrete value in the
+   crate-local `CLI_ACTION` stash); `rustty_cli_try_action`'s `Some` arm now
+   runs the action and exits with its code, matching ghostty's
+   `ghostty_cli_try_action`. The null-action GUI path (`None => return`) is
+   unchanged and still byte-faithful. **Behavior-preserving; no residual gap.**
 
 6. **`inspector_metal_shutdown` returns void** (`ghostty_alias.rs:502-505`) — the
    upstream header (`ghostty.h:1195`) declares `bool` but the exported Zig symbol

@@ -1891,21 +1891,16 @@ module shells, and the global-state precursor. `none.zig` (19 loc) + `browser.zi
 (4 loc) are ported FULLY here (§4 — no trait impls, faithful to the reference).
 The deferrals E0 CREATES (all scheduled, nothing dropped — R1):
 
-1. **The full `state.init()` port.** `rustty_apprt::init()` (the `rustty_init`
-   C-export's body) is the E0 MINIMAL precursor: it sets `rustty_core::STATE` with
-   the `()` allocator seam + `resourcesDir()` only, so the CAPI `global.alloc`
-   readers (`ghostty_surface_free_text`/`_tty_name`/`Text.deinit`) have a live
-   state. The FULL reference `global.zig` `init` body — GPA/allocator selection,
-   CLI action detection (`cli.action.detectArgs`), logging config (`GHOSTTY_LOG`),
-   `crash.init`, `internal_os.ensureLocale`, `i18n.init`, `initSignals` (SIGPIPE) —
-   is the BREAK #1 deferred seam (`rustty_global::GlobalState::init` is commented,
-   pending rustty-core wiring). **Target: the rustty-core/rustty-global `state.init`
-   wiring milestone.**
+1. **LANDED (WS4, 2026-07-23):** the full body is `rustty_apprt::init_with_action`
+   (logging config via RUSTTY_LOG, initSignals SIGPIPE, rlimits, crash.init,
+   ensureLocale, glslang.init, oni.init, i18n.init, the init info-log lines);
+   detection stays above apprt (ADV-FIX 2). Remaining under OTHER entries:
+   tree-wide `std.log.scoped` facade routing (the per-crate scoped-log sites —
+   pre-existing, not created here).
 
-2. **`std.os.argv` storage in `rustty_init`.** The reference `ghostty_init` does
-   `std.os.argv = argv[0..argc]`; the stored argv is consumed only by the deferred
-   CLI-action detection (item 1). `rustty_init` accepts `argv` (fixing the C-ABI
-   signature now) but does not store it yet. **Target: with item 1.**
+2. **LANDED (WS4).** `rustty_init` stores argv in the apprt-c `ARGV` OnceLock
+   (`static ARGV: OnceLock<Vec<Vec<u8>>>`, `crates/rustty-apprt-c/src/lib.rs`)
+   and detection (`detect_from_argv`) consumes it.
 
 3. **The embedded backend + the 71 libghostty C-ABI exports.** `embedded.rs` is an
    E0 shell (only `resourcesDir`). `embedded::App`/`Surface`/`Platform`/`Inspector`
@@ -3079,8 +3074,9 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   list_themes `.resources` warning seam stays consistent. The remaining reference
   init side effects (GHOSTTY_LOG parse, signal setup, xev detect, the version/
   optimize/runtime/font log lines, rlimit init, crash.init, ensureLocale,
-  glslang.init, oni.init, i18n.init) stay BREAK #1 deferred seams (preserved verbatim
-  in `rustty_global::GlobalState::init`), wired as rustty-core / apprt land (Phase-3).
+  glslang.init, oni.init, i18n.init) — **LANDED (WS4, 2026-07-23)** in
+  `rustty_apprt::init_with_action` (`crates/rustty-apprt/src/lib.rs`), which the
+  bin now calls instead of the bare `rustty_apprt::init()` precursor.
 
 ---
 
@@ -4527,25 +4523,21 @@ later cleanup pass.
 in the global C-API state during `ghostty_init` and, if present, runs it and
 `posix.exit`s with its code; if absent it returns (the GUI-launch path). Ported to
 `rustty_cli_try_action` in `crates/rustty-apprt-c/src/lib.rs` (+ the `ghostty_*`
-alias under `identity-oracle`). **What's LIVE:** the null-action GUI-launch path —
-`state.action orelse return` — which is the macOS Swift-app milestone's actual need
-(a windowed launch stashes no action and returns cleanly WITHOUT exiting). **What's
-deferred:** the non-null CLI-action-from-C path. The state field
-`rustty_core::global_state().action` is `Option<()>` because rustty-core binds the
-`GlobalState<Action>` type parameter to `()` — the **BREAK #1** deferred seam:
-`cli.action.detectArgs` is not yet wired into the `rustty_apprt::init` bootstrap
-(`init` hard-codes `action: None`, apprt/src/lib.rs). So no action is ever stashed
-and the `Some(_)` arm is currently unreachable (guarded by an `unreachable!`).
-**Why deferred:** the action RUNNER already exists
-(`rustty_cli::ghostty::Action::run(self) -> Result<u8, Error>`, ghostty.rs:306); the
-only missing wiring is (a) binding `GlobalState<Action>` to the concrete
-`rustty_cli::ghostty::Action` in rustty-core (currently `()`), and (b) calling
-`detectArgs` in `rustty_apprt::init` to stash it. **What unblocks it:** the BREAK #1
-full `state.init()` port (CLI-action detection + logging-config + crash/locale/
-signal setup). Once wired, the documented `TODO(port)` tail in `rustty_cli_try_action`
-becomes `std::process::exit(match action.run() { Ok(c) => c as c_int, Err(err) => {
-eprintln!(...); std::process::exit(1) } }); std::process::exit(0);` — faithful to the
-reference.
+alias under `identity-oracle`).
+
+**LANDED (WS4, 2026-07-23):** both the null-action GUI-launch path AND the
+non-null CLI-action-from-C path are now live. `rustty_core::GlobalState<Action>`
+stays bound `Action = ()` (rustty-cli deps rustty-core — the concrete type CANNOT
+live there without a cycle; the "bind Action in rustty-core" hypothesis in the
+prior write-up of this entry was impossible). The realized split: PRESENCE lives
+in `rustty_core::STATE.action: Option<()>` (set by `rustty_apprt::init_with_action`
+from the `action_detected` flag `rustty_init` passes it), and the concrete VALUE
+lives in a top-sink `CLI_ACTION: OnceLock<Option<rustty_cli::rustty::Action>>`
+stash local to `crates/rustty-apprt-c/src/lib.rs` (set alongside `ARGV`/detection
+in `rustty_init`) — together they realize the reference's one `state.action`
+field. `rustty_cli_try_action`'s `Some` arm now runs
+`std::process::exit(match action.run() { Ok(code) => i32::from(code), Err(err) => {
+log(...); std::process::exit(1) } })`, faithful to the reference.
 
 ## gettext-sys — self-contained libintl (`dgettext`/`bindtextdomain`/`textdomain`) deferred [added 2026-07-12, xtask P3 self-contained-lib]
 

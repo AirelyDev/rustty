@@ -24,7 +24,8 @@
 // const posix = std.posix;
 // const build_config = @import("build_config.zig");
 use rustty_build_config as build_config;
-// const macos = @import("macos");           -> logFn unified-logging (deferred seam)
+// const macos = @import("macos");           -> logFn unified-logging (WS4:
+//   `rustty_core::logging::log_with`'s macOS sink, via `rustty_os::macos::Log`)
 // const cli = @import("cli.zig");
 use rustty_cli::action::{self, DetectError};
 use rustty_cli::rustty::Action;
@@ -58,10 +59,8 @@ use std::io::Write;
 /// The bin's `state.init()` failure set — a faithful projection of the reference
 /// `GlobalState.init` error union that `main()`'s `state.init() catch` switches
 /// on. Only the two live upward calls can fail: CLI action detection
-/// ([`DetectError`]) and resources-dir resolution ([`rustty_apprt::InitError`],
-/// the reference `apprt.runtime.resourcesDir`). The remaining reference init
-/// failures (GHOSTTY_LOG parse, locale, glslang, oniguruma, i18n) are deferred
-/// seams (see `state_init`).
+/// ([`DetectError`]) and the FULL `rustty_apprt::init_with_action` failure set
+/// (WS4 — [`rustty_apprt::InitError`]).
 enum InitError {
     // error.MultipleActions / error.InvalidAction (cli.action.detectArgs).
     Detect(DetectError),
@@ -72,22 +71,19 @@ enum InitError {
 
 /// Initialize our global state (the bin's own `GlobalState<Action>`).
 ///
-/// PORTS: the slice of `global.zig` `GlobalState.init` that is LIVE for the
-/// headless bin — action detection (ADV-FIX 2), the action-implies-no-stderr-log
-/// rule, and resources-dir resolution. The rest of the reference `init` body is a
-/// BREAK #1 deferred seam preserved verbatim in `rustty_global::GlobalState::init`
-/// (GPA/allocator selection, GHOSTTY_LOG parse, signal setup, xev detect, the
-/// version/optimize/runtime/font/renderer/libxev log lines, rlimit init,
-/// crash.init, ensureLocale, glslang.init, oni.init, i18n.init) — those land as
-/// rustty-core / apprt wiring (Phase-3). Reference body for the live slice:
+/// PORTS: `global.zig` `GlobalState.init` — action detection (ADV-FIX 2, LIVE
+/// here) plus the FULL reference init body (GPA/allocator selection collapse,
+/// GHOSTTY_LOG parse, signal setup, xev detect, the version/optimize/runtime/
+/// font/renderer/libxev log lines, rlimit init, crash.init, ensureLocale,
+/// glslang.init, oni.init, resourcesDir, i18n.init) — wired in
+/// `rustty_apprt::init_with_action` (WS4, the BREAK #1 seam landed). Reference
+/// body for the slice this fn drives directly:
 ///
 ///   // We first try to parse any action that we may be executing.
 ///   self.action = try cli.action.detectArgs(cli.ghostty.Action, self.alloc);
 ///   // If we have an action executing, we disable logging by default ...
 ///   if (self.action != null) self.logging.stderr = false;
-///   ...
-///   // Find our resources directory once ...
-///   self.resources_dir = try apprt.runtime.resourcesDir(self.alloc);
+///   ... (the rest — see `rustty_apprt::init_with_action`'s doc)
 fn state_init() -> Result<GlobalState<Action>, InitError> {
     // Initialize ourself to nothing so we don't have any extra state.
     // (reference `self.* = .{ .gpa = null, .alloc = undefined, .action = null,
