@@ -921,6 +921,16 @@ const X11Entry *rustty_color_x11_names(void);
 uintptr_t rustty_color_x11_name_count(void);
 
 /**
+ * C: rustty_color_scheme_report_encode
+ * # Safety
+ * `buf`, if non-null, writable for `buf_len`; `out_written` valid writable.
+ */
+int rustty_color_scheme_report_encode(int scheme,
+                                      uint8_t *buf,
+                                      uintptr_t buf_len,
+                                      uintptr_t *out_written);
+
+/**
  * C: rustty_focus_encode
  *
  * # Safety

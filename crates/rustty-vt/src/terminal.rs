@@ -651,6 +651,50 @@ impl Terminal {
         unsafe { (*self.screens.active).alloc }
     }
 
+    /// Returns the current color for an xterm OSC color target.
+    ///
+    /// Unsupported dynamic and special colors return `None`. The cursor color
+    /// follows xterm-style reporting and falls back to the foreground color when
+    /// no explicit cursor color is set.
+    pub fn color_for_xterm(&self, target: osc::parsers::color::Target) -> Option<color::RGB> {
+        use osc::parsers::color::Target;
+        match target {
+            Target::Palette(i) => Some(self.colors.palette.current[i as usize]),
+            Target::Dynamic(dynamic) => match dynamic {
+                color::Dynamic::Foreground => self.colors.foreground.get(),
+                color::Dynamic::Background => self.colors.background.get(),
+                color::Dynamic::Cursor => self.colors.cursor.get().or_else(|| self.colors.foreground.get()),
+                color::Dynamic::PointerForeground
+                | color::Dynamic::PointerBackground
+                | color::Dynamic::TektronixForeground
+                | color::Dynamic::TektronixBackground
+                | color::Dynamic::HighlightBackground
+                | color::Dynamic::TektronixCursor
+                | color::Dynamic::HighlightForeground => None,
+            },
+            Target::Special(_) => None,
+        }
+    }
+
+    /// Returns the current color for a Kitty color protocol key.
+    ///
+    /// Only palette, foreground, background, and cursor colors are backed by
+    /// Terminal state. Unsupported keys, or supported dynamic colors without a
+    /// value, return `None`.
+    pub fn color_for_kitty(&self, key: kitty::color::Kind) -> Option<color::RGB> {
+        match key {
+            kitty::color::Kind::Palette(palette) => {
+                Some(self.colors.palette.current[palette as usize])
+            }
+            kitty::color::Kind::Special(special) => match special {
+                kitty::color::Special::Foreground => self.colors.foreground.get(),
+                kitty::color::Special::Background => self.colors.background.get(),
+                kitty::color::Special::Cursor => self.colors.cursor.get(),
+                _ => None,
+            },
+        }
+    }
+
     /// Print UTF-8 encoded string to the terminal.
     pub fn print_string(&mut self, str: &[u8]) -> Result<(), OutOfMemory> {
         // const view = try std.unicode.Utf8View.init(str);

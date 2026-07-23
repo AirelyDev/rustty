@@ -35,6 +35,7 @@
  * - @ref sgr "SGR Parser" - Parse SGR (Select Graphic Rendition) sequences
  * - @ref paste "Paste Utilities" - Validate paste data safety
  * - @ref build_info "Build Info" - Query compile-time build configuration
+ * - @ref color_scheme "Color Scheme Report Encoding" - Encode color scheme reports into terminal escape sequences
  * - @ref allocator "Memory Management" - Memory management and custom allocators
  * - @ref wasm "WebAssembly Utilities" - WebAssembly convenience functions
  *
@@ -55,6 +56,7 @@
  * - @ref c-vt-formatter/src/main.c - Terminal formatter example
  * - @ref c-vt-grid-traverse/src/main.c - Grid traversal example using grid refs
  * - @ref c-vt-grid-ref-tracked/src/main.c - Tracked grid ref example
+ * - @ref c-vt-color-scheme/src/main.c - Color scheme report encoding example
  *
  */
 
@@ -114,6 +116,11 @@
  * PNG decoder callback and send a Kitty Graphics Protocol image.
  */
 
+/** @example c-vt-color-scheme/src/main.c
+ * This example demonstrates how to use the color scheme report encoder to
+ * encode a color scheme report escape sequence into a caller-provided buffer.
+ */
+
 #ifndef RUSTTY_VT_H
 #define RUSTTY_VT_H
 
@@ -126,6 +133,7 @@ extern "C" {
 #include <rustty/vt/build_info.h>
 #include <rustty/vt/color.h>
 #include <rustty/vt/device.h>
+#include <rustty/vt/color_scheme.h>
 #include <rustty/vt/focus.h>
 #include <rustty/vt/formatter.h>
 #include <rustty/vt/render.h>

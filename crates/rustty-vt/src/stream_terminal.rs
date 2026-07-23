@@ -513,20 +513,25 @@ impl<'a> Handler<'a> {
 
     // fn colorOperation(
     //     self: *Handler,
-    //     op: osc_color.Operation,
     //     requests: *const osc_color.List,
+    //     terminator: osc.Terminator,
     // ) !void
     fn do_color_operation(
         &mut self,
-        op: osc::color::Operation,
         requests: &osc::color::List,
+        terminator: osc::Terminator,
     ) -> Result<(), crate::pagelist::OutOfMemory> {
-        // _ = op;
-        let _ = op;
         // if (requests.count() == 0) return;
         if requests.is_empty() {
             return Ok(());
         }
+
+        // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
+        // const alloc = stack.get();
+        // var response: std.Io.Writer.Allocating = .init(alloc);
+        // defer response.deinit();
+        // const writer = &response.writer;
+        let mut response = Vec::new();
 
         // var it = requests.constIterator(0);
         // while (it.next()) |req| {
@@ -629,14 +634,86 @@ impl<'a> Handler<'a> {
                     self.term().colors.palette.mask = color::PaletteMask::init_empty();
                 }
 
-                // .query,
-                // .reset_special,
-                // => {},
-                osc::color::Request::Query(_) | osc::color::Request::ResetSpecial => {}
+                // .query => |target| {
+                //     if (self.effects.write_pty == null) continue;
+                //     const c = self.terminal.colorForXterm(target) orelse continue;
+                //     try writeXtermColorReport(writer, target, c, terminator);
+                // },
+                osc::color::Request::Query(target) => {
+                    if self.effects.write_pty.is_none() {
+                        continue;
+                    }
+                    let Some(c) = self.term().color_for_xterm(*target) else {
+                        continue;
+                    };
+                    Self::write_xterm_color_report(&mut response, target, c, terminator);
+                }
+
+                // .reset_special => {},
+                osc::color::Request::ResetSpecial => {}
             }
         }
 
+        // if (response.written().len > 0) {
+        //     const resp = try response.toOwnedSliceSentinel(0);
+        //     defer alloc.free(resp);
+        //     self.writePty(resp);
+        // }
+        if !response.is_empty() {
+            self.write_pty(&response);
+        }
+
         Ok(())
+    }
+
+    // fn writeXtermColorReport(
+    //     writer: *std.Io.Writer,
+    //     target: osc_color.Target,
+    //     c: color.RGB,
+    //     terminator: osc.Terminator,
+    // ) !void
+    fn write_xterm_color_report(
+        out: &mut Vec<u8>,
+        target: &osc::color::Target,
+        c: color::RGB,
+        terminator: osc::Terminator,
+    ) {
+        use std::io::Write as _;
+        match target {
+            // .palette => |i| {
+            //     try writer.print("\x1b]4;{d};", .{i});
+            //     try c.encodeRgb16(writer);
+            //     try writer.writeAll(terminator.string());
+            // },
+            osc::color::Target::Palette(i) => {
+                let _ = write!(out, "\x1b]4;{};", i);
+                c.encode_rgb16(out);
+                out.extend_from_slice(terminator.string());
+            }
+            // .dynamic => |dynamic| switch (dynamic) {
+            osc::color::Target::Dynamic(dynamic) => match dynamic {
+                // .foreground, .background, .cursor => {
+                //     try writer.print("\x1b]{d};", .{@intFromEnum(dynamic)});
+                //     try c.encodeRgb16(writer);
+                //     try writer.writeAll(terminator.string());
+                // },
+                color::Dynamic::Foreground | color::Dynamic::Background | color::Dynamic::Cursor => {
+                    let _ = write!(out, "\x1b]{};", *dynamic as u32);
+                    c.encode_rgb16(out);
+                    out.extend_from_slice(terminator.string());
+                }
+                // .pointer_foreground, ... => {},
+                color::Dynamic::PointerForeground
+                | color::Dynamic::PointerBackground
+                | color::Dynamic::TektronixForeground
+                | color::Dynamic::TektronixBackground
+                | color::Dynamic::HighlightBackground
+                | color::Dynamic::TektronixCursor
+                | color::Dynamic::HighlightForeground => {}
+            },
+            // .special => {},
+            osc::color::Target::Special(_) => {}
+        }
     }
 
     // fn kittyColorOperation(
@@ -647,6 +724,13 @@ impl<'a> Handler<'a> {
         &mut self,
         request: kitty::color::OSC,
     ) -> Result<(), crate::pagelist::OutOfMemory> {
+        // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
+        // const alloc = stack.get();
+        // var response: std.Io.Writer.Allocating = .init(alloc);
+        // defer response.deinit();
+        // const writer = &response.writer;
+        let mut response = Vec::new();
+
         // for (request.list.items) |item| {
         for item in &request.list {
             match item {
@@ -700,9 +784,55 @@ impl<'a> Handler<'a> {
                         _ => {}
                     },
                 },
-                // .query => {},
-                kitty::color::Request::Query(_) => {}
+                // .query => |key| {
+                //     if (self.effects.write_pty == null) continue;
+                //     const c = self.terminal.colorForKitty(key) orelse {
+                //         if (!key.hasTerminalQueryColor()) continue;
+                //         if (response.written().len == 0) try writer.writeAll("\x1b]21");
+                //         try writer.print(";{f}=", .{key});
+                //         continue;
+                //     };
+                //
+                //     if (response.written().len == 0) try writer.writeAll("\x1b]21");
+                //     try writer.print(";{f}=", .{key});
+                //     try c.encodeRgb8(writer);
+                // },
+                kitty::color::Request::Query(key) => {
+                    use std::io::Write as _;
+                    if self.effects.write_pty.is_none() {
+                        continue;
+                    }
+                    match self.term().color_for_kitty(*key) {
+                        None => {
+                            if !key.has_terminal_query_color() {
+                                continue;
+                            }
+                            if response.is_empty() {
+                                response.extend_from_slice(b"\x1b]21");
+                            }
+                            let _ = write!(response, ";{}=", key);
+                        }
+                        Some(c) => {
+                            if response.is_empty() {
+                                response.extend_from_slice(b"\x1b]21");
+                            }
+                            let _ = write!(response, ";{}=", key);
+                            c.encode_rgb8(&mut response);
+                        }
+                    }
+                }
             }
+        }
+
+        // if (response.written().len > 0) {
+        //     try writer.writeAll(request.terminator.string());
+        //     const resp = try response.toOwnedSliceSentinel(0);
+        //     defer alloc.free(resp);
+        //     self.writePty(resp);
+        // }
+        if !response.is_empty() {
+            response.extend_from_slice(request.terminator.string());
+            self.write_pty(&response);
         }
 
         Ok(())
@@ -814,10 +944,9 @@ impl<'a> Handler<'a> {
                 let Some(scheme) = func(self) else {
                     return;
                 };
-                self.write_pty(match scheme {
-                    device_status::ColorScheme::Dark => b"\x1B[?997;1n",
-                    device_status::ColorScheme::Light => b"\x1B[?997;2n",
-                });
+                let mut resp = Vec::new();
+                device_status::encode_color_scheme_report(&mut resp, scheme);
+                self.write_pty(&resp);
             }
         }
     }
@@ -1804,9 +1933,9 @@ impl<'a> stream::Handler for Handler<'a> {
         let _ = self.do_kitty_color_operation(v);
     }
 
-    // .color_operation => try self.colorOperation(value.op, &value.requests),
+    // .color_operation => try self.colorOperation(&value.requests, value.terminator),
     fn color_operation(&mut self, v: stream::ColorOperation) {
-        let _ = self.do_color_operation(v.op, &v.requests);
+        let _ = self.do_color_operation(&v.requests, v.terminator);
     }
 
     // .semantic_prompt => try self.terminal.semanticPrompt(value),
@@ -2266,6 +2395,53 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "OSC color query responses" (oracle 14c829883)
+    #[test]
+    fn osc_color_query_responses() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        s.next_slice(b"\x1b]10;?\x1b\\");
+        assert!(cap_take().is_none());
+
+        s.next_slice(b"\x1b]11;?\x1b\\");
+        assert!(cap_take().is_none());
+
+        s.next_slice(b"\x1b]4;2;rgb:12/34/56;2;?\x1b\\");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b]4;2;rgb:1212/3434/5656\x1b\\"
+        );
+
+        s.next_slice(b"\x1b]10;rgb:01/02/03\x1b\\");
+        s.next_slice(b"\x1b]11;rgb:04/05/06\x1b\\");
+        s.next_slice(b"\x1b]12;rgb:07/08/09\x1b\\");
+        s.next_slice(b"\x1b]10;?;?;?\x1b\\");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            [
+                &b"\x1b]10;rgb:0101/0202/0303\x1b\\"[..],
+                &b"\x1b]11;rgb:0404/0505/0606\x1b\\"[..],
+                &b"\x1b]12;rgb:0707/0808/0909\x1b\\"[..],
+            ]
+            .concat()
+            .as_slice()
+        );
+
+        s.next_slice(b"\x1b]112\x1b\\");
+        s.next_slice(b"\x1b]12;?\x07");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b]12;rgb:0101/0202/0303\x07"
+        );
+
+        drop(s);
+        t.deinit(Global);
+    }
+
     // test "kitty color protocol set palette"
     #[test]
     fn kitty_color_protocol_set_palette() {
@@ -2381,6 +2557,32 @@ mod tests {
         // After reset, should be unset
         assert!(t.colors.foreground.get().is_none());
 
+        t.deinit(Global);
+    }
+
+    // test "kitty color protocol query responses" (oracle 14c829883)
+    #[test]
+    fn kitty_color_protocol_query_responses() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        s.next_slice(b"\x1b]21;background=?\x1b\\");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b]21;background=\x1b\\"
+        );
+
+        s.next_slice(b"\x1b]21;foreground=rgb:12/34/56;2=rgb:aa/bb/cc\x1b\\");
+        s.next_slice(b"\x1b]21;foreground=?;background=?;2=?\x1b\\");
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b]21;foreground=rgb:12/34/56;background=;2=rgb:aa/bb/cc\x1b\\"
+        );
+
+        drop(s);
         t.deinit(Global);
     }
 
@@ -2677,6 +2879,8 @@ mod tests {
             s.next_slice(b"\x1B[c"); // Device attributes
             s.next_slice(b"\x1B[5n"); // Device status report
             s.next_slice(b"\x1B[6n"); // Cursor position report
+            s.next_slice(b"\x1B]4;0;?\x1B\\"); // OSC color query
+            s.next_slice(b"\x1B]21;foreground=?\x1B\\"); // Kitty color query
 
             // Terminal should still be functional
             s.next_slice(b"Test");

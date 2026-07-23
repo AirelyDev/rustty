@@ -38,6 +38,7 @@ pub mod allocator;
 pub mod build_info;
 pub mod cell;
 pub mod color;
+pub mod color_scheme;
 mod cwrap;
 pub mod focus;
 pub mod formatter;
@@ -238,6 +239,31 @@ pub extern "C" fn rustty_color_x11_names() -> *const color::X11Entry {
 #[no_mangle]
 pub extern "C" fn rustty_color_x11_name_count() -> usize {
     color::x11_name_count()
+}
+
+// ----- color_scheme -----
+// pub const color_scheme_report_encode = color_scheme.report_encode;
+//   (@export name ghostty_color_scheme_report_encode)
+/// C: rustty_color_scheme_report_encode
+/// # Safety
+/// `buf`, if non-null, writable for `buf_len`; `out_written` valid writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_color_scheme_report_encode(
+    scheme: c_int,
+    buf: *mut u8,
+    buf_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    use rustty_vt::device_status::ColorScheme;
+    // Integer-range guard on the raw c_int crossing the C boundary
+    // (RusttyColorScheme: LIGHT=0, DARK=1 — see include/rustty/vt/device.h).
+    let scheme = match scheme {
+        0 => ColorScheme::Light,
+        1 => ColorScheme::Dark,
+        _ => return result::Result::InvalidValue.to_c_int(),
+    };
+    // SAFETY: caller contract.
+    unsafe { color_scheme::report_encode(scheme, buf, buf_len, out_written) }.to_c_int()
 }
 
 // ----- focus -----
@@ -2951,6 +2977,7 @@ mod main_tests {
         // We want to make sure we run the tests for the C allocator interface.
         let _ = super::result::Result::Success;
         let _ = super::color::rgb_get as unsafe fn(_, _, _, _);
+        let _ = super::color_scheme::report_encode as unsafe fn(_, _, _, _) -> _;
         let _ = super::focus::encode as unsafe fn(_, _, _, _) -> _;
         let _ = super::modes::report_encode as unsafe fn(_, _, _, _, _) -> _;
         let _ = super::build_info::get as unsafe fn(_, _) -> _;

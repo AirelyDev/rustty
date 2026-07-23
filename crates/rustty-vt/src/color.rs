@@ -831,6 +831,28 @@ impl RGB {
         self.r == other.r && self.g == other.g && self.b == other.b
     }
 
+    // pub fn encodeRgb8(self: RGB, writer: *std.Io.Writer) !void
+    /// Encode as the 8-bit-per-channel `rgb:xx/xx/xx` xterm wire form.
+    pub fn encode_rgb8(&self, out: &mut Vec<u8>) {
+        // try writer.print("rgb:{x:0>2}/{x:0>2}/{x:0>2}", .{self.r, self.g, self.b});
+        use std::io::Write as _;
+        let _ = write!(out, "rgb:{:02x}/{:02x}/{:02x}", self.r, self.g, self.b);
+    }
+
+    // pub fn encodeRgb16(self: RGB, writer: *std.Io.Writer) !void
+    /// Encode as the 16-bit-per-channel `rgb:xxxx/xxxx/xxxx` xterm wire form.
+    pub fn encode_rgb16(&self, out: &mut Vec<u8>) {
+        // 8->16 bit expansion: v * 257 (0xFF -> 0xFFFF)
+        use std::io::Write as _;
+        let _ = write!(
+            out,
+            "rgb:{:04x}/{:04x}/{:04x}",
+            u16::from(self.r) * 257,
+            u16::from(self.g) * 257,
+            u16::from(self.b) * 257,
+        );
+    }
+
     /// Calculates the contrast ratio between two colors. The contrast
     /// ration is a value between 1 and 21 where 1 is the lowest contrast
     /// and 21 is the highest contrast.
@@ -1235,6 +1257,22 @@ impl LAB {
 #[allow(clippy::bool_assert_comparison)]
 mod tests {
     use super::*;
+
+    // test "RGB: encode" (oracle 14c829883)
+    #[test]
+    fn rgb_encode() {
+        let rgb = RGB {
+            r: 0x01,
+            g: 0x23,
+            b: 0xff,
+        };
+        let mut buf = Vec::new();
+        rgb.encode_rgb8(&mut buf);
+        assert_eq!(b"rgb:01/23/ff", &buf[..]);
+        buf.clear();
+        rgb.encode_rgb16(&mut buf);
+        assert_eq!(b"rgb:0101/2323/ffff", &buf[..]);
+    }
 
     // test "parsePaletteEntry" (oracle 2970e9a2a)
     #[test]

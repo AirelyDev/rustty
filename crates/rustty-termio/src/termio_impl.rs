@@ -59,6 +59,7 @@ use rustty_renderer::state::State;
 use rustty_renderer::thread;
 use rustty_vt::color;
 use rustty_vt::cursor::Style as CursorStyle;
+use rustty_vt::device_status;
 use rustty_vt::focus;
 use rustty_vt::kitty::graphics_image::Limits;
 use rustty_vt::modes::Mode;
@@ -1662,12 +1663,14 @@ impl<M: AppMailbox> Termio<M> {
         //     .light => "\x1B[?997;2n",
         //     .dark => "\x1B[?997;1n",
         // };
-        let output: &[u8] = match self.config.conditional_state.theme {
-            conditional::Theme::Light => b"\x1B[?997;2n",
-            conditional::Theme::Dark => b"\x1B[?997;1n",
+        let scheme = match self.config.conditional_state.theme {
+            conditional::Theme::Light => device_status::ColorScheme::Light,
+            conditional::Theme::Dark => device_status::ColorScheme::Dark,
         };
+        let mut output = Vec::new();
+        device_status::encode_color_scheme_report(&mut output, scheme);
         // try self.queueWrite(td, output, false);
-        self.queueWrite(td, output, false)
+        self.queueWrite(td, &output, false)
     }
 
     /// Get information about the process(es) attached to the backend. Returns

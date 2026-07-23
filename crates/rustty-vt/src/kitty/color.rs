@@ -109,6 +109,20 @@ impl Kind {
         }))
     }
 
+    /// Returns true when a terminal has built-in state for this key.
+    ///
+    /// Unsupported special colors may still be valid Kitty protocol keys, but
+    /// libghostty-vt cannot report them because Terminal does not store them.
+    pub fn has_terminal_query_color(&self) -> bool {
+        match self {
+            Kind::Palette(_) => true,
+            Kind::Special(special) => matches!(
+                special,
+                Special::Foreground | Special::Background | Special::Cursor
+            ),
+        }
+    }
+
     // PORT NOTE: the Zig `format` writes `{d}` for palette (decimal) and `{s}`
     // for special (the tag name). Modeled via `std::fmt::Display`.
     pub fn format(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
@@ -141,5 +155,8 @@ mod tests {
             let actual = Kind::Palette(42).to_string();
             assert_eq!("42", actual);
         }
+        assert!(Kind::Palette(42).has_terminal_query_color());
+        assert!(Kind::Special(Special::Foreground).has_terminal_query_color());
+        assert!(!Kind::Special(Special::SelectionBackground).has_terminal_query_color());
     }
 }

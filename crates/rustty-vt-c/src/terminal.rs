@@ -3770,6 +3770,46 @@ mod tests {
         });
     }
 
+    // test "write_pty receives OSC color query response" (oracle 14c829883)
+    #[test]
+    fn write_pty_receives_osc_color_query_response() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe {
+                LAST_DATA = Some(data);
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                LAST_DATA = None;
+            }
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            let set_fg = b"\x1B]10;rgb:01/02/03\x1B\\";
+            vtw(t, set_fg);
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_none());
+
+            let query_fg = b"\x1B]10;?\x1B\\";
+            vtw(t, query_fg);
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1B]10;rgb:0101/0202/0303\x1B\\".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+
+            unsafe { free(t) };
+        });
+    }
+
     // test "set write_pty without callback ignores queries"
     #[test]
     fn set_write_pty_without_callback_ignores_queries() {
