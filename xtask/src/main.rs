@@ -444,8 +444,8 @@ fn xcframework() -> Result<PathBuf, String> {
 ///   * [`res_misc::gen_misc`]         — `share/{man,locale,bat}`.
 ///
 /// All ten folders end up present so the Xcode Copy-Resources phase resolves
-/// every reference (R5: any not-yet-ported generator still leaves a minimal
-/// VALID folder + a DEFERRALS entry, never fake content).
+/// every reference. As of WS1 every subtree carries REAL generated/vendored
+/// content — no placeholder DEFERRALS notes are emitted anywhere (R5).
 fn resources() -> Result<PathBuf, String> {
     let root = workspace_root();
     let share = root.join("zig-out/share");

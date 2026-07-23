@@ -88,9 +88,8 @@ const FILES: &[(&str, &[u8])] = &[
 ///
 /// `share_dir` is the `share/` directory (e.g. `zig-out/share`). Writes every
 /// file in [`FILES`] under `share_dir/{APP}/shell-integration/`, creating
-/// parent directories as needed, then marks the `shell-integration` entry
-/// RESOLVED in the `share/{APP}/DEFERRALS.md` note (idempotent, additive —
-/// it never clobbers other resolutions written to the same note).
+/// parent directories as needed. (The pre-WS1 `DEFERRALS.md` note-annotation
+/// step is gone — the emitted tree IS the real content.)
 pub fn gen_shell_integration(share_dir: &Path) -> Result<(), String> {
     let root = share_dir.join(crate::APP).join("shell-integration");
 
@@ -107,38 +106,6 @@ pub fn gen_shell_integration(share_dir: &Path) -> Result<(), String> {
         std::fs::write(&path, bytes).map_err(|e| format!("write {}: {e}", path.display()))?;
     }
 
-    mark_resolved(share_dir)?;
-    Ok(())
-}
-
-/// The marker line appended to `DEFERRALS.md` once shell-integration ships.
-const RESOLVED_MARKER: &str = "## RESOLVED: shell-integration (P1.1)";
-
-/// Append a "RESOLVED: shell-integration" section to `share/{APP}/DEFERRALS.md`
-/// if not already present (idempotent). The base note (written by
-/// `res_terminfo::gen_app_root`) lists shell-integration as DEFERRED; this
-/// records that it is now shipped from the vendored tree. Additive so it does
-/// not race/clobber other agents' resolutions in the same generated note.
-fn mark_resolved(share_dir: &Path) -> Result<(), String> {
-    let note_path = share_dir.join(crate::APP).join("DEFERRALS.md");
-    let mut contents = std::fs::read_to_string(&note_path).unwrap_or_default();
-    if contents.contains(RESOLVED_MARKER) {
-        return Ok(());
-    }
-    if !contents.ends_with('\n') && !contents.is_empty() {
-        contents.push('\n');
-    }
-    contents.push_str(&format!(
-        "\n{RESOLVED_MARKER}\n\
-\n\
-`shell-integration/{{bash,zsh,fish,elvish,nushell}}/...` is now emitted from the\n\
-vendored tree (`crates/rustty-extra/shell-integration/`, byte-identical to\n\
-ghostty's `src/shell-integration/`, R1/R3) by\n\
-`xtask` (`res_shell_integration::gen_shell_integration`), excluding `*.md`\n\
-(matching ghostty's `exclude_extensions`). No longer deferred.\n"
-    ));
-    std::fs::write(&note_path, contents.as_bytes())
-        .map_err(|e| format!("write {}: {e}", note_path.display()))?;
     Ok(())
 }
 
@@ -156,6 +123,9 @@ mod tests {
         std::fs::create_dir_all(&share).unwrap();
 
         gen_shell_integration(&share).expect("gen_shell_integration");
+
+        // WS1: this generator no longer writes/annotates any DEFERRALS.md note.
+        assert!(!share.join(crate::APP).join("DEFERRALS.md").exists());
 
         let root = share.join(crate::APP).join("shell-integration");
         // Every expected file exists and is non-empty.
