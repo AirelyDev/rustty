@@ -140,4 +140,20 @@ mod tests {
 
         let _ = fs::remove_dir_all(&tmp);
     }
+
+    /// The vendored corpus carries the upstream MIT attribution in-repo
+    /// (`LICENSE.md`, iTerm2-Color-Schemes). It is `.md` so the emitter's
+    /// exclusion keeps the SHIPPED set at exactly 534 files — parity with
+    /// ghostty, whose bundle ships no license file either.
+    #[test]
+    fn vendored_corpus_carries_upstream_license() {
+        let lic = Path::new(VENDORED_THEMES).join("LICENSE.md");
+        let text = fs::read_to_string(&lic).expect("themes LICENSE.md present");
+        assert!(text.contains("MIT License"), "must carry the upstream MIT text");
+        assert!(text.contains("Mark Badolato"), "must credit the upstream author");
+        assert!(
+            text.contains("iTerm2-Color-Schemes"),
+            "must name the upstream project"
+        );
+    }
 }

@@ -34,3 +34,12 @@ verified false and corrected — see Task 14's report).
 
 Do not hand-edit these theme files — they are upstream data. To refresh,
 re-vendor verbatim from the pinned `iterm2_themes` tarball.
+
+## Licensing
+
+The corpus derives from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+(MIT); the upstream license text is vendored verbatim in `LICENSE.md` in this
+directory (repo-side attribution — excluded from the app bundle by the `.md`
+emit filter, keeping the shipped set exactly 534 files like ghostty's).
+Per-theme copyright belongs to each theme's author (see the upstream license's
+final clause).
