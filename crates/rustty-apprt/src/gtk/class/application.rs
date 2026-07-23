@@ -962,16 +962,108 @@ mod imp {
             provider.load_from_string(&css);
         }
 
-        /// PORTS: `application.zig` `loadCustomCss`. Loads each user
-        /// `custom-css` file into a fresh provider appended to
-        /// `custom_css_providers`.
+        /// PORTS: `application.zig:1066-1140` `loadCustomCss`. Loads each
+        /// `gtk-custom-css` file into a fresh provider appended to
+        /// `custom_css_providers` and registered on the display at USER priority.
         fn load_custom_css(&self) {
-            // PORT NOTE (placeholder-leaf): iterates `config.@"custom-css"`,
-            // building one `gtk.CssProvider` per file, registering it on the
-            // display, and pushing it onto `priv.custom_css_providers` (the OWNED
-            // Vec Task 8 declared, freed in `deinit`). Depends on the config
-            // `custom-css` path list surface; wired into `prop_config` so it
-            // activates when that lands.
+            use std::os::unix::ffi::OsStrExt;
+
+            // `gdk.Display.getDefault() orelse { warn; return }` (`:1069-1072`).
+            let Some(display) = gtk4::gdk::Display::default() else {
+                eprintln!("warn(gtk): unable to get display");
+                return;
+            };
+
+            // Unload the previously loaded style providers, then clear the list
+            // (`:1074-1081`). Each was registered at USER priority below; drop it
+            // off the display before releasing our reference.
+            {
+                let mut providers = self.custom_css_providers.borrow_mut();
+                for provider in providers.iter() {
+                    gtk4::style_context_remove_provider_for_display(&display, provider);
+                }
+                providers.clear();
+            }
+
+            let cfg = self.config.borrow();
+            let Some(cfg) = cfg.as_ref() else {
+                return;
+            };
+            let config = cfg.get();
+
+            // 5 MB per-file limit (`:1101`).
+            const CSS_FILE_SIZE_LIMIT: u64 = 5 * 1024 * 1024;
+
+            // `for (config.@"gtk-custom-css".value.items) |p|` (`:1083`). Each path
+            // was already expanded to absolute at config load.
+            for p in &config.gtk_custom_css.value {
+                // `.optional => .{ path, true }` / `.required => .{ path, false }`
+                // (`:1084-1087`).
+                let (path_bytes, optional) = match p {
+                    rustty_config::path::Path::Optional(path) => (path, true),
+                    rustty_config::path::Path::Required(path) => (path, false),
+                };
+                let path = std::path::Path::new(std::ffi::OsStr::from_bytes(path_bytes));
+
+                // Open + read the file (`:1088-1113`). A missing OPTIONAL file is
+                // silent; any other open error (or a missing REQUIRED file) warns;
+                // either way we skip to the next path.
+                let contents = match std::fs::metadata(path) {
+                    Ok(meta) if meta.len() > CSS_FILE_SIZE_LIMIT => {
+                        eprintln!(
+                            "warn(gtk): gtk-custom-css file {} was larger than {CSS_FILE_SIZE_LIMIT} bytes",
+                            path.display()
+                        );
+                        continue;
+                    }
+                    Ok(_) => match std::fs::read(path) {
+                        Ok(bytes) => bytes,
+                        Err(err) => {
+                            let missing = err.kind() == std::io::ErrorKind::NotFound;
+                            if !missing || !optional {
+                                eprintln!(
+                                    "warn(gtk): error opening gtk-custom-css file {}: {err}",
+                                    path.display()
+                                );
+                            }
+                            continue;
+                        }
+                    },
+                    Err(err) => {
+                        let missing = err.kind() == std::io::ErrorKind::NotFound;
+                        if !missing || !optional {
+                            eprintln!(
+                                "warn(gtk): error opening gtk-custom-css file {}: {err}",
+                                path.display()
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                eprintln!("info(gtk): loading gtk-custom-css path={}", path.display());
+
+                // Fresh provider, wire the parse-error logger, own it in the Vec,
+                // load, and register on the display at USER priority (`:1115-1139`).
+                let css_provider = gtk4::CssProvider::new();
+                let obj = self.obj();
+                css_provider.connect_parsing_error(glib::clone!(
+                    #[weak]
+                    obj,
+                    move |_provider, section, error| {
+                        obj.imp().signal_css_parsing_error(section, error);
+                    }
+                ));
+                self.custom_css_providers
+                    .borrow_mut()
+                    .push(css_provider.clone());
+                css_provider.load_from_string(&String::from_utf8_lossy(&contents));
+                gtk4::style_context_add_provider_for_display(
+                    &display,
+                    &css_provider,
+                    gtk4::STYLE_PROVIDER_PRIORITY_USER,
+                );
+            }
         }
 
         /// PORTS: `application.zig:823-846` `startQuitTimer`. Called when the last
