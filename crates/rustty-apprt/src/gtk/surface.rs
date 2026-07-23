@@ -24,8 +24,9 @@
 //! set exactly once in `constructed` (`surface.zig:1793` `priv.rt_surface = .{
 //! .surface = self }`) and never rewritten.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 
 use glib::prelude::*;
 use gtk4::subclass::prelude::*;
@@ -51,12 +52,21 @@ pub struct Surface {
     /// GObject, as a raw unowned `*mut GObject`. Null until the widget's
     /// `constructed` wires it (`surface.zig:1793`); never rewritten after.
     surface: std::cell::Cell<*mut glib::gobject_ffi::GObject>,
+
+    /// NUL-terminated cache backing [`Surface::get_title`]. The apprt trait
+    /// returns `Option<&CStr>` borrowed from `&self`, but the widget stores its
+    /// title as a Rust `String`; this owns a stable heap buffer to lend the
+    /// `&CStr` from. Refilled only when the title changes (matching the
+    /// reference's `[:0]const u8` pointer into the surface's own title storage,
+    /// which is likewise invalidated on the next title update).
+    title_cache: RefCell<Option<CString>>,
 }
 
 impl Default for Surface {
     fn default() -> Self {
         Self {
             surface: std::cell::Cell::new(std::ptr::null_mut()),
+            title_cache: RefCell::new(None),
         }
     }
 }
@@ -179,13 +189,33 @@ impl ApprtSurface for Surface {
     fn get_title(&self) -> Option<&CStr> {
         // PORTS: `Surface.zig:44-46` `return self.surface.getTitle()`.
         //
-        // PORT NOTE (deferred): the widget stores its title in a GObject string
-        // property (`RefCell<Option<String>>`); handing out a `&CStr` borrow tied
-        // to `&self` would require pinning that storage as a NUL-terminated buffer
-        // owned by this backref. The title is cosmetic (not on the first-light
-        // render/pty path), so this returns `None` until the title-storage refit;
-        // the widget's `title` property remains authoritative for GTK consumers.
-        None
+        // The reference returns `?[:0]const u8` — a NUL-terminated pointer into
+        // the surface's own title storage, valid until the title next changes.
+        // The widget stores its title as a Rust `String`, so we build a
+        // NUL-terminated `CString` and cache it in this backref at a stable heap
+        // address to lend the `&CStr` from. The cache is refilled only when the
+        // title actually changes, so the returned pointer stays valid until the
+        // next title update — the same contract as the reference.
+        let title = self.gobj()?.get_title()?;
+        // A title with an interior NUL cannot be a C string; drop it (report no
+        // title) rather than truncate.
+        let cstring = CString::new(title).ok()?;
+
+        let mut cache = self.title_cache.borrow_mut();
+        if cache.as_ref() != Some(&cstring) {
+            *cache = Some(cstring);
+        }
+        // A stable pointer into the cached `CString`'s heap buffer. The buffer
+        // lives as long as this `Surface` backref (owned by the widget's pinned
+        // private data) and is only ever replaced by a *different* title above.
+        let ptr: *const CStr = cache.as_deref()?;
+        drop(cache);
+        // SAFETY: `ptr` points into the `CString` owned by `self.title_cache`,
+        // whose heap buffer is stable for `&self`'s lifetime (only replaced on a
+        // title change). The sole consumer (`Surface.report_title`, the CSI 21 t
+        // path) copies the bytes immediately and does not retain the borrow
+        // across another `get_title` call, so no aliased overwrite can dangle it.
+        Some(unsafe { &*ptr })
     }
 
     fn supports_clipboard(&self, _clipboard_type: Clipboard) -> bool {
