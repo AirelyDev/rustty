@@ -146,4 +146,7 @@ objc2-quartz-core = { version = "0.3", default-features = false, features = ["CA
 objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGDirectDisplay"] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "objc2", "objc2-core-foundation"] }
+# WS2-A quicklook regression KAT: CFRetained::from_raw to balance the +1 CTFontRef
+# the quicklook_font export hands the host (I16). Same 0.3 family as the rest.
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFBase"] }
 objc2-app-kit    = { version = "0.3", default-features = false, features = ["NSWindow", "NSView", "NSResponder", "NSGraphics"] }

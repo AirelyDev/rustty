@@ -62,10 +62,13 @@ use rustty_apprt::embedded::{
 };
 use rustty_apprt_api::action::{ActionC, TargetC};
 use rustty_apprt_api::{ClipboardRequest, ClipboardRequestType};
+use rustty_apprt_c::capi::Text;
 use rustty_apprt_c::{
     rustty_app_free, rustty_app_new, rustty_app_tick, rustty_app_update_config, rustty_init,
     rustty_set_window_background_blur, rustty_surface_config_new, rustty_surface_free,
-    rustty_surface_new, rustty_surface_set_display_id,
+    rustty_surface_free_text, rustty_surface_new, rustty_surface_quicklook_font,
+    rustty_surface_quicklook_word, rustty_surface_set_content_scale,
+    rustty_surface_set_display_id, rustty_surface_set_size,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -482,6 +485,62 @@ fn set_display_id_pushes_to_render_thread_panic_free() {
     unsafe { rustty_surface_set_display_id(host.surface, display_id) };
     host.pump_bounded(); // drain runs
     drop(host);
+}
+
+// --- WS2-A regression KAT ---
+// The two Look-Up/accessibility exports must be ABORT-FREE on a LIVE surface:
+// `quicklook_font` fires from force-click Look-Up AND every VoiceOver/accessibility
+// query (SurfaceView_AppKit.swift:1521,1949,2361 in the oracle app), `quicklook_word`
+// from the Look-Up gesture (:1512) — no explicit user intent required, so under the
+// DG5 panic=abort policy any leftover `unimplemented!()` here is app-fatal.
+// MACOS_APP_GAPS.md §3 listed both as open abort risks; the exports were in fact
+// fully ported in P2.1/P2.2 (DEFERRALS.md P2 section). This KAT pins that they STAY
+// real: it drives the actual C-ABI exports against a live surface (running render
+// thread + populated CoreText font grid).
+#[test]
+fn quicklook_exports_are_abort_free_on_live_surface() {
+    use objc2_core_foundation::{CFRetained, CFType};
+
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    host.pump_bounded(); // live render thread; the shared font grid is populated
+
+    // quicklook_font: the live grid's primary CoreText face resolves ⇒ a +1
+    // CTFontRef crosses the ABI (I16); the host balances it with exactly ONE
+    // CFRelease — modeled as CFRetained::from_raw + drop (the P2.2 KAT's inverse).
+    // SAFETY: `host.surface` is the live surface from `rustty_surface_new`.
+    let font = unsafe { rustty_surface_quicklook_font(host.surface) };
+    assert!(
+        !font.is_null(),
+        "primary CoreText face must resolve on a live surface"
+    );
+    // SAFETY: `font` is the +1 CTFontRef the export handed over; reclaiming it
+    // consumes exactly that one reference (the host's CFRelease).
+    drop(unsafe {
+        CFRetained::<CFType>::from_raw(std::ptr::NonNull::new(font.cast::<CFType>()).unwrap())
+    });
+
+    // quicklook_word: MUST return without abort. `true` ⇒ `text` owns a heap
+    // C-string freed via rustty_surface_free_text; `false` (no word under the
+    // mouse-cursor cell — the harness never moved the mouse, so (0,0) is
+    // typically empty) is a VALID no-word degrade. The assertion IS abort-freedom.
+    let mut text = Text {
+        tl_px_x: 0.0,
+        tl_px_y: 0.0,
+        offset_start: 0,
+        offset_len: 0,
+        text: core::ptr::null(),
+        text_len: 0,
+    };
+    // SAFETY: `host.surface` is live; `text` is a writable Text for the call.
+    let has_word = unsafe { rustty_surface_quicklook_word(host.surface, &mut text) };
+    if has_word {
+        assert!(!text.text.is_null(), "true return must populate the text");
+        // SAFETY: `text` was populated by the export just above; freed exactly once.
+        unsafe { rustty_surface_free_text(host.surface, &mut text) };
+    }
 }
 
 // --- on-device visible variant (#[ignore]): a REAL NSWindow, run ON THE MAIN THREAD ---
