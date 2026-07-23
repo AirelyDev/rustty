@@ -322,7 +322,7 @@ mod tests {
         TICKS.store(0, Ordering::SeqCst);
 
         // 1) xev loop + the Async that plays `thr.draw_now`.
-        let mut loop_ = Loop::init().unwrap();
+        let mut loop_ = Loop::init(rustty_xev::Options::default()).unwrap();
         let draw_now = Async::init().unwrap();
 
         // Count loop wakeups; rearm so multiple vsync ticks accumulate. (Wakeup

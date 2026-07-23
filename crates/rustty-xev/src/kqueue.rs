@@ -2759,11 +2759,12 @@ impl Timer {
 // error sets will fail this `const` assert exactly as the Zig `@compileLog` does.
 // (See DEFERRALS.md; surfaced in the chunk report as a deliberate divergence.)
 //
-// Measured breakdown (Rust 232 vs Zig 256): `Operation` 160B (Rust tagged-enum +
+// Measured breakdown (Rust 248 vs Zig 256): `Operation` 160B (Rust tagged-enum +
 // niche) vs Zig `union(OperationType)` 176B; `flags` a 2-byte struct vs Zig's
-// bit-packed 1 byte; the deferred-ThreadPool `Task.node` a ZST placeholder
-// (§1/§6) vs Zig's 8-byte Zap node. `Result` (24B) and `Address` (108B) match Zig.
-const COMPLETION_SIZE: usize = 232;
+// bit-packed 1 byte; the ThreadPool `Task.node` is now the real intrusive Zap
+// node (+16B over the former ZST placeholder, once the pool was ported).
+// `Result` (24B) and `Address` (108B) match Zig.
+const COMPLETION_SIZE: usize = 248;
 const _: () = assert!(size_of::<Completion>() == COMPLETION_SIZE);
 
 // ---------------------------------------------------------------------------

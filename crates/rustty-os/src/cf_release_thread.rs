@@ -109,7 +109,7 @@ impl Thread {
     /// is up to the caller to start the thread with the threadMain entrypoint.
     pub fn init() -> Result<Thread, xev::Error> {
         // Create our event loop.
-        let loop_ = xev::Loop::init()?;
+        let loop_ = xev::Loop::init(xev::Options::default())?;
         // errdefer loop.deinit();
 
         // This async handle is used to "wake up" the thread to collect objects.
