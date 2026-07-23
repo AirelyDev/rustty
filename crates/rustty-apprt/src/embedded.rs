@@ -741,6 +741,24 @@ pub struct IOS {
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub struct IOS;
 
+/// The host view pointer of a [`Platform`] value — the exact mapping the
+/// reference `Metal.init` performs (Metal.zig:99-102: `switch { .macos =>
+/// v.nsview, .ios => v.uiview }`; both darwin arms yield a real view). The
+/// `nsview`/`uiview` fields only exist on darwin (`MacOS`/`IOS` are ZSTs
+/// off-darwin, §2.9), so both concrete arms are `#[cfg]`-gated and a
+/// non-darwin wildcard returns null (the platform never renders there).
+/// Extracted from `Surface::host_view` so the §2.6/§2.9 mapping is unit-testable.
+pub(crate) fn platform_host_view(platform: &Platform) -> *mut c_void {
+    match platform {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Platform::MacOS(m) => m.nsview,
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Platform::IOS(i) => i.uiview,
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        _ => core::ptr::null_mut(),
+    }
+}
+
 // The C ABI compatible version of this union. The tag is expected
 // to be stored elsewhere.
 //
@@ -2793,14 +2811,7 @@ impl ApprtSurface for Surface {
     // off-darwin, §2.9), so both concrete arms are `#[cfg]`-gated to darwin and a
     // non-darwin wildcard returns null (the platform never renders there).
     fn host_view(&self) -> *mut c_void {
-        match &self.platform {
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Platform::MacOS(m) => m.nsview,
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Platform::IOS(i) => i.uiview,
-            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-            _ => core::ptr::null_mut(),
-        }
+        platform_host_view(&self.platform)
     }
 
     fn host_content_scale(&self) -> f64 {
@@ -3032,4 +3043,37 @@ pub struct ClipboardContent {
     pub mime: *const c_char,
     // data: [*:0]const u8,
     pub data: *const c_char,
+}
+
+#[cfg(test)]
+mod host_view_tests {
+    use super::*;
+
+    /// INTEGRATION_PARITY §2.6 regression: the iOS arm maps `uiview` (the
+    /// reference Metal.zig:99-102 `switch { .macos => v.nsview, .ios => v.uiview }`)
+    /// — never the old null catch-all.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn ios_platform_maps_uiview() {
+        let marker = 0xA5A5usize as *mut c_void;
+        let platform = Platform::IOS(IOS { uiview: marker });
+        assert_eq!(marker, platform_host_view(&platform));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn macos_platform_maps_nsview() {
+        let marker = 0x5A5Ausize as *mut c_void;
+        let platform = Platform::MacOS(MacOS { nsview: marker });
+        assert_eq!(marker, platform_host_view(&platform));
+    }
+
+    /// INTEGRATION_PARITY §2.9 proof: on non-darwin `MacOS`/`IOS` are ZSTs and
+    /// the helper compiles (and returns null — the platform never renders there).
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[test]
+    fn non_darwin_returns_null() {
+        assert!(platform_host_view(&Platform::MacOS(MacOS)).is_null());
+        assert!(platform_host_view(&Platform::IOS(IOS)).is_null());
+    }
 }

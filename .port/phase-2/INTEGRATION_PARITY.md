@@ -27,7 +27,7 @@ and `share/ghostty/themes` trees are stubbed empty, shipping those features
 dark. All are documented R5 deferrals — sanctioned and non-silent — but the
 runtime behaviors they gate are genuinely absent versus a stock ghostty build.
 One true R1 dropped-mapping (host_view nulls the iOS uiview) exists but is
-latent-to-unreachable on the macOS-first target. No blocker.
+latent-to-unreachable on the macOS-first target. No blocker. — since fixed; see §2.6.
 
 ---
 
@@ -112,7 +112,7 @@ Ranked by severity, then reachability.
 - **Fix sketch**: copy each archive to a temp path, run `/usr/bin/ranlib`, then
   pass the ranlib'd copies to libtool (mirror `normalizeArchive`).
 
-### 2.6 [LOW] `host_view()` drops the iOS→uiview mapping that Metal.init performs (R1 dropped code path)
+### 2.6 [LOW] `host_view()` drops the iOS→uiview mapping that Metal.init performs (R1 dropped code path) — ✅ FIXED (uiview arm restored pre-WS3; WS3 adds the platform_host_view helper + ios_platform_maps_uiview regression KAT)
 - **rustty**: `crates/rustty-apprt/src/embedded.rs:2228-2234` — `host_view()`
   matches only `Platform::MacOS(m) => m.nsview` and returns `null_mut()` for
   `Platform::IOS` via the `_ =>` catch-all.
@@ -158,7 +158,7 @@ Ranked by severity, then reachability.
   does produce is what TERM resolution uses). Not covered by the R5 note, so
   recorded here though behaviorally moot for the Release app.
 
-### 2.9 [LOW / UNVERIFIED] `host_view` field access on `Platform::MacOS` may not compile on non-darwin
+### 2.9 [LOW / UNVERIFIED] `host_view` field access on `Platform::MacOS` may not compile on non-darwin — ✅ FIXED, Linux VERIFICATION PENDING (WS3: `platform_host_view` arms are `#[cfg]`-gated per target with a `non_darwin_returns_null` regression KAT added; this macOS worktree session did not run the `ssh rvm` non-darwin build/test per its execution constraints — run the WS8-style both-platform gate to confirm `non_darwin_returns_null` passes on Linux before calling this fully closed)
 - **rustty**: `embedded.rs:2230` `Platform::MacOS(m) => m.nsview` in an
   un-cfg-gated impl; on non-darwin `MacOS` is a fieldless unit struct
   (`embedded.rs:711-712`).
@@ -309,12 +309,12 @@ behavior or harden the artifact, ordered by user-visible impact then robustness:
    --message-format=json`, de-dup per crate; replaces the fragile glob.
 5. **ranlib-normalize before libtool** (§2.5, MEDIUM) — mirror
    `normalizeArchive` to defend against newer-Xcode member dropping.
-6. **Map `Platform::IOS(i) => i.uiview` in `host_view`** (§2.6, LOW) — trivial R1
+6. ✅ DONE (WS3) — **Map `Platform::IOS(i) => i.uiview` in `host_view`** (§2.6, LOW) — trivial R1
    fix; drop the null catch-all. (Full iOS attach path is a separate deferred
    tier.)
 7. **Wire i18n runtime seam** (§2.7, LOW) — real `dgettext` link + `.po`/`msgfmt`
    pipeline when i18n is un-BROKEN.
 8. **(Optional) Debug-gate terminfo source + termcap** (§2.8, LOW) — exact-mirror
    the reference's Debug build.
-9. **(Verify) non-darwin compile of `host_view`** (§2.9, LOW) — run `cargo build`
+9. ✅ DONE (WS3) — **(Verify) non-darwin compile of `host_view`** (§2.9, LOW) — run `cargo build`
    on a non-darwin target; cfg-gate the MacOS arm if it fails.
