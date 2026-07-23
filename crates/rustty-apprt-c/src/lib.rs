@@ -318,14 +318,11 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 /// ```
 /// The reference `state.action` is `rustty_core::global_state().action`
 /// (`Option<Action>`), stashed by `state.init()` (via `rustty_init`). rustty-core
-/// currently binds the `GlobalState<Action>` type parameter to `()` — the BREAK #1
-/// deferred seam: `cli.action.detectArgs` is NOT yet wired into
-/// `rustty_apprt::init`, which hard-codes `action: None` — so no CLI action is ever
-/// stashed and this is the pure GUI-launch path: the `orelse return` fires and a
-/// windowed launch (the macOS Swift-app milestone's actual need) returns cleanly
-/// WITHOUT exiting. The non-null CLI-action-from-C path is a documented
-/// `TODO(port)` below (DEFERRALS "rustty-apprt-c `rustty_cli_try_action` — CLI
-/// action from C").
+/// binds the `GlobalState<Action>` type parameter to `()` (BREAK #1: rustty-cli
+/// deps rustty-core, so core can never name the concrete Action type without a
+/// cycle) — so presence lives in `rustty_core::STATE.action: Option<()>` and the
+/// concrete VALUE lives in this crate's own `CLI_ACTION` stash (set together by
+/// `rustty_init`); together they realize the reference's one field (WS4).
 ///
 /// # Safety
 /// Marked `unsafe extern` only for signature uniformity with the rest of the C API.
@@ -333,44 +330,41 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 /// reference `ghostty_init` → `ghostty_cli_try_action` ordering).
 #[no_mangle]
 pub unsafe extern "C" fn rustty_cli_try_action() {
+    use rustty_core::logging::{log, Level};
+
     // const action = state.action orelse return;
-    let _action = match rustty_core::global_state().action {
-        Some(action) => action,
-        // (no action → GUI launch: return WITHOUT exiting — the milestone path)
+    //   Presence lives in core STATE (`Option<()>`); the concrete value lives
+    //   in the top-sink CLI_ACTION stash (see its doc) — set together by
+    //   `rustty_init`, so a Some presence ALWAYS has a Some stash.
+    let action = match rustty_core::global_state().action {
+        Some(()) => CLI_ACTION
+            .get()
+            .copied()
+            .flatten()
+            .expect("CLI_ACTION is stashed by rustty_init whenever state.action is Some"),
+        // (no action → GUI launch: return WITHOUT exiting — the windowed path)
         None => return,
     };
 
     // std.log.info("executing CLI action={}", .{action});
-    // (no scoped-log sink in this leaf — vt-c `rustty_build_info` precedent — so
-    // emit to stderr, as `rustty_init` does for its error log.)
-    eprintln!("executing CLI action");
+    log(Level::Info, "default", &format!("executing CLI action={action:?}"));
 
     // posix.exit(action.run(state.alloc) catch |err| {
     //     std.log.err("CLI action failed error={}", .{err});
     //     posix.exit(1);
     // });
     // posix.exit(0);
-    //
-    // TODO(port): the CLI-action-from-C path. The action RUNNER already exists
-    // (`rustty_cli::rustty::Action::run(self) -> Result<u8, Error>`); the missing
-    // wiring is the `GlobalState<Action>` type parameter (rustty-core binds it to
-    // `()`) plus `cli.action.detectArgs` in the `rustty_apprt::init` bootstrap
-    // (BREAK #1). Once wired, `_action` is a `rustty_cli::rustty::Action` and this
-    // tail becomes, faithful to the reference:
-    //     std::process::exit(match action.run() {
-    //         Ok(code) => code as c_int,
-    //         Err(err) => {
-    //             eprintln!("CLI action failed error={err:?}");
-    //             std::process::exit(1);
-    //         }
-    //     });
-    //     std::process::exit(0);
-    // Until then, `Action = ()` makes this arm unreachable (init never stashes a
-    // `Some`), so the GUI-launch `orelse return` above is the only live path.
-    unreachable!(
-        "CLI-action-from-C path is deferred: GlobalState<Action> = (), \
-         cli.action.detectArgs not yet wired into rustty_apprt::init (BREAK #1)"
-    )
+    //   PORT NOTE: `action.run()` takes no allocator (dropped tree-wide);
+    //   `posix.exit(action.run(...))` exits with the action's u8 code, and the
+    //   reference's trailing `posix.exit(0)` is unreachable (kept as comment).
+    std::process::exit(match action.run() {
+        Ok(code) => i32::from(code),
+        Err(err) => {
+            log(Level::Err, "default", &format!("CLI action failed error={err:?}"));
+            std::process::exit(1);
+        }
+    });
+    // posix.exit(0); — unreachable after the exit above (reference dead tail).
 }
 
 // ===================================================================
@@ -3326,5 +3320,47 @@ mod tests {
         // SAFETY: argv points at 2 valid NUL-terminated strings.
         let rc = unsafe { crate::rustty_init(2, argv.as_mut_ptr()) };
         assert_eq!(rc, 1);
+    }
+
+    // The NON-NULL path of `rustty_cli_try_action` (main_c.zig): with `+version`
+    // in argv, `rustty_init` stashes the action and `rustty_cli_try_action`
+    // RUNS it and EXITS with its code — so the whole flow runs in a CHILD
+    // process (the panic_policy.rs re-exec pattern); the parent asserts exit 0
+    // and the version output. This is the CLI-action-THROUGH-C KAT.
+    #[test]
+    fn cli_try_action_version_runs_and_exits() {
+        const MARKER: &str = "RUSTTY_CLI_ACTION_CHILD";
+        if std::env::var_os(MARKER).is_some() {
+            // Child: exactly what the Swift host does (main.swift:8,31).
+            let argv0 = std::ffi::CString::new("rustty").unwrap();
+            let arg1 = std::ffi::CString::new("+version").unwrap();
+            let mut argv = [
+                argv0.as_ptr() as *mut c_char,
+                arg1.as_ptr() as *mut c_char,
+            ];
+            // SAFETY: argv points at 2 valid NUL-terminated strings.
+            let rc = unsafe { crate::rustty_init(2, argv.as_mut_ptr()) };
+            assert_eq!(rc, 0, "rustty_init with +version must succeed");
+            // SAFETY: global state initialized by rustty_init above.
+            unsafe { crate::rustty_cli_try_action() };
+            unreachable!("+version must exit the process");
+        }
+        let exe = std::env::current_exe().expect("current_exe");
+        let out = std::process::Command::new(exe)
+            .args(["--exact", "tests::cli_try_action_version_runs_and_exits", "--nocapture"])
+            .env(MARKER, "1")
+            .output()
+            .expect("spawn child test process");
+        assert!(
+            out.status.success(),
+            "child failed: status={:?} stderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(rustty_identity::VERSION),
+            "version output missing from: {stdout}",
+        );
     }
 }
