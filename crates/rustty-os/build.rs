@@ -34,5 +34,17 @@ fn main() {
         println!("cargo:rerun-if-changed=cbits/pty.c");
     }
 
+    // macOS unified-logging shim (see cbits/log_shim.c) — the ghostty
+    // `zig_os_log_with_type` analogue for pkg/macos/os/log.zig's Log.log.
+    if target_os == "macos" {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cc::Build::new()
+            .file(manifest_dir.join("cbits/log_shim.c"))
+            .warnings(false)
+            .flag_if_supported("-w")
+            .compile("rustty_os_log_shim");
+        println!("cargo:rerun-if-changed=cbits/log_shim.c");
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
 }

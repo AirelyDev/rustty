@@ -216,6 +216,107 @@ pub enum AppleApiError {
     AppleAPIFailed,
 }
 
+// ---------------------------------------------------------------------------
+// PORTS: ghostty pkg/macos/os/log.zig — the unified-logging (os_log) binding
+// consumed by main_ghostty.zig's `logFn` macOS sink (WS4). R3: binds the SAME
+// libSystem os_log API the reference binds; `os_log_with_type` is a C macro,
+// shimmed in cbits/log_shim.c (the reference's `zig_os_log_with_type`).
+// ---------------------------------------------------------------------------
+pub use self::oslog::{Log, LogType};
+
+mod oslog {
+    use std::ffi::{c_void, CStr, CString};
+    use std::os::raw::c_char;
+
+    extern "C" {
+        // os_log_t os_log_create(const char *subsystem, const char *category);
+        fn os_log_create(subsystem: *const c_char, category: *const c_char) -> *mut c_void;
+        // void os_release(void *object);
+        fn os_release(object: *mut c_void);
+        // bool os_log_type_enabled(os_log_t log, os_log_type_t type);
+        fn os_log_type_enabled(log: *mut c_void, typ: u8) -> bool;
+        // cbits/log_shim.c
+        fn rustty_os_log_with_type(log: *mut c_void, typ: u8, msg: *const c_char);
+    }
+
+    // pub const Log = opaque { ... };
+    pub struct Log(*mut c_void);
+
+    impl Log {
+        // pub fn create(subsystem: [:0]const u8, category: [:0]const u8) *Log
+        pub fn create(subsystem: &CStr, category: &CStr) -> Log {
+            // SAFETY: both pointers are valid NUL-terminated C strings for the
+            // duration of the call; os_log_create never returns NULL (the
+            // reference unwraps with `.?`).
+            Log(unsafe { os_log_create(subsystem.as_ptr(), category.as_ptr()) })
+        }
+
+        // pub fn release(self: *Log) void { c.os_release(self); }
+        pub fn release(self) {
+            // SAFETY: self.0 came from os_log_create and is released once
+            // (by-value receiver — the handle is consumed).
+            unsafe { os_release(self.0) }
+        }
+
+        // pub fn typeEnabled(self: *Log, typ: LogType) bool
+        pub fn type_enabled(&self, typ: LogType) -> bool {
+            // SAFETY: live os_log_t handle.
+            unsafe { os_log_type_enabled(self.0, typ as u8) }
+        }
+
+        // pub fn log(self: *Log, alloc, typ: LogType, comptime format, args) void
+        //   The reference allocPrints format+args to a NUL-terminated string and
+        //   forwards it; the port takes the pre-formatted message (log sites
+        //   format at the call, the same collapse as the bin's `log_fn`). A
+        //   message with an interior NUL is logged truncated at the NUL (the
+        //   reference cannot produce one from its format machinery either).
+        pub fn log(&self, typ: LogType, message: &str) {
+            let Ok(cmsg) = CString::new(message.as_bytes()) else {
+                let cleaned: Vec<u8> =
+                    message.bytes().take_while(|&b| b != 0).collect();
+                let cmsg = CString::new(cleaned).expect("NUL-free by construction");
+                // SAFETY: live handle + valid C string.
+                unsafe { rustty_os_log_with_type(self.0, typ as u8, cmsg.as_ptr()) };
+                return;
+            };
+            // SAFETY: live handle + valid C string.
+            unsafe { rustty_os_log_with_type(self.0, typ as u8, cmsg.as_ptr()) }
+        }
+    }
+
+    /// https://developer.apple.com/documentation/os/os_log_type_t?language=objc
+    // pub const LogType = enum(c.os_log_type_t) { ... };
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    pub enum LogType {
+        Default = 0x00, // OS_LOG_TYPE_DEFAULT
+        Info = 0x01,    // OS_LOG_TYPE_INFO
+        Debug = 0x02,   // OS_LOG_TYPE_DEBUG
+        Err = 0x10,     // OS_LOG_TYPE_ERROR
+        Fault = 0x11,   // OS_LOG_TYPE_FAULT
+    }
+}
+
+// test { ... } (pkg/macos/os/log.zig)
+#[cfg(test)]
+mod log_tests {
+    use super::{Log, LogType};
+
+    #[test]
+    fn os_log_create_and_log() {
+        // const log = Log.create("com.mitchellh.ghostty", "test");
+        //   R2: bundle id retargeted via rustty-identity at the CALLER; the
+        //   binding takes any subsystem — the KAT uses a literal like the oracle.
+        let log = Log::create(c"io.airely.rustty", c"test");
+        // try testing.expect(log.typeEnabled(.fault));
+        assert!(log.type_enabled(LogType::Fault));
+        // log.log(testing.allocator, .default, "hello {d}", .{12});
+        log.log(LogType::Default, "hello 12");
+        // defer log.release();
+        log.release();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
