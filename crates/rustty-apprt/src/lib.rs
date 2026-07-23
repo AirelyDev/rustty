@@ -59,6 +59,75 @@ pub enum InitError {
     ResourcesDir(rustty_os::resourcesdir::ResourcesDirError),
 }
 
+use rustty_core::Logging;
+
+/// PARITY: `cli.args.parsePackedStruct(Logging, v.value)` (global.zig init).
+/// `Logging` is a foreign type to rustty-args' `PackedStruct` trait (orphan
+/// rule), so the packed-field contract is threaded through this local newtype.
+/// Field order/names mirror the reference packed struct: `stderr`, `macos`.
+#[derive(Clone, Copy)]
+struct LoggingParse(Logging);
+
+impl Default for LoggingParse {
+    fn default() -> Self {
+        Self(Logging::default())
+    }
+}
+
+impl rustty_args::args::PackedStruct for LoggingParse {
+    // inline for (info.fields) |field| @field(result, field.name) = b;
+    fn set_all(&mut self, b: bool) {
+        self.0.stderr = b;
+        self.0.macos = b;
+    }
+
+    fn set_field(&mut self, part: &[u8], value: bool) -> bool {
+        match part {
+            b"stderr" => {
+                self.0.stderr = value;
+                true
+            }
+            b"macos" => {
+                self.0.macos = value;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"stderr", b"macos"]
+    }
+}
+
+/// The logging-config slice of the reference `GlobalState.init`:
+///
+///   if (self.action != null) self.logging.stderr = false;
+///   if ((try internal_os.getenv(self.alloc, "GHOSTTY_LOG"))) |v| {
+///       defer v.deinit(self.alloc);
+///       self.logging = cli.args.parsePackedStruct(Logging, v.value) catch .{};
+///   }
+///
+/// R2: the env var is `RUSTTY_LOG` (the `RUSTTY_RESOURCES_DIR` retarget
+/// precedent). Pure over its inputs so it is unit-testable; `init_with_action`
+/// feeds it the live env read.
+fn compute_logging(action_detected: bool, env_value: Option<&[u8]>) -> Logging {
+    let mut logging = Logging::default();
+    // If we have an action executing, we disable logging by default
+    // since we write to stderr we don't want logs messing up our
+    // output.
+    if action_detected {
+        logging.stderr = false;
+    }
+    if let Some(v) = env_value {
+        // `catch .{}` — a parse failure falls back to the DEFAULT Logging.
+        logging = rustty_args::args::parse_packed_struct::<LoggingParse>(v)
+            .map(|p| p.0)
+            .unwrap_or_else(|_| Logging::default());
+    }
+    logging
+}
+
 /// Initialize rustty global state (`rustty_core::STATE`).
 ///
 /// PORT NOTE: the rustty analogue of the reference `global.zig` `state.init()`
@@ -102,4 +171,53 @@ pub fn init() -> Result<(), InitError> {
     let _ = rustty_core::STATE.set(state);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::*;
+
+    // reference (global.zig init): `if (self.action != null) self.logging.stderr = false;`
+    // then `self.logging = cli.args.parsePackedStruct(Logging, v.value) catch .{};`
+    #[test]
+    fn compute_logging_defaults() {
+        let l = compute_logging(false, None);
+        assert_eq!(l, rustty_core::Logging::default());
+    }
+
+    #[test]
+    fn compute_logging_action_disables_stderr() {
+        let l = compute_logging(true, None);
+        assert!(!l.stderr);
+    }
+
+    #[test]
+    fn compute_logging_env_stderr_flag() {
+        // RUSTTY_LOG=stderr with an action: the env parse REPLACES the
+        // action-adjusted logging (reference assigns `self.logging = ... catch .{}`).
+        let l = compute_logging(true, Some(b"stderr"));
+        assert!(l.stderr);
+    }
+
+    #[test]
+    fn compute_logging_env_bool_shorthand() {
+        let l = compute_logging(false, Some(b"true"));
+        assert!(l.stderr && l.macos);
+        let l = compute_logging(false, Some(b"false"));
+        assert!(!l.stderr && !l.macos);
+    }
+
+    #[test]
+    fn compute_logging_env_negation() {
+        let l = compute_logging(false, Some(b"no-stderr,no-macos"));
+        assert!(!l.stderr && !l.macos);
+    }
+
+    #[test]
+    fn compute_logging_env_invalid_falls_back_to_default() {
+        // reference `catch .{}` — a parse error yields Logging{} (NOT the
+        // action-adjusted value).
+        let l = compute_logging(true, Some(b"bogus-flag"));
+        assert_eq!(l, rustty_core::Logging::default());
+    }
 }

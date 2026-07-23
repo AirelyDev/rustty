@@ -52,6 +52,11 @@ pub mod surface_mouse;
 // until rustty-cli lands and specializes it IN PLACE.
 pub type GlobalState = rustty_global::GlobalState<(), rustty_os::resourcesdir::ResourcesDir>;
 
+/// PARITY: reference `GlobalState.Logging` (global.zig `pub const Logging =
+/// packed struct`). Re-exported at the core wiring tier so upward crates
+/// (apprt, apprt-c, the bin) name it without a direct rustty-global edge.
+pub use rustty_global::Logging;
+
 /// PARITY: reference `pub var state: GlobalState = undefined;` (global.zig)
 /// at the core-wired type — the `OnceLock` analogue of the
 /// undefined-until-`init()` contract (the rustty-global `STATE` precedent):
