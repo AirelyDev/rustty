@@ -17,12 +17,10 @@
 //!   const std = @import("std");
 //!   const Allocator = std.mem.Allocator;
 //!   const build_options = @import("terminal_options");
-//! The default `decode_png` impl uses `@import("wuffs")` — the wuffs C library
-//! binding, which is NOT part of this leaf sub-batch (it rides on a later FFI
-//! crate, R3). We port the function-pointer system and the `Image`/`DecodeError`
-//! types verbatim; the default value is `None` here (the reference also defaults
-//! to `null` when `build_options.artifact == .lib`), and the `decodePngWuffs`
-//! seam is left as a documented deferred stub so no unported file is pulled in.
+//! The default `decode_png` impl uses the `rustty-wuffs` binding under the
+//! `wuffs` cargo feature (the reference `@import("wuffs")`); the default is
+//! `None` only for the `.lib` artifact / featureless builds, exactly as the
+//! reference comptime block reads.
 
 #![allow(non_upper_case_globals)]
 
@@ -49,13 +47,31 @@ pub type DecodePngFn = fn(&[u8]) -> Result<Image, DecodeError>;
 /// Decode PNG data into RGBA pixels. If null, PNG decoding is unsupported
 /// and the exact semantics are up to callers. For example, the Kitty Graphics
 /// Protocol will work but cannot accept PNG images.
-// PORT NOTE: the reference is a `pub var` whose default is either `null` (when
-// the build artifact is the C lib) or `&decodePngWuffs`. Since the wuffs binding
-// is not in this leaf sub-batch, the default here is `None`; embedders (and the
-// later FFI crate) install a decoder at startup via the swappable slot. We use a
-// `RwLock` so the global is safely mutable across threads (the reference relies
-// on Zig's `var` being mutated only at startup).
-pub static decode_png: RwLock<Option<DecodePngFn>> = RwLock::new(None);
+// PORT NOTE: the reference is a `pub var` with a comptime default:
+//     pub var decode_png: ?DecodePngFn = png: {
+//         if (build_options.artifact == .lib) break :png null;
+//         break :png &decodePngWuffs;
+//     };
+// Mapped 1:1: `options::ARTIFACT` carries the artifact (options.rs:32,
+// `Ghostty`; the `.lib` arm is kept for the later lib-artifact seam), and the
+// wuffs binding rides the `wuffs` cargo feature (rustty-core — the SharedDeps
+// `.ghostty` analog — enables it for the application tier; rustty-vt-c — the
+// GhosttyZig `.lib` analog — does not, keeping the reference `null` default).
+// We use a `RwLock` so the global is safely mutable across threads (the
+// reference relies on Zig's `var` being mutated only at startup).
+pub static decode_png: RwLock<Option<DecodePngFn>> = RwLock::new(DECODE_PNG_DEFAULT);
+
+#[cfg(feature = "wuffs")]
+const DECODE_PNG_DEFAULT: Option<DecodePngFn> =
+    if matches!(crate::options::ARTIFACT, crate::build_options::Artifact::Lib) {
+        None
+    } else {
+        Some(decode_png_wuffs as DecodePngFn)
+    };
+/// Without the wuffs binding no default decoder exists (embedders install one
+/// at runtime via the swappable slot — the vt-c `set(.decode_png, ..)` path).
+#[cfg(not(feature = "wuffs"))]
+const DECODE_PNG_DEFAULT: Option<DecodePngFn> = None;
 
 /// The result of decoding an image. The caller owns the returned data
 /// and must free it with the same allocator that was passed to the
@@ -73,25 +89,76 @@ pub struct Image {
 //     alloc: Allocator,
 //     data: []const u8,
 // ) DecodeError!Image {
-//     const wuffs = @import("wuffs");
-//     const result = wuffs.png.decode(
-//         alloc,
-//         data,
-//     ) catch |err| switch (err) {
-//         error.WuffsError => return error.InvalidData,
-//         error.OutOfMemory => return error.OutOfMemory,
-//         error.Overflow => return error.InvalidData,
-//     };
-//
-//     return .{
-//         .width = result.width,
-//         .height = result.height,
-//         .data = result.data,
-//     };
-// }
-//
-// PORT NOTE (DEFERRED SEAM): `decodePngWuffs` is the default decoder backed by
-// the wuffs C library. The wuffs binding is not part of this VT leaf sub-batch
-// (R3: no unported sibling pulled in); it is installed by a later FFI crate.
-// The function body is reproduced verbatim above as a comment so the reference
-// logic is preserved when the seam is filled in.
+#[cfg(feature = "wuffs")]
+fn decode_png_wuffs(data: &[u8]) -> Result<Image, DecodeError> {
+    // const wuffs = @import("wuffs");
+    use allocator_api2::alloc::Global;
+    // const result = wuffs.png.decode(
+    //     alloc,
+    //     data,
+    // ) catch |err| switch (err) {
+    //     error.WuffsError => return error.InvalidData,
+    //     error.OutOfMemory => return error.OutOfMemory,
+    //     error.Overflow => return error.InvalidData,
+    // };
+    let result = match rustty_wuffs::png::decode(Global, data) {
+        Ok(result) => result,
+        Err(rustty_wuffs::Error::WuffsError) => return Err(DecodeError::InvalidData),
+        Err(rustty_wuffs::Error::OutOfMemory) => return Err(DecodeError::OutOfMemory),
+        Err(rustty_wuffs::Error::Overflow) => return Err(DecodeError::InvalidData),
+    };
+
+    // return .{
+    //     .width = result.width,
+    //     .height = result.height,
+    //     .data = result.data,
+    // };
+    //
+    // PORT NOTE: the reference moves the alloc-owned `[]u8` into `Image.data`;
+    // here ownership transfers via `into_raw` into the `Vec` that carries it
+    // (sys.rs `Image.data: Vec<u8>`).
+    let (width, height, ptr, len) = result.into_raw();
+    // SAFETY: `into_raw` yields sole ownership of a `Global` (std-allocator)
+    // align-1 allocation of exactly `len` bytes, matching `Vec<u8>`'s
+    // `Layout::array::<u8>(len)` free layout with capacity == len.
+    let data = unsafe { Vec::from_raw_parts(ptr.as_ptr(), len, len) };
+    Ok(Image {
+        width,
+        height,
+        data,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// LIFETIMES-AUDIT #2 un-defer: the reference comptime default
+    /// (sys.zig:18-24) is `&decodePngWuffs` for every non-`.lib` artifact and
+    /// `null` otherwise. This crate's `options::ARTIFACT` is `Ghostty`
+    /// (options.rs:32), so with the `wuffs` feature (the application tier) the
+    /// default MUST be installed; without it (the vt-c `.lib` analog) it stays
+    /// `None`.
+    #[test]
+    fn default_decoder_matches_artifact_and_feature() {
+        let installed = decode_png.read().unwrap().is_some();
+        assert_eq!(cfg!(feature = "wuffs"), installed);
+    }
+
+    /// The installed default actually decodes a real PNG: the kitty testdata
+    /// 50x76 fixture -> 50*76*4 RGBA bytes (wuffs decodes to RGBA_NONPREMUL).
+    #[cfg(feature = "wuffs")]
+    #[test]
+    fn default_decoder_decodes_png() {
+        // Deref-copy out of the guard (`Option<fn>` is Copy — the
+        // graphics_image.rs:720 `match *sys::decode_png.read().unwrap()` idiom).
+        let f = (*decode_png.read().unwrap()).expect("wuffs default decoder installed");
+        let img = f(include_bytes!(
+            "kitty/testdata/image-png-none-50x76-2147483647-raw.data"
+        ))
+        .expect("PNG decodes");
+        assert_eq!(50, img.width);
+        assert_eq!(76, img.height);
+        assert_eq!(50 * 76 * 4, img.data.len());
+    }
+}

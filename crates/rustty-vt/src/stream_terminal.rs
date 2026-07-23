@@ -1866,6 +1866,35 @@ mod tests {
         t.deinit(Global);
     }
 
+    // WS3-A KAT (rustty addition, not a reference test): a kitty-graphics PNG
+    // transmit sequence through the vt Stream decodes via the wuffs DEFAULT
+    // hook — no embedder installed a decoder — proving the non-lib comptime
+    // default (sys.zig:18-24) survives the port. `q=2` (quiet always) keeps the
+    // handler from emitting an OK response to the (test) pty.
+    #[cfg(feature = "wuffs")]
+    #[test]
+    fn kitty_graphics_png_transmit_decodes_via_default_hook() {
+        // Base64 of kitty/testdata/image-png-none-50x76-2147483647-raw.data
+        // (the `t=d` direct-medium payload is base64 per the kitty protocol).
+        const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAADIAAABMAQMAAAAV2XZDAAAAA1BMVEUrLzc5wwm5AAAADklEQVR4AWOgIRgFowAAAmAAATnED6oAAAAASUVORK5CYII=";
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // APC G: a=t (transmit), f=100 (PNG), t=d (direct), i=31, q=2.
+            let seq = format!("\x1b_Ga=t,f=100,t=d,i=31,q=2;{PNG_B64}\x1b\\");
+            s.next_slice(seq.as_bytes());
+        }
+        // The graphics_exec.rs:172 storage-access idiom.
+        let img = unsafe { &(*t.screens.active).kitty_images }
+            .image_by_id(31)
+            .expect("transmitted image stored (PNG decoded by the default hook)");
+        assert_eq!(50, img.width);
+        assert_eq!(76, img.height);
+        assert_eq!(img.format, kitty::graphics_command::Format::Rgba);
+        t.deinit(Global);
+    }
+
     // test "cursor movement"
     #[test]
     fn cursor_movement() {
