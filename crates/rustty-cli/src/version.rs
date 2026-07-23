@@ -2,12 +2,12 @@
 //!
 //! PORTS: ghostty src/cli/version.zig — the `+version` / `--version` action.
 //!
-//! PORT STATUS: PARTIAL (ADV-FIX 1, CLI_BLUEPRINT.md §0). This file
-//! unconditionally reads `renderer.Renderer` (a Phase-3 leaf: rustty-renderer's
-//! `Renderer` is commented out until R-d) and `xev.backend` (unimplemented in
-//! rustty-xev; D6). Those two lines emit documented STUB strings until R-d/D6
-//! land; the `+version` KAT does NOT assert their content. 0-test file → no test
-//! contract breakage. (See DEFERRALS.md "cli C1 — version(partial)".)
+//! PORT STATUS: done (WS3-B). The renderer / libxev / toolchain lines carry
+//! real values: `build_config::renderer()` mapped to the reference `@typeName`
+//! strings, `rustty_xev::backend()` (the reference `xev.backend`), and
+//! `build_config::RUSTC_VERSION` (the `builtin.zig_version_string` analog).
+//! Still deferred (unchanged): the OSC-8 commit hyperlink (`commit_hash()` is
+//! always None — no `+BUILD` metadata / no repo-URL identity constant yet).
 
 // const std = @import("std");
 // const build_options = @import("build_options");
@@ -16,8 +16,8 @@
 // const build_config = @import("../build_config.zig");
 use rustty_build_config as build_config;
 // const internal_os = @import("../os/main.zig");
-// const xev = @import("../global.zig").xev;          -> STUB (D6)
-// const renderer = @import("../renderer.zig");        -> STUB (R-d)
+// const xev = @import("../global.zig").xev;          -> rustty_xev (WS3-B)
+// const renderer = @import("../renderer.zig");        -> renderer_type_name() (WS3-B)
 //
 // const gtk_version = @import("../apprt/gtk/gtk_version.zig");
 // const adw_version = @import("../apprt/gtk/adw_version.zig");
@@ -29,21 +29,35 @@ use crate::rustty::Error;
 // pub const Options = struct {};
 pub struct Options {}
 
-/// STUB (ADV-FIX 1): `renderer.Renderer` is the concrete GPU renderer TYPE, whose
-/// home (rustty-renderer/lib.rs) is a Phase-3 leaf (commented out). Until R-d
-/// lands, the renderer type-name is a documented stub. The `+version` KAT does
-/// NOT assert this line's content.
-const RENDERER_STUB: &str = "(deferred: rustty-renderer — Phase-3 / R-d)";
+/// The renderer type name, exactly as the reference prints it: `{}` on the
+/// comptime type `renderer.Renderer` is `@typeName`, and renderer.zig:38-42
+/// selects `.metal => GenericRenderer(Metal)`, `.opengl => GenericRenderer(OpenGL)`,
+/// `.webgl => WebGL`. Derived from `build_config::renderer()` — the SAME
+/// `build_config.renderer` the reference switch reads — so the CLI keeps no
+/// rustty-renderer edge.
+fn renderer_type_name() -> &'static str {
+    match build_config::renderer() {
+        build_config::renderer::Backend::Metal => {
+            "renderer.generic.Renderer(renderer.Metal)"
+        }
+        build_config::renderer::Backend::Opengl => {
+            "renderer.generic.Renderer(renderer.OpenGL)"
+        }
+        build_config::renderer::Backend::Webgl => "renderer.WebGL",
+    }
+}
 
-/// STUB (ADV-FIX 1): `xev.backend` is libxev's selected backend; rustty-xev is
-/// unimplemented (D6). Documented stub; the `+version` KAT does NOT assert this.
-const LIBXEV_STUB: &str = "(deferred: rustty-xev / libxev — D6)";
-
-/// The reference prints `builtin.zig_version_string` (the Zig compiler version).
-/// The Rust port has no Zig toolchain and no build script capturing the rustc
-/// version at compile time, so this reports a documented placeholder. 0-test
-/// line; not KAT-asserted.
-const TOOLCHAIN_VERSION_STUB: &str = "(rust toolchain)";
+/// The `{t}` tag name of the libxev backend (the reference `@tagName` of
+/// `xev.backend`).
+fn libxev_backend_tag() -> &'static str {
+    match rustty_xev::backend() {
+        rustty_xev::Backend::IoUring => "io_uring",
+        rustty_xev::Backend::Epoll => "epoll",
+        rustty_xev::Backend::Kqueue => "kqueue",
+        rustty_xev::Backend::WasiPoll => "wasi_poll",
+        rustty_xev::Backend::Iocp => "iocp",
+    }
+}
 
 /// Reference: `build_config.version.build` — the `+BUILD` metadata (commit hash)
 /// of the SemanticVersion. The Rust runtime SemanticVersion view drops `+BUILD`
@@ -119,9 +133,9 @@ pub fn run() -> Result<u8, Error> {
     // try stdout.print("Build Config\n", .{});
     writeln!(stdout, "Build Config")?;
     // try stdout.print("  - Zig version   : {s}\n", .{builtin.zig_version_string});
-    //   PORT NOTE: the Rust port has no Zig toolchain — reported as the analogous
-    //   Rust toolchain version (documented stub; see TOOLCHAIN_VERSION_STUB).
-    writeln!(stdout, "  - Rust version  : {TOOLCHAIN_VERSION_STUB}")?;
+    //   PORT NOTE: the Rust port's toolchain is rustc — the analogous version,
+    //   captured at compile time (build_config::RUSTC_VERSION).
+    writeln!(stdout, "  - Rust version  : {}", build_config::RUSTC_VERSION)?;
     // try stdout.print("  - build mode    : {}\n", .{builtin.mode});
     writeln!(
         stdout,
@@ -141,9 +155,9 @@ pub fn run() -> Result<u8, Error> {
         build_config::font_backend()
     )?;
     // try stdout.print("  - renderer      : {}\n", .{renderer.Renderer});
-    writeln!(stdout, "  - renderer      : {RENDERER_STUB}")?;
+    writeln!(stdout, "  - renderer      : {}", renderer_type_name())?;
     // try stdout.print("  - libxev        : {t}\n", .{xev.backend});
-    writeln!(stdout, "  - libxev        : {LIBXEV_STUB}")?;
+    writeln!(stdout, "  - libxev        : {}", libxev_backend_tag())?;
     // PORT NOTE: the GTK block below is a comptime branch
     // (`build_config.app_runtime == .gtk`), statically false for the headless
     // `.none` build this milestone targets, so it is compiled out. It ports with

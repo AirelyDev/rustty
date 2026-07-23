@@ -63,18 +63,49 @@ fn write_file(path: &Path, contents: &str) {
 }
 
 // `rustty +version` -> exit 0, stdout starts `Rustty ` (the title-case product
-// name via rustty_identity::APP_NAME_TITLECASE; `ghostty` prints `Ghostty `).
-// ADV-FIX 1: do NOT assert the renderer/libxev/toolchain line content (stubbed
-// until R-d/D6).
+// name). WS3-B: the renderer / libxev / toolchain lines now carry REAL values
+// (ADV-FIX 1 retired) — assert their content and the absence of every stub.
 #[test]
 fn version_plus() {
     let out = run(&["+version"], &[]);
     assert!(out.status.success(), "+version should exit 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        out.stdout.starts_with(b"Rustty "),
+        stdout.starts_with("Rustty "),
         "+version stdout should start with `Rustty `, got: {:?}",
-        String::from_utf8_lossy(&out.stdout),
+        stdout
     );
+    assert!(
+        !stdout.contains("STUB") && !stdout.contains("deferred"),
+        "+version must carry no stub lines, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("  - Rust version  : 1."),
+        "toolchain line missing/wrong: {stdout}"
+    );
+    #[cfg(target_os = "macos")]
+    {
+        assert!(
+            stdout.contains("  - renderer      : renderer.generic.Renderer(renderer.Metal)"),
+            "renderer line missing/wrong: {stdout}"
+        );
+        assert!(
+            stdout.contains("  - libxev        : kqueue"),
+            "libxev line missing/wrong: {stdout}"
+        );
+    }
+    #[cfg(target_os = "linux")]
+    {
+        assert!(
+            stdout.contains("  - renderer      : renderer.generic.Renderer(renderer.OpenGL)"),
+            "renderer line missing/wrong: {stdout}"
+        );
+        assert!(
+            stdout.contains("  - libxev        : epoll")
+                || stdout.contains("  - libxev        : io_uring"),
+            "libxev line missing/wrong: {stdout}"
+        );
+    }
 }
 
 // `rustty --version` -> exit 0 (special-case, same output as `+version`).

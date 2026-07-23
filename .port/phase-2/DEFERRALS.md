@@ -2600,7 +2600,12 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
 + `rustty-identity` (ADV-FIX 4). Deferrals introduced/continued:
 
 - **`version.zig` is PARTIAL (ADV-FIX 1) — `renderer.Renderer` + `xev.backend`
-  STUBBED.** `version.rs` emits documented STUB strings for the `- renderer` line
+  STUBBED. ✅ RESOLVED (2026-07-23, WS3-B) for the renderer/libxev/toolchain
+  lines — real values via build_config::renderer() type-name map,
+  rustty_xev::backend(), and build_config::RUSTC_VERSION; the cli_smoke
+  `version_plus` KAT now ASSERTS their content. Still open: the OSC-8
+  commit-hash hyperlink (no `+BUILD` metadata / repo-URL identity constant).**
+  `version.rs` emits documented STUB strings for the `- renderer` line
   (`RENDERER_STUB`; rustty-renderer's `Renderer` is a Phase-3 leaf, commented out)
   and the `- libxev` line (`LIBXEV_STUB`; rustty-xev unimplemented, D6). The
   `builtin.zig_version_string` line has no Rust analog (no Zig toolchain / no

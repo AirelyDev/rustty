@@ -41,10 +41,14 @@ rustty-crash = { workspace = true }
 # C1 (CLI_BLUEPRINT.md ADV-FIX 4): version.zig reads the build-config version /
 # release-channel / app-runtime / font-backend, and version/help emit the rustty
 # product name via rustty-identity (R2). Both are strictly-earlier members (2, 3)
-# so the crate graph stays acyclic (G7). version's renderer/xev lines are STUBBED
-# (ADV-FIX 1) so no rustty-renderer / rustty-xev dep is needed.
+# so the crate graph stays acyclic (G7).
+# `+version` build/version constants + the product name via rustty-identity
+# (R2). The renderer line derives from build_config::renderer() (no
+# rustty-renderer edge needed — the renderer.zig selection switch is data);
+# the libxev line reads rustty-xev's `backend()` (the reference `xev.backend`).
 rustty-build-config = { workspace = true }
 rustty-identity = { workspace = true }
+rustty-xev = { workspace = true }
 # C2 (CLI_BLUEPRINT.md §7): show_config streams `config.FileFormatter` output and
 # list_actions streams `input.helpgen_actions.generate` output; both are generic
 # over the `rustty_cfg_fmt::Writer` trait (the ported `std.Io.Writer` surface), so
