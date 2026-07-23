@@ -52,8 +52,10 @@ use libadwaita::subclass::prelude::*;
 
 use rustty_input::{binding, command};
 
+use crate::gtk::app::App;
 use crate::gtk::WeakRef;
 
+use super::application::Application;
 use super::config::Config;
 use super::surface::Surface;
 use super::window::Window;
@@ -283,14 +285,37 @@ impl CommandPalette {
         }
     }
 
-    /// PORTS: `command_palette.zig:225-243` `collectJumpCommands`.
-    ///
-    /// PORT NOTE (inhabited placeholder — see module doc): iterating all live core
-    /// surfaces requires the type-erased core app pointer to be named, which this
-    /// tier does not yet do, and jump titles need `Surface::getEffectiveTitle`/
-    /// `getPwd` which do not exist yet. A no-op until that infra lands; the
-    /// [`Command`] jump machinery it would call is ported in full below.
-    fn collect_jump_commands(&self, _config: &Config, _commands: &mut [Command]) {}
+    /// PORTS: `command_palette.zig:225-243` `collectJumpCommands`. Collect jump
+    /// commands for all surfaces across all windows.
+    fn collect_jump_commands(&self, config: &Config, commands: &mut Vec<Command>) {
+        // `const app = Application.default()` (`:232`). The allocator (`:233`) is
+        // implicit in rustty (`Vec::push`).
+        let app = Application::default();
+
+        // Get all surfaces from the core app (`:236`). The `Application` GObject
+        // stores its `core_app` type-erased as `*mut c_void`, so — unlike the
+        // reference's comptime-monomorphized `app.core()` — reconstitute the
+        // concrete `rustty_core::app::App<App>` from that pointer. No-op when the
+        // core app is unbound (e.g. widget tests).
+        let Some(core_app) = app.imp().core_app.get() else {
+            return;
+        };
+        let core_app = core_app.as_ptr().cast::<rustty_core::app::App<App>>();
+
+        // `for (core_app.surfaces.items) |apprt_surface|` (`:237-242`).
+        // SAFETY: app-thread-only access to the surface backrefs the core app
+        // owns (the same access pattern as `Application::bind_core_app`'s
+        // color-scheme walk); each `*mut` apprt surface is live for the walk.
+        for &apprt_surface in unsafe { &*core_app }.surfaces.iter() {
+            // `const surface = apprt_surface.gobj()` (`:238`).
+            let Some(surface) = (unsafe { &*apprt_surface }).widget() else {
+                continue;
+            };
+            // `const cmd = Command.newJump(config, surface)` + `commands.append`
+            // (`:239-241`).
+            commands.push(Command::new_jump(config, &surface));
+        }
+    }
 
     /// PORTS: `command_palette.zig:330-364` `activated`. Emit `trigger` for the
     /// selected regular command, or focus the surface for a jump command.
