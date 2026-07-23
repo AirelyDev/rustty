@@ -38,6 +38,10 @@ pub mod renderer_seam;
 // function bodies land C6..C15 IN PLACE.
 pub mod surface;
 
+// PORT NOTE (WS4): src/main_ghostty.zig `logFn` — the shared process log sink,
+// hosted at the core wiring tier (below apprt/apprt-c/bin, above os/global).
+pub mod logging;
+
 // PORT NOTE: Surface.zig:38 `const SurfaceMouse = @import("surface_mouse.zig");`
 // — the future surface.rs (C5+) reaches the module as `crate::surface_mouse`.
 pub mod surface_mouse;
