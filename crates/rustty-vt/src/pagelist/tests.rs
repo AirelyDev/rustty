@@ -2346,6 +2346,41 @@ fn pagelist_compress_full_leaves_viewport_and_active_resident() {
     s.deinit();
 }
 
+/// PORTS: oracle d0a26d146
+/// `test "PageList replacements preserve compression continuation and mark activity"`
+///
+/// NOTE: contrary to the WS7 plan's prose, the oracle does NOT reset the
+/// continuation here. `increase_capacity` / `compact` only bump the activity
+/// token; `last_serial` and `next_serial` are preserved so a still-valid
+/// traversal keeps its progress.
+#[test]
+fn pagelist_replacements_preserve_compression_continuation_and_mark_activity() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    let state = super::compress::IncrementalCompressionState {
+        flags: super::compress::IncrementalCompressionFlags {
+            did_compress: false,
+            verifying: true,
+        },
+        activity_serial: 42,
+        last_serial: Some(7),
+        next_serial: 8,
+    };
+    let expected = super::compress::IncrementalCompressionState {
+        activity_serial: 43,
+        ..state
+    };
+
+    s.page_compression = state;
+    let replacement = s.increase_capacity(s.pages.first, None).unwrap();
+    assert_eq!(s.page_compression, expected);
+
+    s.page_compression = state;
+    let _ = s.compact(replacement).unwrap().unwrap();
+    assert_eq!(s.page_compression, expected);
+    s.deinit();
+}
+
 /// PORTS: oracle 91a63e528
 /// `test "PageList bounded pruning after split invalidation preserves live serials"`
 #[test]
