@@ -2213,6 +2213,88 @@ impl PageList {
         false
     }
 
+    /// Give a live node a new generation before changing its coordinate layout
+    /// in place.
+    ///
+    /// This must be called when a node remains at the same address and stays in
+    /// the list, but a mutation changes which logical row a `(node, y)`
+    /// coordinate identifies or whether that coordinate is still in range.
+    /// Examples include rotating rows after an erase, truncating a page's row
+    /// range, reinitializing the sole remaining page, or shortening the source
+    /// page of a split. Without a new generation, a cached pointer, serial, and
+    /// coordinate could still pass `node_is_valid` while referring to a
+    /// different row than it originally did. Screen and Terminal fast paths
+    /// which manipulate Page rows directly must use this because they bypass
+    /// PageList's own row-mutation helpers.
+    ///
+    /// The caller must pass a node which is currently live in this PageList.
+    /// Call this at the point the operation commits to changing the layout and
+    /// before the first such change. When an operation is intended to be
+    /// atomic, finish its failable preparation first so a failed operation does
+    /// not needlessly invalidate references. One call per affected node is
+    /// sufficient when an operation performs several layout changes without
+    /// exposing intermediate references.
+    ///
+    /// This helper is only needed for in-place changes. Removing or replacing a
+    /// node already invalidates old references through the live-list check in
+    /// `node_is_valid`, and newly allocated or reused nodes receive a fresh
+    /// serial as part of their initialization. Ordinary cell or style changes
+    /// which preserve the meaning of page coordinates do not require a new
+    /// generation solely for that reason.
+    ///
+    /// The only state changed here is `node.serial` and the next-generation
+    /// counter `page_serial`. Consequently, every previously captured
+    /// pointer-plus-serial pair for this node becomes invalid while new
+    /// references can capture the new generation. This does not advance
+    /// `page_serial_epoch`: only `reset` starts a new whole-list validity epoch.
+    ///
+    /// This also does not mutate the page, update tracked pins or viewport
+    /// state, adjust row or memory accounting, mark cells dirty, or notify
+    /// incremental compression. The surrounding operation remains responsible
+    /// for all such bookkeeping required by its layout change.
+    ///
+    /// PORTS: oracle@main PageList.zig `invalidateNodeLayout`
+    /// (a804e3ac7, 0bad91adb).
+    //
+    // PORT NOTE: raw-pointer argument, never `&mut Node` — callers routinely
+    // hold a live alias into the same node across this call (memory:
+    // `rust-mut-args-strongly-protected`).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn invalidate_node_layout(&mut self, node: *mut Node) {
+        unsafe { (*node).serial = self.page_serial };
+        self.page_serial += 1;
+    }
+
+    /// Returns whether a node pointer and serial still identify the same page in
+    /// this list. The node pointer is only compared and is safe even if the node
+    /// has been destroyed or reused since the serial was captured.
+    ///
+    /// PORTS: oracle@main PageList.zig `nodeIsValid` (86e1f7b8b, f6d9a582e).
+    //
+    // PORT NOTE: `target` is a raw `*const Node` and is NEVER dereferenced —
+    // only compared against live node addresses. This is the whole point of the
+    // helper: callers hold captured pointers that may name destroyed or reused
+    // nodes.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn node_is_valid(&self, target: *const Node, serial: u64) -> bool {
+        // Reset invalidates the whole prior epoch, so reject those generations
+        // without scanning the live list.
+        if serial < self.page_serial_epoch {
+            return false;
+        }
+
+        let mut it = self.pages.first;
+        while !it.is_null() {
+            let node = it;
+            if core::ptr::eq(node as *const Node, target) {
+                return unsafe { (*node).serial } == serial;
+            }
+            it = unsafe { (*node).next };
+        }
+
+        false
+    }
+
     /// Mark a point as dirty, used for testing.
     //
     // PORT NOTE: `#[allow(dead_code)]` — the reference `markDirty` is a private

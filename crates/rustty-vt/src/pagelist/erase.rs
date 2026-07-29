@@ -52,6 +52,8 @@ impl PageList {
         // In order to move the following rows up we rotate the rows array by 1.
         // The rotate operation turns e.g. [ 0 1 2 3 ] in to [ 1 2 3 0 ], which
         // works perfectly to move all of our elements where they belong.
+        // Rotating rows changes which logical row cached coordinates identify.
+        self.invalidate_node_layout(node);
         fastmem::rotateOnce(unsafe {
             core::slice::from_raw_parts_mut(
                 rows.add(pn.y as usize),
@@ -113,6 +115,8 @@ impl PageList {
             node = next;
             rows = next_rows;
 
+            // Rotating this page moves every cached row coordinate up by one.
+            self.invalidate_node_layout(node);
             fastmem::rotateOnce(unsafe {
                 core::slice::from_raw_parts_mut(rows, super::Node::rows(node) as usize)
             });
@@ -201,6 +205,8 @@ impl PageList {
         // page, then we clear the row, rotate it to the end of the boundary limit
         // and update our pins.
         if (unsafe { super::Node::rows(node) } - pn.y) as usize > limit {
+            // Rotating this bounded region changes its cached row coordinates.
+            self.invalidate_node_layout(node);
             unsafe {
                 let cols = super::Node::cols(node) as usize;
                 (*super::Node::page(node)).clear_cells(rows.add(pn.y as usize), 0, cols);
@@ -254,6 +260,8 @@ impl PageList {
             return Ok(());
         }
 
+        // Rotating this suffix changes which logical row its coordinates identify.
+        self.invalidate_node_layout(node);
         fastmem::rotateOnce(unsafe {
             core::slice::from_raw_parts_mut(
                 rows.add(pn.y as usize),
@@ -327,6 +335,8 @@ impl PageList {
             // The logic here is very similar to the one before the loop.
             let shifted_limit = limit - shifted;
             if (unsafe { super::Node::rows(node) } as usize) > shifted_limit {
+                // Rotating this bounded prefix changes its cached row coordinates.
+                self.invalidate_node_layout(node);
                 unsafe {
                     let cols = super::Node::cols(node) as usize;
                     (*super::Node::page(node)).clear_cells(rows, 0, cols);
@@ -379,6 +389,8 @@ impl PageList {
                 return Ok(());
             }
 
+            // Rotating the whole page moves every cached row coordinate up by one.
+            self.invalidate_node_layout(node);
             fastmem::rotateOnce(unsafe {
                 core::slice::from_raw_parts_mut(rows, super::Node::rows(node) as usize)
             });

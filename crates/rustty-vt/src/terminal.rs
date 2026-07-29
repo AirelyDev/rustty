@@ -2876,6 +2876,32 @@ impl Terminal {
         }
     }
 
+    /// Renew every live page generation in an inclusive range before a
+    /// full-width line operation moves logical rows between their coordinates.
+    ///
+    /// PORTS: oracle@main Terminal.zig `invalidateFullWidthRowRange`
+    /// (0bad91adb).
+    //
+    // PORT NOTE: raw-pointer node arguments, never `&mut Node` — the caller
+    // holds live tracked-pin aliases into these nodes across the call (memory:
+    // `rust-mut-args-strongly-protected`).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    fn invalidate_full_width_row_range(
+        &mut self,
+        first: *mut crate::pagelist::Node,
+        last: *mut crate::pagelist::Node,
+    ) {
+        let mut node = first;
+        loop {
+            // Full-width line movement remaps cached row coordinates in this page.
+            unsafe { (*self.screens.active).pages.invalidate_node_layout(node) };
+            if std::ptr::eq(node, last) {
+                break;
+            }
+            node = unsafe { (*node).next };
+        }
+    }
+
     // TODO(qwerasd): `insertLines` and `deleteLines` are 99% identical,
     // the majority of their logic can (and should) be abstracted in to
     // a single shared helper function, probably on `Screen` not here.
@@ -2985,6 +3011,14 @@ impl Terminal {
             screen: self.screens.active,
             pin: cur_p,
         };
+
+        // Partial-width margins edit cells in stable rows; full-width moves rows.
+        if !left_right {
+            self.invalidate_full_width_row_range(
+                unsafe { (*(*self.screens.active).cursor.page_pin).node },
+                unsafe { (*cur_p).node },
+            );
+        }
 
         // Our current y position relative to the cursor
         // var y: usize = rem;
@@ -3279,6 +3313,12 @@ impl Terminal {
             screen: self.screens.active,
             pin: cur_p,
         };
+
+        // Partial-width margins edit cells in stable rows; full-width moves rows.
+        if !left_right {
+            let last = unsafe { (*cur_p).down((rem - 1) as usize) }.unwrap().node;
+            self.invalidate_full_width_row_range(unsafe { (*cur_p).node }, last);
+        }
 
         // Our current y position relative to the cursor
         // var y: usize = 0;
@@ -10183,8 +10223,13 @@ mod tests {
         t.print_string("GHI".as_bytes()).unwrap();
         t.set_cursor_pos(2, 2);
 
+        // PORTS: oracle 0bad91adb — a full-width line operation moves whole
+        // rows, so the affected page generations are renewed.
+        let node = unsafe { (*(*t.screens.active).cursor.page_pin).node };
+        let serial = unsafe { (*node).serial };
         t.clear_dirty();
         t.insert_lines(1);
+        assert!(!unsafe { (*t.screens.active).pages.node_is_valid(node, serial) });
 
         assert!(!t.is_dirty(active_pt(0, 0)));
         assert!(t.is_dirty(active_pt(0, 1)));
@@ -12113,8 +12158,13 @@ mod tests {
         t.print_string("GHI".as_bytes()).unwrap();
         t.set_cursor_pos(2, 2);
 
+        // PORTS: oracle 0bad91adb — a full-width line operation moves whole
+        // rows, so the affected page generations are renewed.
+        let node = unsafe { (*(*t.screens.active).cursor.page_pin).node };
+        let serial = unsafe { (*node).serial };
         t.clear_dirty();
         t.delete_lines(1);
+        assert!(!unsafe { (*t.screens.active).pages.node_is_valid(node, serial) });
 
         assert!(!t.is_dirty(active_pt(0, 0)));
         assert!(t.is_dirty(active_pt(0, 1)));
@@ -12533,11 +12583,17 @@ mod tests {
         t.print_string("5EEEE".as_bytes()).unwrap();
 
         // Verify we now have a second page
-        assert!(!unsafe { (*first_page).next }.is_null());
+        let second_page = unsafe { (*first_page).next };
+        assert!(!second_page.is_null());
+        // PORTS: oracle 0bad91adb — every page in the shifted range is renewed.
+        let first_serial = unsafe { (*first_page).serial };
+        let second_serial = unsafe { (*second_page).serial };
 
         t.set_cursor_pos(1, 1);
         t.clear_dirty();
         t.insert_lines(1);
+        assert!(!unsafe { (*t.screens.active).pages.node_is_valid(first_page, first_serial) });
+        assert!(!unsafe { (*t.screens.active).pages.node_is_valid(second_page, second_serial) });
 
         assert!(t.is_dirty(active_pt(0, 0)));
         assert!(t.is_dirty(active_pt(0, 1)));
@@ -12700,11 +12756,17 @@ mod tests {
         t.print_string("5EEEE".as_bytes()).unwrap();
 
         // Verify we now have a second page
-        assert!(!unsafe { (*first_page).next }.is_null());
+        let second_page = unsafe { (*first_page).next };
+        assert!(!second_page.is_null());
+        // PORTS: oracle 0bad91adb — every page in the shifted range is renewed.
+        let first_serial = unsafe { (*first_page).serial };
+        let second_serial = unsafe { (*second_page).serial };
 
         t.set_cursor_pos(1, 1);
         t.clear_dirty();
         t.delete_lines(1);
+        assert!(!unsafe { (*t.screens.active).pages.node_is_valid(first_page, first_serial) });
+        assert!(!unsafe { (*t.screens.active).pages.node_is_valid(second_page, second_serial) });
 
         assert!(t.is_dirty(active_pt(0, 0)));
         assert!(t.is_dirty(active_pt(0, 1)));

@@ -2015,6 +2015,88 @@ fn fill_compressible_history(s: &mut PageList, pages: usize) {
     }
 }
 
+/// Fill the current tail page to capacity without allocating a successor.
+/// Capturing the tail before the loop makes this stop at the allocation
+/// boundary needed by bounded-pruning tests.
+///
+/// PORTS: oracle@main PageList.zig `fillLastPageForTest` (f1a5fab45).
+#[allow(dead_code)] // first used by the C3 bounded-pruning tests
+fn fill_last_page_for_test(s: &mut PageList) {
+    let last = s.pages.last;
+    while unsafe { super::Node::rows(last) } < unsafe { super::Node::capacity(last) }.rows {
+        let _ = s.grow().unwrap();
+    }
+}
+
+/// Verify every live page belongs to the current validity epoch, has an
+/// allocated generation below the next serial, and validates through the same
+/// pointer-plus-generation lookup used by external references.
+///
+/// PORTS: oracle@main PageList.zig `expectLivePageSerialsValidForTest`
+/// (f1a5fab45 / f6d9a582e).
+fn expect_live_page_serials_valid_for_test(s: &PageList) {
+    let mut node = s.pages.first;
+    while !node.is_null() {
+        let serial = unsafe { (*node).serial };
+        assert!(serial >= s.page_serial_epoch);
+        assert!(serial < s.page_serial);
+        assert!(s.node_is_valid(node, serial));
+        node = unsafe { (*node).next };
+    }
+}
+
+/// PORTS: oracle dd956f37c `test "PageList row erasure renews affected page generations"`
+#[test]
+fn pagelist_row_erasure_renews_affected_page_generations() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    while s.total_pages() < 2 {
+        let _ = s.grow().unwrap();
+    }
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let mut first_serial = unsafe { (*first).serial };
+    let mut second_serial = unsafe { (*second).serial };
+    let mut activity = s.page_compression.activity_serial;
+
+    s.erase_row(point::Point::History(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+    assert!(!s.node_is_valid(first, first_serial));
+    assert!(!s.node_is_valid(second, second_serial));
+    assert_ne!(activity, s.page_compression.activity_serial);
+
+    first_serial = unsafe { (*first).serial };
+    second_serial = unsafe { (*second).serial };
+    activity = s.page_compression.activity_serial;
+    s.erase_row_bounded(
+        point::Point::History(point::Coordinate { x: 0, y: 0 }),
+        unsafe { super::Node::rows(first) } as usize + 1,
+    )
+    .unwrap();
+    assert!(!s.node_is_valid(first, first_serial));
+    assert!(!s.node_is_valid(second, second_serial));
+    assert_ne!(activity, s.page_compression.activity_serial);
+
+    s.deinit();
+}
+
+/// PORTS: oracle dd956f37c `test "PageList trailing row truncation renews page generation"`
+#[test]
+fn pagelist_trailing_row_truncation_renews_page_generation() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    let node = s.pages.last;
+    let old_serial = unsafe { (*node).serial };
+    let trimmed = s.trim_trailing_blank_rows(1);
+    s.total_rows -= trimmed as usize;
+    assert_eq!(trimmed, 1);
+    assert!(!s.node_is_valid(node, old_serial));
+
+    let _ = s.grow().unwrap();
+    expect_live_page_serials_valid_for_test(&s);
+    s.deinit();
+}
+
 /// PORTS: the memoryStats assertions in oracle 0d015b2fc / 6d5dda40d.
 #[test]
 fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {

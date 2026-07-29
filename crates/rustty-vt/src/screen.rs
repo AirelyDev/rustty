@@ -1501,8 +1501,8 @@ impl Screen {
         //  lot cheaper in 99% of cases.
 
         let old_pin = unsafe { *self.cursor.page_pin };
-        if self.pages.grow()?.is_some() {
-            self.cursor_scroll_above_rotate()?;
+        if let Some(new_node) = self.pages.grow()? {
+            self.cursor_scroll_above_rotate(new_node)?;
         } else {
             // In this case, it means grow() didn't allocate a new page.
 
@@ -1531,6 +1531,9 @@ impl Screen {
                 let rows = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
                 let pin_y = unsafe { (*pin).y } as usize;
                 let size_rows = unsafe { (*page).size.rows } as usize;
+                // Rotating this suffix changes which logical row its coordinates identify.
+                self.pages
+                    .invalidate_node_layout(unsafe { (*pin).node });
                 fastmem::rotateOnceR(unsafe {
                     core::slice::from_raw_parts_mut(rows.add(pin_y), size_rows - pin_y)
                 });
@@ -1566,7 +1569,7 @@ impl Screen {
                 //    1 |5E00000000| | 4
                 //      +----------+ :
                 //     +-------------+
-                self.cursor_scroll_above_rotate()?;
+                self.cursor_scroll_above_rotate(core::ptr::null_mut())?;
             }
         }
 
@@ -1587,7 +1590,14 @@ impl Screen {
         Ok(())
     }
 
-    fn cursor_scroll_above_rotate(&mut self) -> Result<(), OutOfMemory> {
+    //
+    // PORT NOTE: the reference takes `fresh_node: ?*PageList.List.Node`; the
+    // Rust port uses a null `*mut Node` for the `null` case (raw-pointer
+    // discipline: no `&mut` into a node the caller also aliases).
+    fn cursor_scroll_above_rotate(
+        &mut self,
+        fresh_node: *mut crate::pagelist::Node,
+    ) -> Result<(), OutOfMemory> {
         let down = unsafe { (*self.cursor.page_pin).down(1) }.unwrap();
         self.cursor_change_pin(down);
 
@@ -1601,6 +1611,12 @@ impl Screen {
             let cur_page: *mut Page = unsafe { crate::pagelist::Node::page(current) };
             let prev_rows = unsafe { (*prev_page).rows.ptr((*prev_page).memory_ptr()) };
             let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
+
+            // A newly allocated tail has no earlier references to invalidate.
+            if fresh_node.is_null() || !std::ptr::eq(current, fresh_node) {
+                // Rotating this page moves every cached row coordinate down by one.
+                self.pages.invalidate_node_layout(current);
+            }
 
             // Rotate the pages down: [ 0 1 2 3 ] => [ 3 0 1 2 ]
             let cur_size_rows = unsafe { (*cur_page).size.rows } as usize;
@@ -1631,6 +1647,8 @@ impl Screen {
         let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
         let pin_y = unsafe { (*self.cursor.page_pin).y } as usize;
         let cur_size_rows = unsafe { (*cur_page).size.rows } as usize;
+        // Rotating the cursor-page suffix changes its cached row coordinates.
+        self.pages.invalidate_node_layout(current);
         fastmem::rotateOnceR(unsafe {
             core::slice::from_raw_parts_mut(cur_rows.add(pin_y), cur_size_rows - pin_y)
         });
@@ -11613,7 +11631,12 @@ mod tests {
         //   +----------+ :
         //  +-------------+
 
+        // PORTS: oracle 0bad91adb — the in-place row rotation renews this
+        // node's generation, so a cached (node, serial) pair is rejected.
+        let node = unsafe { (*s.cursor.page_pin).node };
+        let serial = unsafe { (*node).serial };
         s.cursor_scroll_above().unwrap();
+        assert!(!s.pages.node_is_valid(node, serial));
 
         //   +----------+ = PAGE 0
         // 0 |1ABCD00000|
@@ -11705,7 +11728,15 @@ mod tests {
         //      +----------+ :
         //     +-------------+
 
+        // PORTS: oracle 0bad91adb — both pages are rotated in place, so both
+        // generations are renewed.
+        let first_node = s.pages.pages.first;
+        let second_node = unsafe { (*first_node).next };
+        let first_serial = unsafe { (*first_node).serial };
+        let second_serial = unsafe { (*second_node).serial };
         s.cursor_scroll_above().unwrap();
+        assert!(!s.pages.node_is_valid(first_node, first_serial));
+        assert!(!s.pages.node_is_valid(second_node, second_serial));
 
         //      +----------+ = PAGE 0
         //  ... :          :
@@ -11912,7 +11943,12 @@ mod tests {
         // 4307 |3IJKL00000| | 2
         //      +----------+ :
         //     +-------------+
+        // PORTS: oracle 0bad91adb — rotating rows into a freshly grown page
+        // still renews the existing source page's generation.
+        let node = s.pages.pages.first;
+        let serial = unsafe { (*node).serial };
         s.cursor_scroll_above().unwrap();
+        assert!(!s.pages.node_is_valid(node, serial));
 
         //      +----------+ = PAGE 0
         //  ... :          :
