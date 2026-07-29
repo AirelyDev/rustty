@@ -2,8 +2,19 @@
 # ws15_globalshortcuts_portal_gate.sh — WS15 live gate (LINUX / VM ONLY)
 #
 # Proves the XDG GlobalShortcuts portal round-trip actually completes against
-# the running desktop, and that an `Activated` signal dispatches the bound
-# action.
+# the running desktop, and that an `Activated` signal is dispatched all the way
+# through to the bound action's side effect. Specifically it asserts, in order:
+#   1. `CreateSession` got `Response` 0 (a session handle exists);
+#   2. `BindShortcuts` completed AND its results name the bound shortcut;
+#   3. the injected `Activated` reached the app's signal handler;
+#   4. the shortcut id RESOLVED in the map (`dispatch map-hit`);
+#   5. `performAllAction` was reached and returned Ok (`action performed ok`) —
+#      which requires the `trigger` emission and an installed dispatch thunk;
+#   6. a new toplevel window actually appeared (AT-SPI), the bound action being
+#      `new_window`.
+# Assertions 4-6 are what make this more than a signal-delivery test: the older
+# "global shortcut activated=" line is logged BEFORE dispatch and so passes even
+# when the map lookup misses or the action fails.
 #
 # Run ON THE VM inside the GNOME session's environment:
 #   ssh rvm 'cd ~/projects/rustty && \
@@ -79,8 +90,9 @@ NoDisplay=true
 DESKTOP
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null
 
-# --- (2) the AT-SPI grant clicker -------------------------------------------
+# --- (2) the AT-SPI grant clicker + window counter ---------------------------
 GRANT_PY="$WORK/grant.py"
+WINCOUNT_PY="$WORK/wincount.py"
 
 # --- isolated config with one global keybind ---------------------------------
 rm -rf "$WORK"; mkdir -p "$WORK/cfg/rustty"
@@ -139,7 +151,58 @@ print(f"clicked {WANT!r} x{clicked}")
 sys.exit(0 if clicked else 1)
 PYEOF
 
+# Count the rustty application's toplevel windows via AT-SPI. This is the
+# external, out-of-process observable for `new_window` — the gate uses it to
+# prove the dispatched action actually did something, not merely that the code
+# path ran. Prints the count on stdout; exits 2 if the app is not on the
+# accessibility bus at all (so "app missing" can never masquerade as "0 windows").
+cat > "$WINCOUNT_PY" <<'PYEOF'
+import sys
+import gi
+gi.require_version("Atspi", "2.0")
+from gi.repository import Atspi
+
+Atspi.init()
+found_app = False
+count = 0
+desktop = Atspi.get_desktop(0)
+for i in range(desktop.get_child_count()):
+    app = desktop.get_child_at_index(i)
+    if not app:
+        continue
+    try:
+        name = (app.get_name() or "").lower()
+    except Exception:
+        continue
+    if "rustty" not in name:
+        continue
+    found_app = True
+    try:
+        for j in range(app.get_child_count()):
+            w = app.get_child_at_index(j)
+            if w and w.get_role_name() in ("frame", "window", "dialog"):
+                count += 1
+    except Exception:
+        pass
+
+if not found_app:
+    print("rustty not present on the a11y bus", file=sys.stderr)
+    sys.exit(2)
+print(count)
+PYEOF
+
+# Is the AT-SPI clicker itself usable? Distinguished up-front so that "no dialog
+# appeared" can never be confused with "python3/gi/Atspi is missing", which would
+# otherwise silently downgrade a broken grant path into a benign-looking message.
+ATSPI_OK=0
+if python3 -c 'import gi; gi.require_version("Atspi","2.0"); from gi.repository import Atspi' 2>/dev/null; then
+  ATSPI_OK=1
+else
+  echo "WARNING: python3 gi/Atspi unavailable — the permission dialog CANNOT be answered by this gate"
+fi
+
 grant() { # grant <button-label> <tries>
+  [ "$ATSPI_OK" -eq 1 ] || return 2
   for _ in $(seq 1 "${2:-40}"); do
     if python3 "$GRANT_PY" "$1" 2>/dev/null | grep -qv 'x0'; then
       echo "granted via AT-SPI ($1)"
@@ -150,6 +213,22 @@ grant() { # grant <button-label> <tries>
   return 1
 }
 
+# Installed and torn down by this gate; tracked so cleanup removes it rather than
+# leaving a stray entry in the real user profile.
+DESKTOP_FILE="$DESKTOP_DIR/$APP_ID.desktop"
+cleanup() {
+  [ -n "${UNIT:-}" ] && systemctl --user stop "$UNIT" 2>/dev/null
+  [ -n "${APP_PID:-}" ] && kill "$APP_PID" 2>/dev/null
+  [ -n "${MON_PID:-}" ] && kill "$MON_PID" 2>/dev/null
+  [ -n "${APP_PID:-}" ] && wait "$APP_PID" 2>/dev/null
+  rm -f "$DESKTOP_FILE"
+  update-desktop-database "$DESKTOP_DIR" 2>/dev/null
+  return 0
+}
+# Installed BEFORE anything is spawned so no failure can leak dbus-monitor or the
+# scope unit, and armed for signals as well as normal exit.
+trap cleanup EXIT INT TERM HUP
+
 dbus-monitor --session "path_namespace=/org/freedesktop/portal/desktop" > "$BUS_LOG" 2>&1 &
 MON_PID=$!
 sleep 1
@@ -157,12 +236,6 @@ sleep 1
 XDG_CONFIG_HOME="$WORK/cfg" systemd-run --user --scope --slice=app.slice \
   --unit="$UNIT" -- "$BIN" > "$APP_LOG" 2>&1 &
 APP_PID=$!
-cleanup() {
-  systemctl --user stop "$UNIT" 2>/dev/null
-  kill "$APP_PID" "$MON_PID" 2>/dev/null
-  wait "$APP_PID" 2>/dev/null
-}
-trap cleanup EXIT
 
 # --- wait for the round-trip -------------------------------------------------
 handle=""
@@ -180,7 +253,12 @@ echo "session_handle=$handle"
 
 # Answer the one-time GNOME permission dialog if it is up. A second run needs no
 # dialog at all (the grant is remembered), so a miss here is not fatal.
-grant Add 40 || echo "no permission dialog appeared (grant already remembered)"
+grant Add 40
+case $? in
+  0) ;;
+  2) echo "grant SKIPPED: AT-SPI clicker unavailable — if BindShortcuts now stalls, that is why, NOT an absent dialog" ;;
+  *) echo "no permission dialog appeared (AT-SPI is working and found no 'Add' button — grant already remembered)" ;;
+esac
 
 bound=0
 for _ in $(seq 1 60); do
@@ -191,11 +269,25 @@ done
   echo "--- app log ---"; cat "$APP_LOG"
   fail "BindShortcuts never completed (the GNOME permission dialog was not answered)"
 }
-grep -q "$SHORTCUT" "$APP_LOG" \
+grep -q "global shortcuts bound results=.*$SHORTCUT" "$APP_LOG" \
   || fail "BindShortcuts results do not mention $SHORTCUT"
 echo "BindShortcuts accepted $SHORTCUT"
 
 # --- activation dispatch -----------------------------------------------------
+# Baseline window count BEFORE the activation, so the post-activation count is a
+# delta rather than an absolute (the app may legitimately start with one window).
+if [ "$ATSPI_OK" -eq 1 ]; then
+  windows_before="$(python3 "$WINCOUNT_PY" 2>"$WORK/wincount.err")"
+  rc=$?
+else
+  rc=3
+fi
+[ "${rc:-3}" -eq 0 ] || {
+  echo "--- wincount stderr ---"; cat "$WORK/wincount.err" 2>/dev/null
+  fail "cannot observe rustty's windows over AT-SPI (rc=$rc); the new-window side-effect assertion below would be vacuous"
+}
+echo "windows before activation: $windows_before"
+
 gdbus emit --session \
   --object-path /org/freedesktop/portal/desktop \
   --signal org.freedesktop.portal.GlobalShortcuts.Activated \
@@ -209,7 +301,49 @@ for _ in $(seq 1 20); do
 done
 [ "$activated" -eq 1 ] || {
   echo "--- app log ---"; cat "$APP_LOG"
-  fail "Activated signal was not received/dispatched"
+  fail "Activated signal was not received (the signal never reached the app's handler)"
 }
+echo "Activated signal received"
 
-echo "GATE PASS: portal round-trip + activation dispatch confirmed"
+# The line above is emitted BEFORE `dispatch_activation` runs, so on its own it
+# proves only signal delivery. The two assertions below are the load-bearing
+# ones: they are reachable only after the map lookup HIT (`dispatch map-hit`),
+# and only after `trigger` was emitted, the `perform_all_action_thunk` was
+# installed, and `performAllAction` returned Ok (`action performed ok`).
+dispatched=0
+for _ in $(seq 1 20); do
+  if grep -q "global shortcut dispatch map-hit id=$SHORTCUT" "$APP_LOG"; then dispatched=1; break; fi
+  sleep 0.5
+done
+[ "$dispatched" -eq 1 ] || {
+  echo "--- app log ---"; cat "$APP_LOG"
+  fail "Activated arrived but did not resolve to a bound action (map lookup missed)"
+}
+echo "map lookup resolved $SHORTCUT to its bound action"
+
+performed=0
+for _ in $(seq 1 20); do
+  if grep -q "global shortcut action performed ok" "$APP_LOG"; then performed=1; break; fi
+  sleep 0.5
+done
+[ "$performed" -eq 1 ] || {
+  echo "--- app log ---"; cat "$APP_LOG"
+  fail "the bound action was never performed (trigger not emitted, thunk not installed, or performAllAction returned Err)"
+}
+echo "performAllAction completed Ok"
+
+# --- the observable side effect ----------------------------------------------
+# The bound action is `new_window`, so a window must actually have appeared.
+windows_after="$windows_before"
+for _ in $(seq 1 20); do
+  windows_after="$(python3 "$WINCOUNT_PY" 2>/dev/null)" || windows_after="$windows_before"
+  [ "${windows_after:-0}" -gt "${windows_before:-0}" ] && break
+  sleep 0.5
+done
+[ "${windows_after:-0}" -gt "${windows_before:-0}" ] || {
+  echo "--- app log ---"; cat "$APP_LOG"
+  fail "no new window appeared (before=$windows_before after=$windows_after): the action was reported performed but had no effect"
+}
+echo "new window observed over AT-SPI: $windows_before -> $windows_after"
+
+echo "GATE PASS: portal round-trip + dispatch through performAllAction + new window confirmed"

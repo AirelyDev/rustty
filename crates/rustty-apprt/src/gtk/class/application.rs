@@ -2398,11 +2398,21 @@ impl Application {
                     return;
                 };
                 // SAFETY: as above — app-thread-only access to the two backrefs.
-                if let Err(_err) =
-                    unsafe { &mut *core_app }.performAllAction(unsafe { &*rt_app }, action)
-                {
-                    // log.warn("failed to perform action={}", .{err});
-                    eprintln!("warn(gtk): failed to perform global shortcut action");
+                match unsafe { &mut *core_app }.performAllAction(unsafe { &*rt_app }, action) {
+                    // PORT NOTE (rustty-only instrumentation): the reference has no
+                    // success-side log here. We emit one because it is the ONLY
+                    // observable that proves the whole activation chain completed —
+                    // portal `Activated` → map lookup hit → `trigger` emission →
+                    // installed thunk → `performAllAction` returning Ok. The
+                    // pre-dispatch "global shortcut activated=" line is emitted
+                    // before any of that and so cannot prove dispatch;
+                    // `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`
+                    // asserts THIS line.
+                    Ok(()) => eprintln!("debug(gtk): global shortcut action performed ok"),
+                    Err(_err) => {
+                        // log.warn("failed to perform action={}", .{err});
+                        eprintln!("warn(gtk): failed to perform global shortcut action");
+                    }
                 }
             })));
     }

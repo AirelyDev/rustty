@@ -4008,8 +4008,10 @@ display test (`application_global_shortcut_trigger_performs_action`), plus the
 live gate `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh` run against
 `xdg-desktop-portal-gnome` 50.0 on the VM's GNOME Shell 50 Wayland session
 (`org.freedesktop.portal.GlobalShortcuts` version 2): CreateSession/BindShortcuts
-both answered `Response 0`, and an `Activated` signal dispatched the bound
-action. The emitted traffic was diffed against a `dbus-monitor` capture of the
+both answered `Response 0`, the `BindShortcuts` results named the bound
+accelerator, and an injected `Activated` signal was OBSERVED to resolve in the
+shortcut map, reach `performAllAction` with an `Ok` return, and produce a second
+toplevel window (counted over AT-SPI) — the bound action being `new_window`. The emitted traffic was diffed against a `dbus-monitor` capture of the
 installed `ghostty 1.3.1-2.fc44` doing the same handshake: same methods, same
 order, same payload shapes, differing only in the R2 token prefix
 (`rustty_<7hex>` vs `ghostty_<7hex>`).
@@ -4030,14 +4032,36 @@ against the oracle, and reproduced by the port):
 What is proven instead: gnome-settings-daemon's own store holds the accepted
 binding (`io.airely.rustty-debug -> [('SHIFT+CTRL+ALT+F12', {shortcuts:
 ['<Shift><Control><Alt>F12'], description: 'new_window'})]`), i.e. the
-compositor grabbed the accelerator, and an injected `Activated` exercises every
-line the real signal would. Only mutter's key-event → `Activated` step is
-unexercised.
+compositor grabbed the accelerator; and an injected `Activated` is followed all
+the way to its side effect — the gate asserts the map lookup HIT, that
+`performAllAction` returned `Ok`, and that a new toplevel window appeared. Only
+mutter's key-event → `Activated` step is unexercised.
 
-**Still deferred (SEPARATE, unchanged):** the sibling portal `OpenURI` call site
-in `application.zig` (the INHABITED placeholder at
-`crates/rustty-apprt/src/gtk/class/application.rs`'s `startup` — the D-Bus
-connection is fetched but has no OpenURI consumer). WS15 does not cover it.
+**Sibling deferral, split out:** the portal `OpenURI` call site is NOT covered by
+WS15 and now has its own top-level entry below ("GTK portal OpenURI (L6)"), so it
+stays discoverable by a ledger grep instead of being buried under this resolved
+heading.
+
+
+## GTK portal OpenURI (L6) — call site INHABITED, body unported [split out of the WS15 GlobalShortcuts entry, 2026-07-29]
+
+**OPEN.** The sibling XDG portal call site to GlobalShortcuts: the reference's
+`portal.zig` / `portal/OpenURI.zig`, reached from `application.zig`'s `startup`.
+In the port, `crates/rustty-apprt/src/gtk/class/application.rs`'s `startup` is an
+INHABITED placeholder for this: the `gio::DBusConnection` is fetched (and handed
+to `GlobalShortcuts`), but there is no `OpenURI` consumer — nothing calls the
+portal's `OpenURI`/`OpenFile` methods, and the reference's `portal` module has no
+Rust counterpart yet.
+
+**Impact:** opening a URL/file through the desktop portal (the sandbox-correct
+path) is unavailable on GTK; only the non-portal fallback path exists.
+
+**Un-defer trigger:** port `portal.zig` + `portal/OpenURI.zig` onto the same
+`gio::DBusConnection` + `Request`-object-path pattern that
+`global_shortcuts.rs` already establishes (pre-subscribe to `Response` on a
+self-computed request path, then issue the call). WS15's live-gate harness
+(`.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`) is directly reusable
+for the app-id/`.desktop` environment setup that any portal call needs.
 
 
 ## App-core over-claim CORRECTION — `main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` are DEFERRED (already tracked at C6)
@@ -4744,6 +4768,10 @@ it does on macOS. This removes only the exit RACE — the KAT still spawns a rea
 Recorded after the **final parity audit** (25 adversarially-verified agents over all Linux/GTK
 features vs ghostty) confirmed these are the ONLY remaining Linux/GTK divergences and that they
 are **not daily-use parity gaps on the common (GNOME/mutter) target**.
+
+> **CORRECTION (2026-07-29, WS15 review):** "ONLY remaining" is no longer accurate — the portal
+> `OpenURI` call site is also open; see "GTK portal OpenURI (L6)" above. Read this entry as
+> covering the winproto-x11 and dcimgui divergences only.
 
 - **`gtk/winproto/x11.rs` — the x11 window-protocol arm (L6).** The reference
   `winproto/x11.zig` is unported; the x11 arm of the `App`/`Window` unions stays `#[cfg]`-gated

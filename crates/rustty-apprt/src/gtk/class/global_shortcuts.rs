@@ -254,19 +254,28 @@ impl GlobalShortcuts {
     fn close(&self) {
         let imp = self.imp();
 
+        // `:113-121` — dropping a `SignalSubscription` unsubscribes it.
+        //
+        // PORT NOTE (ordering, WS15 review): these run BEFORE the
+        // `dbus_connection` early-return. Each guard owns its own ref to the
+        // connection it was created on, so a `close()` reached after the
+        // connection field was already cleared must still unsubscribe rather than
+        // leak two live subscriptions. The reference's `orelse return` cannot hit
+        // this case because Zig's `priv.dbus_connection` and its subscriptions are
+        // cleared together; hoisting the drops makes the port unconditionally
+        // correct with no behavioural difference on the reachable paths.
+        drop(imp.response_subscription.borrow_mut().take());
+        drop(imp.activate_subscription.borrow_mut().take());
+
         // `const dbus = priv.dbus_connection orelse return;` (`:111`)
         let dbus = { imp.dbus_connection.borrow().clone() };
         let Some(dbus) = dbus else {
-            // Without a connection there are no subscriptions and no session, but
-            // the map may still hold state from a headless refresh.
+            // Without a connection there is no session to close, but the map may
+            // still hold state from a headless refresh.
             imp.map.replace(Vec::new());
             imp.handle.replace(None);
             return;
         };
-
-        // `:113-121` — dropping a `SignalSubscription` unsubscribes it.
-        drop(imp.response_subscription.borrow_mut().take());
-        drop(imp.activate_subscription.borrow_mut().take());
 
         // Close the existing session (`:123-139`).
         let handle = imp.handle.borrow_mut().take();
@@ -305,6 +314,13 @@ impl GlobalShortcuts {
         let Some(action) = action else {
             return;
         };
+
+        // PORT NOTE (rustty-only instrumentation): the reference logs nothing here.
+        // This line is reachable only AFTER the map lookup hit, so it separates
+        // "signal arrived" from "signal resolved to a bound action" for the live
+        // gate; the terminal success observable is `global shortcut action
+        // performed ok` in `application.rs`.
+        eprintln!("debug(gtk): global shortcut dispatch map-hit id={shortcut_id}");
 
         self.emit_by_name::<()>("trigger", &[&ActionBoxed(action)]);
     }
@@ -395,6 +411,13 @@ impl GlobalShortcuts {
 
                 // `params.get("(u@a{sv})", &response, &vardict)` (`:411`).
                 let params = signal.parameters;
+                // DELIBERATE DIVERGENCE: the fallback is 2 ("ended unexpectedly"),
+                // not 0. The oracle's `params.get` leaves `response` at its
+                // uninitialized/zero value on a malformed payload, which reads as
+                // 0 = success; treating an unparseable Response as success would
+                // run `on_response` against garbage results. Defaulting to the
+                // portal's own "ended unexpectedly" code is strictly safer and is
+                // intentional, not an oversight.
                 let response: u32 = params.child_value(0).get().unwrap_or(2);
                 let results = params.child_value(1);
 

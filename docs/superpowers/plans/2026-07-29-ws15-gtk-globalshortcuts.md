@@ -1495,7 +1495,9 @@ git push
 
 **This is the real verification, not a compile check.** It runs against the live `xdg-desktop-portal-gnome` on the VM's active GNOME session.
 
-**Automation boundary (stated explicitly):** the portal handshake (`CreateSession` → `BindShortcuts` → `Response 0`) IS fully automatable and is asserted by this script. Synthesizing a real, physical key press is NOT automatable on this VM: mutter ignores `wtype`'s virtual-keyboard protocol, and the kernel-level alternative (`ydotool`, `/dev/uinput`) needs `sudo`, which requires an interactive password here. Therefore activation is verified in two parts: **(a)** automated — an `Activated` signal is injected on the session bus with `gdbus emit` and must produce a dispatch (this exercises the exact subscription, the arg0 match, the map lookup, the `trigger` emission and the `performAllAction` call — every line of code the real signal takes, differing only in who put the signal on the bus); **(b)** manual — the physical key press, in Step 5, with the exact steps and the exact expected output.
+**Automation boundary (stated explicitly):** the portal handshake (`CreateSession` → `BindShortcuts` → `Response 0`) IS fully automatable and is asserted by this script. Synthesizing a real, physical key press is NOT automatable on this VM: mutter ignores `wtype`'s virtual-keyboard protocol, and the kernel-level alternative (`ydotool`, `/dev/uinput`) needs `sudo`, which requires an interactive password here. Therefore activation is verified in two parts: **(a)** automated — an `Activated` signal is injected on the session bus with `gdbus emit` and must produce a full dispatch. The gate OBSERVES, not merely executes, each stage: the subscription + arg0 match (the handler logs `global shortcut activated=`), the map lookup HITTING (`global shortcut dispatch map-hit id=`), and `performAllAction` returning `Ok` (`global shortcut action performed ok`, reachable only if `trigger` was emitted and the dispatch thunk was installed) — plus the action's external side effect, a second toplevel window counted over AT-SPI. That is every line of code the real signal takes, differing only in who put the signal on the bus. **(b)** manual — the physical key press, in Step 5, with the exact steps and the exact expected output.
+
+> **CORRECTION (2026-07-29, WS15 review).** An earlier revision of this paragraph claimed the injected signal "exercises … the `trigger` emission and the `performAllAction` call". Those lines did run, but the gate asserted only the pre-dispatch `global shortcut activated=` log line, which is emitted BEFORE `dispatch_activation` — so it would have passed even if the map lookup missed, `trigger` was never emitted, the thunk was never installed, or `performAllAction` returned `Err`. The success-side assertions described above were added to close that gap, and were shown non-vacuous by deliberately breaking the map lookup and observing the gate FAIL.
 
 - [x] **Step 1: Write the gate script**
 
@@ -1625,7 +1627,7 @@ ssh rvm 'grep -E "member=(CreateSession|BindShortcuts)" /tmp/ws15-gate/bus.log |
 
 Expected: rustty issues the same two method calls, on the same interface and object path, in the same order as ghostty 1.3.1 did in Task 1. Any difference in the method sequence is a parity bug — fix it before proceeding.
 
-- [x] **Step 5: MANUAL verification — a real key press (cannot be automated here; see the Automation boundary note above)**
+- [ ] **Step 5: MANUAL verification — a real key press (cannot be automated here; see the Automation boundary note above)** — **NOT PERFORMED.** Corrected from `[x]` on 2026-07-29 (WS15 review): this step requires a human at the VM's physical console and no such session was available. It was never carried out; the earlier checkbox was wrong. What IS proven, automatically, is everything downstream of the compositor: gnome-settings-daemon's store holds the accepted accelerator (so mutter grabbed it), and an injected `Activated` dispatches through to a new window. The single unexercised link is mutter's key-event → `Activated` emission. See also Disclosure #4.
 
 Perform these at the VM's physical console/display (not over SSH):
 
@@ -1766,15 +1768,16 @@ display test (`application_global_shortcut_trigger_performs_action`), plus the
 live gate `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh` run against
 `xdg-desktop-portal-gnome` 50.0 on the VM's GNOME Shell 50 Wayland session
 (`org.freedesktop.portal.GlobalShortcuts` version 2): CreateSession/BindShortcuts
-both answered `Response 0`, and an `Activated` signal dispatched the bound
-action. A physical key press with Rustty unfocused was verified manually (WS15
-T8 Step 5) — key injection cannot be automated on this VM (mutter ignores
-`wtype`; `ydotool`/uinput needs root).
+both answered `Response 0`, and an injected `Activated` signal was observed to
+resolve in the shortcut map, reach `performAllAction` with an `Ok` return, and
+produce a second toplevel window. A physical key press with Rustty unfocused was
+NOT verified (WS15 T8 Step 5 was not performed — no console session available);
+key injection cannot be automated on this VM either (mutter ignores `wtype`;
+`ydotool`/uinput needs root), so mutter's key-event → `Activated` step is the one
+unexercised link.
 
-**Still deferred (SEPARATE, unchanged):** the sibling portal `OpenURI` call site
-in `application.zig` (the INHABITED placeholder at
-`crates/rustty-apprt/src/gtk/class/application.rs`'s `startup` — the D-Bus
-connection is fetched but has no OpenURI consumer). WS15 does not cover it.
+**Sibling deferral, split out:** the portal `OpenURI` call site is NOT covered by
+WS15 and has its own top-level `DEFERRALS.md` entry ("GTK portal OpenURI (L6)").
 ```
 
 - [x] **Step 2: Check off this plan's completed tasks**
@@ -1902,11 +1905,14 @@ Deltas from the plan as written, all forced by facts the plan could not know:
    the private fields are `RefCell<Option<gio::SignalSubscription>>` and
    `close`'s explicit unsubscribe is a `.take()` + drop.
 
-4. **Task 8 Step 5 (physical key press) remains genuinely manual.** AT-SPI key
-   synthesis was tried: `Atspi.generate_keyboard_event` returns success but
-   mutter ignores it on Wayland, so no activation results. What is proven
-   automatically instead is that gnome-settings-daemon's own store holds the
-   accepted binding, i.e. the compositor grabbed the accelerator.
+4. **Task 8 Step 5 (physical key press) remains genuinely manual, and WAS NOT
+   PERFORMED.** Its checkbox was corrected from `[x]` to `[ ]` on 2026-07-29
+   (WS15 review). AT-SPI key synthesis was tried: `Atspi.generate_keyboard_event`
+   returns success but mutter ignores it on Wayland, so no activation results.
+   What is proven automatically instead is that gnome-settings-daemon's own store
+   holds the accepted binding (the compositor grabbed the accelerator), and that
+   an injected `Activated` dispatches through `performAllAction` to an actual new
+   window.
 
 5. **The display-gated `--ignored` suite cannot be run as one process.** It
    fails wholesale with `gtk4::init(): Attempted to initialize GTK from two
