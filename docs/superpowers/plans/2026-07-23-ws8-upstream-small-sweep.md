@@ -6,6 +6,25 @@
 
 **Architecture:** Each upstream commit is a small, focused Zig diff against pin-era ported files. WS8 ports them one at a time, assertion-for-assertion with their test hunks, grouped into task-groups by rustty subsystem (title/pwd/hyperlink aliasing in `terminal.rs`/`screen.rs`; selection geometry in `selection.rs`/`selection_gesture.rs`; PageList iteration/pin/scroll in `pagelist/*.rs`; search fixes in `search/*.rs`; pool/capacity invariants in `pagelist/grow.rs`+`page.rs`; the BL-2 madvise decommit path; the BL-6 kitty/gfx generation-stamp refactor; the BL-7 new OSC 72 parser). No commit is force-fit: any hunk without a portable Rust seam is recorded as debt with a one-line reason, never silently dropped.
 
+> **EXECUTION CORRECTIONS (recorded WS8 T12/T13, evidence-based — see the commit
+> bodies):**
+> 1. The Tech Stack line below says "the `libc` crate is deliberately NOT a
+>    dependency". `libc` IS already a `rustty-vt` dependency (for the POSIX
+>    shared-memory medium in `kitty/graphics_image.rs`, and dev-only in the bench
+>    harness). The binding constraint honored by T12 is the narrower and correct
+>    one from the Task 12 body: `madvise` is HAND-ROLLED in the style of
+>    `page.rs`'s `mmap`/`munmap`, and WS8 added no new dependency anywhere.
+> 2. Task 13's `#[ignore]`d-test RSS probe is UNWORKABLE and was replaced by a
+>    standalone example (`crates/rustty-vt/examples/rss_probe.rs`). A libtest
+>    build always has `cfg(test)` true, so `decommit_pool_item` compiles its
+>    memset arm — and the memset COMMITS the pages: the probe was run as written
+>    and recorded RSS going UP (grow 8.8 MiB -> clear 17.4 MiB). macOS also needs
+>    `ri_phys_footprint` (`proc_pid_rusage`) rather than `ps -o rss`, because
+>    `MADV_FREE_REUSABLE` moves the footprint, not the RSS.
+> 3. Task 18's expected `rustty-vt --lib` count of 2069 is stale: the branch's
+>    real baseline at `19d8a10` is 2058 (not 2035), and WS8 added 38 vt lib tests
+>    (more oracle tests were ported than the plan enumerated), giving **2096**.
+
 **Tech Stack:** Rust 1.93.1 (pinned), oracle git repo at `/Users/gael/projects/ghostty` (origin/main, fetched — the local pin `4749c4e` predates all WS8 commits), hand-rolled `extern "C"` `madvise` bindings for BL-2 in the style of `page.rs`'s `mmap`/`munmap` (the `libc` crate is deliberately NOT a dependency — see Task 12), existing `.port/tools/miri-run.sh` runner.
 
 ## Global Constraints (inherited from 2026-07-23-rustty-completion-ROADMAP.md)

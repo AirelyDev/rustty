@@ -480,6 +480,30 @@ fn selection_string_tw_check(point: SelectionStringFp) -> Result<(), OutOfMemory
     SELECTION_STRING_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
+// PORT NOTE: `04810273a`'s rollback test uses `std.testing.FailingAllocator` on
+// `alloc.create(Hyperlink)`. The Rust analogue of that allocation is the
+// `Box::new(source.dupe())` in `start_hyperlink_once`, which aborts rather than
+// returning on OOM, so the injectable seam is a tripwire fail point (same idiom
+// as `SELECTION_STRING_TW` above).
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum StartHyperlinkFp {
+    DupeLink,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static START_HYPERLINK_TW:
+        core::cell::RefCell<rustty_util::tripwire::Module<StartHyperlinkFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn start_hyperlink_tw_check(point: StartHyperlinkFp) -> Result<(), OutOfMemory> {
+    START_HYPERLINK_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 pub struct SelectLine<'a> {
     /// The pin of some part of the line to select.
     pub pin: Pin,
@@ -969,10 +993,15 @@ impl Screen {
                         }
 
                         // We move the top pin back in bounds to the top row.
+                        // const node = pages.pages.first.?;
+                        let node = pages.pages.first;
                         break 'start pages.track_pin(Pin {
-                            node: pages.pages.first,
+                            node,
+                            // .x = if (sel.rectangle) @min(ordered.tl.x, node.cols() - 1)
+                            //      else 0
                             x: if sel.rectangle {
-                                unsafe { (*ordered.tl).x }
+                                let cols = unsafe { (*node).data.size.cols };
+                                core::cmp::min(unsafe { (*ordered.tl).x }, cols - 1)
                             } else {
                                 0
                             },
@@ -987,16 +1016,23 @@ impl Screen {
                 // in bounds if it isn't already.
                 let end_pin: *mut Pin = match pin_remap.get(&ordered.br) {
                     Some(&p) => p,
-                    None => pages.track_pin(Pin {
-                        node: pages.pages.last,
-                        x: if sel.rectangle {
-                            unsafe { (*ordered.br).x }
-                        } else {
-                            pages.cols - 1
-                        },
-                        y: unsafe { (*pages.pages.last).data.size.rows } - 1,
-                        garbage: false,
-                    })?,
+                    None => {
+                        // const node = pages.pages.last.?;
+                        let node = pages.pages.last;
+                        let cols = unsafe { (*node).data.size.cols };
+                        pages.track_pin(Pin {
+                            node,
+                            // .x = if (sel.rectangle) @min(ordered.br.x, node.cols() - 1)
+                            //      else node.cols() - 1
+                            x: if sel.rectangle {
+                                core::cmp::min(unsafe { (*ordered.br).x }, cols - 1)
+                            } else {
+                                cols - 1
+                            },
+                            y: unsafe { (*node).data.size.rows } - 1,
+                            garbage: false,
+                        })?
+                    }
                 };
 
                 Some(Selection {
@@ -3052,7 +3088,9 @@ impl Screen {
                 hyperlink::HyperlinkId::Explicit(id.to_vec())
             } else {
                 let implicit = self.cursor.hyperlink_implicit_id;
-                self.cursor.hyperlink_implicit_id += 1;
+                // defer self.cursor.hyperlink_implicit_id +%= 1;
+                self.cursor.hyperlink_implicit_id =
+                    self.cursor.hyperlink_implicit_id.wrapping_add(1);
                 hyperlink::HyperlinkId::Implicit(implicit)
             },
         };
@@ -3069,7 +3107,9 @@ impl Screen {
                 Err(StartHyperlinkOnceError::OutOfMemory) => {
                     // An actual self.alloc OOM is a fatal error.
                     if implicit_inc {
-                        self.cursor.hyperlink_implicit_id -= 1;
+                        // .implicit => self.cursor.hyperlink_implicit_id -%= 1
+                        self.cursor.hyperlink_implicit_id =
+                            self.cursor.hyperlink_implicit_id.wrapping_sub(1);
                     }
                     return Err(pagelist::grow::IncreaseCapacityError::OutOfMemory);
                 }
@@ -3090,7 +3130,9 @@ impl Screen {
                         self.increase_capacity(unsafe { (*self.cursor.page_pin).node }, adj)
                     {
                         if implicit_inc {
-                            self.cursor.hyperlink_implicit_id -= 1;
+                            // .implicit => self.cursor.hyperlink_implicit_id -%= 1
+                        self.cursor.hyperlink_implicit_id =
+                            self.cursor.hyperlink_implicit_id.wrapping_sub(1);
                         }
                         return Err(e);
                     }
@@ -3108,16 +3150,20 @@ impl Screen {
         &mut self,
         source: hyperlink::Hyperlink,
     ) -> Result<(), StartHyperlinkOnceError> {
-        // End any prior hyperlink
-        self.end_hyperlink();
-
         // Allocate our new Hyperlink entry in non-page memory. This
         // lets us quickly get access to URI, ID.
         // PORT NOTE: `alloc.create(Hyperlink)` + `link.* = source.dupe(alloc)`
         // maps to a heap `Box`; `Box::into_raw` yields the `*mut Hyperlink` the
         // cursor stores. On the insert-error path we reclaim the box (mirroring
         // the reference's `errdefer alloc.destroy(link)` / `link.deinit`).
+        #[cfg(test)]
+        start_hyperlink_tw_check(StartHyperlinkFp::DupeLink)
+            .map_err(|_| StartHyperlinkOnceError::OutOfMemory)?;
         let link: *mut hyperlink::Hyperlink = Box::into_raw(Box::new(source.dupe()));
+
+        // End any prior hyperlink only after duplicating the new value. The
+        // source slices are allowed to reference our current hyperlink.
+        self.end_hyperlink();
 
         // Insert the hyperlink into page memory
         let page: *mut Page =
@@ -3301,9 +3347,30 @@ impl Screen {
         // errdefer if (!sel.tracked()) tracked_sel.deinit(self);
         let tracked_sel = if sel.tracked() { sel } else { sel.track(self)? };
 
-        // Untrack prior selection
+        // Untrack prior selection pins that aren't also owned by the
+        // replacement. A caller may pass our current tracked selection back to
+        // us by value, so releasing both old pins unconditionally would leave
+        // the replacement pointing at freed pool entries.
         if let Some(old) = self.selection.take() {
-            old.deinit(self);
+            // const new_bounds = tracked_sel.bounds.tracked;
+            // PORT NOTE: `track` always yields `Bounds::Tracked`, so the
+            // reference's unchecked `.tracked` field access is faithful; the
+            // untracked arm is unreachable.
+            let (new_start, new_end): (*mut Pin, *mut Pin) = match tracked_sel.bounds {
+                selection::Bounds::Tracked { start, end } => (start, end),
+                selection::Bounds::Untracked { .. } => unreachable!(),
+            };
+            match old.bounds {
+                selection::Bounds::Untracked { .. } => old.deinit(self),
+                selection::Bounds::Tracked { start, end } => {
+                    if !core::ptr::eq(start, new_start) && !core::ptr::eq(start, new_end) {
+                        self.pages.untrack_pin(start);
+                    }
+                    if !core::ptr::eq(end, new_start) && !core::ptr::eq(end, new_end) {
+                        self.pages.untrack_pin(end);
+                    }
+                }
+            }
         }
         self.selection = Some(tracked_sel);
         self.dirty.selection = true;
@@ -3528,7 +3595,8 @@ impl Screen {
                     // so we scan forward to find where our content ends.
                     if start_offset == 0 && cells[0].semantic_content() != v {
                         let mut prev = p.up(1).unwrap();
-                        prev.x = unsafe { (*p.node).data.size.cols } - 1;
+                        // prev.x = prev.node.cols() - 1;
+                        prev.x = unsafe { (*prev.node).data.size.cols } - 1;
                         break 'end_pin prev;
                     }
 
@@ -8231,6 +8299,70 @@ mod tests {
         s.deinit();
     }
 
+    // test "Screen: selectLine semantic boundary across mixed-width pages"
+    #[test]
+    fn screen_select_line_semantic_boundary_across_mixed_width_pages() {
+        let mut s = mkscreen(4, 2, 0);
+
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"ABCD").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"E").unwrap();
+
+        let first = s.pages.pages.first;
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 1,
+                garbage: false,
+            })
+            .unwrap();
+        let second = unsafe { (*first).next };
+        // PORT NOTE: `first.page().size.cols = 2` — a deliberate mid-reflow
+        // narrow page, written directly through the node pointer.
+        unsafe { (*first).data.size.cols = 2 };
+        s.pages.pause_integrity_checks(true);
+
+        assert_eq!(2 as size::CellCountInt, unsafe { (*first).data.size.cols });
+        assert_eq!(4 as size::CellCountInt, unsafe {
+            (*second).data.size.cols
+        });
+
+        let sel = s
+            .select_line(SelectLine {
+                pin: Pin {
+                    node: first,
+                    x: 1,
+                    y: 0,
+                    garbage: false,
+                },
+                whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                semantic_prompt_boundary: true,
+            })
+            .unwrap();
+        assert!(Pin {
+            node: first,
+            x: 0,
+            y: 0,
+            garbage: false
+        }
+        .eql(sel.start()));
+        assert!(Pin {
+            node: first,
+            x: 1,
+            y: 0,
+            garbage: false
+        }
+        .eql(sel.end()));
+        sel.deinit(&mut s);
+
+        s.pages.pause_integrity_checks(false);
+        s.deinit();
+    }
+
     // test "Screen: selectLine semantic all same content"
     #[test]
     fn screen_select_line_semantic_all_same_content() {
@@ -9422,6 +9554,93 @@ mod tests {
         }
 
         s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone clamps clipped selections to mixed-width pages"
+    #[test]
+    fn screen_clone_clamps_clipped_selections_to_mixed_width_pages() {
+        let mut s = mkscreen(4, 3, 0);
+
+        let first = s.pages.pages.first;
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 2,
+                garbage: false,
+            })
+            .unwrap();
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 1,
+                garbage: false,
+            })
+            .unwrap();
+        let middle = unsafe { (*first).next };
+        let last = unsafe { (*middle).next };
+        // PORT NOTE: `middle.page().size.cols = 2` — a deliberate mid-reflow
+        // narrow page, written directly through the node pointer.
+        unsafe { (*middle).data.size.cols = 2 };
+
+        s.select(Some(Selection::init(
+            Pin {
+                node: first,
+                x: 0,
+                y: 0,
+                garbage: false,
+            },
+            Pin {
+                node: last,
+                x: 3,
+                y: 0,
+                garbage: false,
+            },
+            false,
+        )))
+        .unwrap();
+        let mut linear = s
+            .clone(
+                Allocator,
+                point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+                Some(point::Point::Screen(point::Coordinate { x: 0, y: 1 })),
+            )
+            .unwrap();
+        let linear_end = linear.selection.unwrap().end();
+        let _ = linear_end.row_and_cell();
+        assert_eq!(1 as size::CellCountInt, linear_end.x);
+        linear.deinit();
+
+        s.select(Some(Selection::init(
+            Pin {
+                node: first,
+                x: 3,
+                y: 0,
+                garbage: false,
+            },
+            Pin {
+                node: last,
+                x: 3,
+                y: 0,
+                garbage: false,
+            },
+            true,
+        )))
+        .unwrap();
+        let mut rectangle = s
+            .clone(
+                Allocator,
+                point::Point::Screen(point::Coordinate { x: 0, y: 1 }),
+                None,
+            )
+            .unwrap();
+        let rectangle_start = rectangle.selection.unwrap().start();
+        let _ = rectangle_start.row_and_cell();
+        assert_eq!(1 as size::CellCountInt, rectangle_start.x);
+        rectangle.deinit();
+
         s.deinit();
     }
 
@@ -11956,6 +12175,32 @@ mod tests {
         s.deinit();
     }
 
+    // test "Screen: reselecting tracked selection preserves its pins"
+    #[test]
+    fn screen_reselecting_tracked_selection_preserves_its_pins() {
+        let mut s = mkscreen(10, 2, 0);
+
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 1, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 3, y: 0 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // `Selection` is `Copy`, so this hands our own tracked selection back
+        // to `select` by value — exactly the aliasing upstream fixes.
+        let current = s.selection.unwrap();
+        s.select(Some(current)).unwrap();
+
+        assert_eq!(selection::Order::Forward, s.selection.unwrap().order(&s));
+
+        s.deinit();
+    }
+
     // test "Screen: hyperlink start/end"
     #[test]
     fn screen_hyperlink_start_end() {
@@ -11979,6 +12224,90 @@ mod tests {
             let page = unsafe { &(*(*s.cursor.page_pin).node).data };
             assert_eq!(0usize, page.hyperlink_set.count());
         }
+        s.deinit();
+    }
+
+    // test "Screen: hyperlink accepts its current values"
+    #[test]
+    fn screen_hyperlink_accepts_its_current_values() {
+        let mut s = mkscreen(5, 5, 0);
+
+        s.start_hyperlink(b"http://example.com", Some(b"current"))
+            .unwrap();
+
+        // PORT NOTE: the reference passes `current.uri` / `current.id.explicit`
+        // straight back into `s.startHyperlink`. Rust's borrow checker forbids
+        // holding `&s.cursor.hyperlink` across the `&mut self` call, so we read
+        // the current values through the RAW pointer the cursor already stores
+        // (`cursor.hyperlink: Option<*mut Hyperlink>`) — the same aliasing the
+        // reference test exercises, expressed in the way this crate allows.
+        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        let (uri_ptr, uri_len) = unsafe { ((*link).uri.as_ptr(), (*link).uri.len()) };
+        let (id_ptr, id_len) = match unsafe { &(*link).id } {
+            crate::hyperlink::HyperlinkId::Explicit(v) => (v.as_ptr(), v.len()),
+            crate::hyperlink::HyperlinkId::Implicit(_) => unreachable!(),
+        };
+        let uri: &[u8] = unsafe { core::slice::from_raw_parts(uri_ptr, uri_len) };
+        let id: &[u8] = unsafe { core::slice::from_raw_parts(id_ptr, id_len) };
+        s.start_hyperlink(uri, Some(id)).unwrap();
+
+        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        assert_eq!(b"http://example.com".as_slice(), unsafe { &(&(*link).uri)[..] });
+        match unsafe { &(*link).id } {
+            crate::hyperlink::HyperlinkId::Explicit(v) => {
+                assert_eq!(b"current".as_slice(), &v[..])
+            }
+            crate::hyperlink::HyperlinkId::Implicit(_) => unreachable!(),
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: implicit hyperlink ID wraps" (success half)
+    #[test]
+    fn screen_implicit_hyperlink_id_wraps() {
+        let mut s = mkscreen(5, 5, 0);
+
+        s.cursor.hyperlink_implicit_id = size::OffsetInt::MAX;
+        s.start_hyperlink(b"http://example.com", None).unwrap();
+
+        assert_eq!(0 as size::OffsetInt, s.cursor.hyperlink_implicit_id);
+        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        match unsafe { &(*link).id } {
+            crate::hyperlink::HyperlinkId::Implicit(v) => {
+                assert_eq!(size::OffsetInt::MAX, *v)
+            }
+            crate::hyperlink::HyperlinkId::Explicit(_) => unreachable!(),
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: implicit hyperlink ID wraps" (allocation-failure rollback half)
+    #[test]
+    fn screen_implicit_hyperlink_id_wrap_rolls_back_on_allocation_failure() {
+        let mut s = mkscreen(5, 5, 0);
+
+        s.cursor.hyperlink_implicit_id = size::OffsetInt::MAX;
+        // PORT NOTE: the reference swaps in a `testing.FailingAllocator`; this
+        // crate's failure-injection seam is the tripwire fail point at the
+        // `Box::new(source.dupe())` allocation in `start_hyperlink_once`.
+        START_HYPERLINK_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(StartHyperlinkFp::DupeLink, OutOfMemory)
+        });
+        assert_eq!(
+            Err(pagelist::grow::IncreaseCapacityError::OutOfMemory),
+            s.start_hyperlink(b"http://example.com", None)
+        );
+        START_HYPERLINK_TW.with(|tw| {
+            tw.borrow_mut()
+                .end(rustty_util::tripwire::ResetMode::Reset)
+                .unwrap()
+        });
+
+        assert_eq!(size::OffsetInt::MAX, s.cursor.hyperlink_implicit_id);
+
         s.deinit();
     }
 

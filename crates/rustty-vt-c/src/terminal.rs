@@ -1009,18 +1009,27 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         // },
         Option_::Title => {
             // const str = if (value) |v| v.ptr[0..v.len] else "";
+            //
+            // PORT NOTE (WS8 T7): the caller is allowed to hand back the bytes
+            // `rustty_terminal_title()` returned, i.e. the terminal's OWN
+            // buffer. We therefore keep the source as a RAW pointer and use the
+            // alias-tolerant `set_title_raw`; forming a `&[u8]` here and
+            // passing it to `set_title` would make the source a strongly
+            // protected argument, and writing into it would be Stacked-Borrows
+            // UB (memory: `rust-mut-args-strongly-protected`).
             let ptr = value as *const LibString;
-            let str_: &[u8] = if !ptr.is_null() {
+            let (src, src_len): (*const u8, usize) = if !ptr.is_null() {
                 let s = unsafe { *ptr };
-                unsafe { core::slice::from_raw_parts(s.ptr, s.len) }
+                (s.ptr, s.len)
             } else {
-                b""
+                (b"".as_ptr(), 0)
             };
             // wrapper.terminal.setTitle(str) catch return .out_of_memory;
             // SAFETY: write the `title` sub-field of the terminal via the raw ptr;
-            // `set_title` takes `&mut Terminal` over a region disjoint from the
-            // stream handler's alias usage (no concurrent `vt_write` is live).
-            if unsafe { (*t).set_title(str_) }.is_err() {
+            // `set_title_raw` takes `&mut Terminal` over a region disjoint from
+            // the stream handler's alias usage (no concurrent `vt_write` is
+            // live), and tolerates `src` overlapping the terminal's title.
+            if unsafe { (*t).set_title_raw(src, src_len) }.is_err() {
                 return Result::OutOfMemory;
             }
         }
@@ -1029,14 +1038,16 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         //     wrapper.terminal.setPwd(str) catch return .out_of_memory;
         // },
         Option_::Pwd => {
+            // See the WS8 T7 PORT NOTE on `Option_::Title` above — the source
+            // may alias the terminal's own pwd buffer, so it stays raw.
             let ptr = value as *const LibString;
-            let str_: &[u8] = if !ptr.is_null() {
+            let (src, src_len): (*const u8, usize) = if !ptr.is_null() {
                 let s = unsafe { *ptr };
-                unsafe { core::slice::from_raw_parts(s.ptr, s.len) }
+                (s.ptr, s.len)
             } else {
-                b""
+                (b"".as_ptr(), 0)
             };
-            if unsafe { (*t).set_pwd(str_) }.is_err() {
+            if unsafe { (*t).set_pwd_raw(src, src_len) }.is_err() {
                 return Result::OutOfMemory;
             }
         }

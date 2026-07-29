@@ -20,6 +20,7 @@ pub mod hyperlink;
 pub mod iterm2;
 pub mod kitty_clipboard_protocol;
 pub mod kitty_color;
+pub mod kitty_dnd_protocol;
 pub mod kitty_text_sizing;
 pub mod mouse_shape;
 pub mod osc9;
@@ -53,6 +54,7 @@ mod tests {
         let _ = super::iterm2::parse as fn(_, _) -> _;
         let _ = super::kitty_clipboard_protocol::parse as fn(_, _) -> _;
         let _ = super::kitty_color::parse as fn(_, _) -> _;
+        let _ = super::kitty_dnd_protocol::parse as fn(_, _) -> _;
         let _ = super::kitty_text_sizing::parse as fn(_, _) -> _;
         let _ = super::mouse_shape::parse as fn(_, _) -> _;
         let _ = super::osc9::parse as fn(_, _) -> _;

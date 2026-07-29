@@ -125,6 +125,17 @@ int main() {
   }
   printf("\nKitty graphics storage is available.\n");
 
+  /*
+   * The storage-wide generation changes on every image/placement
+   * mutation. Renderers can compare it against the value from the
+   * previous frame: if unchanged, placement iteration and image
+   * staleness checks can be skipped entirely.
+   */
+  uint64_t generation = 0;
+  rustty_kitty_graphics_get(graphics, RUSTTY_KITTY_GRAPHICS_DATA_GENERATION,
+                            &generation);
+  printf("Storage generation: %llu\n", (unsigned long long)generation);
+
   /* Iterate placements to find the image ID. */
   RusttyKittyGraphicsPlacementIterator iter = NULL;
   if (rustty_kitty_graphics_placement_iterator_new(NULL, &iter) != RUSTTY_SUCCESS) {
@@ -170,20 +181,30 @@ int main() {
     uint32_t width = 0, height = 0, number = 0;
     RusttyKittyImageFormat format = 0;
     size_t data_len = 0;
+    uint64_t image_generation = 0;
 
-    rustty_kitty_graphics_image_get_multi(image, 5,
+    /*
+     * The per-image generation changes on every add/replace of this
+     * image ID, so it detects retransmissions even when the size and
+     * format are unchanged. Texture caches should key staleness on it.
+     */
+    rustty_kitty_graphics_image_get_multi(image, 6,
         (RusttyKittyGraphicsImageData[]){
             RUSTTY_KITTY_IMAGE_DATA_NUMBER,
             RUSTTY_KITTY_IMAGE_DATA_WIDTH,
             RUSTTY_KITTY_IMAGE_DATA_HEIGHT,
             RUSTTY_KITTY_IMAGE_DATA_FORMAT,
             RUSTTY_KITTY_IMAGE_DATA_DATA_LEN,
+            RUSTTY_KITTY_IMAGE_DATA_GENERATION,
         },
-        (void*[]){ &number, &width, &height, &format, &data_len },
+        (void*[]){ &number, &width, &height, &format, &data_len,
+                   &image_generation },
         NULL);
 
-    printf("    image: number=%u size=%ux%u format=%d data_len=%zu\n",
-           number, width, height, format, data_len);
+    printf("    image: number=%u size=%ux%u format=%d data_len=%zu "
+           "generation=%llu\n",
+           number, width, height, format, data_len,
+           (unsigned long long)image_generation);
 
     /* Compute the rendered pixel size and grid size. */
     uint32_t px_w = 0, px_h = 0, cols = 0, rows = 0;

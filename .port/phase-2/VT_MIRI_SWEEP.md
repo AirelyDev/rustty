@@ -16,6 +16,7 @@ over-reports FAIL under memory pressure — see below).
 | zlib FFI-limit | 3 | `image_load_rgb_zlib_compressed_*` — Miri can't call `inflateInit2_` → ASan route |
 | Miri ICE | 1 | `search::thread::search_thread` (rustc `operand.rs:160` interpreter bug) → exception |
 | parallelism false-FAIL | 8 | pass clean in isolation → **no exception** (final lane runs serial/low-parallel) |
+| Raw syscall memory mgmt | 2 sites | `page.rs` mmap/munmap + `pagelist/mod.rs` madvise decommit (WS8 BL-2) → MIRI_EXCEPTIONS.md "Category 2"; the `#[cfg(test)]` arms ARE Miri-run, only the OS hints are excepted (complement: `examples/rss_probe.rs`, 9.0 MiB returned on macOS) |
 
 **Method note (R5-critical):** running 6–8 concurrent memory-hungry Miri processes on
 multi-page tests causes OOM/ICE-cascade false failures. UB is deterministic (unaffected);

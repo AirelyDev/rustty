@@ -180,12 +180,15 @@ impl Selection {
             Order::Reverse => self.end(),
             Order::MirroredForward => {
                 let mut p = self.start();
-                p.x = self.end().x;
+                // p.x = @min(self.end().x, p.node.cols() - 1);
+                let cols = unsafe { (*p.node).data.size.cols };
+                p.x = core::cmp::min(self.end().x, cols - 1);
                 p
             }
             Order::MirroredReverse => {
                 let mut p = self.end();
-                p.x = self.start().x;
+                let cols = unsafe { (*p.node).data.size.cols };
+                p.x = core::cmp::min(self.start().x, cols - 1);
                 p
             }
         }
@@ -198,12 +201,14 @@ impl Selection {
             Order::Reverse => self.start(),
             Order::MirroredForward => {
                 let mut p = self.end();
-                p.x = self.start().x;
+                let cols = unsafe { (*p.node).data.size.cols };
+                p.x = core::cmp::min(self.start().x, cols - 1);
                 p
             }
             Order::MirroredReverse => {
                 let mut p = self.start();
-                p.x = self.end().x;
+                let cols = unsafe { (*p.node).data.size.cols };
+                p.x = core::cmp::min(self.end().x, cols - 1);
                 p
             }
         }
@@ -374,6 +379,11 @@ impl Selection {
         br: point::Coordinate,
         p: point::Coordinate,
     ) -> Option<Selection> {
+        // _ = s;
+        // PORT NOTE: upstream drops the screen read entirely (`_ = s;`). The
+        // parameter must stay for the `contained_row` call site's signature, so
+        // we mirror the discard.
+        let _ = s;
         if p.y < tl.y || p.y > br.y {
             return None;
         }
@@ -384,12 +394,16 @@ impl Selection {
             return Some(Selection::init(
                 {
                     let mut copy: Pin = pin;
-                    copy.x = tl.x;
+                    // copy.x = @min(tl.x, copy.node.cols() - 1);
+                    let cols = unsafe { (*copy.node).data.size.cols };
+                    copy.x = core::cmp::min(tl.x, cols - 1);
                     copy
                 },
                 {
                     let mut copy: Pin = pin;
-                    copy.x = br.x;
+                    // copy.x = @min(br.x, copy.node.cols() - 1);
+                    let cols = unsafe { (*copy.node).data.size.cols };
+                    copy.x = core::cmp::min(br.x, cols - 1);
                     copy
                 },
                 true,
@@ -407,7 +421,8 @@ impl Selection {
                 tl_pin,
                 {
                     let mut copy: Pin = pin;
-                    copy.x = s.pages.cols - 1;
+                    // copy.x = copy.node.cols() - 1;
+                    copy.x = unsafe { (*copy.node).data.size.cols } - 1;
                     copy
                 },
                 false,
@@ -439,7 +454,8 @@ impl Selection {
             },
             {
                 let mut copy: Pin = pin;
-                copy.x = s.pages.cols - 1;
+                // copy.x = copy.node.cols() - 1;
+                copy.x = unsafe { (*copy.node).data.size.cols } - 1;
                 copy
             },
             false,
@@ -1283,6 +1299,169 @@ mod tests {
             assert!(!sel.contains(&s, pin_screen(&s, 2, 1)));
             assert!(!sel.contains(&s, pin_screen(&s, 12, 1)));
         }
+
+        s.deinit();
+    }
+
+    // test "Selection: rectangle corners clamp across mixed-width pages"
+    #[test]
+    fn selection_rectangle_corners_clamp_across_mixed_width_pages() {
+        let mut s = screen_init(4, 2, 0);
+
+        let first = s.pages.pages.first;
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 1,
+                garbage: false,
+            })
+            .unwrap();
+        let second = unsafe { (*first).next };
+        // PORT NOTE: `second.page().size.cols = 2` — a deliberate mid-reflow
+        // narrow page, written directly through the node pointer.
+        unsafe { (*second).data.size.cols = 2 };
+
+        let sel = Selection::init(
+            Pin {
+                node: first,
+                x: 3,
+                y: 0,
+                garbage: false,
+            },
+            Pin {
+                node: second,
+                x: 1,
+                y: 0,
+                garbage: false,
+            },
+            true,
+        );
+        assert_eq!(Order::MirroredForward, sel.order(&s));
+
+        let bottom_right = sel.bottom_right(&s);
+        // Resolving the pin is what panics when it is out of bounds.
+        let _ = bottom_right.row_and_cell();
+        assert!(Pin {
+            node: second,
+            x: 1,
+            y: 0,
+            garbage: false
+        }
+        .eql(bottom_right));
+
+        s.deinit();
+    }
+
+    // test "Selection: containedRow clamps mixed-width pages"
+    #[test]
+    fn selection_contained_row_clamps_mixed_width_pages() {
+        let mut s = screen_init(4, 3, 0);
+
+        let first = s.pages.pages.first;
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 2,
+                garbage: false,
+            })
+            .unwrap();
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 1,
+                garbage: false,
+            })
+            .unwrap();
+        let middle = unsafe { (*first).next };
+        let last = unsafe { (*middle).next };
+        unsafe { (*middle).data.size.cols = 2 };
+
+        let linear = Selection::init(
+            Pin {
+                node: first,
+                x: 1,
+                y: 0,
+                garbage: false,
+            },
+            Pin {
+                node: last,
+                x: 1,
+                y: 0,
+                garbage: false,
+            },
+            false,
+        );
+        let linear_row = linear
+            .contained_row(
+                &s,
+                Pin {
+                    node: middle,
+                    x: 0,
+                    y: 0,
+                    garbage: false,
+                },
+            )
+            .unwrap();
+        let _ = linear_row.end().row_and_cell();
+        assert!(Pin {
+            node: middle,
+            x: 0,
+            y: 0,
+            garbage: false
+        }
+        .eql(linear_row.start()));
+        assert!(Pin {
+            node: middle,
+            x: 1,
+            y: 0,
+            garbage: false
+        }
+        .eql(linear_row.end()));
+
+        let rectangle = Selection::init(
+            Pin {
+                node: first,
+                x: 1,
+                y: 0,
+                garbage: false,
+            },
+            Pin {
+                node: last,
+                x: 3,
+                y: 0,
+                garbage: false,
+            },
+            true,
+        );
+        let rectangle_row = rectangle
+            .contained_row(
+                &s,
+                Pin {
+                    node: middle,
+                    x: 0,
+                    y: 0,
+                    garbage: false,
+                },
+            )
+            .unwrap();
+        let _ = rectangle_row.end().row_and_cell();
+        assert!(Pin {
+            node: middle,
+            x: 1,
+            y: 0,
+            garbage: false
+        }
+        .eql(rectangle_row.start()));
+        assert!(Pin {
+            node: middle,
+            x: 1,
+            y: 0,
+            garbage: false
+        }
+        .eql(rectangle_row.end()));
 
         s.deinit();
     }

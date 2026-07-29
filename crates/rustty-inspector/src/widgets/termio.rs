@@ -1141,6 +1141,7 @@ fn osc_tag_name(osc: &OscCommand) -> &'static str {
         OscCommand::ConemuComment(_) => "conemu_comment",
         OscCommand::KittyTextSizing(_) => "kitty_text_sizing",
         OscCommand::KittyClipboardProtocol(_) => "kitty_clipboard_protocol",
+        OscCommand::KittyDndProtocol(_) => "kitty_dnd_protocol",
         OscCommand::ContextSignal(_) => "context_signal",
     }
 }
@@ -1272,6 +1273,19 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
 
         // kitty_clipboard_protocol: OSC { metadata: []const u8, payload: ?[]const u8, terminator: enum }
         OscCommand::KittyClipboardProtocol(o) => {
+            md.put(b"metadata", dupe_z(&o.metadata));
+            match &o.payload {
+                Some(bytes) => md.put(b"payload", dupe_z(bytes)),
+                None => md.put(b"payload", dupe_z(b"(unset)")),
+            }
+            md.put(
+                b"terminator",
+                dupe_z(terminator_tag(o.terminator).as_bytes()),
+            );
+        }
+
+        // kitty_dnd_protocol: OSC { metadata: []const u8, payload: ?[]const u8, terminator: enum }
+        OscCommand::KittyDndProtocol(o) => {
             md.put(b"metadata", dupe_z(&o.metadata));
             match &o.payload {
                 Some(bytes) => md.put(b"payload", dupe_z(bytes)),

@@ -55,6 +55,63 @@ top. Criterion 4 holds: each is heavy due to allocation volume (oversized/
 non-standard pages, multi-page reflow, capacity-exceeding grapheme/style/hyperlink
 churn), not a logic anomaly.
 
+## Category 2 — raw syscall memory management (outside Miri's model)
+
+Miri models Rust's abstract machine; it does not model `mmap`/`munmap`/`madvise`
+on OS-backed pages. Code that manages its own mappings therefore cannot be run
+under Miri at all — this is a *model* limitation, not a soundness gap, and it is
+NOT a regression to chase.
+
+| Site | Syscall | Miri coverage | Complement |
+|---|---|---|---|
+| `crates/rustty-vt/src/page.rs` `Backing::alloc`/`Backing::free` (~250-313) | `mmap`/`munmap` | none (pre-existing; no `.port/phase-2/mirihar-*` touches `page.rs` or `pagelist`) | native + ASan over all 210 PageList tests; page tracking allocator asserts no leaks |
+| `crates/rustty-vt/src/pagelist/mod.rs` `decommit_pool_item`/`recommit_pool_item` (WS8 BL-2, oracle `896aca499`) | `madvise` (`MADV_DONTNEED` on Linux; `MADV_FREE_REUSABLE`/`MADV_FREE_REUSE`/`MADV_FREE` on Darwin) | none — the `madvise` arms are `#[cfg(not(test))]`, so Miri and `cargo test -p rustty-vt` both execute the plain-memset `#[cfg(test)]` arm instead, which IS Miri-provable and IS what upholds the pool zero-invariant. The `#[cfg(test)]` gate is crate-local to `rustty-vt`: when `rustty-vt` is compiled as an ordinary (non-test) dependency of another crate's test build — e.g. `cargo test -p rustty-vt-c` — `not(test)` is true for it and the real `madvise` arms run, so those downstream test runs are NOT covered by this Miri gap; they run outside Miri, same as any other native execution | native + ASan; the zero-invariant unit tests `pagelist_decommit_pool_item_zeroes_the_dirty_region` and `pagelist_destroyed_pool_page_reuse_is_zeroed`; the empirical footprint probe `crates/rustty-vt/examples/rss_probe.rs` |
+
+Criterion note: the WS8 entry is *stronger* than the `page.rs` precedent, because
+the exact code path Miri would need to verify (the zero-invariant) is still run
+under Miri via the `#[cfg(test)]` arm. Only the OS-hint calls — which have no
+observable effect on program semantics, only on RSS/footprint — are unverifiable,
+and those are covered by the probe below.
+
+### The empirical footprint probe (WS8 T13)
+
+**Why it is an EXAMPLE, not an `#[ignore]`d test.** The WS8 plan specified an
+`#[ignore]`d test run via `cargo test --release -- --ignored`. That does not work
+and was *measured* not to work: a libtest build always has `cfg(test)` true, so
+`decommit_pool_item` compiles its memset arm, and the memset **commits** the
+pages — the probe recorded RSS going *up* (grow 8.8 MiB → clear 17.4 MiB) rather
+than down. A standalone example is the only build in which the library's
+production `cfg` arms and production page geometry are compiled; this is the same
+reason `examples/alloc_bench.rs` exists (see `crates/rustty-vt/Cargo.toml`, the
+`alloc-bench` feature comment). The probe therefore lives at
+`crates/rustty-vt/examples/rss_probe.rs`.
+
+**macOS metric.** `MADV_FREE_REUSABLE` removes pages from the process *physical
+footprint* immediately; it does not necessarily move `ps -o rss`. The probe reads
+`ri_phys_footprint` via `proc_pid_rusage(RUSAGE_INFO_V0)` (hand-rolled
+`extern "C"`, matching the crate's no-`libc` convention). Linux reads
+`/proc/self/statm` resident pages, which `MADV_DONTNEED` does move.
+
+Run:
+
+```bash
+cargo run -p rustty-vt --example rss_probe --release
+```
+
+MEASURED, macOS 15 / aarch64, 2026-07-28:
+
+| Build | before | after_grow | after_clear | returned |
+|---|---|---|---|---|
+| with decommit (landed) | 1.5 MiB | 11.4 MiB | **2.4 MiB** | **9.0 MiB** |
+| negative control (`madvise` call disabled, memset only) | 1.5 MiB | 11.4 MiB | 11.4 MiB | 0.0 MiB |
+
+The control was produced by disabling only the `MADV_FREE_REUSABLE` call and
+rebuilding, then reverting — it isolates the return-to-OS to the `madvise` hint.
+
+**Linux (`MADV_DONTNEED`) arm: NOT YET RUN.** The WS8 executor was scoped to
+macOS only and explicitly barred from the `rvm` Linux gate. Outstanding action:
+run the same command on `rvm` and append the row.
+
 ## Revisiting
 
 These are documented **debt, not permanent**: a faster Miri, a Linux box with more

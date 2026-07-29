@@ -114,18 +114,20 @@ pub struct PlacementIteratorWrapper {
 }
 
 /// C: GhosttyKittyGraphicsData -> RusttyKittyGraphicsData (R2)
-// pub const Data = enum(c_int) { invalid = 0, placement_iterator = 1, ... };
+// pub const Data = enum(c_int) { invalid = 0, placement_iterator = 1, generation = 2, ... };
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Data {
     Invalid = 0,
     PlacementIterator = 1,
+    Generation = 2,
 }
 
 // PORT NOTE: the reference `Data.OutType` maps `.invalid => void`,
-// `.placement_iterator => PlacementIterator`. The typed body below dispatches on
-// the tag and casts `out` to the matching type, so the comptime `OutType`
-// function is realized inline (no separate type-level function).
+// `.placement_iterator => PlacementIterator`, `.generation => u64`. The typed
+// body below dispatches on the tag and casts `out` to the matching type, so the
+// comptime `OutType` function is realized inline (no separate type-level
+// function).
 
 /// C: GhosttyKittyGraphicsPlacementData -> RusttyKittyGraphicsPlacementData (R2)
 // pub const PlacementData = enum(c_int) { invalid=0, image_id=1, ..., z=12 };
@@ -170,7 +172,7 @@ pub unsafe fn get(graphics_: KittyGraphics, data: Data, out: *mut c_void) -> Res
     match data {
         Data::Invalid => Result::InvalidValue,
         // inline else => getTyped(graphics_, comptime_data, @ptrCast(@alignCast(out)))
-        Data::PlacementIterator => unsafe { get_typed(graphics_, data, out) },
+        Data::PlacementIterator | Data::Generation => unsafe { get_typed(graphics_, data, out) },
     }
 }
 
@@ -220,6 +222,13 @@ unsafe fn get_typed(graphics_: KittyGraphics, data: Data, out: *mut c_void) -> R
                 (*it).inner = Some(iter_static);
                 (*it).entry = None;
             }
+            Result::Success
+        }
+        // .generation => out.* = storage.generation,
+        Data::Generation => {
+            // SAFETY: `out` points to a writable `u64` (caller contract);
+            // `storage` is the live `ImageStorage` behind the handle.
+            unsafe { *(out as *mut u64) = (*storage).generation };
             Result::Success
         }
     }
@@ -288,7 +297,7 @@ const _: fn() = || {
 };
 
 /// C: GhosttyKittyGraphicsImageData -> RusttyKittyGraphicsImageData (R2)
-// pub const ImageData = enum(c_int) { invalid=0, id=1, ..., data_len=8 };
+// pub const ImageData = enum(c_int) { invalid=0, id=1, ..., data_len=8, generation=9 };
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ImageData {
@@ -301,11 +310,13 @@ pub enum ImageData {
     Compression = 6,
     DataPtr = 7,
     DataLen = 8,
+    Generation = 9,
 }
 
 // PORT NOTE: the reference `ImageData.OutType` maps `.id`/`.number`/`.width`/
 // `.height` to `u32`, `.format` to `ImageFormat`, `.compression` to
-// `ImageCompression`, `.data_ptr` to `[*]const u8`, `.data_len` to `usize`.
+// `ImageCompression`, `.data_ptr` to `[*]const u8`, `.data_len` to `usize`,
+// `.generation` to `u64`.
 // Realized inline in `image_get_typed`.
 
 // pub fn image_get_handle(graphics_, image_id) callconv(...) ImageHandle {
@@ -453,6 +464,8 @@ unsafe fn image_get_typed(image_: ImageHandle, data: ImageData, out: *mut c_void
         ImageData::DataPtr => unsafe { *(out as *mut *const u8) = image.data.as_ptr() },
         // .data_len => out.* = image.data.len,
         ImageData::DataLen => unsafe { *(out as *mut usize) = image.data.len() },
+        // .generation => out.* = image.generation,
+        ImageData::Generation => unsafe { *(out as *mut u64) = image.generation },
     }
 
     // return .success;
@@ -3342,6 +3355,463 @@ mod tests {
                 values.as_ptr(),
                 core::ptr::null_mut(),
             )
+        });
+    }
+
+    // test "storage generation via get"
+    #[test]
+    fn storage_generation_via_get() {
+        if !KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|ta| {
+            let mut t: terminal_c::Terminal = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(
+                    ta as *const CAllocator,
+                    &mut t,
+                    terminal_c::Options {
+                        cols: 80,
+                        rows: 24,
+                        max_scrollback: 0,
+                    },
+                )
+            });
+
+            let mut graphics: KittyGraphics = core::ptr::null_mut();
+            let refresh = |t: terminal_c::Terminal, graphics: &mut KittyGraphics| {
+                assert_eq!(Result::Success, unsafe {
+                    terminal_c::get(
+                        t,
+                        terminal_c::TerminalData::KittyGraphics,
+                        graphics as *mut KittyGraphics as *mut c_void,
+                    )
+                });
+            };
+            refresh(t, &mut graphics);
+
+            // Fresh storage: generation zero.
+            let mut gen0: u64 = 99;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    graphics,
+                    Data::Generation,
+                    &mut gen0 as *mut u64 as *mut c_void,
+                )
+            });
+            assert_eq!(0u64, gen0);
+
+            // Transmit bumps the generation.
+            vt_write(t, b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\");
+            refresh(t, &mut graphics);
+            let mut gen1: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    graphics,
+                    Data::Generation,
+                    &mut gen1 as *mut u64 as *mut c_void,
+                )
+            });
+            assert!(gen1 > gen0);
+
+            // Unrelated terminal writes (plain text) do not bump it.
+            vt_write(t, b"hello world");
+            refresh(t, &mut graphics);
+            let mut gen2: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    graphics,
+                    Data::Generation,
+                    &mut gen2 as *mut u64 as *mut c_void,
+                )
+            });
+            assert_eq!(gen1, gen2);
+
+            // Placement bumps it.
+            vt_write(t, b"\x1b_Ga=p,i=1,p=1,c=1,r=1;\x1b\\");
+            refresh(t, &mut graphics);
+            let mut gen3: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    graphics,
+                    Data::Generation,
+                    &mut gen3 as *mut u64 as *mut c_void,
+                )
+            });
+            assert!(gen3 > gen2);
+
+            // Delete bumps it.
+            vt_write(t, b"\x1b_Ga=d,d=A\x1b\\");
+            refresh(t, &mut graphics);
+            let mut gen4: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    graphics,
+                    Data::Generation,
+                    &mut gen4 as *mut u64 as *mut c_void,
+                )
+            });
+            assert!(gen4 > gen3);
+
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // test "image generation detects same-sized retransmission"
+    #[test]
+    fn image_generation_detects_same_sized_retransmission() {
+        if !KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|ta| {
+            let mut t: terminal_c::Terminal = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(
+                    ta as *const CAllocator,
+                    &mut t,
+                    terminal_c::Options {
+                        cols: 80,
+                        rows: 24,
+                        max_scrollback: 0,
+                    },
+                )
+            });
+
+            // Transmit a 1x2 RGB image with id=1.
+            vt_write(t, b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\");
+
+            let mut graphics: KittyGraphics = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::get(
+                    t,
+                    terminal_c::TerminalData::KittyGraphics,
+                    &mut graphics as *mut KittyGraphics as *mut c_void,
+                )
+            });
+
+            let mut gen1: u64 = 0;
+            let mut w1: u32 = 0;
+            let mut h1: u32 = 0;
+            let mut len1: usize = 0;
+            {
+                let img = unsafe { image_get_handle(graphics, 1) };
+                assert!(!img.is_null());
+                assert_eq!(Result::Success, unsafe {
+                    image_get(
+                        img,
+                        ImageData::Generation,
+                        &mut gen1 as *mut u64 as *mut c_void,
+                    )
+                });
+                assert_eq!(Result::Success, unsafe {
+                    image_get(img, ImageData::Width, &mut w1 as *mut u32 as *mut c_void)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    image_get(img, ImageData::Height, &mut h1 as *mut u32 as *mut c_void)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    image_get(
+                        img,
+                        ImageData::DataLen,
+                        &mut len1 as *mut usize as *mut c_void,
+                    )
+                });
+                assert!(gen1 > 0);
+            }
+
+            // Retransmit the same ID with identical dimensions but different
+            // pixel bytes. All size heuristics match; only the generation
+            // reveals the change.
+            vt_write(t, b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;AAAAAAAA\x1b\\");
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::get(
+                    t,
+                    terminal_c::TerminalData::KittyGraphics,
+                    &mut graphics as *mut KittyGraphics as *mut c_void,
+                )
+            });
+
+            {
+                let img = unsafe { image_get_handle(graphics, 1) };
+                assert!(!img.is_null());
+                let mut gen2: u64 = 0;
+                let mut w2: u32 = 0;
+                let mut h2: u32 = 0;
+                let mut len2: usize = 0;
+                assert_eq!(Result::Success, unsafe {
+                    image_get(
+                        img,
+                        ImageData::Generation,
+                        &mut gen2 as *mut u64 as *mut c_void,
+                    )
+                });
+                assert_eq!(Result::Success, unsafe {
+                    image_get(img, ImageData::Width, &mut w2 as *mut u32 as *mut c_void)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    image_get(img, ImageData::Height, &mut h2 as *mut u32 as *mut c_void)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    image_get(
+                        img,
+                        ImageData::DataLen,
+                        &mut len2 as *mut usize as *mut c_void,
+                    )
+                });
+
+                // Size heuristics are identical...
+                assert_eq!(w1, w2);
+                assert_eq!(h1, h2);
+                assert_eq!(len1, len2);
+
+                // ...but the generation changed.
+                assert!(gen2 > gen1);
+            }
+
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // test "image generation via image_get_multi"
+    #[test]
+    fn image_generation_via_image_get_multi() {
+        if !KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|ta| {
+            let mut t: terminal_c::Terminal = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(
+                    ta as *const CAllocator,
+                    &mut t,
+                    terminal_c::Options {
+                        cols: 80,
+                        rows: 24,
+                        max_scrollback: 0,
+                    },
+                )
+            });
+
+            vt_write(t, b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\");
+
+            let mut graphics: KittyGraphics = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::get(
+                    t,
+                    terminal_c::TerminalData::KittyGraphics,
+                    &mut graphics as *mut KittyGraphics as *mut c_void,
+                )
+            });
+            let img = unsafe { image_get_handle(graphics, 1) };
+            assert!(!img.is_null());
+
+            let mut id: u32 = 0;
+            let mut generation: u64 = 0;
+            let mut written: usize = 0;
+            let keys = [ImageData::Id, ImageData::Generation];
+            let values: [*mut c_void; 2] = [
+                &mut id as *mut u32 as *mut c_void,
+                &mut generation as *mut u64 as *mut c_void,
+            ];
+            assert_eq!(Result::Success, unsafe {
+                image_get_multi(
+                    img,
+                    keys.len(),
+                    keys.as_ptr(),
+                    values.as_ptr(),
+                    &mut written,
+                )
+            });
+            assert_eq!(keys.len(), written);
+            assert_eq!(1, id);
+            assert!(generation > 0);
+
+            // The image stamp came from the same sequence as (and here, the
+            // same event as) the storage stamp.
+            let mut storage_gen: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    graphics,
+                    Data::Generation,
+                    &mut storage_gen as *mut u64 as *mut c_void,
+                )
+            });
+            assert_eq!(storage_gen, generation);
+
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // test "image compression and format always report decoded data"
+    #[test]
+    fn image_compression_and_format_always_report_decoded_data() {
+        if !KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|ta| {
+            let mut t: terminal_c::Terminal = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(
+                    ta as *const CAllocator,
+                    &mut t,
+                    terminal_c::Options {
+                        cols: 80,
+                        rows: 24,
+                        max_scrollback: 0,
+                    },
+                )
+            });
+
+            // Transmit a zlib-compressed 1x1 RGB image (o=z). The payload is
+            // base64(zlib([0xFF, 0x00, 0x00])).
+            //
+            // zlib stream for the 3 bytes FF 00 00 (stored block).
+            // 78 01: zlib header; 01: final stored block; 03 00 len;
+            // FC FF nlen; FF 00 00 data; adler32 = 0x03000100 (big endian).
+            //   raw = [0x78,0x01,0x01,0x03,0x00,0xFC,0xFF,0xFF,0x00,0x00,0x03,0x00,0x01,0x00]
+            //
+            // PORT NOTE: the reference computes the base64 at `comptime` with
+            // `std.base64.standard.Encoder`. Rust has no comptime base64 in
+            // std, so the encoding is inlined as the literal below (verified:
+            // `base64(raw) == "eAEBAwD8//8AAAMAAQA="` and
+            // `zlib_inflate(raw) == FF 00 00`).
+            vt_write(
+                t,
+                b"\x1b_Ga=t,t=d,f=24,o=z,i=1,s=1,v=1;eAEBAwD8//8AAAMAAQA=\x1b\\",
+            );
+
+            let mut graphics: KittyGraphics = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::get(
+                    t,
+                    terminal_c::TerminalData::KittyGraphics,
+                    &mut graphics as *mut KittyGraphics as *mut c_void,
+                )
+            });
+            let img = unsafe { image_get_handle(graphics, 1) };
+            assert!(!img.is_null());
+
+            // Compression must report NONE: the data was inflated at
+            // transmission time.
+            let mut comp: ImageCompression = ImageCompression::ZlibDeflate;
+            assert_eq!(Result::Success, unsafe {
+                image_get(
+                    img,
+                    ImageData::Compression,
+                    &mut comp as *mut ImageCompression as *mut c_void,
+                )
+            });
+            assert_eq!(ImageCompression::None, comp);
+
+            // Data is the decoded pixels: width * height * bpp.
+            let mut data_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                image_get(
+                    img,
+                    ImageData::DataLen,
+                    &mut data_len as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(3usize, data_len);
+
+            let mut data_ptr: *const u8 = core::ptr::null();
+            assert_eq!(Result::Success, unsafe {
+                image_get(
+                    img,
+                    ImageData::DataPtr,
+                    &mut data_ptr as *mut *const u8 as *mut c_void,
+                )
+            });
+            assert_eq!(&[0xFFu8, 0x00, 0x00][..], unsafe {
+                core::slice::from_raw_parts(data_ptr, data_len)
+            });
+
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // test "generation never recurs across resets and screen switches"
+    #[test]
+    fn generation_never_recurs_across_resets_and_screen_switches() {
+        if !KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|ta| {
+            let mut t: terminal_c::Terminal = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(
+                    ta as *const CAllocator,
+                    &mut t,
+                    terminal_c::Options {
+                        cols: 80,
+                        rows: 24,
+                        max_scrollback: 0,
+                    },
+                )
+            });
+
+            let mut graphics: KittyGraphics = core::ptr::null_mut();
+            let mut gen: u64 = 0;
+
+            macro_rules! read_gen {
+                () => {{
+                    assert_eq!(Result::Success, unsafe {
+                        terminal_c::get(
+                            t,
+                            terminal_c::TerminalData::KittyGraphics,
+                            &mut graphics as *mut KittyGraphics as *mut c_void,
+                        )
+                    });
+                    assert_eq!(Result::Success, unsafe {
+                        get(
+                            graphics,
+                            Data::Generation,
+                            &mut gen as *mut u64 as *mut c_void,
+                        )
+                    });
+                }};
+            }
+
+            let transmit = b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\";
+
+            // Transmit on the main screen.
+            vt_write(t, transmit);
+            read_gen!();
+            let gen_main = gen;
+            assert!(gen_main > 0);
+
+            // Switch to the alternate screen: its storage is untouched, so its
+            // generation is zero (which always means "empty").
+            vt_write(t, b"\x1b[?1049h");
+            read_gen!();
+            assert_eq!(0u64, gen);
+
+            // A transmit on the alt screen draws from the same global sequence,
+            // so its stamp is strictly greater than anything seen on the main
+            // screen: an embedder keying a cache on the generation value alone
+            // can never confuse the two storages.
+            vt_write(t, transmit);
+            read_gen!();
+            let gen_alt = gen;
+            assert!(gen_alt > gen_main);
+
+            // Back to the main screen: its generation is unchanged.
+            vt_write(t, b"\x1b[?1049l");
+            read_gen!();
+            assert_eq!(gen_main, gen);
+
+            // Reset zeroes the storage (empty), and the next mutation continues
+            // from the global sequence: past values are never reused for
+            // different content.
+            unsafe { terminal_c::reset(t) };
+            read_gen!();
+            assert_eq!(0u64, gen);
+
+            vt_write(t, transmit);
+            read_gen!();
+            assert!(gen > gen_alt);
+
+            unsafe { terminal_c::free(t) };
         });
     }
 }

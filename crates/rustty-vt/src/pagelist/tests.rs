@@ -1849,6 +1849,77 @@ fn pagelist_compact_oversized_page() {
     s.deinit();
 }
 
+// ref: test "PageList decommitPoolItem zeroes the dirty region"
+//
+// A pooled page buffer returning to the free list must read back as all
+// zeroes, so the next `create()` that reuses it hands out observably-zero
+// memory. `decommit_pool_item` is what upholds this.
+//
+// PORT NOTE: in test builds `decommit_pool_item` always takes the memset path;
+// the madvise-based paths rely on kernel zero-fill semantics that unit tests
+// cannot exercise (see `decommit_pool_item`). The reference allocates a
+// page-aligned `std_size` buffer from `testing.allocator`; the Rust port uses a
+// plain `Vec<u8>` because the test path never touches the pointer alignment.
+#[test]
+fn pagelist_decommit_pool_item_zeroes_the_dirty_region() {
+    let mut buf = vec![0u8; 4096];
+    let ptr = buf.as_mut_ptr();
+
+    // Fully dirty item.
+    buf.iter_mut().for_each(|b| *b = 0xAA);
+    super::decommit_pool_item(ptr, buf.len(), buf.len());
+    assert!(buf.iter().all(|&b| b == 0));
+
+    // Partially dirty item: an item that hosted a page smaller than the item is
+    // only dirty up to the page length; the rest is zero by invariant and must
+    // remain zero.
+    buf[0..1024].iter_mut().for_each(|b| *b = 0xAA);
+    super::decommit_pool_item(ptr, buf.len(), 1024);
+    assert!(buf.iter().all(|&b| b == 0));
+}
+
+// ref: test "PageList destroyed pool page reuse is zeroed"
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): scribbles over a full std_size page buffer; covered natively + by ASan"
+)]
+#[test]
+fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Create a page and scribble over its entire backing memory, then destroy
+    // it so the buffer returns to the pool free list.
+    let node = s.create_page(PageList::initial_capacity(80)).unwrap();
+    unsafe { (*node).data.size.rows = 1 };
+    let mem_ptr = unsafe { (*node).data.memory_ptr };
+    let mem_len = unsafe { (*node).data.memory_len };
+    unsafe { core::ptr::write_bytes(mem_ptr, 0xAA, mem_len) };
+    s.destroy_node(node);
+
+    // Reusing the buffer must produce a fully valid, zeroed page.
+    let node2 = s.create_page(PageList::initial_capacity(80)).unwrap();
+    assert_eq!(mem_ptr, unsafe { (*node2).data.memory_ptr });
+    unsafe { (*node2).data.size.rows = (*node2).data.capacity.rows };
+
+    let cells_len =
+        unsafe { (*node2).data.capacity.cols as usize * (*node2).data.capacity.rows as usize };
+    {
+        let page = unsafe { &(*node2).data };
+        for i in 0..cells_len {
+            let rac =
+                page.get_row_and_cell(i % page.size.cols as usize, i / page.size.cols as usize);
+            let bytes = unsafe {
+                core::slice::from_raw_parts(rac.cell as *const u8, core::mem::size_of::<Cell>())
+            };
+            assert!(bytes.iter().all(|&b| b == 0));
+        }
+    }
+    unsafe { (*node2).data.assert_integrity() };
+    s.destroy_node(node2);
+
+    s.deinit();
+}
+
 // ref: test "PageList compact insufficient savings returns null"
 #[test]
 fn pagelist_compact_insufficient_savings_returns_null() {
