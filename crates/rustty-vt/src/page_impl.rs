@@ -798,6 +798,49 @@ impl Page {
         Ok(page)
     }
 
+    /// Copy every field of this page WITHOUT copying or reallocating its
+    /// backing memory. The result aliases the same mapping.
+    ///
+    /// PORT NOTE (WS7 B2): the oracle expresses this as a plain Zig struct copy
+    /// (`.page = source.*` in `compress/Page.zig`, `var result = self.page` in
+    /// its `restore`/`cloneBuf`). rustty's `Page` is not `Copy`, so the copy is
+    /// explicit. The result is ALWAYS `owned = false`: the original owner keeps
+    /// the mapping, and a shallow copy must never `munmap` it.
+    pub fn shallow_copy(&self) -> Page {
+        Page {
+            memory_ptr: self.memory_ptr,
+            memory_len: self.memory_len,
+            owned: false,
+            rows: self.rows,
+            cells: self.cells,
+            dirty: self.dirty,
+            string_alloc: self.string_alloc,
+            grapheme_alloc: self.grapheme_alloc,
+            grapheme_map: self.grapheme_map,
+            // See `clone_buf`: `var result = self.*` copies the ref-counted
+            // sets too; they hold `Offset`s + a context, so the shallow `Clone`
+            // is exactly what `self.*` does in Zig.
+            styles: self.styles.clone(),
+            hyperlink_map: self.hyperlink_map,
+            hyperlink_set: self.hyperlink_set.clone(),
+            size: self.size,
+            capacity: self.capacity,
+            pause_integrity_checks: self.pause_integrity_checks,
+        }
+    }
+
+    /// Repoint this page's backing mapping. Only valid on an UNOWNED page whose
+    /// contents are about to be rewritten (see `compress::CompressedPage::clone_buf`).
+    ///
+    /// PORT NOTE (WS7 B3): the oracle writes `result.memory = memory[0..len]`.
+    // First caller lands in WS7 B3 (`CompressedPage::clone_buf`).
+    #[allow(dead_code)]
+    pub(crate) fn set_memory(&mut self, ptr: *mut u8, len: usize) {
+        debug_assert!(!self.owned);
+        self.memory_ptr = ptr;
+        self.memory_len = len;
+    }
+
     /// Clone the entire contents of this page.
     ///
     /// The buffer must be at least the size of self.memory.
