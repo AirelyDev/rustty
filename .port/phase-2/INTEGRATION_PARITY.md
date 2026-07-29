@@ -80,7 +80,7 @@ Ranked by severity, then reachability.
   byte-reproducible from a clean `zig-out`. Live `+list-themes` CLI count check
   re-queued to WS4 (blocked on `rustty_cli_try_action`).
 
-### 2.3 [MEDIUM] Combined archive is NOT self-contained — full-deflate zlib + full gettext omitted, patched with system `-lz` / Homebrew `-lintl`
+### 2.3 [RESOLVED 2026-07-28, WS9] Combined archive IS self-contained — full zlib (P3) + full gettext (WS9); `-lz`/`-lintl` both gone
 - **rustty**: `xtask/src/main.rs:242-273` folds only whatever `.a` sit under
   `target/<t>/xcframework/build/*/out` (partial `-sys` slices) +
   `macos/build-rustty.sh:19-25` `OTHER_LDFLAGS="-lstdc++ -lz
@@ -103,8 +103,25 @@ Ranked by severity, then reachability.
 - **Fix sketch**: build/vendor full deflate-capable zlib + full gettext static
   archives into the `-sys` crates so their `out/` archives carry
   `_deflate`/`_dgettext`, then drop `-lz`/`-lintl` from `build-rustty.sh`.
+- **RESOLUTION**: the zlib half was already closed by the P3 pass (`crates-sys/
+  zlib-sys` vendors `deflate.c`/`trees.c`/`compress.c`; `-lz` dropped) — that
+  part of the text above was stale when written. WS9 closed the gettext half:
+  `crates-sys/gettext-sys` now vendors the reference's FULL `pkg/libintl/
+  build.zig` `srcs` set (30 TUs from gettext 0.24, incl. the pre-generated Bison
+  `plural.c`) and emits `librustty_intl.a` defining `_dgettext`/
+  `_bindtextdomain`/`_textdomain`. `-L/opt/homebrew/opt/gettext/lib -lintl` was
+  removed from BOTH link sites — `macos/build-rustty.sh` `OTHER_LDFLAGS` (now
+  just `-lstdc++`) and `crates/rustty-os/build.rs` (the WS4-added block; review
+  finding **WS4-M1**, which also hardcoded the ARM-Homebrew prefix and missed
+  Intel Homebrew — RESOLVED here). Proof:
+  `.port/tools/gates/no_homebrew_gettext_gate.sh` renames Homebrew's
+  linker-facing `libintl.{dylib,a}`, verifies `-lintl` no longer links, runs a
+  clean `macos/build-rustty.sh`, and asserts `nm`/`otool` symbol conditions on
+  both `libRusttyKit.a` and the app binary. Homebrew `msgfmt` remains a
+  build-TIME tool dependency of `xtask resources` — the oracle needs it too
+  (`GhosttyI18n.zig`) — and is out of scope here.
 
-### 2.4 [MEDIUM] Archive set discovered by filesystem glob, not an explicit dependency list
+### 2.4 [RESOLVED 2026-07-28, WS9] Archive set is now an explicit cargo-derived dependency list, not a filesystem glob
 - **rustty**: `xtask/src/main.rs:243-256` — `read_dir(build_dir)` then one-level
   `<crate>/out/*.a` per crate, pushing every `.a` found.
 - **ghostty**: `GhosttyLib.zig:52-53` — `deps.add(lib)` + `getEmittedBin()`, an
@@ -116,8 +133,17 @@ Ranked by severity, then reachability.
   function of leftover filesystem state, not a deterministic dep list.
 - **Fix sketch**: derive the set via `cargo build --message-format=json`
   (staticlib + build-script archives it reports); de-dup per crate.
+- **RESOLUTION**: `xtask/src/archives.rs` (`parse_artifacts` +
+  `NativeArchiveRequest::resolve`) derives the set from `cargo build
+  --message-format=json` — the staticlib target's own `filenames`, plus every
+  `cargo:rustc-link-lib=static=<name>` a build script declared, resolved against
+  that same script's `cargo:rustc-link-search` paths and de-duplicated per
+  (package, lib). A nested OUT_DIR now resolves by construction (cargo reports
+  the nested dir), stale hash-suffixed build dirs are never consulted, and an
+  archive that cannot be located is a HARD ERROR instead of a silent omission.
+  Unit-tested in `xtask/src/archives.rs`.
 
-### 2.5 [MEDIUM] ranlib per-source normalization before libtool omitted — risks libtool silently dropping 64-bit archive members
+### 2.5 [RESOLVED 2026-07-28, WS9] ranlib per-source normalization runs before libtool
 - **rustty**: `xtask/src/main.rs:259-263` feeds each source `.a` straight to
   `libtool -static -o` with no pre-pass.
 - **ghostty**: `LibtoolStep.zig:36-78` `normalizeArchive()` runs `cp src dst &&
@@ -129,6 +155,12 @@ Ranked by severity, then reachability.
   nondeterministically. rustty is *more* exposed than the oracle.
 - **Fix sketch**: copy each archive to a temp path, run `/usr/bin/ranlib`, then
   pass the ranlib'd copies to libtool (mirror `normalizeArchive`).
+- **RESOLUTION**: `xtask::archives::normalize_archive` ports
+  `LibtoolStep.zig`'s `normalizeArchive` — every source archive is copied to
+  `target/<t>/xcframework/normalized/<i>-libRusttyKit.a` and `/usr/bin/ranlib`'d
+  before `libtool -static` sees it. Unit-tested (`ar -t` shows `__.SYMDEF`
+  appearing on the normalized copy and the source left unmodified) and asserted
+  end-to-end by the acceptance gate.
 
 ### 2.6 [LOW] `host_view()` drops the iOS→uiview mapping that Metal.init performs (R1 dropped code path) — ✅ FIXED (uiview arm restored pre-WS3; WS3 adds the platform_host_view helper + ios_platform_maps_uiview regression KAT)
 - **rustty**: `crates/rustty-apprt/src/embedded.rs:2228-2234` — `host_view()`
@@ -318,12 +350,12 @@ behavior or harden the artifact, ordered by user-visible impact then robustness:
    (WS1, 2026-07-23; see §2.1 RESOLUTION).
 2. ~~**Ship `share/ghostty/themes/`** (§2.2, HIGH)~~ — ✅ DONE
    (WS1, 2026-07-23; see §2.2 RESOLUTION).
-3. **Make the xcframework self-contained** (§2.3, MEDIUM) — vendor full
+3. ✅ DONE (WS9, 2026-07-28) — **Make the xcframework self-contained** (§2.3, MEDIUM) — vendor full
    deflate-zlib + full gettext into the `-sys` crates; drop `-lz`/`-lintl` from
    `build-rustty.sh`. Removes the hard Homebrew/host dependency.
-4. **Deterministic archive set** (§2.4, MEDIUM) — derive from `cargo build
+4. ✅ DONE (WS9, 2026-07-28) — **Deterministic archive set** (§2.4, MEDIUM) — derive from `cargo build
    --message-format=json`, de-dup per crate; replaces the fragile glob.
-5. **ranlib-normalize before libtool** (§2.5, MEDIUM) — mirror
+5. ✅ DONE (WS9, 2026-07-28) — **ranlib-normalize before libtool** (§2.5, MEDIUM) — mirror
    `normalizeArchive` to defend against newer-Xcode member dropping.
 6. ✅ DONE (WS3) — **Map `Platform::IOS(i) => i.uiview` in `host_view`** (§2.6, LOW) — trivial R1
    fix; drop the null catch-all. (Full iOS attach path is a separate deferred

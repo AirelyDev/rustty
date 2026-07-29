@@ -355,4 +355,22 @@ mod tests {
             canonicalizeLocale(&mut buf, "en_US.UTF-8").unwrap(),
         );
     }
+
+    /// WS9 regression: `gettext_` resolves `dgettext` from rustty's OWN
+    /// vendored libintl (`gettext-sys`), not from Homebrew.
+    ///
+    /// The build-script link-search that used to point at
+    /// `/opt/homebrew/opt/gettext/lib` is gone, so this test only links if the
+    /// vendored archive carries the catalog API. With no `.mo` catalog bound
+    /// for the bundle-id domain, gettext returns the msgid unchanged — that is
+    /// the exact behavior the reference's `_` has today.
+    #[test]
+    #[cfg_attr(miri, ignore)] // ffi: vendored gettext catalog runtime crosses the C boundary (ASan, not Miri)
+    fn gettext_resolves_from_vendored_libintl() {
+        if !cfg!(target_os = "macos") {
+            return; // the vendored libintl is macOS-only (Linux gets it from libc)
+        }
+        let msgid = c"ws9 untranslated probe";
+        assert_eq!(gettext_(msgid), msgid);
+    }
 }

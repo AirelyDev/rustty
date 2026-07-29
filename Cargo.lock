@@ -2037,6 +2037,7 @@ version = "0.1.0"
 dependencies = [
  "rustty-extra",
  "rustty-terminfo",
+ "serde_json",
 ]
 
 [[package]]

@@ -44,6 +44,80 @@ pub unsafe fn locale_name_canonicalize(name: *mut std::os::raw::c_char) {
     unsafe { _libintl_locale_name_canonicalize(name) };
 }
 
+/// The GNU gettext **message-catalog runtime** — the second half of libintl,
+/// vendored in full as of WS9 (the reference builds the whole
+/// `gettext-runtime/intl/` core for macOS; see `ghostty/pkg/libintl/build.zig`
+/// `srcs`).
+///
+/// These are the exact three entry points `os/i18n.zig` uses
+/// (`bindtextdomain` in `init`, `textdomain` in `initGlobalDomain`, `dgettext`
+/// in `_`). They are the POSIX-spelled compatibility wrappers defined by the
+/// vendored `intl-compat.c`, which forward to the `libintl_*` primaries.
+///
+/// `crates/rustty-os/src/i18n.rs` declares the same three symbols in its own
+/// `extern "C"` block (the direct port of the Zig `extern fn` declarations);
+/// this module exists so the vendoring crate itself proves, in its own test
+/// suite, that the archive actually carries them.
+#[cfg(target_os = "macos")]
+pub mod catalog {
+    use std::os::raw::c_char;
+
+    unsafe extern "C" {
+        /// Bind message domain `domainname` to directory `dirname`. Returns the
+        /// currently-bound directory, or NULL on allocation failure.
+        pub fn bindtextdomain(domainname: *const c_char, dirname: *const c_char) -> *const c_char;
+        /// Set the global default message domain. Returns the current domain,
+        /// or NULL on allocation failure.
+        pub fn textdomain(domainname: *const c_char) -> *const c_char;
+        /// Look `msgid` up in `domainname`'s catalog. With no catalog bound it
+        /// returns `msgid` itself.
+        pub fn dgettext(domainname: *const c_char, msgid: *const c_char) -> *const c_char;
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod catalog_tests {
+    use super::catalog::{bindtextdomain, dgettext, textdomain};
+    use std::ffi::CStr;
+
+    /// Link + behavior KAT for the vendored message-catalog runtime (WS9).
+    ///
+    /// Proves the full `intl/` core compiled, linked, and runs from rustty's
+    /// OWN archive — no Homebrew `-lintl`. `bindtextdomain` must echo back the
+    /// directory it was handed, and `dgettext` on a domain with no `.mo`
+    /// catalog must return the msgid pointer-equal (gettext's documented
+    /// no-catalog behavior), which is exactly what `os/i18n.zig`'s `_` relies
+    /// on today.
+    #[test]
+    fn catalog_api_links_and_round_trips() {
+        let domain = c"io.airely.rustty.ws9-test";
+        let dir = c"/nonexistent/ws9/locale";
+
+        // SAFETY: both arguments are valid NUL-terminated C strings; gettext
+        // copies them into its own bindings table.
+        let bound = unsafe { bindtextdomain(domain.as_ptr(), dir.as_ptr()) };
+        assert!(!bound.is_null(), "bindtextdomain returned NULL (OOM)");
+        // SAFETY: gettext returns a pointer to its own NUL-terminated copy,
+        // valid for the program lifetime.
+        assert_eq!(unsafe { CStr::from_ptr(bound) }, dir);
+
+        let msgid = c"ws9 untranslated probe";
+        // SAFETY: both arguments are valid NUL-terminated C strings.
+        let out = unsafe { dgettext(domain.as_ptr(), msgid.as_ptr()) };
+        assert!(!out.is_null(), "dgettext returned NULL");
+        // No catalog exists at that path, so gettext hands the msgid straight
+        // back — pointer-identical, per the gettext contract.
+        assert_eq!(out, msgid.as_ptr());
+
+        // Force `textdomain` to be linked too (the third symbol
+        // `os/i18n.zig` needs) without mutating this process's global default
+        // domain, which other tests in the crate could observe.
+        let f: unsafe extern "C" fn(*const std::os::raw::c_char) -> *const std::os::raw::c_char =
+            textdomain;
+        assert!(!(f as *const ()).is_null());
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
