@@ -467,9 +467,8 @@ impl PageList {
     /// and the page becomes underutilized (size < capacity).
     ///
     /// Callers must ensure that the erased range only removes pages from
-    /// the front or back of the linked list, never the middle. Middle-page
-    /// erasure would create serial gaps that page_serial_epoch cannot
-    /// represent, leaving dangling references in consumers such as search.
+    /// the front or back of the linked list, never the middle. The pin and row
+    /// accounting in this operation is only defined for those boundary ranges.
     /// Use the public eraseHistory/eraseActive wrappers which enforce this.
     fn erase_rows(&mut self, tl_pt: point::Point, bl_pt: Option<point::Point>) {
         // PORT NOTE: `defer self.assertIntegrity()` — Zig's defer runs on the
@@ -503,6 +502,8 @@ impl PageList {
                 if unsafe { (*chunk.node).next }.is_null()
                     && unsafe { (*chunk.node).prev }.is_null()
                 {
+                    // Reinitializing the sole page invalidates every coordinate in it.
+                    self.invalidate_node_layout(chunk.node);
                     let page: *mut crate::page::Page = unsafe { super::Node::page(chunk.node) };
                     erased += unsafe { (*page).size.rows } as usize;
                     unsafe { (*page).reinit() };
@@ -514,6 +515,9 @@ impl PageList {
                 self.erase_page(chunk.node);
                 continue;
             }
+
+            // Moving the retained suffix changes every captured row coordinate.
+            self.invalidate_node_layout(chunk.node);
 
             // We are modifying our chunk so make sure it is in a good state.
             //
@@ -616,18 +620,9 @@ impl PageList {
         // Must not be the final page.
         assert!(!unsafe { (*node).next }.is_null() || !unsafe { (*node).prev }.is_null());
 
-        // We only support erasing from the front or back, never the middle.
-        // Middle erasure would create serial gaps that page_serial_epoch can't
-        // represent. If this ever needs to change, we'll need a more
-        // sophisticated invalidation mechanism.
+        // We only support erasing from the front or back, never the middle. The
+        // public erase operations maintain this contract by construction.
         assert!(unsafe { (*node).prev }.is_null() || unsafe { (*node).next }.is_null());
-
-        // If we're erasing the first page, update page_serial_epoch so that
-        // any external references holding this page's serial will know it
-        // has been invalidated.
-        if unsafe { (*node).prev }.is_null() {
-            self.page_serial_epoch = unsafe { (*(*node).next).serial };
-        }
 
         // Update any tracked pins to move to the previous or next page.
         let pin_keys = self.tracked_pins.keys();

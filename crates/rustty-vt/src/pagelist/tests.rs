@@ -2020,7 +2020,6 @@ fn fill_compressible_history(s: &mut PageList, pages: usize) {
 /// boundary needed by bounded-pruning tests.
 ///
 /// PORTS: oracle@main PageList.zig `fillLastPageForTest` (f1a5fab45).
-#[allow(dead_code)] // first used by the C3 bounded-pruning tests
 fn fill_last_page_for_test(s: &mut PageList) {
     let last = s.pages.last;
     while unsafe { super::Node::rows(last) } < unsafe { super::Node::capacity(last) }.rows {
@@ -2344,6 +2343,190 @@ fn pagelist_compress_full_leaves_viewport_and_active_resident() {
         unsafe { super::Node::storage(s.pages.first) },
         Storage::Compressed
     );
+    s.deinit();
+}
+
+/// PORTS: oracle 91a63e528
+/// `test "PageList bounded pruning after split invalidation preserves live serials"`
+#[test]
+fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+
+    while s.total_pages() < 2 {
+        let _ = s.grow().unwrap();
+    }
+    let first = s.pages.first;
+    let old_serial = unsafe { (*first).serial };
+    let activity = s.page_compression.activity_serial;
+
+    s.split(Pin {
+        node: first,
+        y: unsafe { super::Node::rows(first) } / 2,
+        x: 0,
+        garbage: false,
+    })
+    .unwrap();
+    assert!(!s.node_is_valid(first, old_serial));
+    assert_ne!(activity, s.page_compression.activity_serial);
+
+    fill_last_page_for_test(&mut s);
+    let _ = s.grow().unwrap();
+    expect_live_page_serials_valid_for_test(&s);
+    s.deinit();
+}
+
+/// PORTS: oracle a804e3ac7
+/// `test "PageList bounded pruning after partial erase preserves live serials"`
+#[test]
+fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+
+    while s.total_pages() < 2 {
+        let _ = s.grow().unwrap();
+    }
+    let first = s.pages.first;
+    let old_serial = unsafe { (*first).serial };
+    let old_rows = unsafe { super::Node::rows(first) };
+
+    s.erase_history(Some(point::Point::History(point::Coordinate {
+        x: 0,
+        y: 0,
+    })));
+    assert!(core::ptr::eq(first, s.pages.first));
+    assert_eq!(old_rows - 1, unsafe { super::Node::rows(first) });
+    assert!(!s.node_is_valid(first, old_serial));
+
+    fill_last_page_for_test(&mut s);
+    let _ = s.grow().unwrap();
+    expect_live_page_serials_valid_for_test(&s);
+    s.deinit();
+}
+
+/// PORTS: oracle a804e3ac7
+/// `test "PageList partial erase restarts compression before continuation"`
+#[test]
+fn pagelist_partial_erase_restarts_compression_before_continuation() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    fill_compressible_history(&mut s, super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED + 2);
+    let _ = s.compress(CompressionMode::Full);
+
+    let first = s.pages.first;
+    assert!(unsafe { super::Node::is_compressed(first) });
+
+    // Park the incremental continuation on a marker page well past `first`.
+    let mut marker = first;
+    for _ in 1..super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED {
+        marker = unsafe { (*marker).next };
+    }
+    s.page_compression = super::compress::IncrementalCompressionState {
+        flags: super::compress::IncrementalCompressionFlags {
+            did_compress: false,
+            verifying: true,
+        },
+        activity_serial: s.page_compression.activity_serial,
+        last_serial: Some(unsafe { (*marker).serial }),
+        next_serial: s.page_serial,
+    };
+
+    let activity = s.page_compression.activity_serial;
+    s.erase_history(Some(point::Point::History(point::Coordinate {
+        x: 0,
+        y: 0,
+    })));
+    assert!(!unsafe { super::Node::is_compressed(first) });
+    assert_ne!(activity, s.page_compression.activity_serial);
+
+    // The changed generation is before the saved marker, so continuation must
+    // restart and recompress it instead of reporting verification complete.
+    assert_eq!(
+        s.compress(CompressionMode::Incremental),
+        IncrementalCompressionResult::Pending
+    );
+    assert!(unsafe { super::Node::is_compressed(first) });
+    s.deinit();
+}
+
+/// PORTS: oracle f1a5fab45 (+ f6d9a582e's epoch assertion)
+/// `test "PageList repeated bounded pruning after split preserves live serials"`
+#[test]
+fn pagelist_repeated_bounded_pruning_after_split_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
+
+    let epoch = s.page_serial_epoch;
+    while s.total_pages() < 3 {
+        let _ = s.grow().unwrap();
+    }
+    let first = s.pages.first;
+    s.split(Pin {
+        node: first,
+        y: unsafe { super::Node::rows(first) } / 2,
+        x: 0,
+        garbage: false,
+    })
+    .unwrap();
+
+    // The split target has a fresh serial but precedes older successor pages.
+    // Prune both the old source and then that target while verifying ordinary
+    // list mutation does not advance the whole-list validity epoch.
+    for _ in 0..2 {
+        while unsafe { super::Node::rows(s.pages.last) }
+            < unsafe { super::Node::capacity(s.pages.last) }.rows
+        {
+            let _ = s.grow().unwrap();
+        }
+        let _ = s.grow().unwrap();
+
+        // Ordinary pruning invalidates one generation at a time through live
+        // list validation; only reset may begin a new whole-list epoch.
+        assert_eq!(epoch, s.page_serial_epoch);
+        expect_live_page_serials_valid_for_test(&s);
+    }
+    s.deinit();
+}
+
+/// PORTS: oracle f1a5fab45
+/// `test "PageList bounded pruning after front replacement preserves live serials"`
+#[test]
+fn pagelist_bounded_pruning_after_front_replacement_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+
+    while s.total_pages() < 2 {
+        let _ = s.grow().unwrap();
+    }
+    let old = s.pages.first;
+    let old_serial = unsafe { (*old).serial };
+    let replacement = s.increase_capacity(old, None).unwrap();
+    assert!(!core::ptr::eq(replacement, old));
+    assert!(!s.node_is_valid(old, old_serial));
+
+    fill_last_page_for_test(&mut s);
+    let _ = s.grow().unwrap();
+
+    expect_live_page_serials_valid_for_test(&s);
+    s.deinit();
+}
+
+/// PORTS: oracle f1a5fab45
+/// `test "PageList bounded pruning after middle replacement preserves live serials"`
+#[test]
+fn pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
+
+    while s.total_pages() < 3 {
+        let _ = s.grow().unwrap();
+    }
+    let old = unsafe { (*s.pages.first).next };
+    let old_serial = unsafe { (*old).serial };
+    let replacement = s.increase_capacity(old, None).unwrap();
+    assert!(!core::ptr::eq(replacement, old));
+    assert!(!s.node_is_valid(old, old_serial));
+
+    // Prune the original first page and then the fresh middle replacement.
+    for _ in 0..2 {
+        fill_last_page_for_test(&mut s);
+        let _ = s.grow().unwrap();
+        expect_live_page_serials_valid_for_test(&s);
+    }
     s.deinit();
 }
 

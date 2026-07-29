@@ -553,10 +553,11 @@ impl ScreenSearch {
     // fn pruneHistory(self: *ScreenSearch) void {
     fn prune_history(&mut self) {
         // Go through our history results in order (newest to oldest) to find
-        // any result that contains an invalid serial. Prune up to that
-        // point.
-        // for (0..self.history_results.items.len) |i| {
-        for i in 0..self.history_results.len() {
+        // any result that contains an invalid serial.
+        // var i: usize = 0;
+        // while (i < self.history_results.items.len) {
+        let mut i: usize = 0;
+        while i < self.history_results.len() {
             // const hl = &self.history_results.items[i];
             let hl = &self.history_results[i];
             // const serials = hl.chunks.items(.serial);
@@ -579,6 +580,40 @@ impl ScreenSearch {
                 self.history_results.shrink_to_fit();
                 return;
             }
+
+            // A page can also be replaced in place, such as by compaction.
+            // In that case its old serial remains above page_serial_epoch, so
+            // validate the captured pointer and serial against the live list.
+            //
+            // const nodes = chunks.items(.node);
+            // for (nodes, serials) |node, serial| {
+            //     if (!self.screen.pages.nodeIsValid(node, serial)) break;
+            // } else { i += 1; continue; }
+            let all_valid = hl.chunks.iter().all(|c| unsafe {
+                (*self.screen).pages.node_is_valid(c.node, c.serial)
+            });
+            if all_valid {
+                i += 1;
+                continue;
+            }
+
+            // Only this result is known to be invalid. Older results may live
+            // on unrelated pages and remain usable, so remove it individually.
+            // const result_idx = self.active_results.items.len + i;
+            let result_idx = self.active_results.len() + i;
+            // if (self.selected) |*m| { ... }
+            if let Some(m) = self.selected.as_mut() {
+                if m.idx == result_idx {
+                    self.selected.take().unwrap().deinit(self.screen);
+                } else if m.idx > result_idx {
+                    m.idx -= 1;
+                }
+            }
+
+            // var removed = self.history_results.orderedRemove(i);
+            // removed.deinit(self.allocator());
+            let mut removed = self.history_results.remove(i);
+            removed.deinit();
         }
     }
 
@@ -2559,6 +2594,102 @@ mod tests {
 
         search.deinit();
         s.deinit();
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle a804e3ac7
+    /// `test "select after partial history page erase ignores shifted results"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn select_after_partial_history_page_erase_ignores_shifted_results() {
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 2, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+
+        let mut stream = t.vt_stream();
+        let first = unsafe { (*list).pages.first };
+        while unsafe { crate::pagelist::Node::rows(first) }
+            < unsafe { crate::pagelist::Node::capacity(first) }.rows
+        {
+            stream.next_slice(b"\r\n");
+        }
+        stream.next_slice(b"error");
+        for _ in 0..unsafe { (*list).rows } + 1 {
+            stream.next_slice(b"\r\n");
+        }
+        assert!(!core::ptr::eq(first, unsafe { (*list).pages.last }));
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"error").unwrap();
+        search.search_all().unwrap();
+        assert_eq!(search.active_results.len(), 0);
+        assert_eq!(search.history_results.len(), 1);
+
+        let old_rows = unsafe { crate::pagelist::Node::rows(first) };
+        unsafe {
+            (*list).erase_history(Some(point::Point::History(point::Coordinate {
+                x: 0,
+                y: 0,
+            })))
+        };
+        assert_eq!(old_rows - 1, unsafe { crate::pagelist::Node::rows(first) });
+
+        assert!(!search.select(Select::Next).unwrap());
+        assert!(search.selected.is_none());
+
+        search.deinit();
+        stream.deinit();
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle 91a63e528
+    /// `test "select after history page split ignores moved results"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn select_after_history_page_split_ignores_moved_results() {
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 2, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+
+        let mut stream = t.vt_stream();
+        let first = unsafe { (*list).pages.first };
+        while unsafe { crate::pagelist::Node::rows(first) }
+            < unsafe { crate::pagelist::Node::capacity(first) }.rows
+        {
+            stream.next_slice(b"\r\n");
+        }
+        stream.next_slice(b"error");
+        for _ in 0..unsafe { (*list).rows } + 1 {
+            stream.next_slice(b"\r\n");
+        }
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"error").unwrap();
+        search.search_all().unwrap();
+        assert_eq!(search.history_results.len(), 1);
+
+        unsafe {
+            (*list)
+                .split(Pin {
+                    node: first,
+                    y: crate::pagelist::Node::rows(first) / 2,
+                    x: 0,
+                    garbage: false,
+                })
+                .unwrap()
+        };
+
+        assert!(!search.select(Select::Next).unwrap());
+        assert!(search.selected.is_none());
+
+        search.deinit();
+        stream.deinit();
         t.deinit(alloc);
     }
 

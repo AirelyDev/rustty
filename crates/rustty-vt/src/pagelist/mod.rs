@@ -1603,7 +1603,7 @@ impl PageList {
 
         if let Err(_err) = self.verify_integrity() {
             // log.err("PageList integrity check failed: {}", .{err});
-            panic!("PageList integrity check failed");
+            panic!("PageList integrity check failed: {_err:?}");
         }
     }
 
