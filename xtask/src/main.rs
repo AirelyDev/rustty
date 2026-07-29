@@ -363,8 +363,14 @@ fn xcframework() -> Result<PathBuf, String> {
         }
     };
     let mut archives_list: Vec<PathBuf> = vec![rust_lib.clone()];
+    // `resolve_under` (not `resolve`): an archive that resolves outside the
+    // workspace's `target/` tree is a SYSTEM archive (Homebrew's libintl.a /
+    // libz.a being the obvious ones) and folding it in would quietly undo the
+    // self-containment this whole step exists to guarantee — while still
+    // passing the no-Homebrew gate. Fail closed instead.
+    let build_root = root.join("target");
     for req in &parsed.native {
-        archives_list.push(req.resolve()?);
+        archives_list.push(req.resolve_under(&build_root)?);
     }
     eprintln!(
         "xcframework: folding {} archives ({} Rust staticlib + {} vendored C)",

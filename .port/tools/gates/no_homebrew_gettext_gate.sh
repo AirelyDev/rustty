@@ -31,17 +31,77 @@ cd "$ROOT"
 fail() { echo "GATE FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok: $*"; }
 
+# ------------------------------------------------------- (-1). leftover scan
+# A previous run that was SIGKILLed (or a host crash) can leave Homebrew's
+# libintl renamed to `*.ws9-hidden`. That state is doubly dangerous: the user's
+# gettext stays broken, AND section 1's probe below then finds no libintl and
+# would report "already hermetic" — i.e. the gate would PASS having verified
+# strictly LESS while silently keeping the host broken. So scan first, and never
+# let a leftover reach section 1.
+echo "== pre-flight: leftover *.ws9-hidden from an interrupted run =="
+LEFTOVERS=0
+for prefix in /opt/homebrew /usr/local; do
+  d="$prefix/opt/gettext/lib"
+  [ -d "$d" ] || continue
+  for h in "$d"/*.ws9-hidden; do
+    [ -e "$h" ] || [ -L "$h" ] || continue
+    LEFTOVERS=1
+    orig="${h%.ws9-hidden}"
+    if [ -e "$orig" ] || [ -L "$orig" ]; then
+      # Both the hidden copy and a file at the original name exist. Restoring
+      # would clobber whatever is there now (a reinstall? a different version?),
+      # so refuse and hand the human the exact decision.
+      fail "AMBIGUOUS leftover: BOTH '$h' and '$orig' exist.
+      A previous gate run was killed mid-flight and something has since
+      recreated '$orig'. Resolve by hand, e.g.:
+          rm '$h'          # keep the current file, drop the stale hidden copy
+        or
+          mv -f '$h' '$orig'   # restore the hidden copy over the current file"
+    fi
+    mv "$h" "$orig" || fail "could not restore leftover '$h' -> '$orig' (permissions?)
+      Restore it by hand with:  mv '$h' '$orig'"
+    echo "  !! RESTORED $orig"
+    echo "     (it was left hidden by an interrupted earlier run of this gate)"
+  done
+done
+if [ "$LEFTOVERS" -eq 1 ]; then
+  echo "  the host has been repaired; continuing with the real gate"
+else
+  ok "no leftover *.ws9-hidden anywhere under /opt/homebrew or /usr/local"
+fi
+
 # ---------------------------------------------------------------- 0. static
 echo "== 0/5 static checks: no source references Homebrew gettext for LINKING =="
-# Only EFFECTIVE flags count, so strip `#` / `//` comment lines first (both files
-# retain explanatory comments that mention `-lintl` by name on purpose).
-strip_comments() { sed -e 's/[[:space:]]*#.*$//' -e 's|[[:space:]]*//.*$||' "$1"; }
+# Only EFFECTIVE flags count, so strip comment lines first (these files retain
+# explanatory comments that mention `-lintl` by name on purpose). The comment
+# syntax is LANGUAGE-SPECIFIC: stripping `#`-to-EOL from a .rs file would also
+# blank every `#[cfg(...)]`/`#[derive]` line and create a blind spot, so shell
+# scripts get `#` stripping and Rust sources get `//` stripping.
+strip_comments() {
+  case "$1" in
+    *.rs) sed -e 's|[[:space:]]*//.*$||' "$1" ;;
+    *)    sed -e 's/[[:space:]]*#.*$//' "$1" ;;
+  esac
+}
+# Catches, in effective (non-comment) text:
+#   -lintl                      as a whole word (not `-lintlfoo`)
+#   cargo:rustc-link-lib=<anything>intl   — covers `dylib=intl`, `static=intl`,
+#                               `intl`, and interpolated `{kind}=intl` forms
+#   opt/gettext/lib             a Homebrew-prefixed link-search path
+LINK_INTL_RE='(^|[^[:alnum:]_])-lintl($|[^[:alnum:]_])|link-lib=[^ "'"'"']*intl|opt/gettext/lib'
+SCANNED=0
 for f in macos/build-rustty.sh crates/*/build.rs crates-sys/*/build.rs; do
-  if strip_comments "$f" | grep -q -- "-lintl\|rustc-link-lib=dylib=intl\|opt/gettext/lib"; then
+  # An unmatched glob or a moved file would otherwise make this whole section
+  # pass VACUOUSLY (sed prints to stderr, grep sees nothing, `ok` prints).
+  [ -f "$f" ] || fail "expected build file '$f' does not exist (cwd $PWD) — this \
+section would have passed without scanning it"
+  if strip_comments "$f" | grep -qE -- "$LINK_INTL_RE"; then
     fail "$f still passes a Homebrew gettext link flag"
   fi
+  SCANNED=$((SCANNED + 1))
 done
-ok "no -lintl link flag in any build script or in build-rustty.sh"
+[ "$SCANNED" -ge 2 ] || fail "only $SCANNED build file(s) scanned; the globs matched nothing"
+ok "no -lintl / rustc-link-lib=*intl / opt/gettext/lib in any of the $SCANNED scanned build scripts"
 
 # --------------------------------------------------------------- 1. locate
 echo "== 1/5 locating Homebrew's libintl =="
@@ -72,14 +132,18 @@ restore() {
     fi
   done
 }
-trap restore EXIT
+trap restore EXIT INT TERM HUP
 
 echo "== 2/5 hiding Homebrew's linker-facing libintl =="
 if [ -n "$CELLAR_LIB" ]; then
   for f in "$CELLAR_LIB/libintl.dylib" "$CELLAR_LIB/libintl.a"; do
     if [ -e "$f" ] || [ -L "$f" ]; then
-      mv "$f" "$f.ws9-hidden" || fail "could not rename $f (is $CELLAR_LIB writable?)"
+      # Record the INTENT before the rename: a kill in the window between `mv`
+      # and the bookkeeping would otherwise leave a hidden file with no restore
+      # record. `restore` no-ops on entries whose `.ws9-hidden` does not exist,
+      # so a record for a rename that never happened is harmless.
       HIDDEN+=("$f")
+      mv "$f" "$f.ws9-hidden" || fail "could not rename $f (is $CELLAR_LIB writable?)"
       echo "  hid $f"
     fi
   done
@@ -128,14 +192,27 @@ done
 # SAME archive satisfies (every zlib caller lists `_deflate` as U). So a bare
 # `nm -u | grep` can never be empty and would prove nothing. The meaningful
 # condition — "this archive needs the symbol from OUTSIDE itself" — is
-# referenced-somewhere AND defined-nowhere, which is what we assert.
+# referenced-somewhere AND defined-nowhere.
+#
+# Compute that difference for the WHOLE archive rather than re-testing the four
+# symbols against the same `" T sym"` predicate the loop above already required
+# (that phrasing was vacuous — the check above `fail`s unless the symbol IS
+# defined, so the second conjunct could never hold). Here the defined set is
+# built independently, from every defined-symbol class nm reports (T/D/S/B and
+# their local lowercase forms), so the set difference is real evidence.
+UNSAT="$(mktemp)"
+comm -23 \
+  <(sort -u "$NM_UNDEF") \
+  <(awk '$2 ~ /^[TtDdSsBb]$/ {print $3}' "$NM_DEFINED" | sort -u) > "$UNSAT"
 for sym in _dgettext _bindtextdomain _textdomain _deflate; do
-  if grep -qx "$sym" "$NM_UNDEF" && ! grep -q " T $sym\$" "$NM_DEFINED"; then
-    fail "$LIB references $sym but no member defines it"
+  if grep -qx -- "$sym" "$UNSAT"; then
+    fail "$LIB references $sym but no member of the archive defines it"
   fi
 done
-ok "no externally-unsatisfied _dgettext/_bindtextdomain/_textdomain/_deflate"
-rm -f "$NM_DEFINED" "$NM_UNDEF"
+ok "none of _dgettext/_bindtextdomain/_textdomain/_deflate appear in the archive's \
+undefined-minus-defined set ($(grep -c . "$UNSAT") entries in that set overall; \
+they are the archive's genuine external deps, which are NOT asserted on here)"
+rm -f "$NM_DEFINED" "$NM_UNDEF" "$UNSAT"
 AR_TOC="$(mktemp)"
 ar -t "$LIB" > "$AR_TOC"
 head -1 "$AR_TOC" | grep -q "__.SYMDEF" \

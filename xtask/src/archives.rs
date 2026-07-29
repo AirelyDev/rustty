@@ -60,10 +60,70 @@ impl NativeArchiveRequest {
         ))
     }
 
-    /// [`Self::resolve_with`] against the real filesystem.
-    pub fn resolve(&self) -> Result<PathBuf, String> {
-        self.resolve_with(&|p: &Path| p.exists())
+    /// [`Self::resolve_with`], then REJECT any archive that resolved outside
+    /// `build_root` (the workspace's `target/` directory).
+    ///
+    /// Why this is an error and not a warning: the whole point of WS9 is that
+    /// the shipped `libRusttyKit.a` contains rustty's OWN vendored C archives
+    /// and nothing else. A build script that emitted, say,
+    /// `cargo:rustc-link-search=native=/opt/homebrew/lib` alongside
+    /// `static=intl` would make `resolve` pick up Homebrew's `libintl.a` and
+    /// libtool would fold a SYSTEM archive into the product — and the
+    /// no-Homebrew gate would still pass, because the symbols really are in the
+    /// archive by then. A warning printed into a many-thousand-line xcodebuild
+    /// log would be missed. No build script in this workspace emits an
+    /// out-of-tree link-search today, so failing closed cannot break the build;
+    /// if one ever legitimately needs to, the error names the path and the
+    /// decision gets made deliberately.
+    pub fn resolve_under_with(
+        &self,
+        build_root: &Path,
+        exists: &dyn Fn(&Path) -> bool,
+    ) -> Result<PathBuf, String> {
+        let found = self.resolve_with(exists)?;
+        if !lexical_normalize(&found).starts_with(lexical_normalize(build_root)) {
+            return Err(format!(
+                "package {} resolved `static={}` to {}, which is OUTSIDE the build tree {}. \
+                 Folding a system/Homebrew archive into libRusttyKit.a would silently make the \
+                 shipped library non-self-contained (WS9/INTEGRATION_PARITY §2.3). Refusing. \
+                 Search paths were {:?}.",
+                self.package_id,
+                self.lib_name,
+                found.display(),
+                build_root.display(),
+                self.search_paths
+            ));
+        }
+        Ok(found)
     }
+
+    /// [`Self::resolve_under_with`] against the real filesystem.
+    ///
+    /// There is deliberately NO unguarded `resolve()` counterpart: every caller
+    /// must state the tree the archive is allowed to come from.
+    pub fn resolve_under(&self, build_root: &Path) -> Result<PathBuf, String> {
+        self.resolve_under_with(build_root, &|p: &Path| p.exists())
+    }
+}
+
+/// Collapse `.` and `..` components WITHOUT touching the filesystem, so the
+/// containment test is a pure function of the two paths (`/w/target/../etc`
+/// must not read as inside `/w/target`).
+fn lexical_normalize(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Everything the combine step needs out of one cargo JSON message stream.
@@ -137,15 +197,23 @@ pub fn parse_artifacts(json: &str) -> Result<ParsedArtifacts, String> {
                 let libs = msg.get("linked_libs").and_then(|l| l.as_array());
                 for lib in libs.into_iter().flatten() {
                     let Some(spec) = lib.as_str() else { continue };
-                    // Only `static=` entries name an archive we must fold.
+                    // Only `static` entries name an archive we must fold.
                     // `framework=`, `dylib=` and bare names are system links
                     // the app resolves normally.
-                    let Some(name) = spec.strip_prefix("static=") else {
+                    //
+                    // Cargo's grammar is `[KIND[:MODIFIERS]=]NAME`, so the kind
+                    // must be read as the FIRST `:`-segment of the text before
+                    // the FIRST `=` — `static:+bundle=onig` and
+                    // `static:-whole-archive=foo` are `static` too. A plain
+                    // `strip_prefix("static=")` would miss those and SILENTLY
+                    // DROP the archive from the set, which is precisely the
+                    // partial-set failure this module exists to prevent.
+                    let Some((kind, name)) = spec.split_once('=') else {
                         continue;
                     };
-                    // Cargo allows `static:+bundle=name` style modifiers; take
-                    // the part after the last `=`.
-                    let name = name.rsplit('=').next().unwrap_or(name);
+                    if kind.split(':').next().unwrap_or(kind) != "static" {
+                        continue;
+                    }
                     let key = (package_id.clone(), name.to_string());
                     if seen.contains(&key) {
                         continue;
@@ -164,12 +232,20 @@ pub fn parse_artifacts(json: &str) -> Result<ParsedArtifacts, String> {
     Ok(out)
 }
 
+/// The link-search kinds cargo accepts in `cargo:rustc-link-search=KIND=PATH`.
+const LINK_SEARCH_KINDS: [&str; 5] = ["native", "dependency", "crate", "framework", "all"];
+
 /// Strip a `kind=` prefix from a raw cargo link directive value
 /// (`native=/dir` -> `/dir`; a bare `/dir` is returned unchanged).
+///
+/// Only a KNOWN kind is stripped: a bare path is legal here and may itself
+/// contain `=` (`/w/target/some=dir/out`), so splitting on the first `=`
+/// unconditionally would truncate it into a wrong — and probably nonexistent —
+/// search path.
 fn strip_kind(value: &str) -> &str {
     match value.split_once('=') {
-        Some((_, rest)) => rest,
-        None => value,
+        Some((kind, rest)) if LINK_SEARCH_KINDS.contains(&kind) => rest,
+        _ => value,
     }
 }
 
@@ -382,6 +458,108 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Cargo's `[KIND[:MODIFIERS]=]NAME` grammar: `static:+bundle=onig` and
+    /// `static:-whole-archive=foo` ARE static archives and must be folded. The
+    /// old `strip_prefix("static=")` dropped them silently — the partial-set
+    /// failure §2.4 is about.
+    #[test]
+    fn accepts_static_link_kind_modifiers() {
+        let json = r#"{"reason":"build-script-executed","package_id":"p#1","linked_libs":["static:+bundle=onig","static:-whole-archive=foo","static=z"],"linked_paths":["native=/w/out"],"cfgs":[],"env":[],"out_dir":"/w/out"}"#;
+        let p = parse_artifacts(json).unwrap();
+        let names: Vec<&str> = p.native.iter().map(|r| r.lib_name.as_str()).collect();
+        assert_eq!(names, vec!["onig", "foo", "z"]);
+    }
+
+    /// …but a MODIFIER form of a non-static kind is still not an archive, and
+    /// neither is a lib whose *name* merely starts with "static".
+    #[test]
+    fn modifier_forms_of_other_kinds_are_still_ignored() {
+        let json = r#"{"reason":"build-script-executed","package_id":"p#1","linked_libs":["dylib:+as-needed=intl","framework=CoreText","staticfoo=bar","static-thing"],"linked_paths":["native=/w/out"],"cfgs":[],"env":[],"out_dir":"/w/out"}"#;
+        let p = parse_artifacts(json).unwrap();
+        assert!(p.native.is_empty(), "unexpected: {:?}", p.native);
+    }
+
+    /// `strip_kind` may only strip a KNOWN kind prefix: a bare search path that
+    /// contains `=` must survive intact (splitting on the first `=` truncated
+    /// it into a nonexistent directory).
+    #[test]
+    fn strip_kind_only_strips_known_kinds() {
+        assert_eq!(strip_kind("native=/w/out"), "/w/out");
+        assert_eq!(strip_kind("dependency=/w/d"), "/w/d");
+        assert_eq!(strip_kind("framework=/w/f"), "/w/f");
+        assert_eq!(strip_kind("crate=/w/c"), "/w/c");
+        assert_eq!(strip_kind("all=/w/a"), "/w/a");
+        // Bare paths, including ones containing `=`.
+        assert_eq!(strip_kind("/w/out"), "/w/out");
+        assert_eq!(strip_kind("/w/some=dir/out"), "/w/some=dir/out");
+        assert_eq!(strip_kind("/w/a=b=c"), "/w/a=b=c");
+    }
+
+    /// The same, end to end through the JSON parser.
+    #[test]
+    fn search_path_containing_equals_is_not_truncated() {
+        let json = r#"{"reason":"build-script-executed","package_id":"p#1","linked_libs":["static=z"],"linked_paths":["/w/target/dir=with=eq/out","native=/w/target/plain/out"],"cfgs":[],"env":[],"out_dir":"/w/out"}"#;
+        let p = parse_artifacts(json).unwrap();
+        assert_eq!(
+            p.native[0].search_paths,
+            vec![
+                PathBuf::from("/w/target/dir=with=eq/out"),
+                PathBuf::from("/w/target/plain/out"),
+            ]
+        );
+    }
+
+    /// An archive that resolves OUTSIDE the build tree (Homebrew's `libintl.a`
+    /// via a system link-search) must be refused, not folded into the shipped
+    /// library — that is exactly the non-self-containment WS9 removed, and it
+    /// would pass the no-Homebrew gate.
+    #[test]
+    fn resolve_under_rejects_out_of_tree_archives() {
+        let req = NativeArchiveRequest {
+            package_id: "p#1".to_string(),
+            lib_name: "intl".to_string(),
+            search_paths: vec![PathBuf::from("/opt/homebrew/opt/gettext/lib")],
+        };
+        let exists = |p: &Path| p == Path::new("/opt/homebrew/opt/gettext/lib/libintl.a");
+        let err = req
+            .resolve_under_with(Path::new("/w/target"), &exists)
+            .unwrap_err();
+        assert!(err.contains("OUTSIDE"), "{err}");
+        assert!(err.contains("/opt/homebrew/opt/gettext/lib/libintl.a"), "{err}");
+        // …and the same request inside the tree is accepted.
+        let req = NativeArchiveRequest {
+            search_paths: vec![PathBuf::from("/w/target/aarch64/xcframework/build/x/out")],
+            ..req
+        };
+        let exists =
+            |p: &Path| p == Path::new("/w/target/aarch64/xcframework/build/x/out/libintl.a");
+        assert!(req.resolve_under_with(Path::new("/w/target"), &exists).is_ok());
+    }
+
+    /// Containment is LEXICAL: `..` must not be able to escape the build root,
+    /// and a sibling directory with the root as a string prefix is not inside.
+    #[test]
+    fn resolve_under_containment_is_lexical() {
+        let req = NativeArchiveRequest {
+            package_id: "p#1".to_string(),
+            lib_name: "z".to_string(),
+            search_paths: vec![PathBuf::from("/w/target/../../etc")],
+        };
+        let exists = |p: &Path| p == Path::new("/w/target/../../etc/libz.a");
+        assert!(req
+            .resolve_under_with(Path::new("/w/target"), &exists)
+            .is_err());
+
+        let req = NativeArchiveRequest {
+            search_paths: vec![PathBuf::from("/w/target-evil")],
+            ..req
+        };
+        let exists = |p: &Path| p == Path::new("/w/target-evil/libz.a");
+        assert!(req
+            .resolve_under_with(Path::new("/w/target"), &exists)
+            .is_err());
     }
 
     /// An unlocatable declared archive is a HARD ERROR — never a silent skip.
