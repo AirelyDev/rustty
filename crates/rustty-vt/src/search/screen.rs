@@ -638,6 +638,16 @@ impl ScreenSearch {
         self.selected.take().unwrap().deinit(self.screen);
     }
 
+    // PERF NOTE (WS7 Phase C review, M3): `select` calls this on every
+    // navigation, and `node_is_valid` (called per surviving chunk below, via
+    // `history_result_is_valid`/the epoch check) walks the whole live page
+    // list to confirm a node pointer is still on it. Worst case this makes
+    // `prune_history` O(results * chunks_per_result * live_pages) per
+    // `select` — real cost on a very deep scrollback with many cached
+    // results. This is ORACLE-IDENTICAL (`PageList.zig`'s `nodeIsValid` walks
+    // the same way) — parity, not a rustty-introduced regression — so it is
+    // documented here rather than changed. See also `.port/phase-2/PERF_LOG.md`
+    // (WS7 Phase E perf section).
     fn prune_history(&mut self) {
         // Go through our history results in order (newest to oldest) to find
         // any result that contains an invalid serial.
@@ -674,6 +684,16 @@ impl ScreenSearch {
                 // only after a whole-list reset. The guard is kept verbatim: a
                 // selection naming a pre-reset history result must still be
                 // dropped.
+                //
+                // RECORDED, NOT FIXED (WS7 Phase C review, M4): no rustty test
+                // currently drives `select` with a tracked selection that
+                // survives a `reset` and then names an about-to-be-pruned
+                // history result, so this `if let Some(m) = ...` sub-branch is
+                // not exercised by the ported test suite today. It remains
+                // reachable in principle at runtime (a live selection across a
+                // `Terminal::reset`/full-clear followed by `select`), and it is
+                // present verbatim in `oracle@main`, so it is kept rather than
+                // removed as dead code.
                 if let Some(m) = self.selected.as_ref() {
                     let first_pruned = self.active_results.len() + i;
                     if m.idx >= first_pruned {

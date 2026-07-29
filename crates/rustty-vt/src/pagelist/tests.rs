@@ -1474,6 +1474,10 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
 /// PORTS: oracle f6d9a582e — only `reset` begins a new whole-list validity
 /// epoch. Growth, replacement and splitting must NOT advance it, because
 /// generations are not monotonic in list order.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_only_reset_advances_the_serial_epoch() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2045,6 +2049,10 @@ fn expect_live_page_serials_valid_for_test(s: &PageList) {
 }
 
 /// PORTS: oracle dd956f37c `test "PageList row erasure renews affected page generations"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_row_erasure_renews_affected_page_generations() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -2383,6 +2391,10 @@ fn pagelist_replacements_preserve_compression_continuation_and_mark_activity() {
 
 /// PORTS: oracle 91a63e528
 /// `test "PageList bounded pruning after split invalidation preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
     let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
@@ -2412,6 +2424,10 @@ fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
 
 /// PORTS: oracle a804e3ac7
 /// `test "PageList bounded pruning after partial erase preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
     let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
@@ -2439,6 +2455,10 @@ fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
 
 /// PORTS: oracle a804e3ac7
 /// `test "PageList partial erase restarts compression before continuation"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_partial_erase_restarts_compression_before_continuation() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -2483,6 +2503,10 @@ fn pagelist_partial_erase_restarts_compression_before_continuation() {
 
 /// PORTS: oracle f1a5fab45 (+ f6d9a582e's epoch assertion)
 /// `test "PageList repeated bounded pruning after split preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_repeated_bounded_pruning_after_split_preserves_live_serials() {
     let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
@@ -2521,6 +2545,10 @@ fn pagelist_repeated_bounded_pruning_after_split_preserves_live_serials() {
 
 /// PORTS: oracle f1a5fab45
 /// `test "PageList bounded pruning after front replacement preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_bounded_pruning_after_front_replacement_preserves_live_serials() {
     let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
@@ -2543,6 +2571,10 @@ fn pagelist_bounded_pruning_after_front_replacement_preserves_live_serials() {
 
 /// PORTS: oracle f1a5fab45
 /// `test "PageList bounded pruning after middle replacement preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials() {
     let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();

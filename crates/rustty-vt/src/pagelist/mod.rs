@@ -1023,9 +1023,10 @@ pub struct PageList {
     /// The list of pages in the screen.
     pub pages: List,
 
-    /// A monotonically increasing serial number that is incremented each
-    /// time a page is allocated or reused as new. The serial is assigned to
-    /// the Node.
+    /// The next globally unique reference generation for this PageList. A
+    /// generation is assigned whenever a page is allocated, reused as new, or
+    /// changed in place such that existing page coordinates are no longer
+    /// stable. The serial is assigned to the Node.
     ///
     /// The serial number can be used to detect whether the page is identical
     /// to the page that was originally referenced by a pointer. Since we reuse

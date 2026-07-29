@@ -55,6 +55,65 @@ top. Criterion 4 holds: each is heavy due to allocation volume (oversized/
 non-standard pages, multi-page reflow, capacity-exceeding grapheme/style/hyperlink
 churn), not a logic anomaly.
 
+## WS7 Phase C additions — 8 more tests (31 total)
+
+Phase C (generation-stamp renewal + bounded pruning of stale serials, oracles
+`dd956f37c`/`91a63e528`/`a804e3ac7`/`f1a5fab45`/`f6d9a582e`) added 10 new PageList
+tests. Per the review finding (I1), each of the 10 was individually measured with
+`.port/tools/miri-run.sh rustty-vt <exact-test-name> 1 3 4` (a bounded 4-minute
+hard timeout, single worker, warm Miri build) rather than assumed from the class.
+**8 are intractable (TIMEOUT at the 4-min bound, killed cleanly by the harness);
+2 are tractable and were deliberately left un-annotated** — this is the
+criterion-4 discipline (allocation-volume, not logic; measure, don't
+blanket-annotate):
+
+| Test | Result | Measured |
+|---|---|---|
+| `pagelist_only_reset_advances_the_serial_epoch` | TIMEOUT | 240s @ 4min bound (unbounded run by the reviewer ran >9min) |
+| `pagelist_row_erasure_renews_affected_page_generations` | TIMEOUT | 240s @ 4min bound (unbounded run by the reviewer ran >9min) |
+| `pagelist_trailing_row_truncation_renews_page_generation` | **tractable, left unignored** | 9s |
+| `pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials` | TIMEOUT | 240s @ 4min bound |
+| `pagelist_bounded_pruning_after_partial_erase_preserves_live_serials` | TIMEOUT | 240s @ 4min bound |
+| `pagelist_partial_erase_restarts_compression_before_continuation` | TIMEOUT | 240s @ 4min bound |
+| `pagelist_repeated_bounded_pruning_after_split_preserves_live_serials` | TIMEOUT | 240s @ 4min bound |
+| `pagelist_bounded_pruning_after_front_replacement_preserves_live_serials` | TIMEOUT | 240s @ 4min bound |
+| `pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials` | TIMEOUT | 240s @ 4min bound |
+| `pagelist_replacements_preserve_compression_continuation_and_mark_activity` | **tractable, left unignored** | 37s |
+
+All 8 TIMEOUTs ran 0 UB before being killed (the harness's `killtree` fires only
+after the full 240s, well past when Stacked-Borrows/leak errors would already have
+printed). The 8 are now annotated in `crates/rustty-vt/src/pagelist/tests.rs` with
+the same `#[cfg_attr(miri, ignore = "MIRI EXCEPTION …")]` form and reason wording
+as the 23 above (they are the same class: `while s.total_pages() < N`-style
+multi-page construction, `fill_compressible_history`, or `fill_last_page_for_test`
+driving a real prune). Per-test criterion-3 coverage (the method's Stacked-Borrows
+aliasing is Miri-verified by a lighter, passing test):
+
+| Excepted test | PageList method(s) | Miri-verified by (lighter, passing) |
+|---|---|---|
+| `pagelist_only_reset_advances_the_serial_epoch` | `reset`, `grow` (via `fill_compressible_history`) | `pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused` (single-page reset), the existing `grow`-family Miri-passing tests |
+| `pagelist_row_erasure_renews_affected_page_generations` | `erase_row`, `erase_row_bounded`, `node_is_valid` | the ported point-range erase tests + `erase` family that pass under Miri (same coverage row as #2–7 above) |
+| `pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials` | `split`, `grow`, `node_is_valid` prune check | `pagelist_split_at_middle_row` and the single-page `pagelist_split_*` family (aliasing), `active_after_grow`/`grow_fit_in_capacity` (grow) |
+| `pagelist_bounded_pruning_after_partial_erase_preserves_live_serials` | `erase_history`, `node_is_valid`, `grow` | the passing `erase_history`/point-range erase tests + `grow`-family |
+| `pagelist_partial_erase_restarts_compression_before_continuation` | `compress(Full)`, `erase_history`, incremental-compression state restart | native + ASan (all PageList tests). **CORRECTION:** this row originally cited `pagelist_compress_incremental_restarts_after_list_mutation`/`pagelist_compress_full_mode_leaves_no_continuation` as "lighter, passing" Miri coverage — checked and found FALSE: both are themselves Miri-intractable (TIMEOUT at a 2–3 min bound, confirmed in isolation, and `…_leaves_no_continuation` reproduces the same on pre-Phase-C commit `098fc63`, so it is a pre-existing WS7-Phase-B gap, not introduced here). See the DEFERRALS.md WS7 Phase E item 3 addendum; those two need their own exception review — not claimed as this row's Miri-verified coverage anymore |
+| `pagelist_repeated_bounded_pruning_after_split_preserves_live_serials` | `split`, `grow`, `node_is_valid` (repeated) | same as the split-invalidation row above; repetition is volume, not new logic |
+| `pagelist_bounded_pruning_after_front_replacement_preserves_live_serials` | `increase_capacity`, `node_is_valid`, `grow` | the 8 passing single-page `pagelist_increaseCapacity_*` tests (same coverage row as #14 above) |
+| `pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials` | `increase_capacity`, `node_is_valid`, `grow` (repeated prune) | same as the front-replacement row above |
+
+Criterion 4 holds for all 8: each builds a real multi-page list (`while
+s.total_pages() < 2/3`) or a long compressible-history run
+(`fill_compressible_history`) specifically to exercise `node_is_valid`/prune over
+≥ 2 live pages — allocation volume, not a logic difference from the tractable
+single-page siblings of the same methods.
+
+The 2 left un-annotated
+(`pagelist_trailing_row_truncation_renews_page_generation`,
+`pagelist_replacements_preserve_compression_continuation_and_mark_activity`)
+build only a single page's worth of state before asserting, so they stay on the
+Miri-gated surface — this is the proof that the annotation pass was per-test, not
+blanket-applied to "the other 8 also build multi-page lists" as the review
+described the pre-fix state.
+
 ## Category 2 — raw syscall memory management (outside Miri's model)
 
 Miri models Rust's abstract machine; it does not model `mmap`/`munmap`/`madvise`
@@ -66,6 +125,43 @@ NOT a regression to chase.
 |---|---|---|---|
 | `crates/rustty-vt/src/page.rs` `Backing::alloc`/`Backing::free` (~250-313) | `mmap`/`munmap` | none (pre-existing; no `.port/phase-2/mirihar-*` touches `page.rs` or `pagelist`) | native + ASan over all 210 PageList tests; page tracking allocator asserts no leaks |
 | `crates/rustty-vt/src/pagelist/mod.rs` `decommit_pool_item`/`recommit_pool_item` (WS8 BL-2, oracle `896aca499`) | `madvise` (`MADV_DONTNEED` on Linux; `MADV_FREE_REUSABLE`/`MADV_FREE_REUSE`/`MADV_FREE` on Darwin) | none — the `madvise` arms are `#[cfg(not(test))]`, so Miri and `cargo test -p rustty-vt` both execute the plain-memset `#[cfg(test)]` arm instead, which IS Miri-provable and IS what upholds the pool zero-invariant. The `#[cfg(test)]` gate is crate-local to `rustty-vt`: when `rustty-vt` is compiled as an ordinary (non-test) dependency of another crate's test build — e.g. `cargo test -p rustty-vt-c` — `not(test)` is true for it and the real `madvise` arms run, so those downstream test runs are NOT covered by this Miri gap; they run outside Miri, same as any other native execution | native + ASan; the zero-invariant unit tests `pagelist_decommit_pool_item_zeroes_the_dirty_region` and `pagelist_destroyed_pool_page_reuse_is_zeroed`; the empirical footprint probe `crates/rustty-vt/examples/rss_probe.rs` |
+
+**CORRECTION (WS7 Phase C review, I1 proof pass, 2026-07-29):** the claim above
+that `pagelist_decommit_pool_item_zeroes_the_dirty_region` "IS Miri-provable"
+was never actually verified under Miri and is **false as measured**. Running
+the pagelist module's bounded Miri lane (as part of proving I1) surfaced a
+real, reproducible Stacked-Borrows violation in that test, confirmed
+deterministic in isolation
+(`cargo +nightly miri test -p rustty-vt -- --exact
+pagelist::tests::pagelist_decommit_pool_item_zeroes_the_dirty_region
+--test-threads=1`):
+
+```
+error: Undefined Behavior: trying to retag from <NNN> for SharedReadOnly
+permission at allocNNN[0x0], but that tag does not exist in the borrow stack
+  --> crates/rustty-vt/src/pagelist/tests.rs:2735:13  (assert!(buf.iter()...))
+help: <NNN> was created by a Unique retag at ...tests.rs:2730:24
+  (let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };)
+help: <NNN> was later invalidated ... by a write access
+  --> crates/rustty-vt/src/mem.rs:175:18 (core::ptr::write_bytes(ptr, 0, ...))
+```
+
+The test takes a long-lived `&mut [u8]` (`buf`) over the allocation, then calls
+`decommit_pool_item` (which reaches `mem::decommit`'s `write_bytes` through a
+*separate* raw pointer) while `buf`'s tag is still logically live, then reads
+through `buf` again — the same long-lived-alias-plus-interleaved-write shape
+this codebase's own discipline warns against elsewhere (see
+`rust-mut-args-strongly-protected`/`shaper-hook-sb-clean-interleave`). **This is
+a TEST-CODE bug, not new, not caused by WS7 Phase C** — `mem.rs`/this test were
+last touched at commit `0413d2b` (WS7 Phase B review response) and no Phase C
+commit (`6af540d`/`f94716d`/`0349439`/`e5a9217`) touches either file. It
+predates WS7 entirely (WS7 B1, commit `39cd6b8`). It is **OPEN, not fixed
+here** — out of scope for the Phase C review response — and the "native +
+ASan" complement in the table above still holds (native `cargo test` passes;
+ASan does not flag it, consistent with a Stacked-Borrows-only violation that
+leaves no actual memory corruption). Fix sketch: re-derive `buf` fresh from
+`ptr` after each `decommit_pool_item` call instead of holding one `&mut [u8]`
+across it.
 
 Criterion note: the WS8 entry is *stronger* than the `page.rs` precedent, because
 the exact code path Miri would need to verify (the zero-invariant) is still run

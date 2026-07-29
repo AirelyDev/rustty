@@ -2612,6 +2612,15 @@ where
             s.deinit();
         }
 
+        // ORDERING INVARIANT (WS7 Phase C review, M5 — prospective, not a
+        // current bug): search is torn down BEFORE the renderer thread is
+        // stopped/joined below, so nothing here holds `renderer::State`'s
+        // `mutex`/`opts.mutex` across that join. A future change to this
+        // teardown order (or a new consumer that locks `mutex` around a
+        // join) should re-check this invariant against the D4 mutex-handoff
+        // machinery (`crates/rustty-renderer/src/state.rs`) to avoid a
+        // deadlock.
+
         // Stop rendering thread
         {
             // self.renderer_thread.stop.notify() catch |err|
