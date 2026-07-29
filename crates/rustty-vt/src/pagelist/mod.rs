@@ -201,6 +201,106 @@ impl CreatePage {
 }
 
 
+impl Node {
+    /// Return the terminal page stored in this node.
+    ///
+    /// WARNING: this will DECOMPRESS compressed pages! Only use it if you need
+    /// access to the underlying memory. If you only need metadata (row/column
+    /// counts etc.) use `metadata`/`rows`/`cols`/`capacity`.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.page`.
+    ///
+    /// PORT NOTE (WS7 B5): every accessor below takes a RAW `Node` pointer, per
+    /// this port's raw-pointer discipline — a `&mut Node` would be a live
+    /// exclusive alias of memory that `*mut Page` also names. The bodies return
+    /// the resident page directly while `data` is still a plain `Page`; WS7 B6
+    /// changes ONLY these bodies.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn page(node: *mut Node) -> *mut Page {
+        unsafe { core::ptr::addr_of_mut!((*node).data) }
+    }
+
+    /// Return the terminal page only when its raw memory is resident, else
+    /// null.
+    ///
+    /// Unlike `page`, this never restores a compressed node. This is useful for
+    /// diagnostics which can display node metadata without touching the
+    /// discarded mapping, but may inspect page contents when they are already
+    /// available.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.pageIfResident`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn page_if_resident(node: *mut Node) -> *mut Page {
+        unsafe { core::ptr::addr_of_mut!((*node).data) }
+    }
+
+    /// Return a page which the caller KNOWS is already resident.
+    ///
+    /// This avoids the representation check in hot paths which already hold
+    /// live pointers into the page mapping. Such pointers are only valid while
+    /// the page is resident. Prefer `page` unless the caller can establish that
+    /// invariant independently.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.pageAssumeResident`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node` whose page is resident.
+    #[inline]
+    pub unsafe fn page_assume_resident(node: *mut Node) -> *mut Page {
+        unsafe { core::ptr::addr_of_mut!((*node).data) }
+    }
+
+    /// Return the embedded Page metadata without restoring its memory.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.metadata`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn metadata(node: *const Node) -> *const Page {
+        unsafe { core::ptr::addr_of!((*node).data) }
+    }
+
+    /// Return the number of populated rows without accessing page memory.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.rows`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn rows(node: *const Node) -> size::CellCountInt {
+        unsafe { (*Node::metadata(node)).size.rows }
+    }
+
+    /// Return the current column count without accessing page memory.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.cols`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn cols(node: *const Node) -> size::CellCountInt {
+        unsafe { (*Node::metadata(node)).size.cols }
+    }
+
+    /// Return the page capacity without accessing page memory.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.capacity`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn capacity(node: *const Node) -> Capacity {
+        unsafe { (*Node::metadata(node)).capacity }
+    }
+}
+
 impl rustty_datastruct::intrusive_linked_list::Node for Node {
     #[inline]
     fn prev(&self) -> *mut Self {
@@ -1198,7 +1298,7 @@ impl PageList {
             let mut node_ = self.pages.first;
             while !node_.is_null() {
                 let node = node_;
-                actual_total += unsafe { (*node).data.size.rows as usize };
+                actual_total += unsafe { Node::rows(node) as usize };
                 node_ = unsafe { (*node).next };
 
                 // While doing this traversal, verify no node has a serial
@@ -1236,7 +1336,7 @@ impl PageList {
                 let mut node = self.pages.last;
                 while !node.is_null() {
                     let n = node;
-                    offset += unsafe { (*n).data.size.rows as usize };
+                    offset += unsafe { Node::rows(n) as usize };
                     if core::ptr::eq(n, unsafe { (*self.viewport_pin).node }) {
                         offset -= unsafe { (*self.viewport_pin).y as usize };
                         break 'offset self.total_rows - offset;
@@ -1556,7 +1656,7 @@ impl PageList {
 
     #[allow(dead_code)]
     fn destroy_node_ext(pool: &mut MemoryPool, node: *mut Node, total_size: Option<&mut usize>) {
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        let page: *mut Page = unsafe { Node::page(node) };
         let owned = unsafe { (*node).owned };
         let (ptr, len) = Self::page_memory(page);
 
@@ -1641,7 +1741,7 @@ impl PageList {
     /// Free a NON-STANDARD page's backing buffer DIRECTLY via the page allocator
     /// (the reference `page_alloc.free(node.data.memory)`).
     fn free_non_standard_page(node: *mut Node) {
-        let page: *const Page = unsafe { &(*node).data };
+        let page: *const Page = unsafe { &(*Node::page(node)) };
         let (ptr, len) = Self::page_memory(page as *mut Page);
         let layout = Self::non_standard_layout(len);
         let alloc = page_backing_alloc();
@@ -1666,7 +1766,7 @@ impl PageList {
     /// `node.data.memory.len`.
     #[inline]
     fn page_memory_len(node: *mut Node) -> usize {
-        unsafe { (*node).data.memory_len }
+        unsafe { (*Node::page(node)).memory_len }
     }
 
     /// `(node.data.memory.ptr, node.data.memory.len)` via field projection on a
@@ -1734,8 +1834,8 @@ impl PageList {
                 it = unsafe { (*node).next };
                 continue;
             }
-            return p.y < unsafe { (*node).data.size.rows }
-                && p.x < unsafe { (*node).data.size.cols };
+            return p.y < unsafe { Node::rows(node) }
+                && p.x < unsafe { Node::cols(node) };
         }
 
         false
@@ -1777,7 +1877,7 @@ impl PageList {
                 let mut it = self.pages.last;
                 while !it.is_null() {
                     let node = it;
-                    let node_rows = unsafe { (*node).data.size.rows };
+                    let node_rows = unsafe { Node::rows(node) };
                     if rem <= node_rows {
                         return Pin {
                             node,
@@ -1807,7 +1907,7 @@ impl PageList {
         let mut node_ = self.pages.first;
         while !node_.is_null() {
             let node = node_;
-            rows += unsafe { (*node).data.size.rows as usize };
+            rows += unsafe { Node::rows(node) as usize };
             node_ = unsafe { (*node).next };
         }
 

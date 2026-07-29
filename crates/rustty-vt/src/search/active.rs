@@ -99,13 +99,13 @@ impl ActiveSearch {
             //     node_ = node.prev;
             //     break;
             // }
-            if rem <= unsafe { (*node).data.size.rows as usize } {
+            if rem <= unsafe { crate::pagelist::Node::rows(node) as usize } {
                 node_ = unsafe { (*node).prev };
                 break;
             }
 
             // rem -= node.data.size.rows;
-            rem -= unsafe { (*node).data.size.rows as usize };
+            rem -= unsafe { crate::pagelist::Node::rows(node) as usize };
 
             node_ = unsafe { (*node).prev };
         }
@@ -118,7 +118,7 @@ impl ActiveSearch {
             // If the last row of this node isn't wrapped we can't overlap.
             // const row = node.data.getRow(node.data.size.rows - 1);
             // if (!row.wrap) break;
-            let row = unsafe { (*node).data.get_row((*node).data.size.rows as usize - 1) };
+            let row = unsafe { (*crate::pagelist::Node::page(node)).get_row(crate::pagelist::Node::rows(node) as usize - 1) };
             if !unsafe { (*row).wrap() } {
                 break;
             }

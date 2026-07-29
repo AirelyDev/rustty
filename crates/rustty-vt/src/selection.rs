@@ -181,13 +181,13 @@ impl Selection {
             Order::MirroredForward => {
                 let mut p = self.start();
                 // p.x = @min(self.end().x, p.node.cols() - 1);
-                let cols = unsafe { (*p.node).data.size.cols };
+                let cols = unsafe { crate::pagelist::Node::cols(p.node) };
                 p.x = core::cmp::min(self.end().x, cols - 1);
                 p
             }
             Order::MirroredReverse => {
                 let mut p = self.end();
-                let cols = unsafe { (*p.node).data.size.cols };
+                let cols = unsafe { crate::pagelist::Node::cols(p.node) };
                 p.x = core::cmp::min(self.start().x, cols - 1);
                 p
             }
@@ -201,13 +201,13 @@ impl Selection {
             Order::Reverse => self.start(),
             Order::MirroredForward => {
                 let mut p = self.end();
-                let cols = unsafe { (*p.node).data.size.cols };
+                let cols = unsafe { crate::pagelist::Node::cols(p.node) };
                 p.x = core::cmp::min(self.start().x, cols - 1);
                 p
             }
             Order::MirroredReverse => {
                 let mut p = self.start();
-                let cols = unsafe { (*p.node).data.size.cols };
+                let cols = unsafe { crate::pagelist::Node::cols(p.node) };
                 p.x = core::cmp::min(self.end().x, cols - 1);
                 p
             }
@@ -395,14 +395,14 @@ impl Selection {
                 {
                     let mut copy: Pin = pin;
                     // copy.x = @min(tl.x, copy.node.cols() - 1);
-                    let cols = unsafe { (*copy.node).data.size.cols };
+                    let cols = unsafe { crate::pagelist::Node::cols(copy.node) };
                     copy.x = core::cmp::min(tl.x, cols - 1);
                     copy
                 },
                 {
                     let mut copy: Pin = pin;
                     // copy.x = @min(br.x, copy.node.cols() - 1);
-                    let cols = unsafe { (*copy.node).data.size.cols };
+                    let cols = unsafe { crate::pagelist::Node::cols(copy.node) };
                     copy.x = core::cmp::min(br.x, cols - 1);
                     copy
                 },
@@ -422,7 +422,7 @@ impl Selection {
                 {
                     let mut copy: Pin = pin;
                     // copy.x = copy.node.cols() - 1;
-                    copy.x = unsafe { (*copy.node).data.size.cols } - 1;
+                    copy.x = unsafe { crate::pagelist::Node::cols(copy.node) } - 1;
                     copy
                 },
                 false,
@@ -455,7 +455,7 @@ impl Selection {
             {
                 let mut copy: Pin = pin;
                 // copy.x = copy.node.cols() - 1;
-                copy.x = unsafe { (*copy.node).data.size.cols } - 1;
+                copy.x = unsafe { crate::pagelist::Node::cols(copy.node) } - 1;
                 copy
             },
             false,
@@ -490,7 +490,7 @@ impl Selection {
                 let mut found = false;
                 while let Some(next) = current.down(1) {
                     let rac = next.row_and_cell();
-                    let cells = unsafe { (*next.node).data.get_cells(rac.row) };
+                    let cells = unsafe { (*crate::pagelist::Node::page(next.node)).get_cells(rac.row) };
                     if page::Cell::has_text_any(unsafe { &*cells }) {
                         unsafe {
                             *end_pin = next;
@@ -571,7 +571,7 @@ impl Selection {
                 );
                 while let Some(next) = it.next() {
                     let rac = next.row_and_cell();
-                    let cells = unsafe { (*next.node).data.get_cells(rac.row) };
+                    let cells = unsafe { (*crate::pagelist::Node::page(next.node)).get_cells(rac.row) };
                     if page::Cell::has_text_any(unsafe { &*cells }) {
                         unsafe {
                             *end_pin = next;
@@ -587,7 +587,7 @@ impl Selection {
             },
 
             Adjustment::EndOfLine => unsafe {
-                (*end_pin).x = (*(*end_pin).node).data.size.cols - 1;
+                (*end_pin).x = crate::pagelist::Node::cols((*end_pin).node) - 1;
             },
         }
     }
@@ -1320,7 +1320,7 @@ mod tests {
         let second = unsafe { (*first).next };
         // PORT NOTE: `second.page().size.cols = 2` — a deliberate mid-reflow
         // narrow page, written directly through the node pointer.
-        unsafe { (*second).data.size.cols = 2 };
+        unsafe { (*crate::pagelist::Node::page(second)).size.cols = 2 };
 
         let sel = Selection::init(
             Pin {
@@ -1377,7 +1377,7 @@ mod tests {
             .unwrap();
         let middle = unsafe { (*first).next };
         let last = unsafe { (*middle).next };
-        unsafe { (*middle).data.size.cols = 2 };
+        unsafe { (*crate::pagelist::Node::page(middle)).size.cols = 2 };
 
         let linear = Selection::init(
             Pin {

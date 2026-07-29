@@ -1036,7 +1036,7 @@ impl<'a> PageListFormatter<'a> {
 
             // PORT NOTE: `&chunk.node.data` — the page lives in the node; deref
             // the raw `*mut Node` to take a `*const Page`.
-            let page: *const Page = unsafe { &(*chunk.node).data };
+            let page: *const Page = unsafe { &(*crate::pagelist::Node::page(chunk.node)) };
             let mut formatter: PageFormatter = PageFormatter::init(page, copy_options(&self.opts));
             formatter.start_y = chunk.start;
             formatter.end_y = Some(chunk.end - 1);
@@ -1956,7 +1956,7 @@ mod tests {
     // PORT NOTE: `&pages.pages.last.?.data` — deref the raw last node to a
     // `*const Page`. The caller guarantees the node outlives the formatter.
     unsafe fn last_page(pages: &PageList) -> *const Page {
-        unsafe { &(*pages.pages.last).data }
+        unsafe { &(*crate::pagelist::Node::page(pages.pages.last)) }
     }
 
     // PORT NOTE: `std.mem.trimStart(u8, s, pat)` — strip leading bytes that are
@@ -3723,7 +3723,7 @@ mod tests {
         let mut builder: Vec<u8> = Vec::new();
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
         let first_page_rows =
-            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+            unsafe { crate::pagelist::Node::capacity((*t.screens.active).pages.pages.first).rows };
         {
             let mut s = t.vt_stream();
             // Fill the first page almost completely
@@ -3799,7 +3799,7 @@ mod tests {
         let mut builder: Vec<u8> = Vec::new();
         let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
         let first_page_rows =
-            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+            unsafe { crate::pagelist::Node::capacity((*t.screens.active).pages.pages.first).rows };
         {
             let mut s = t.vt_stream();
             // Fill the first page with soft-wrapped content
@@ -3862,7 +3862,7 @@ mod tests {
         let mut builder: Vec<u8> = Vec::new();
         let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
         let first_page_rows =
-            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+            unsafe { crate::pagelist::Node::capacity((*t.screens.active).pages.pages.first).rows };
         {
             let mut s = t.vt_stream();
             // Fill the first page with soft-wrapped content
@@ -3929,7 +3929,7 @@ mod tests {
         let mut builder: Vec<u8> = Vec::new();
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
         let first_page_rows =
-            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+            unsafe { crate::pagelist::Node::capacity((*t.screens.active).pages.pages.first).rows };
         {
             let mut s = t.vt_stream();
             // Fill the first page almost completely
@@ -4036,7 +4036,7 @@ mod tests {
         let mut builder: Vec<u8> = Vec::new();
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
         let first_page_rows =
-            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+            unsafe { crate::pagelist::Node::capacity((*t.screens.active).pages.pages.first).rows };
         {
             let mut s = t.vt_stream();
             // Fill first page almost completely
@@ -4060,7 +4060,7 @@ mod tests {
         }
         let first_node = unsafe { (*pages_ptr).pages.first };
         let last_node = unsafe { (*pages_ptr).pages.last };
-        let first_node_size_rows = unsafe { (*first_node).data.size.rows };
+        let first_node_size_rows = unsafe { crate::pagelist::Node::rows(first_node) };
 
         let mut pin_map: Vec<Pin> = Vec::new();
         let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());

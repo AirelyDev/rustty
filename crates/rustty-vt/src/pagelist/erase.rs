@@ -38,7 +38,7 @@ impl PageList {
         let pn = self.pin(pt).unwrap();
 
         let mut node = pn.node;
-        let mut rows = unsafe { (*node).data.rows.ptr((*node).data.memory_ptr()) };
+        let mut rows = unsafe { (*super::Node::page(node)).rows.ptr((*super::Node::page(node)).memory_ptr()) };
 
         // In order to move the following rows up we rotate the rows array by 1.
         // The rotate operation turns e.g. [ 0 1 2 3 ] in to [ 1 2 3 0 ], which
@@ -46,7 +46,7 @@ impl PageList {
         fastmem::rotateOnce(unsafe {
             core::slice::from_raw_parts_mut(
                 rows.add(pn.y as usize),
-                ((*node).data.size.rows - pn.y) as usize,
+                (super::Node::rows(node) - pn.y) as usize,
             )
         });
 
@@ -69,13 +69,13 @@ impl PageList {
         //
         // Technically we only need to mark rows from the erased row to the end
         // of the page as dirty, but that's slower and this is a hot function.
-        unsafe { (*node).data.dirty = true };
+        unsafe { (*super::Node::page(node)).dirty = true };
 
         // We iterate through all of the following pages in order to move their
         // rows up by 1 as well.
         while !unsafe { (*node).next }.is_null() {
             let next = unsafe { (*node).next };
-            let next_rows = unsafe { (*next).data.rows.ptr((*next).data.memory_ptr()) };
+            let next_rows = unsafe { (*super::Node::page(next)).rows.ptr((*super::Node::page(next)).memory_ptr()) };
 
             // We take the top row of the page and clone it in to the bottom
             // row of the previous page, which gets rid of the top row that was
@@ -93,9 +93,9 @@ impl PageList {
             //    6         6         6  |      7
             //    7         7         7 <'      4
             unsafe {
-                (*node).data.clone_row_from(
-                    &(*next).data,
-                    rows.add((*node).data.size.rows as usize - 1),
+                (*super::Node::page(node)).clone_row_from(
+                    &(*super::Node::page(next)),
+                    rows.add(super::Node::rows(node) as usize - 1),
                     next_rows,
                 )
             }
@@ -105,11 +105,11 @@ impl PageList {
             rows = next_rows;
 
             fastmem::rotateOnce(unsafe {
-                core::slice::from_raw_parts_mut(rows, (*node).data.size.rows as usize)
+                core::slice::from_raw_parts_mut(rows, super::Node::rows(node) as usize)
             });
 
             // Mark the whole page as dirty.
-            unsafe { (*node).data.dirty = true };
+            unsafe { (*super::Node::page(node)).dirty = true };
 
             // Our tracked pins for this page need to be updated.
             // If the pin is in row 0 that means the corresponding row has
@@ -123,7 +123,7 @@ impl PageList {
                 if unsafe { (*p).y } == 0 {
                     unsafe {
                         (*p).node = (*node).prev;
-                        (*p).y = (*(*p).node).data.size.rows - 1;
+                        (*p).y = super::Node::rows((*p).node) - 1;
                     }
                     continue;
                 }
@@ -133,9 +133,9 @@ impl PageList {
 
         // Clear the final row which was rotated from the top of the page.
         unsafe {
-            let cols = (*node).data.size.cols as usize;
-            let row = rows.add((*node).data.size.rows as usize - 1);
-            (*node).data.clear_cells(row, 0, cols);
+            let cols = super::Node::cols(node) as usize;
+            let row = rows.add(super::Node::rows(node) as usize - 1);
+            (*super::Node::page(node)).clear_cells(row, 0, cols);
         }
 
         Ok(())
@@ -177,15 +177,15 @@ impl PageList {
         let pn = self.pin(pt).unwrap();
 
         let mut node: *mut Node = pn.node;
-        let mut rows = unsafe { (*node).data.rows.ptr((*node).data.memory_ptr()) };
+        let mut rows = unsafe { (*super::Node::page(node)).rows.ptr((*super::Node::page(node)).memory_ptr()) };
 
         // If the row limit is less than the remaining rows before the end of the
         // page, then we clear the row, rotate it to the end of the boundary limit
         // and update our pins.
-        if (unsafe { (*node).data.size.rows } - pn.y) as usize > limit {
+        if (unsafe { super::Node::rows(node) } - pn.y) as usize > limit {
             unsafe {
-                let cols = (*node).data.size.cols as usize;
-                (*node).data.clear_cells(rows.add(pn.y as usize), 0, cols);
+                let cols = super::Node::cols(node) as usize;
+                (*super::Node::page(node)).clear_cells(rows.add(pn.y as usize), 0, cols);
             }
             fastmem::rotateOnce(unsafe {
                 core::slice::from_raw_parts_mut(rows.add(pn.y as usize), limit + 1)
@@ -195,7 +195,7 @@ impl PageList {
             //
             // Technically we only need to mark from the erased row to the
             // limit but this is a hot function, so we want to minimize work.
-            unsafe { (*node).data.dirty = true };
+            unsafe { (*super::Node::page(node)).dirty = true };
 
             // If our viewport is a pin and our pin is within the erased
             // region we need to maybe shift our cache up. We do this here instead
@@ -239,7 +239,7 @@ impl PageList {
         fastmem::rotateOnce(unsafe {
             core::slice::from_raw_parts_mut(
                 rows.add(pn.y as usize),
-                ((*node).data.size.rows - pn.y) as usize,
+                (super::Node::rows(node) - pn.y) as usize,
             )
         });
 
@@ -247,12 +247,12 @@ impl PageList {
         //
         // Technically we only need to mark rows from the erased row to the end
         // of the page as dirty, but that's slower and this is a hot function.
-        unsafe { (*node).data.dirty = true };
+        unsafe { (*super::Node::page(node)).dirty = true };
 
         // We need to keep track of how many rows we've shifted so that we can
         // determine at what point we need to do a partial shift on subsequent
         // pages.
-        let mut shifted: usize = (unsafe { (*node).data.size.rows } - pn.y) as usize;
+        let mut shifted: usize = (unsafe { super::Node::rows(node) } - pn.y) as usize;
 
         // Update tracked pins.
         {
@@ -288,12 +288,12 @@ impl PageList {
 
         while !unsafe { (*node).next }.is_null() {
             let next = unsafe { (*node).next };
-            let next_rows = unsafe { (*next).data.rows.ptr((*next).data.memory_ptr()) };
+            let next_rows = unsafe { (*super::Node::page(next)).rows.ptr((*super::Node::page(next)).memory_ptr()) };
 
             unsafe {
-                (*node).data.clone_row_from(
-                    &(*next).data,
-                    rows.add((*node).data.size.rows as usize - 1),
+                (*super::Node::page(node)).clone_row_from(
+                    &(*super::Node::page(next)),
+                    rows.add(super::Node::rows(node) as usize - 1),
                     next_rows,
                 )
             }
@@ -308,10 +308,10 @@ impl PageList {
             //
             // The logic here is very similar to the one before the loop.
             let shifted_limit = limit - shifted;
-            if (unsafe { (*node).data.size.rows } as usize) > shifted_limit {
+            if (unsafe { super::Node::rows(node) } as usize) > shifted_limit {
                 unsafe {
-                    let cols = (*node).data.size.cols as usize;
-                    (*node).data.clear_cells(rows, 0, cols);
+                    let cols = super::Node::cols(node) as usize;
+                    (*super::Node::page(node)).clear_cells(rows, 0, cols);
                 }
                 fastmem::rotateOnce(unsafe {
                     core::slice::from_raw_parts_mut(rows, shifted_limit + 1)
@@ -321,7 +321,7 @@ impl PageList {
                 //
                 // Technically we only need to mark from the erased row to the
                 // limit but this is a hot function, so we want to minimize work.
-                unsafe { (*node).data.dirty = true };
+                unsafe { (*super::Node::page(node)).dirty = true };
 
                 // See the other places we do something similar in this function
                 // for a detailed explanation.
@@ -351,7 +351,7 @@ impl PageList {
                     if unsafe { (*p).y } == 0 {
                         unsafe {
                             (*p).node = (*node).prev;
-                            (*p).y = (*(*p).node).data.size.rows - 1;
+                            (*p).y = super::Node::rows((*p).node) - 1;
                         }
                         continue;
                     }
@@ -362,14 +362,14 @@ impl PageList {
             }
 
             fastmem::rotateOnce(unsafe {
-                core::slice::from_raw_parts_mut(rows, (*node).data.size.rows as usize)
+                core::slice::from_raw_parts_mut(rows, super::Node::rows(node) as usize)
             });
 
             // Mark the whole page as dirty.
-            unsafe { (*node).data.dirty = true };
+            unsafe { (*super::Node::page(node)).dirty = true };
 
             // Account for the rows shifted in this node.
-            shifted += unsafe { (*node).data.size.rows } as usize;
+            shifted += unsafe { super::Node::rows(node) } as usize;
 
             // See the other places we do something similar in this function
             // for a detailed explanation.
@@ -393,7 +393,7 @@ impl PageList {
                 if unsafe { (*p).y } == 0 {
                     unsafe {
                         (*p).node = (*node).prev;
-                        (*p).y = (*(*p).node).data.size.rows - 1;
+                        (*p).y = super::Node::rows((*p).node) - 1;
                     }
                     continue;
                 }
@@ -404,9 +404,9 @@ impl PageList {
         // We reached the end of the page list before the limit, so we clear
         // the final row since it was rotated down from the top of this page.
         unsafe {
-            let cols = (*node).data.size.cols as usize;
-            let row = rows.add((*node).data.size.rows as usize - 1);
-            (*node).data.clear_cells(row, 0, cols);
+            let cols = super::Node::cols(node) as usize;
+            let row = rows.add(super::Node::rows(node) as usize - 1);
+            (*super::Node::page(node)).clear_cells(row, 0, cols);
         }
 
         Ok(())
@@ -471,14 +471,14 @@ impl PageList {
                 if unsafe { (*chunk.node).next }.is_null()
                     && unsafe { (*chunk.node).prev }.is_null()
                 {
-                    let page: *mut crate::page::Page = unsafe { &mut (*chunk.node).data };
+                    let page: *mut crate::page::Page = unsafe { &mut (*super::Node::page(chunk.node)) };
                     erased += unsafe { (*page).size.rows } as usize;
                     unsafe { (*page).reinit() };
                     unsafe { (*page).size.rows = 0 };
                     break;
                 }
 
-                erased += unsafe { (*chunk.node).data.size.rows } as usize;
+                erased += unsafe { super::Node::rows(chunk.node) } as usize;
                 self.erase_page(chunk.node);
                 continue;
             }
@@ -493,8 +493,8 @@ impl PageList {
             // This is a cheap operation because we're just moving cell offsets,
             // not the actual cell contents.
             assert!(chunk.start == 0);
-            let rows = unsafe { (*chunk.node).data.rows.ptr((*chunk.node).data.memory_ptr()) };
-            let scroll_amount = unsafe { (*chunk.node).data.size.rows } - chunk.end;
+            let rows = unsafe { (*super::Node::page(chunk.node)).rows.ptr((*super::Node::page(chunk.node)).memory_ptr()) };
+            let scroll_amount = unsafe { super::Node::rows(chunk.node) } - chunk.end;
             for i in 0..scroll_amount {
                 let src: *mut Row = unsafe { rows.add((i + chunk.end) as usize) };
                 let dst: *mut Row = unsafe { rows.add(i as usize) };
@@ -508,11 +508,11 @@ impl PageList {
 
             // Clear our remaining cells that we didn't shift or swapped
             // in case we grow back into them.
-            for i in scroll_amount..unsafe { (*chunk.node).data.size.rows } {
+            for i in scroll_amount..unsafe { super::Node::rows(chunk.node) } {
                 let row: *mut Row = unsafe { rows.add(i as usize) };
                 unsafe {
-                    let cols = (*chunk.node).data.size.cols as usize;
-                    (*chunk.node).data.clear_cells(row, 0, cols);
+                    let cols = super::Node::cols(chunk.node) as usize;
+                    (*super::Node::page(chunk.node)).clear_cells(row, 0, cols);
                 }
             }
 
@@ -535,11 +535,11 @@ impl PageList {
             }
 
             // Our new size is the amount we scrolled
-            unsafe { (*chunk.node).data.size.rows = scroll_amount };
+            unsafe { (*super::Node::page(chunk.node)).size.rows = scroll_amount };
             erased += chunk.end as usize;
 
             // PORT NOTE: `defer chunk.node.data.assertIntegrity()`.
-            unsafe { (*chunk.node).data.assert_integrity() };
+            unsafe { (*super::Node::page(chunk.node)).assert_integrity() };
         }
 
         // Update our total row count

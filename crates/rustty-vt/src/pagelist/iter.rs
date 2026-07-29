@@ -238,7 +238,7 @@ impl CellIterator {
 
         match self.row_it.page_it.direction {
             Direction::RightDown => {
-                if (cell.x as usize) + 1 < unsafe { (*cell.node).data.size.cols } as usize {
+                if (cell.x as usize) + 1 < unsafe { super::Node::cols(cell.node) } as usize {
                     // We still have cells in this row, increase x.
                     let mut copy = cell.pin_copy();
                     copy.x += 1;
@@ -259,7 +259,7 @@ impl CellIterator {
                     // We need to move to the previous row and last col
                     if let Some(next_cell) = self.row_it.next() {
                         let mut copy = next_cell.pin_copy();
-                        copy.x = unsafe { (*next_cell.node).data.size.cols } - 1;
+                        copy.x = unsafe { super::Node::cols(next_cell.node) } - 1;
                         self.cell = Some(copy);
                     } else {
                         self.cell = None;
@@ -375,14 +375,14 @@ impl PageIterator {
                 Some(Chunk {
                     node: row.node,
                     start: row.y,
-                    end: unsafe { (*row.node).data.size.rows },
+                    end: unsafe { super::Node::rows(row.node) },
                 })
             }
 
             Limit::Count(limit) => {
                 assert!(*limit > 0); // should be handled already
                 let len = core::cmp::min(
-                    unsafe { (*row.node).data.size.rows } - row.y,
+                    unsafe { super::Node::rows(row.node) } - row.y,
                     *limit as size::CellCountInt,
                 );
                 if (len as usize) > *limit {
@@ -422,7 +422,7 @@ impl PageIterator {
                     return Some(Chunk {
                         node: row.node,
                         start: row.y,
-                        end: unsafe { (*row.node).data.size.rows },
+                        end: unsafe { super::Node::rows(row.node) },
                     });
                 }
 
@@ -459,7 +459,7 @@ impl PageIterator {
                     } else {
                         Some(Pin {
                             node: next_page,
-                            y: unsafe { (*next_page).data.size.rows } - 1,
+                            y: unsafe { super::Node::rows(next_page) } - 1,
                             x: 0,
                             garbage: false,
                         })
@@ -503,7 +503,7 @@ impl PageIterator {
                         } else {
                             Some(Pin {
                                 node: next_page,
-                                y: unsafe { (*next_page).data.size.rows } - 1,
+                                y: unsafe { super::Node::rows(next_page) } - 1,
                                 x: 0,
                                 garbage: false,
                             })
@@ -546,7 +546,7 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn rows(self) -> *mut [pagepkg::Row] {
-        let rows_ptr = unsafe { (*self.node).data.rows.ptr((*self.node).data.memory_ptr()) };
+        let rows_ptr = unsafe { (*super::Node::page(self.node)).rows.ptr((*super::Node::page(self.node)).memory_ptr()) };
         core::ptr::slice_from_raw_parts_mut(
             unsafe { rows_ptr.add(self.start as usize) },
             (self.end - self.start) as usize,
@@ -555,7 +555,7 @@ impl Chunk {
 
     /// Returns true if this chunk represents every row in the page.
     pub fn full_page(self) -> bool {
-        self.start == 0 && self.end == unsafe { (*self.node).data.size.rows }
+        self.start == 0 && self.end == unsafe { super::Node::rows(self.node) }
     }
 
     /// Returns true if this chunk overlaps with the given other chunk

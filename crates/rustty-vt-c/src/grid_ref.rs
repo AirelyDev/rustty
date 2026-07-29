@@ -252,7 +252,7 @@ pub unsafe fn grid_ref_hyperlink_uri(
     // const rac = p.node.data.getRowAndCell(p.x, p.y);
     // const cell = rac.cell;
     // SAFETY: `p.node` is a live page node (the pin came from a valid ref).
-    let rac = unsafe { (*p.node).data.get_row_and_cell(p.x as usize, p.y as usize) };
+    let rac = unsafe { (*rustty_vt::pagelist::Node::page(p.node)).get_row_and_cell(p.x as usize, p.y as usize) };
     let cell = rac.cell;
 
     // if (!cell.hyperlink) { out_len.* = 0; return .success; }
@@ -262,7 +262,7 @@ pub unsafe fn grid_ref_hyperlink_uri(
     }
 
     // const link_id = p.node.data.lookupHyperlink(cell) orelse { out_len.* = 0; return .success; };
-    let link_id = match unsafe { (*p.node).data.lookup_hyperlink(cell) } {
+    let link_id = match unsafe { (*rustty_vt::pagelist::Node::page(p.node)).lookup_hyperlink(cell) } {
         Some(id) => id,
         None => {
             unsafe { *out_len = 0 };
@@ -274,8 +274,8 @@ pub unsafe fn grid_ref_hyperlink_uri(
     // SAFETY: `link_id` was just looked up against this page's hyperlink set; the
     // page memory base outlives the borrowed `uri` slice (read immediately).
     let uri: &[u8] = unsafe {
-        let base = (*p.node).data.memory_ptr();
-        let entry = (*p.node).data.hyperlink_set.get(base, link_id);
+        let base = (*rustty_vt::pagelist::Node::page(p.node)).memory_ptr();
+        let entry = (*rustty_vt::pagelist::Node::page(p.node)).hyperlink_set.get(base, link_id);
         (*entry).uri.slice(base)
     };
 
@@ -329,8 +329,8 @@ pub unsafe fn grid_ref_style(ref_: *const CGridRef, out: *mut Style) -> Result {
             // SAFETY: `cell.style_id` is a live style id for this page; the page
             // memory base outlives the read; `out` is a valid writable `Style`.
             let style = unsafe {
-                let base = (*p.node).data.memory_ptr();
-                *(*p.node).data.styles.get(base, (*cell).style_id())
+                let base = (*rustty_vt::pagelist::Node::page(p.node)).memory_ptr();
+                *(*rustty_vt::pagelist::Node::page(p.node)).styles.get(base, (*cell).style_id())
             };
             unsafe { *out = Style::from_style(style) };
         }

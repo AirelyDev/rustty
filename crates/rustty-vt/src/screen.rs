@@ -1000,7 +1000,7 @@ impl Screen {
                             // .x = if (sel.rectangle) @min(ordered.tl.x, node.cols() - 1)
                             //      else 0
                             x: if sel.rectangle {
-                                let cols = unsafe { (*node).data.size.cols };
+                                let cols = unsafe { crate::pagelist::Node::cols(node) };
                                 core::cmp::min(unsafe { (*ordered.tl).x }, cols - 1)
                             } else {
                                 0
@@ -1019,7 +1019,7 @@ impl Screen {
                     None => {
                         // const node = pages.pages.last.?;
                         let node = pages.pages.last;
-                        let cols = unsafe { (*node).data.size.cols };
+                        let cols = unsafe { crate::pagelist::Node::cols(node) };
                         pages.track_pin(Pin {
                             node,
                             // .x = if (sel.rectangle) @min(ordered.br.x, node.cols() - 1)
@@ -1029,7 +1029,7 @@ impl Screen {
                             } else {
                                 cols - 1
                             },
-                            y: unsafe { (*node).data.size.rows } - 1,
+                            y: unsafe { crate::pagelist::Node::rows(node) } - 1,
                             garbage: false,
                         })?
                     }
@@ -1125,7 +1125,7 @@ impl Screen {
         // capacity below it will be short the ref count on our
         // current style and hyperlink, so we need to init those.
         let new_node = self.pages.increase_capacity(node, adjustment)?;
-        let new_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*new_node).data) };
+        let new_page: *mut Page = unsafe { crate::pagelist::Node::page(new_node) };
 
         // Re-add the style, if the page somehow doesn't have enough
         // memory to add it, we emit a warning and gracefully degrade
@@ -1371,7 +1371,7 @@ impl Screen {
             // the cells.
             if self.pages.rows == 1 {
                 let page: *mut Page =
-                    unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                    unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
                 let row = self.cursor.page_row;
                 let cells = unsafe { (*page).get_cells(row) };
                 self.clear_cells(page, row, cells);
@@ -1450,7 +1450,7 @@ impl Screen {
             // if we have a bg color at all.
             if !matches!(self.cursor.style.bg_color, style::Color::None) {
                 let page: *mut Page =
-                    unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                    unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
                 let row = self.cursor.page_row;
                 let cells = unsafe { (*page).get_cells(row) };
                 self.clear_cells(page, row, cells);
@@ -1524,7 +1524,7 @@ impl Screen {
 
                 let pin = self.cursor.page_pin;
                 let page: *mut Page =
-                    unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                    unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
 
                 // Rotate the rows so that the newly created empty row is at the
                 // beginning. e.g. [ 0 1 2 3 ] in to [ 3 0 1 2 ].
@@ -1597,8 +1597,8 @@ impl Screen {
         assert!(!current.is_null());
         while !std::ptr::eq(current, unsafe { (*self.cursor.page_pin).node }) {
             let prev = unsafe { (*current).prev };
-            let prev_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*prev).data) };
-            let cur_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*current).data) };
+            let prev_page: *mut Page = unsafe { crate::pagelist::Node::page(prev) };
+            let cur_page: *mut Page = unsafe { crate::pagelist::Node::page(current) };
             let prev_rows = unsafe { (*prev_page).rows.ptr((*prev_page).memory_ptr()) };
             let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
 
@@ -1627,7 +1627,7 @@ impl Screen {
         debug_assert!(std::ptr::eq(current, unsafe {
             (*self.cursor.page_pin).node
         }));
-        let cur_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*current).data) };
+        let cur_page: *mut Page = unsafe { crate::pagelist::Node::page(current) };
         let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
         let pin_y = unsafe { (*self.cursor.page_pin).y } as usize;
         let cur_size_rows = unsafe { (*cur_page).size.rows } as usize;
@@ -1701,7 +1701,7 @@ impl Screen {
             // manualStyleUpdate, because the cursor position may have already been
             // updated but the pin has not, which would fail integrity checks.
             let old_page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
             unsafe {
                 let base = (*old_page).memory_ptr();
                 (*old_page).styles.release(base, self.cursor.style_id);
@@ -1713,7 +1713,7 @@ impl Screen {
         // If we have a hyperlink then we need to release it from the old page.
         if self.cursor.hyperlink.is_some() {
             let old_page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
             unsafe {
                 let base = (*old_page).memory_ptr();
                 (*old_page)
@@ -1826,7 +1826,7 @@ impl Screen {
         if opts.hyperlink && other_hyperlink_id != 0 {
             // Get the hyperlink from the other cursor's page.
             let other_page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*other_page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*other_page_pin).node) };
             let other_link = unsafe {
                 let base = (*other_page).memory_ptr();
                 (*other_page).hyperlink_set.get(base, other_hyperlink_id)
@@ -1887,11 +1887,11 @@ impl Screen {
 
         // If the last cell in the row is a spacer head we need to clear it.
         let cells = unsafe { (*self.cursor.page_pin).cells(pagelist::pin::CellSubset::All) };
-        let cols = unsafe { (*(*self.cursor.page_pin).node).data.size.cols } as usize;
+        let cols = unsafe { crate::pagelist::Node::cols((*self.cursor.page_pin).node) } as usize;
         let cell = unsafe { *(cells as *mut pagepkg::Cell).add(cols - 1) };
         if cell.wide() == pagepkg::Wide::SpacerHead {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
             let last = unsafe { (cells as *mut pagepkg::Cell).add(cols - 1) };
             let slice = core::ptr::slice_from_raw_parts_mut(last, 1);
             self.clear_cells(page, page_row, slice);
@@ -1991,7 +1991,7 @@ impl Screen {
             // PORT NOTE: `chunk.node` is the `*mut Node`; `&chunk.node.data` is
             // the page. We take a raw `*mut Page` via `addr_of_mut!` (the page
             // lives in the node) and read `chunk.rows()` (a `*mut [Row]`).
-            let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*chunk.node).data) };
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(chunk.node) };
             let rows = chunk.rows();
             let rows_len = rows.len();
             let rows_base = rows as *mut Row;
@@ -2237,7 +2237,7 @@ impl Screen {
     pub fn split_cell_boundary(&mut self, x: size::CellCountInt) {
         // const page = &self.cursor.page_pin.node.data;
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
 
         // PORT NOTE: stash the raw cursor pin/row pointers in locals up front so
         // the `clear_cells(&mut self, ...)` calls below don't reborrow `self`
@@ -2254,7 +2254,7 @@ impl Screen {
         // end. The reference's single `defer` runs at every exit identically.
 
         // const cols = self.cursor.page_pin.node.data.size.cols;
-        let cols = unsafe { (*(*cursor_page_pin).node).data.size.cols };
+        let cols = unsafe { crate::pagelist::Node::cols((*cursor_page_pin).node) };
 
         // `x` may be up to an INCLUDING `cols`, since that signifies splitting
         // the boundary to the right of the final cell in the row.
@@ -2305,11 +2305,11 @@ impl Screen {
                     let p_rac = p_row.row_and_cell();
                     let p_cells = p_row.cells(pagelist::pin::CellSubset::All);
                     let p_cells_base = p_cells as *mut Cell;
-                    let p_cols = unsafe { (*p_row.node).data.size.cols };
+                    let p_cols = unsafe { crate::pagelist::Node::cols(p_row.node) };
                     let p_cell = unsafe { *p_cells_base.add(p_cols as usize - 1) };
                     if p_cell.wide() == pagepkg::Wide::SpacerHead {
                         let p_page: *mut Page =
-                            unsafe { core::ptr::addr_of_mut!((*p_row.node).data) };
+                            unsafe { crate::pagelist::Node::page(p_row.node) };
                         let slice = core::ptr::slice_from_raw_parts_mut(
                             unsafe { p_cells_base.add(p_cols as usize - 1) },
                             1,
@@ -2435,7 +2435,7 @@ impl Screen {
             // Note we do NOT use endHyperlink because we want to keep
             // our allocated self.cursor.hyperlink valid.
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
             unsafe {
                 let base = (*page).memory_ptr();
                 (*page)
@@ -2500,7 +2500,7 @@ impl Screen {
                     // For `.true`, clear all prompt lines starting from the beginning.
                     osc::semantic_prompt::Redraw::Last => {
                         let page: *mut Page = unsafe {
-                            core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data)
+                            crate::pagelist::Node::page((*self.cursor.page_pin).node)
                         };
                         let row = self.cursor.page_row;
                         let cells = unsafe { (*page).get_cells(row) };
@@ -2530,7 +2530,7 @@ impl Screen {
                         let mut it = start.row_iterator(pagelist::iter::Direction::RightDown, None);
                         while let Some(pin) = it.next() {
                             let page: *mut Page =
-                                unsafe { core::ptr::addr_of_mut!((*pin.node).data) };
+                                unsafe { crate::pagelist::Node::page(pin.node) };
                             let row = pin.row_and_cell().row;
                             let cells = unsafe { (*page).get_cells(row) };
                             self.clear_cells(page, row, cells);
@@ -2831,7 +2831,7 @@ impl Screen {
         use crate::ref_counted_set::AddError;
 
         let mut page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
 
         // std.log.warn("active styles={}", .{page.styles.count()});
 
@@ -2903,7 +2903,7 @@ impl Screen {
                     }
                 };
 
-                page = unsafe { core::ptr::addr_of_mut!((*node).data) };
+                page = unsafe { crate::pagelist::Node::page(node) };
                 match unsafe {
                     let base = (*page).memory_ptr();
                     (*page).styles.add(base, self.cursor.style)
@@ -2951,11 +2951,11 @@ impl Screen {
         // Get our capacities. We include our target row because its
         // capacity will be preserved.
         let bytes_above =
-            Page::layout(unsafe { (*pin.node).data.exact_row_capacity(0, pin.y as usize + 1) })
+            Page::layout(unsafe { (*crate::pagelist::Node::page(pin.node)).exact_row_capacity(0, pin.y as usize + 1) })
                 .total_size;
         let bytes_below = Page::layout(unsafe {
-            let rows = (*pin.node).data.size.rows as usize;
-            (*pin.node).data.exact_row_capacity(pin.y as usize, rows)
+            let rows = crate::pagelist::Node::rows(pin.node) as usize;
+            (*crate::pagelist::Node::page(pin.node)).exact_row_capacity(pin.y as usize, rows)
         })
         .total_size;
 
@@ -3002,7 +3002,7 @@ impl Screen {
         // fn and the page integrity gate runs unconditionally after it against
         // the then-current pin (VALIDATION_REPORT §3e / §3c.9).
         let result = self.append_grapheme_inner(cell, cp);
-        unsafe { (*(*self.cursor.page_pin).node).data.assert_integrity() };
+        unsafe { (*crate::pagelist::Node::page((*self.cursor.page_pin).node)).assert_integrity() };
         result
     }
 
@@ -3016,8 +3016,7 @@ impl Screen {
         use crate::pagelist::grow::IncreaseCapacity;
 
         let result = unsafe {
-            (*(*self.cursor.page_pin).node)
-                .data
+            (*crate::pagelist::Node::page((*self.cursor.page_pin).node))
                 .append_grapheme(self.cursor.page_row, cell, cp)
         };
         match result {
@@ -3052,7 +3051,7 @@ impl Screen {
                 };
 
                 unsafe {
-                    (*(*self.cursor.page_pin).node).data.append_grapheme(
+                    (*crate::pagelist::Node::page((*self.cursor.page_pin).node)).append_grapheme(
                         self.cursor.page_row,
                         reloaded_cell,
                         cp,
@@ -3167,7 +3166,7 @@ impl Screen {
 
         // Insert the hyperlink into page memory
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
         let id: hyperlink::Id = match unsafe { (*page).insert_hyperlink((*link).clone()) } {
             Ok(id) => id,
             Err(e) => {
@@ -3204,7 +3203,7 @@ impl Screen {
         // is fine because if it is ever pruned the context deleted callback
         // will be called.
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
         unsafe {
             let base = (*page).memory_ptr();
             (*page)
@@ -3226,7 +3225,7 @@ impl Screen {
         debug_assert!(self.cursor.hyperlink_id != 0);
 
         let mut page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
         match unsafe {
             (*page).set_hyperlink(
                 self.cursor.page_row,
@@ -3268,7 +3267,7 @@ impl Screen {
                     debug_assert!(std::ptr::eq(new_node, unsafe {
                         (*self.cursor.page_pin).node
                     }));
-                    page = unsafe { core::ptr::addr_of_mut!((*new_node).data) };
+                    page = unsafe { crate::pagelist::Node::page(new_node) };
                 }
 
                 let _ = self.increase_capacity(
@@ -3508,7 +3507,7 @@ impl Screen {
             // First, check the current row for semantic boundaries before the clicked position.
             if let Some(v) = semantic_prompt_state {
                 let row = it_prev.row_and_cell().row;
-                let cells = unsafe { (*it_prev.node).data.get_cells(row) };
+                let cells = unsafe { (*crate::pagelist::Node::page(it_prev.node)).get_cells(row) };
                 let cells = unsafe { &*cells };
                 // Scan backwards from clicked position to find where our content starts
                 for i in 0..(opts.pin.x as usize + 1) {
@@ -3548,7 +3547,7 @@ impl Screen {
                 if let Some(v) = semantic_prompt_state {
                     // We need to check every cell in this row in reverse
                     // order since we're going up and back.
-                    let cells = unsafe { (*p.node).data.get_cells(row) };
+                    let cells = unsafe { (*crate::pagelist::Node::page(p.node)).get_cells(row) };
                     let cells = unsafe { &*cells };
                     for x in 0..cells.len() {
                         let x_rev = cells.len() - 1 - x;
@@ -3577,7 +3576,7 @@ impl Screen {
 
                 if let Some(v) = semantic_prompt_state {
                     // We need to check every cell in this row
-                    let cells = unsafe { (*p.node).data.get_cells(row) };
+                    let cells = unsafe { (*crate::pagelist::Node::page(p.node)).get_cells(row) };
                     let cells = unsafe { &*cells };
 
                     // If this is our pin row we can start from our x because
@@ -3596,7 +3595,7 @@ impl Screen {
                     if start_offset == 0 && cells[0].semantic_content() != v {
                         let mut prev = p.up(1).unwrap();
                         // prev.x = prev.node.cols() - 1;
-                        prev.x = unsafe { (*prev.node).data.size.cols } - 1;
+                        prev.x = unsafe { crate::pagelist::Node::cols(prev.node) } - 1;
                         break 'end_pin prev;
                     }
 
@@ -3612,7 +3611,7 @@ impl Screen {
 
                 if !unsafe { (*row).wrap() } {
                     let mut copy = p;
-                    copy.x = unsafe { (*p.node).data.size.cols } - 1;
+                    copy.x = unsafe { crate::pagelist::Node::cols(p.node) } - 1;
                     break 'end_pin copy;
                 }
             }
@@ -3829,7 +3828,7 @@ impl Screen {
 
                 // If we are going to the next row and it isn't wrapped, we
                 // return the previous.
-                if p.x == unsafe { (*p.node).data.size.cols } - 1 && !unsafe { (*rac.row).wrap() } {
+                if p.x == unsafe { crate::pagelist::Node::cols(p.node) } - 1 && !unsafe { (*rac.row).wrap() } {
                     break 'end p;
                 }
 
@@ -3849,7 +3848,7 @@ impl Screen {
 
                 // If we are going to the next row and it isn't wrapped, we
                 // return the previous.
-                if p.x == unsafe { (*p.node).data.size.cols } - 1 && !unsafe { (*rac.row).wrap() } {
+                if p.x == unsafe { crate::pagelist::Node::cols(p.node) } - 1 && !unsafe { (*rac.row).wrap() } {
                     break 'start prev;
                 }
 
@@ -3909,7 +3908,7 @@ impl Screen {
             // the prompt and will trim the trailing whitespace.
             let start_pin = self.pages.get_top_left(point::Tag::Screen);
             let mut end_pin = next.up(1)?;
-            end_pin.x = unsafe { (*end_pin.node).data.size.cols } - 1;
+            end_pin.x = unsafe { crate::pagelist::Node::cols(end_pin.node) } - 1;
             let mut cell_it =
                 end_pin.cell_iterator(pagelist::iter::Direction::LeftUp, Some(start_pin));
             while let Some(p) = cell_it.next() {
@@ -4010,7 +4009,7 @@ impl Screen {
                 cursor_pin.row_iterator(pagelist::iter::Direction::RightDown, Some(click_pin));
             'row_it: while let Some(row_pin) = row_it.next() {
                 let rac = row_pin.row_and_cell();
-                let cells: &[pagepkg::Cell] = unsafe { &*(*row_pin.node).data.get_cells(rac.row) };
+                let cells: &[pagepkg::Cell] = unsafe { &*(*crate::pagelist::Node::page(row_pin.node)).get_cells(rac.row) };
 
                 // Determine if this row is our cursor.
                 let is_cursor_row =
@@ -4103,7 +4102,7 @@ impl Screen {
             cursor_pin.row_iterator(pagelist::iter::Direction::LeftUp, Some(click_pin));
         'row_it: while let Some(row_pin) = row_it.next() {
             let rac = row_pin.row_and_cell();
-            let cells: &[pagepkg::Cell] = unsafe { &*(*row_pin.node).data.get_cells(rac.row) };
+            let cells: &[pagepkg::Cell] = unsafe { &*(*crate::pagelist::Node::page(row_pin.node)).get_cells(rac.row) };
 
             // Determine the length of the cells we look at in this row.
             let end_len: usize = 'end_len: {
@@ -4307,7 +4306,7 @@ impl Screen {
                 };
 
                 unsafe {
-                    (*(*self.cursor.page_pin).node).data.append_grapheme(
+                    (*crate::pagelist::Node::page((*self.cursor.page_pin).node)).append_grapheme(
                         self.cursor.page_row,
                         cell,
                         c,
@@ -4347,7 +4346,7 @@ impl Screen {
                     // If we have a ref-counted style, increase.
                     if self.cursor.style_id != style::DEFAULT_ID {
                         let page = unsafe {
-                            core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data)
+                            crate::pagelist::Node::page((*self.cursor.page_pin).node)
                         };
                         unsafe {
                             let base = (*page).memory_ptr();
@@ -4417,7 +4416,7 @@ impl Screen {
                     // If we have a ref-counted style, increase twice.
                     if self.cursor.style_id != style::DEFAULT_ID {
                         let page = unsafe {
-                            core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data)
+                            crate::pagelist::Node::page((*self.cursor.page_pin).node)
                         };
                         unsafe {
                             let base = (*page).memory_ptr();
@@ -4479,7 +4478,7 @@ mod tests {
         )
         .unwrap();
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
 
         // Bold should create our style
         s2.set_attribute(crate::sgr::Attribute::Bold).unwrap();
@@ -4524,25 +4523,25 @@ mod tests {
         .unwrap();
 
         // We need to get the cursor on a new page.
-        let first_page_size = unsafe { (*s2.pages.pages.first).data.capacity.rows };
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s2.pages.pages.first).rows };
 
         // Fill the scrollback with blank lines until
         // there are only 5 rows left on the first page.
-        unsafe { (*s2.pages.pages.first).data.pause_integrity_checks(true) };
+        unsafe { (*crate::pagelist::Node::page(s2.pages.pages.first)).pause_integrity_checks(true) };
         for _ in 0..(first_page_size - 5) {
             s2.test_write_string(b"\n").unwrap();
         }
-        unsafe { (*s2.pages.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(s2.pages.pages.first)).pause_integrity_checks(false) };
 
         s2.test_write_string(b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10")
             .unwrap();
 
         // This should be PAGE 1
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
 
         // It should be the last page in the list.
-        assert!(std::ptr::eq(unsafe { &(*s2.pages.pages.last).data }, page));
+        assert!(std::ptr::eq(unsafe { &(*crate::pagelist::Node::page(s2.pages.pages.last)) }, page));
         // It should have a previous page.
         assert!(!unsafe { (*(*s2.cursor.page_pin).node).prev }.is_null());
 
@@ -4563,7 +4562,7 @@ mod tests {
         assert_eq!(0usize, unsafe { (*page).styles.count() });
         // The page after the page the cursor is now in should be page 1.
         assert!(std::ptr::eq(page, unsafe {
-            core::ptr::addr_of_mut!((*(*(*s2.cursor.page_pin).node).next).data)
+            crate::pagelist::Node::page((*(*s2.cursor.page_pin).node).next)
         }));
         // The cursor should be at 0, 0
         assert!(s2.cursor.x == 0);
@@ -4601,7 +4600,7 @@ mod tests {
         )
         .unwrap();
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
         s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true })
             .unwrap();
         assert!(s2.cursor.style.flags.bold);
@@ -4638,7 +4637,7 @@ mod tests {
         )
         .unwrap();
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
 
         // Create a hyperlink for the cursor.
         s2.start_hyperlink(b"https://example.com/", None).unwrap();
@@ -4683,25 +4682,25 @@ mod tests {
         .unwrap();
 
         // We need to get the cursor on a new page.
-        let first_page_size = unsafe { (*s2.pages.pages.first).data.capacity.rows };
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s2.pages.pages.first).rows };
 
         // Fill the scrollback with blank lines until
         // there are only 5 rows left on the first page.
-        unsafe { (*s2.pages.pages.first).data.pause_integrity_checks(true) };
+        unsafe { (*crate::pagelist::Node::page(s2.pages.pages.first)).pause_integrity_checks(true) };
         for _ in 0..(first_page_size - 5) {
             s2.test_write_string(b"\n").unwrap();
         }
-        unsafe { (*s2.pages.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(s2.pages.pages.first)).pause_integrity_checks(false) };
 
         s2.test_write_string(b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10")
             .unwrap();
 
         // This should be PAGE 1
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
 
         // It should be the last page in the list.
-        assert!(std::ptr::eq(unsafe { &(*s2.pages.pages.last).data }, page));
+        assert!(std::ptr::eq(unsafe { &(*crate::pagelist::Node::page(s2.pages.pages.last)) }, page));
         // It should have a previous page.
         assert!(!unsafe { (*(*s2.cursor.page_pin).node).prev }.is_null());
 
@@ -4722,7 +4721,7 @@ mod tests {
         assert!(s2.cursor.hyperlink_id == 0);
         // The page after the page the cursor is now in should be page 1.
         assert!(std::ptr::eq(page, unsafe {
-            core::ptr::addr_of_mut!((*(*(*s2.cursor.page_pin).node).next).data)
+            crate::pagelist::Node::page((*(*s2.cursor.page_pin).node).next)
         }));
         // The cursor should be at 0, 0
         assert!(s2.cursor.x == 0);
@@ -4750,7 +4749,7 @@ mod tests {
         // Create a hyperlink for the cursor.
         s.start_hyperlink(b"https://example.com/", None).unwrap();
         assert_eq!(1usize, unsafe {
-            (*(*s.cursor.page_pin).node).data.hyperlink_set.count()
+            (*crate::pagelist::Node::page((*s.cursor.page_pin).node)).hyperlink_set.count()
         });
         assert!(s.cursor.hyperlink_id != 0);
 
@@ -4766,7 +4765,7 @@ mod tests {
         )
         .unwrap();
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
 
         assert_eq!(0usize, unsafe { (*page).hyperlink_set.count() });
         assert!(s2.cursor.hyperlink_id == 0);
@@ -4799,7 +4798,7 @@ mod tests {
         // Create a hyperlink for the cursor.
         s.start_hyperlink(b"https://example.com/", None).unwrap();
         assert_eq!(1usize, unsafe {
-            (*(*s.cursor.page_pin).node).data.hyperlink_set.count()
+            (*crate::pagelist::Node::page((*s.cursor.page_pin).node)).hyperlink_set.count()
         });
         assert!(s.cursor.hyperlink_id != 0);
 
@@ -4815,7 +4814,7 @@ mod tests {
         )
         .unwrap();
         let page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
 
         assert_eq!(0usize, unsafe { (*page).hyperlink_set.count() });
         assert!(s2.cursor.hyperlink_id == 0);
@@ -4844,7 +4843,7 @@ mod tests {
             },
         )
         .unwrap();
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         assert_eq!(0usize, unsafe { (*page).styles.count() });
 
         // Set a new style
@@ -4876,7 +4875,7 @@ mod tests {
             },
         )
         .unwrap();
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         assert_eq!(0usize, unsafe { (*page).styles.count() });
 
         // Set a new style
@@ -4906,7 +4905,7 @@ mod tests {
             },
         )
         .unwrap();
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         assert_eq!(0usize, unsafe { (*page).styles.count() });
 
         // Set a new style
@@ -4938,7 +4937,7 @@ mod tests {
         .unwrap();
 
         // Scroll down enough to go to another page
-        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let start_page: *mut Page = unsafe { crate::pagelist::Node::page(s.pages.pages.last) };
         let rem = unsafe { (*start_page).capacity.rows };
         unsafe { (*start_page).pause_integrity_checks(true) };
         for _ in 0..rem {
@@ -4951,7 +4950,7 @@ mod tests {
         // above enough for a new page to show up.
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             assert!(!std::ptr::eq(start_page, page));
         }
 
@@ -4959,7 +4958,7 @@ mod tests {
         s.cursor_up(1);
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             assert!(std::ptr::eq(start_page, page));
         }
 
@@ -4967,7 +4966,7 @@ mod tests {
         s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             let styleval = unsafe {
                 let base = (*page).memory_ptr();
                 &*(*page).styles.get(base, s.cursor.style_id)
@@ -4979,7 +4978,7 @@ mod tests {
         s.cursor_down(1);
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             let styleval = unsafe {
                 let base = (*page).memory_ptr();
                 &*(*page).styles.get(base, s.cursor.style_id)
@@ -5005,7 +5004,7 @@ mod tests {
         )
         .unwrap();
 
-        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let start_page: *mut Page = unsafe { crate::pagelist::Node::page(s.pages.pages.last) };
         let rem = unsafe { (*start_page).capacity.rows };
         unsafe { (*start_page).pause_integrity_checks(true) };
         for _ in 0..rem {
@@ -5015,7 +5014,7 @@ mod tests {
 
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             assert!(!std::ptr::eq(start_page, page));
         }
 
@@ -5023,7 +5022,7 @@ mod tests {
         s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             let styleval = unsafe {
                 let base = (*page).memory_ptr();
                 &*(*page).styles.get(base, s.cursor.style_id)
@@ -5035,7 +5034,7 @@ mod tests {
         s.cursor_up(1);
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             assert!(std::ptr::eq(start_page, page));
 
             let styleval = unsafe {
@@ -5063,7 +5062,7 @@ mod tests {
         )
         .unwrap();
 
-        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let start_page: *mut Page = unsafe { crate::pagelist::Node::page(s.pages.pages.last) };
         let rem = unsafe { (*start_page).capacity.rows };
         unsafe { (*start_page).pause_integrity_checks(true) };
         for _ in 0..rem {
@@ -5073,7 +5072,7 @@ mod tests {
 
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             assert!(!std::ptr::eq(start_page, page));
         }
 
@@ -5081,7 +5080,7 @@ mod tests {
         s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             let styleval = unsafe {
                 let base = (*page).memory_ptr();
                 &*(*page).styles.get(base, s.cursor.style_id)
@@ -5093,7 +5092,7 @@ mod tests {
         s.cursor_absolute(1, 1);
         {
             let page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             assert!(std::ptr::eq(start_page, page));
 
             let styleval = unsafe {
@@ -5133,7 +5132,7 @@ mod tests {
         .unwrap();
 
         // Scroll down enough to go to another page
-        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let start_page: *mut Page = unsafe { crate::pagelist::Node::page(s.pages.pages.last) };
         let rem = unsafe { (*start_page).capacity.rows };
         unsafe { (*start_page).pause_integrity_checks(true) };
         for _ in 0..rem {
@@ -5142,7 +5141,7 @@ mod tests {
         unsafe { (*start_page).pause_integrity_checks(false) };
 
         let new_page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
 
         // We need our page to change for this test to make sense. If this
         // assertion fails then the bug is in the test: we should be scrolling
@@ -5196,7 +5195,7 @@ mod tests {
         s.cursor_absolute(1, 1);
         {
             let cur_page: *mut Page =
-                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+                unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
             // The page we're on now should NOT equal start_page, since its
             // capacity should have been adjusted, which invalidates our ptr.
             assert!(!std::ptr::eq(start_page, cur_page));
@@ -5210,7 +5209,7 @@ mod tests {
             assert!(styleval.flags.bold);
         }
 
-        unsafe { (*(*s.cursor.page_pin).node).data.assert_integrity() };
+        unsafe { (*crate::pagelist::Node::page((*s.cursor.page_pin).node)).assert_integrity() };
         unsafe { (*new_page).assert_integrity() };
 
         s.deinit();
@@ -6349,7 +6348,7 @@ mod tests {
             .pages
             .page_iterator(pagelist::iter::Direction::RightDown, scr(), None);
         while let Some(chunk) = it.next() {
-            let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*chunk.node).data) };
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(chunk.node) };
             for y in chunk.start..chunk.end {
                 let rac = unsafe { (*page).get_row_and_cell(0, y as usize) };
                 if y % 2 == 0 {
@@ -8323,12 +8322,12 @@ mod tests {
         let second = unsafe { (*first).next };
         // PORT NOTE: `first.page().size.cols = 2` — a deliberate mid-reflow
         // narrow page, written directly through the node pointer.
-        unsafe { (*first).data.size.cols = 2 };
+        unsafe { (*crate::pagelist::Node::page(first)).size.cols = 2 };
         s.pages.pause_integrity_checks(true);
 
-        assert_eq!(2 as size::CellCountInt, unsafe { (*first).data.size.cols });
+        assert_eq!(2 as size::CellCountInt, unsafe { crate::pagelist::Node::cols(first) });
         assert_eq!(4 as size::CellCountInt, unsafe {
-            (*second).data.size.cols
+            crate::pagelist::Node::cols(second)
         });
 
         let sel = s
@@ -8931,7 +8930,7 @@ mod tests {
             let cell = pin.row_and_cell().cell;
             assert_eq!(0x1F468u32, unsafe { (*cell).codepoint() });
             assert_eq!(pagepkg::Wide::Wide, unsafe { (*cell).wide() });
-            let cps = unsafe { (*pin.node).data.lookup_grapheme(cell).unwrap() };
+            let cps = unsafe { (*crate::pagelist::Node::page(pin.node)).lookup_grapheme(cell).unwrap() };
             assert_eq!(1usize, cps.len());
         }
 
@@ -8997,14 +8996,14 @@ mod tests {
     fn screen_selection_string_multi_page() {
         let mut s = mkscreen(10, 3, 2048);
 
-        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
 
         // Lazy way to seek to the first page boundary.
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
         for _ in 0..(first_page_size - 1) {
             s.test_write_string(b"\n").unwrap();
         }
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false) };
 
         s.test_write_string(b"123456789\n!@#$%^&*(\n123456789")
             .unwrap();
@@ -9583,7 +9582,7 @@ mod tests {
         let last = unsafe { (*middle).next };
         // PORT NOTE: `middle.page().size.cols = 2` — a deliberate mid-reflow
         // narrow page, written directly through the node pointer.
-        unsafe { (*middle).data.size.cols = 2 };
+        unsafe { (*crate::pagelist::Node::page(middle)).size.cols = 2 };
 
         s.select(Some(Selection::init(
             Pin {
@@ -10082,7 +10081,7 @@ mod tests {
         s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
 
         // We should have one style
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         assert_eq!(1usize, unsafe { (*page).styles.count() });
 
         s.clear_rows(
@@ -10115,7 +10114,7 @@ mod tests {
         let mut s = Screen::init(Allocator, Options::default()).unwrap();
 
         // const page = s.cursor.page_pin.node.page();
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         // const row = s.cursor.page_row;
         let row: *mut Row = s.cursor.page_row;
         // const cells = page.getCells(row);
@@ -11103,7 +11102,7 @@ mod tests {
         let mut s = mkscreen(10, 3, 1);
         s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
         s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
-        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let start_page: *mut Page = unsafe { crate::pagelist::Node::page(s.pages.pages.last) };
 
         // Scroll down enough to go to another page
         let rem = unsafe { (*start_page).capacity.rows - (*start_page).size.rows + 1 };
@@ -11116,7 +11115,7 @@ mod tests {
         // We need our page to change for this test o make sense. If this
         // assertion fails then the bug is in the test: we should be scrolling
         // above enough for a new page to show up.
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let page: *mut Page = unsafe { crate::pagelist::Node::page(s.pages.pages.last) };
         assert!(!std::ptr::eq(start_page, page));
 
         let styleval = unsafe {
@@ -11657,12 +11656,12 @@ mod tests {
         let mut s = mkscreen(10, 5, 10);
 
         // We need to get the cursor to a new page
-        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
         for _ in 0..(first_page_size - 3) {
             s.test_write_string(b"\n").unwrap();
         }
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false) };
 
         s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
             r: 155,
@@ -11757,12 +11756,12 @@ mod tests {
         let mut s = mkscreen(10, 5, 10);
 
         // We need to get the cursor to a new page
-        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
         for _ in 0..(first_page_size - 2) {
             s.test_write_string(b"\n").unwrap();
         }
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false) };
 
         s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
             r: 155,
@@ -11855,8 +11854,8 @@ mod tests {
         // This catches a case of memory corruption where the cursor
         // is moved between pages without accounting for style refs.
         s.set_attribute(crate::sgr::Attribute::ResetBg).unwrap();
-        unsafe { (*s.pages.pages.first).data.assert_integrity() };
-        unsafe { (*s.pages.pages.last).data.assert_integrity() };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).assert_integrity() };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.last)).assert_integrity() };
         s.deinit();
     }
 
@@ -11866,12 +11865,12 @@ mod tests {
         let mut s = mkscreen(10, 3, 10);
 
         // We need to get the cursor to a new page
-        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
         for _ in 0..(first_page_size - 3) {
             s.test_write_string(b"\n").unwrap();
         }
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false) };
 
         s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
             r: 155,
@@ -11953,12 +11952,12 @@ mod tests {
         let mut s = mkscreen(10, 4, 10);
 
         // Get the cursor to be 2 rows above a new page
-        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
         for _ in 0..(first_page_size - 3) {
             s.test_write_string(b"\n").unwrap();
         }
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false) };
 
         // Write 3 lines of text, forcing the last line into the first
         // row of a new page. Move our cursor onto the previous page.
@@ -12044,12 +12043,12 @@ mod tests {
     fn screen_scroll_above_no_scrollback_bottom_of_page() {
         let mut s = mkscreen(10, 3, 0);
 
-        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
         for _ in 0..(first_page_size - 3) {
             s.test_write_string(b"\n").unwrap();
         }
-        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false) };
 
         s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
             r: 155,
@@ -12207,21 +12206,21 @@ mod tests {
         let mut s = mkscreen(5, 5, 0);
         assert!(s.cursor.hyperlink_id == 0);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(0usize, page.hyperlink_set.count());
         }
 
         s.start_hyperlink(b"http://example.com", None).unwrap();
         assert!(s.cursor.hyperlink_id != 0);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(1usize, page.hyperlink_set.count());
         }
 
         s.end_hyperlink();
         assert!(s.cursor.hyperlink_id == 0);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(0usize, page.hyperlink_set.count());
         }
         s.deinit();
@@ -12318,7 +12317,7 @@ mod tests {
 
         assert!(s.cursor.hyperlink_id == 0);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(0usize, page.hyperlink_set.count());
         }
 
@@ -12331,14 +12330,14 @@ mod tests {
         s.start_hyperlink(b"http://example.com", None).unwrap();
         assert_eq!(id, s.cursor.hyperlink_id);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(1usize, page.hyperlink_set.count());
         }
 
         s.end_hyperlink();
         assert!(s.cursor.hyperlink_id == 0);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(0usize, page.hyperlink_set.count());
         }
         s.deinit();
@@ -12357,7 +12356,7 @@ mod tests {
         s.start_hyperlink(b"http://example.com", None).unwrap();
         assert!(s.cursor.hyperlink_id != 0);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(1usize, page.hyperlink_set.count());
         }
 
@@ -12371,14 +12370,14 @@ mod tests {
         .unwrap();
         assert!(s.cursor.hyperlink_id != 0);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(1usize, page.hyperlink_set.count());
         }
 
         s.end_hyperlink();
         assert!(s.cursor.hyperlink_id == 0);
         {
-            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
             assert_eq!(0usize, page.hyperlink_set.count());
         }
         s.deinit();
@@ -12402,8 +12401,8 @@ mod tests {
         // Figure out how many cells should can have hyperlinks in this page,
         // and write twice that number, to guarantee the capacity needs to be
         // increased at some point.
-        let base_capacity = unsafe { (*(*s.cursor.page_pin).node).data.hyperlink_capacity() };
-        let base_string_bytes = unsafe { (*(*s.cursor.page_pin).node).data.capacity.string_bytes };
+        let base_capacity = unsafe { (*crate::pagelist::Node::page((*s.cursor.page_pin).node)).hyperlink_capacity() };
+        let base_string_bytes = unsafe { crate::pagelist::Node::capacity((*s.cursor.page_pin).node).string_bytes };
         for _ in 0..(base_capacity * 2) {
             s.cursor_set_hyperlink().unwrap();
             if s.cursor.x >= s.pages.cols - 1 {
@@ -12415,10 +12414,10 @@ mod tests {
         }
 
         // Make sure the capacity really did increase.
-        assert!(base_capacity < unsafe { (*(*s.cursor.page_pin).node).data.hyperlink_capacity() });
+        assert!(base_capacity < unsafe { (*crate::pagelist::Node::page((*s.cursor.page_pin).node)).hyperlink_capacity() });
         // And that our string_bytes increased as well.
         assert!(
-            base_string_bytes < unsafe { (*(*s.cursor.page_pin).node).data.capacity.string_bytes }
+            base_string_bytes < unsafe { crate::pagelist::Node::capacity((*s.cursor.page_pin).node).string_bytes }
         );
         s.deinit();
     }
@@ -12439,7 +12438,7 @@ mod tests {
         let old_style = s.cursor.style;
 
         {
-            let page = unsafe { &(*s.pages.pages.last).data };
+            let page = unsafe { &(*crate::pagelist::Node::page(s.pages.pages.last)) };
             // 5 chars + cursor = 6 refs
             assert_eq!(6, unsafe {
                 let base = page.memory_ptr();
@@ -12470,7 +12469,7 @@ mod tests {
         // After increaseCapacity, the 5 chars are cloned (5 refs) and
         // the cursor's style is re-added (1 ref) = 6 total.
         {
-            let page = unsafe { &(*s.pages.pages.last).data };
+            let page = unsafe { &(*crate::pagelist::Node::page(s.pages.pages.last)) };
             let ref_count = unsafe {
                 let base = page.memory_ptr();
                 page.styles.ref_count(base, s.cursor.style_id)
@@ -12494,7 +12493,7 @@ mod tests {
         }));
 
         {
-            let page = unsafe { &(*s.pages.pages.last).data };
+            let page = unsafe { &(*crate::pagelist::Node::page(s.pages.pages.last)) };
             // Cursor has the hyperlink active = 1 count in hyperlink_set
             assert_eq!(1usize, page.hyperlink_set.count());
             assert!(s.cursor.hyperlink_id != 0);
@@ -12519,7 +12518,7 @@ mod tests {
 
         // After increaseCapacity, the hyperlink is re-added to the new page.
         {
-            let page = unsafe { &(*s.pages.pages.last).data };
+            let page = unsafe { &(*crate::pagelist::Node::page(s.pages.pages.last)) };
             assert_eq!(1usize, page.hyperlink_set.count());
         }
         s.deinit();
@@ -12546,7 +12545,7 @@ mod tests {
         let old_style = s.cursor.style;
 
         {
-            let page = unsafe { &(*s.pages.pages.last).data };
+            let page = unsafe { &(*crate::pagelist::Node::page(s.pages.pages.last)) };
             // 5 chars + cursor = 6 refs for bold style
             assert_eq!(6, unsafe {
                 let base = page.memory_ptr();
@@ -12581,7 +12580,7 @@ mod tests {
 
         // After increaseCapacity, both style and hyperlink are re-added to the new page.
         {
-            let page = unsafe { &(*s.pages.pages.last).data };
+            let page = unsafe { &(*crate::pagelist::Node::page(s.pages.pages.last)) };
             let ref_count = unsafe {
                 let base = page.memory_ptr();
                 page.styles.ref_count(base, s.cursor.style_id)
@@ -12621,13 +12620,13 @@ mod tests {
         // Grow pages until we have multiple pages. The cursor's pin stays on
         // the first page since we're just adding rows.
         let first_page_node = s.pages.pages.first;
-        unsafe { (*first_page_node).data.pause_integrity_checks(true) };
+        unsafe { (*crate::pagelist::Node::page(first_page_node)).pause_integrity_checks(true) };
         let n_grow =
-            unsafe { (*first_page_node).data.capacity.rows - (*first_page_node).data.size.rows };
+            unsafe { crate::pagelist::Node::capacity(first_page_node).rows - crate::pagelist::Node::rows(first_page_node) };
         for _ in 0..n_grow {
             let _ = s.pages.grow().unwrap();
         }
-        unsafe { (*first_page_node).data.pause_integrity_checks(false) };
+        unsafe { (*crate::pagelist::Node::page(first_page_node)).pause_integrity_checks(false) };
         let _ = s.pages.grow().unwrap();
 
         // Now we have two pages
@@ -12644,8 +12643,8 @@ mod tests {
             second_page
         ));
 
-        let second_page_styles_cap = unsafe { (*second_page).data.capacity.styles };
-        let cursor_page_styles_cap = unsafe { (*(*s.cursor.page_pin).node).data.capacity.styles };
+        let second_page_styles_cap = unsafe { crate::pagelist::Node::capacity(second_page).styles };
+        let cursor_page_styles_cap = unsafe { crate::pagelist::Node::capacity((*s.cursor.page_pin).node).styles };
 
         // Call increaseCapacity on the second page (NOT the cursor's page)
         let new_second_page = s
@@ -12654,12 +12653,12 @@ mod tests {
 
         // The second page should have increased capacity
         assert_eq!(second_page_styles_cap * 2, unsafe {
-            (*new_second_page).data.capacity.styles
+            crate::pagelist::Node::capacity(new_second_page).styles
         });
 
         // The cursor's page (first page) should be unchanged
         assert_eq!(cursor_page_styles_cap, unsafe {
-            (*(*s.cursor.page_pin).node).data.capacity.styles
+            crate::pagelist::Node::capacity((*s.cursor.page_pin).node).styles
         });
 
         // Cursor state should be completely unchanged since we didn't touch its page
@@ -12696,7 +12695,7 @@ mod tests {
         let mut s = mkscreen(10, 3, 1);
 
         // Scroll down enough to create a second page
-        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let start_page: *mut Page = unsafe { crate::pagelist::Node::page(s.pages.pages.last) };
         let rem = unsafe { (*start_page).capacity.rows };
         unsafe { (*start_page).pause_integrity_checks(true) };
         for _ in 0..rem {
@@ -12706,7 +12705,7 @@ mod tests {
 
         // Cursor should now be on a new page
         let new_page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         assert!(!std::ptr::eq(start_page, new_page));
 
         // Fill new_page's style map to capacity. When we move INTO this page
@@ -12756,7 +12755,7 @@ mod tests {
                 if !std::ptr::eq(next_pin.node, cur_node) {
                     // Cursor is at 'row', moving down crosses to new_page
                     assert!(std::ptr::eq(
-                        unsafe { core::ptr::addr_of!((*next_pin.node).data) },
+                        unsafe { crate::pagelist::Node::page(next_pin.node) },
                         new_page as *const Page
                     ));
 
@@ -12799,7 +12798,7 @@ mod tests {
             .unwrap();
 
         // Get the page and fill its style map to capacity
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         let original_styles_capacity = unsafe { (*page).capacity.styles };
 
         // Fill the style map to capacity using the StyleSet's layout capacity
@@ -12846,7 +12845,7 @@ mod tests {
 
         // Either the capacity increased or the page was split/changed
         let current_page: *mut Page =
-            unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         let capacity_increased =
             unsafe { (*current_page).capacity.styles } > original_styles_capacity;
         let page_changed = !std::ptr::eq(current_page, page);
@@ -12873,7 +12872,7 @@ mod tests {
         // Increase the page's style capacity to max by repeatedly calling increaseCapacity
         // Use Screen.increaseCapacity to properly maintain cursor state
         let max_styles = size::CellCountInt::MAX;
-        while unsafe { (*(*s.cursor.page_pin).node).data.capacity.styles } < max_styles {
+        while unsafe { crate::pagelist::Node::capacity((*s.cursor.page_pin).node).styles } < max_styles {
             if s.increase_capacity(
                 unsafe { (*s.cursor.page_pin).node },
                 Some(pagelist::grow::IncreaseCapacity::Styles),
@@ -12885,7 +12884,7 @@ mod tests {
         }
 
         // Get the page reference after increaseCapacity - cursor may have moved
-        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
         assert_eq!(max_styles, unsafe { (*page).capacity.styles });
 
         // Fill the style map to capacity using the StyleSet's layout capacity

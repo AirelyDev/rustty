@@ -688,7 +688,7 @@ impl RenderState {
             self.row_data[y as usize].pin = row_pin;
 
             // Get all our cells in the page.
-            let p: *mut page::Page = unsafe { core::ptr::addr_of_mut!((*row_pin.node).data) };
+            let p: *mut page::Page = unsafe { crate::pagelist::Node::page(row_pin.node) };
             let page_rac = row_pin.row_and_cell();
 
             'dirty: {
@@ -1180,7 +1180,7 @@ impl RenderState {
 
         // Grab our link ID
         let link_pin: Pin = self.row_data[viewport_point.y as usize].pin;
-        let link_page: *mut page::Page = unsafe { core::ptr::addr_of_mut!((*link_pin.node).data) };
+        let link_page: *mut page::Page = unsafe { crate::pagelist::Node::page(link_pin.node) };
         let link = 'link: {
             let rac = unsafe {
                 (*link_page).get_row_and_cell(viewport_point.x as usize, link_pin.y as usize)
@@ -1212,7 +1212,7 @@ impl RenderState {
                 }
 
                 let other_page: *mut page::Page =
-                    unsafe { core::ptr::addr_of_mut!((*pin.node).data) };
+                    unsafe { crate::pagelist::Node::page(pin.node) };
                 let other = 'link2: {
                     let rac = unsafe { (*other_page).get_row_and_cell(x, pin.y as usize) };
                     let link_id = match unsafe { (*other_page).lookup_hyperlink(rac.cell) } {
@@ -1965,7 +1965,7 @@ mod tests {
         )
         .unwrap();
 
-        let first_page_cap = unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+        let first_page_cap = unsafe { crate::pagelist::Node::capacity((*t.screens.active).pages.pages.first).rows };
 
         {
             let mut s = t.vt_stream();

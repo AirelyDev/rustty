@@ -139,7 +139,7 @@ impl PageList {
                     let mut rem: usize = n;
                     while !node_it.is_null() {
                         let node = node_it;
-                        if rem < unsafe { (*node).data.size.rows } as usize {
+                        if rem < unsafe { super::Node::rows(node) } as usize {
                             unsafe {
                                 *self.viewport_pin = Pin {
                                     node,
@@ -157,7 +157,7 @@ impl PageList {
                             break 'row;
                         }
 
-                        rem -= unsafe { (*node).data.size.rows } as usize;
+                        rem -= unsafe { super::Node::rows(node) } as usize;
                         node_it = unsafe { (*node).next };
                     }
                 } else {
@@ -169,12 +169,12 @@ impl PageList {
                     let mut rem: usize = self.total_rows - n;
                     while !node_it.is_null() {
                         let node = node_it;
-                        if rem <= unsafe { (*node).data.size.rows } as usize {
+                        if rem <= unsafe { super::Node::rows(node) } as usize {
                             unsafe {
                                 *self.viewport_pin = Pin {
                                     node,
                                     y: match size::CellCountInt::try_from(
-                                        (*node).data.size.rows as usize - rem,
+                                        super::Node::rows(node) as usize - rem,
                                     ) {
                                         Ok(v) => v,
                                         Err(_) => {
@@ -189,7 +189,7 @@ impl PageList {
                             break 'row;
                         }
 
-                        rem -= unsafe { (*node).data.size.rows } as usize;
+                        rem -= unsafe { super::Node::rows(node) } as usize;
                         node_it = unsafe { (*node).prev };
                     }
                 }
@@ -402,9 +402,9 @@ impl PageList {
             let mut page = self.pages.last;
             let mut n: usize = 0;
             loop {
-                let base = unsafe { (*page).data.memory_ptr() };
-                let rows: *const Row = unsafe { (*page).data.rows.ptr(base) };
-                let page_rows = unsafe { (*page).data.size.rows };
+                let base = unsafe { (*super::Node::page(page)).memory_ptr() };
+                let rows: *const Row = unsafe { (*super::Node::page(page)).rows.ptr(base) };
+                let page_rows = unsafe { super::Node::rows(page) };
                 for i in 0..page_rows {
                     let rev_i = page_rows - i - 1;
                     let row = unsafe { &*rows.add(rev_i as usize) };

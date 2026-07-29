@@ -92,8 +92,8 @@ impl PageListSearch {
         let pin = unsafe {
             (*list).track_pin(Pin {
                 node: start,
-                y: (*start).data.size.rows - 1,
-                x: (*start).data.size.cols - 1,
+                y: crate::pagelist::Node::rows(start) - 1,
+                x: crate::pagelist::Node::cols(start) - 1,
                 garbage: false,
             })?
         };
@@ -322,7 +322,7 @@ mod tests {
 
         // Fill up first page
         // const first_page_rows = t.screens.active.pages.pages.first.?.data.capacity.rows;
-        let first_page_rows = unsafe { (*(*active_ptr).pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
         // for (0..first_page_rows - 1) |_| s.nextSlice("\r\n");
         for _ in 0..first_page_rows - 1 {
             s.next_slice(b"\r\n");
@@ -394,7 +394,7 @@ mod tests {
         let mut s = t.vt_stream();
 
         // Fill up first page
-        let first_page_rows = unsafe { (*(*active_ptr).pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.next_slice(b"\r\n");
         }
@@ -447,7 +447,7 @@ mod tests {
 
         let mut s = t.vt_stream();
 
-        let first_page_rows = unsafe { (*(*active_ptr).pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
 
         // Fill first page with a match at the end
         for _ in 0..first_page_rows - 1 {
@@ -504,7 +504,7 @@ mod tests {
 
         let mut s = t.vt_stream();
 
-        let first_page_rows = unsafe { (*(*active_ptr).pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
 
         // Fill first page ending with "Te"
         for _ in 0..first_page_rows - 1 {
@@ -591,7 +591,7 @@ mod tests {
 
         let mut s = t.vt_stream();
 
-        let first_page_rows = unsafe { (*(*active_ptr).pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
 
         // Fill first page ending with "Te"
         for _ in 0..first_page_rows - 1 {
@@ -654,8 +654,8 @@ mod tests {
         // for (0..page1.capacity.rows - page1.size.rows) |_| {
         //     try testing.expect(try p.grow() == null);
         // }
-        let page1_cap_rows = unsafe { (*page1_node).data.capacity.rows };
-        let page1_size_rows = unsafe { (*page1_node).data.size.rows };
+        let page1_cap_rows = unsafe { crate::pagelist::Node::capacity(page1_node).rows };
+        let page1_size_rows = unsafe { crate::pagelist::Node::rows(page1_node) };
         for _ in 0..page1_cap_rows - page1_size_rows {
             assert!(p.grow().unwrap().is_none());
         }
@@ -667,8 +667,8 @@ mod tests {
         // for (0..page2.capacity.rows - page2.size.rows) |_| {
         //     try testing.expect(try p.grow() == null);
         // }
-        let page2_cap_rows = unsafe { (*page2_node).data.capacity.rows };
-        let page2_size_rows = unsafe { (*page2_node).data.size.rows };
+        let page2_cap_rows = unsafe { crate::pagelist::Node::capacity(page2_node).rows };
+        let page2_size_rows = unsafe { crate::pagelist::Node::rows(page2_node) };
         for _ in 0..page2_cap_rows - page2_size_rows {
             assert!(p.grow().unwrap().is_none());
         }

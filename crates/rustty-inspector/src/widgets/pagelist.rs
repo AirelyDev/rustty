@@ -210,7 +210,7 @@ impl Inspector {
             while !node.is_null() {
                 let page_node = node;
                 // const page = &page_node.data;
-                let page = unsafe { &(*page_node).data };
+                let page = unsafe { &(*rustty_vt::pagelist::Node::page(page_node)) };
                 // row_offset -= page.size.rows;
                 row_offset -= page.size.rows as usize;
                 // index -= 1;
@@ -1314,10 +1314,9 @@ impl CellChooser {
         if unsafe { (*cell.cell).style_id() } != stylepkg::DEFAULT_ID {
             unsafe { dcimgui_sys::ImGui_SeparatorText(c"Style".as_ptr()) };
             let style = unsafe {
-                *(*cell.node)
-                    .data
+                *(*rustty_vt::pagelist::Node::page(cell.node))
                     .styles
-                    .get((*cell.node).data.memory_ptr(), (*cell.cell).style_id())
+                    .get((*rustty_vt::pagelist::Node::page(cell.node)).memory_ptr(), (*cell.cell).style_id())
             };
             super::style::table(style, None);
         }
@@ -1373,7 +1372,7 @@ fn hyperlinkTable(cell: &Cell) {
     let _end_table = Defer(|| unsafe { dcimgui_sys::ImGui_EndTable() });
 
     // const page = &cell.node.data;
-    let page = unsafe { &(*cell.node).data };
+    let page = unsafe { &(*rustty_vt::pagelist::Node::page(cell.node)) };
     let base = page.memory_ptr();
     // const link_id = page.lookupHyperlink(cell.cell) orelse {
     //     cimgui.c.ImGui_TableNextRow();
@@ -1503,7 +1502,7 @@ fn graphemeTable(cell: &Cell) {
     //     cimgui.c.ImGui_TextDisabled("(missing grapheme data)");
     //     return;
     // };
-    let page = unsafe { &(*cell.node).data };
+    let page = unsafe { &(*rustty_vt::pagelist::Node::page(cell.node)) };
     let cps = match page.lookup_grapheme(cell.cell) {
         Some(cps) => cps,
         None => {
@@ -1777,7 +1776,7 @@ impl CellInfo {
                 )
             } {
                 let _end_list_box = Defer(|| unsafe { dcimgui_sys::ImGui_EndListBox() });
-                if let Some(cps) = unsafe { (*cell.node).data.lookup_grapheme(cell.cell) } {
+                if let Some(cps) = unsafe { (*rustty_vt::pagelist::Node::page(cell.node)).lookup_grapheme(cell.cell) } {
                     let mut buf: [u8; 96] = [0; 96];
                     for &cp in cps {
                         let label = cp_label(&mut buf, cp);
@@ -1993,7 +1992,7 @@ impl CellInfo {
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
             helpMarker(c"OSC8 hyperlink ID associated with this cell.");
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
-            let link_id = unsafe { (*cell.node).data.lookup_hyperlink(cell.cell) }.unwrap_or(0);
+            let link_id = unsafe { (*rustty_vt::pagelist::Node::page(cell.node)).lookup_hyperlink(cell.cell) }.unwrap_or(0);
             unsafe { dcimgui_sys::ImGui_Text(c"id=%d".as_ptr(), link_id as c_int) };
         }
     }

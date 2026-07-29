@@ -130,7 +130,7 @@ impl PageList {
             }
             coord.y = (p.y - tl.y) as u32;
         } else {
-            coord.y += (unsafe { (*tl.node).data.size.rows } - tl.y) as u32;
+            coord.y += (unsafe { super::Node::rows(tl.node) } - tl.y) as u32;
             let mut node_ = unsafe { (*tl.node).next };
             loop {
                 if node_.is_null() {
@@ -143,7 +143,7 @@ impl PageList {
                     break;
                 }
 
-                coord.y += unsafe { (*node).data.size.rows } as u32;
+                coord.y += unsafe { super::Node::rows(node) } as u32;
                 node_ = unsafe { (*node).next };
             }
         }
@@ -216,8 +216,7 @@ pub enum PinOverflow {
 impl Pin {
     pub fn row_and_cell(&self) -> pagepkg::RowAndCell {
         let rac = unsafe {
-            (*self.node)
-                .data
+            (*super::Node::page(self.node))
                 .get_row_and_cell(self.x as usize, self.y as usize)
         };
         pagepkg::RowAndCell {
@@ -231,7 +230,7 @@ impl Pin {
     /// inclusive of the x coordinate of the pin.
     pub fn cells(&self, subset: CellSubset) -> *mut [pagepkg::Cell] {
         let rac = self.row_and_cell();
-        let all = unsafe { (*self.node).data.get_cells(rac.row) };
+        let all = unsafe { (*super::Node::page(self.node)).get_cells(rac.row) };
         // PORT NOTE: the reference `getCells` returns a `[]Cell` slice; the Rust
         // port returns the raw `*mut [Cell]` (a fat pointer carrying the length).
         // We read its length via the raw-slice `len()` (no deref of the target)
@@ -383,7 +382,7 @@ impl Pin {
     #[allow(dead_code)]
     #[inline]
     pub fn is_dirty(&self) -> bool {
-        unsafe { (*self.node).data.dirty || (*self.row_and_cell().row).dirty() }
+        unsafe { (*super::Node::page(self.node)).dirty || (*self.row_and_cell().row).dirty() }
     }
 
     /// Mark this pin location as dirty.
@@ -414,7 +413,7 @@ impl Pin {
     /// Move the pin right n columns. n must fit within the size.
     #[inline]
     fn right(&self, n: usize) -> Pin {
-        assert!((self.x as usize) + n < unsafe { (*self.node).data.size.cols } as usize);
+        assert!((self.x as usize) + n < unsafe { super::Node::cols(self.node) } as usize);
         let mut result = self.pin_copy();
         // result.x +|= std.math.cast(size.CellCountInt, n) orelse
         //     std.math.maxInt(size.CellCountInt);
@@ -441,7 +440,7 @@ impl Pin {
         result.x = self
             .x
             .saturating_add(n)
-            .min(unsafe { (*self.node).data.size.cols } - 1);
+            .min(unsafe { super::Node::cols(self.node) } - 1);
         result
     }
 
@@ -453,7 +452,7 @@ impl Pin {
     pub fn left_wrap(&self, n: usize) -> Option<Pin> {
         // NOTE: This assumes that all pages have the same width, which may
         //       be violated under certain circumstances by incomplete reflow.
-        let cols = unsafe { (*self.node).data.size.cols } as usize;
+        let cols = unsafe { super::Node::cols(self.node) } as usize;
         let remaining_in_row = self.x as usize;
 
         if n <= remaining_in_row {
@@ -482,7 +481,7 @@ impl Pin {
     pub fn right_wrap(&self, n: usize) -> Option<Pin> {
         // NOTE: This assumes that all pages have the same width, which may
         //       be violated under certain circumstances by incomplete reflow.
-        let cols = unsafe { (*self.node).data.size.cols } as usize;
+        let cols = unsafe { super::Node::cols(self.node) } as usize;
         let remaining_in_row = cols - self.x as usize - 1;
 
         if n <= remaining_in_row {
@@ -527,7 +526,7 @@ impl Pin {
     /// end of the screen, return the overflow amount.
     pub fn down_overflow(&self, n: usize) -> PinOverflow {
         // Index fits within this page
-        let rows = unsafe { (*self.node).data.size.rows } as usize - (self.y as usize + 1);
+        let rows = unsafe { super::Node::rows(self.node) } as usize - (self.y as usize + 1);
         if n <= rows {
             return PinOverflow::Offset(Pin {
                 node: self.node,
@@ -549,7 +548,7 @@ impl Pin {
                 return PinOverflow::Overflow {
                     end: Pin {
                         node,
-                        y: unsafe { (*node).data.size.rows } - 1,
+                        y: unsafe { super::Node::rows(node) } - 1,
                         x: self.x,
                         garbage: false,
                     },
@@ -557,7 +556,7 @@ impl Pin {
                 };
             }
             node = next;
-            let node_rows = unsafe { (*node).data.size.rows } as usize;
+            let node_rows = unsafe { super::Node::rows(node) } as usize;
             if n_left <= node_rows {
                 return PinOverflow::Offset(Pin {
                     node,
@@ -606,7 +605,7 @@ impl Pin {
                 };
             }
             node = prev;
-            let node_rows = unsafe { (*node).data.size.rows } as usize;
+            let node_rows = unsafe { super::Node::rows(node) } as usize;
             if n_left <= node_rows {
                 return PinOverflow::Offset(Pin {
                     node,
@@ -627,7 +626,7 @@ impl Pin {
     #[inline]
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `cell: *const Cell`
     pub fn grapheme(&self, cell: *const pagepkg::Cell) -> Option<&[u32]> {
-        unsafe { (*self.node).data.lookup_grapheme(cell) }
+        unsafe { (*super::Node::page(self.node)).lookup_grapheme(cell) }
     }
 
     /// Returns the style for the given cell in this pin.
@@ -638,10 +637,9 @@ impl Pin {
             return stylepkg::Style::default();
         }
         unsafe {
-            *(*self.node)
-                .data
+            *(*super::Node::page(self.node))
                 .styles
-                .get((*self.node).data.memory_ptr(), (*cell).style_id())
+                .get((*super::Node::page(self.node)).memory_ptr(), (*cell).style_id())
         }
     }
 }
