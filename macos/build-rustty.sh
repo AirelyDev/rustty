@@ -17,16 +17,22 @@ echo "== 2/3 generating app resources (zig-out/share) =="
 cargo run -q -p xtask -- resources
 
 echo "== 3/3 xcodebuild =="
-# zlib is now self-contained: rustty's vendored libz.a builds FULL zlib
-# (inflate + deflate; xtask P3 vendored deflate.c/trees.c/compress.c) and xtask
-# folds it into libRusttyKit.a, so sentry's `deflate` resolves from the app's
-# own archive — no system `-lz` needed.
-# -lintl: gettext runtime. STILL required — rustty's vendored gettext-sys is the
-# localename slice only (no dgettext/bindtextdomain/textdomain). Folding full
-# libintl is a large vendor change; see DEFERRALS.md ("self-contained libintl").
+# The combined archive is fully self-contained — no system or Homebrew link
+# flags for zlib or gettext:
+#   * zlib: rustty's vendored libz.a builds FULL zlib (inflate + deflate; xtask
+#     P3 vendored deflate.c/trees.c/compress.c), so sentry's `deflate` resolves
+#     from the app's own archive — no `-lz`.
+#   * gettext: rustty's vendored gettext-sys builds the FULL macOS libintl (WS9
+#     vendored the reference's whole pkg/libintl `srcs` set), so
+#     `dgettext`/`bindtextdomain`/`textdomain` resolve from the app's own
+#     archive — no `-L/opt/homebrew/opt/gettext/lib -lintl`.
+# `-lstdc++` stays: it is a toolchain runtime (the C++ -sys crates), not a
+# third-party library rustty could vendor.
+# Guard: `.port/tools/gates/no_homebrew_gettext_gate.sh` proves this by building
+# with Homebrew's libintl hidden.
 cd macos
 exec xcodebuild -project Rustty.xcodeproj -scheme Rustty -configuration Debug \
   -destination 'platform=macOS,arch=arm64' \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-  OTHER_LDFLAGS="-lstdc++ -L/opt/homebrew/opt/gettext/lib -lintl" \
+  OTHER_LDFLAGS="-lstdc++" \
   "$@"

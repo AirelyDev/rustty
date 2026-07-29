@@ -319,9 +319,9 @@ fn xcframework() -> Result<PathBuf, String> {
     // OS, so the app (deployment target 13.0) gets "built for newer macOS"
     // linker warnings. Set as an env on the Command so it reaches BOTH rustc and
     // every build-script `cc` invocation this cargo build spawns.
-    let status = Command::new("cargo")
-        .args([
-            "build",
+    let json = archives::cargo_build_json(
+        &root,
+        &[
             "-p",
             "rustty-apprt-c",
             "--profile",
@@ -333,18 +333,9 @@ fn xcframework() -> Result<PathBuf, String> {
             "simd",
             "--target",
             target,
-        ])
-        .env("MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)
-        .current_dir(&root)
-        .status()
-        .map_err(|e| format!("spawn cargo build: {e}"))?;
-    if !status.success() {
-        return Err(format!("cargo build exited with {status}"));
-    }
-    let rust_lib = root.join(format!("target/{target}/xcframework/librustty_apprt_c.a"));
-    if !rust_lib.exists() {
-        return Err(format!("staticlib not found at {}", rust_lib.display()));
-    }
+        ],
+        &[("MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)],
+    )?;
 
     // 1b. Combine the Rust staticlib with its vendored C archives into ONE
     // self-contained lib (ghostty's CombineArchivesStep). A Rust `staticlib`
@@ -353,26 +344,53 @@ fn xcframework() -> Result<PathBuf, String> {
     // xcodebuild link would report undefined `_deflate`/`_dgettext`/… . libtool
     // folds rustty's OWN vendored C archives (R3 — not Homebrew/system) into the
     // shipped lib so the Swift app links against a single self-contained archive.
-    let build_dir = root.join(format!("target/{target}/xcframework/build"));
-    let mut archives: Vec<PathBuf> = vec![rust_lib.clone()];
-    if let Ok(entries) = std::fs::read_dir(&build_dir) {
-        for e in entries.flatten() {
-            let out = e.path().join("out");
-            if let Ok(outs) = std::fs::read_dir(&out) {
-                for f in outs.flatten() {
-                    let p = f.path();
-                    if p.extension().and_then(|s| s.to_str()) == Some("a") {
-                        archives.push(p);
-                    }
-                }
-            }
+    //
+    // WS9: the set is DERIVED FROM CARGO (the `--message-format=json` stream
+    // above), not from a filesystem glob — the port of GhosttyLib.zig's
+    // enumerated `deps.add(lib)` list. A declared archive that cannot be located
+    // is a hard error, so a nested OUT_DIR can no longer be silently missed and
+    // stale hash-suffixed build dirs can no longer be folded in
+    // (INTEGRATION_PARITY §2.4).
+    let parsed = archives::parse_artifacts(&json)?;
+    let rust_lib = match parsed.staticlibs.as_slice() {
+        [one] => one.clone(),
+        [] => return Err("cargo reported no staticlib artifact for rustty-apprt-c".to_string()),
+        many => {
+            return Err(format!(
+                "cargo reported {} staticlib artifacts; expected exactly one: {many:?}",
+                many.len()
+            ))
         }
+    };
+    let mut archives_list: Vec<PathBuf> = vec![rust_lib.clone()];
+    for req in &parsed.native {
+        archives_list.push(req.resolve()?);
     }
+    eprintln!(
+        "xcframework: folding {} archives ({} Rust staticlib + {} vendored C)",
+        archives_list.len(),
+        1,
+        parsed.native.len()
+    );
+
+    // WS9: normalize EVERY source archive with ranlib before libtool sees it
+    // (ghostty LibtoolStep.zig `normalizeArchive`) — newer Xcode libtool can
+    // silently drop 64-bit members from cc/ar-produced archives
+    // (INTEGRATION_PARITY §2.5).
+    let norm_dir = root.join(format!("target/{target}/xcframework/normalized"));
+    let _ = std::fs::remove_dir_all(&norm_dir);
+    let mut normalized: Vec<PathBuf> = Vec::with_capacity(archives_list.len());
+    for (i, a) in archives_list.iter().enumerate() {
+        let dst = norm_dir.join(format!("{i}-libRusttyKit.a"));
+        archives::normalize_archive(a, &dst)?;
+        normalized.push(dst);
+    }
+
     let lib = root.join(format!("target/{target}/xcframework/libRusttyKit.a"));
     let _ = std::fs::remove_file(&lib);
     let mut lt = Command::new("libtool");
     lt.arg("-static").arg("-o").arg(&lib);
-    for a in &archives {
+    for a in &normalized {
         lt.arg(a);
     }
     let status = lt
@@ -382,7 +400,7 @@ fn xcframework() -> Result<PathBuf, String> {
     if !status.success() {
         return Err(format!(
             "libtool combine exited with {status} ({} archives)",
-            archives.len()
+            normalized.len()
         ));
     }
     if !lib.exists() {
