@@ -74,7 +74,7 @@ export GDK_BACKEND=wayland
 **Interfaces:**
 - Produces: the empirically-confirmed answers three later tasks depend on — (a) does GNOME 50 pop a permission dialog for `BindShortcuts`, (b) what the exact `CreateSession`/`BindShortcuts` payloads look like on this box, (c) whether `Activated` fires from a real key press. Recorded in the Task 1 commit message so no later task has to guess.
 
-- [ ] **Step 1: Create the branch on macOS and sync the VM**
+- [x] **Step 1: Create the branch on macOS and sync the VM**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -86,7 +86,7 @@ ssh rvm 'cd ~/projects/rustty && git fetch origin && git checkout ws15-gtk-globa
 
 Expected: branch created on both sides; `git status --short` prints nothing.
 
-- [ ] **Step 2: Re-confirm the portal is present and at version 2**
+- [x] **Step 2: Re-confirm the portal is present and at version 2**
 
 ```bash
 ssh rvm 'export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus; \
@@ -99,7 +99,7 @@ Expected: the interface block listing `CreateSession`, `BindShortcuts`, `ListSho
 
 If the interface is absent, STOP and run `sudo dnf install -y xdg-desktop-portal-gnome && systemctl --user restart xdg-desktop-portal xdg-desktop-portal-gnome` (interactive password required), then re-run this step.
 
-- [ ] **Step 3: Capture the ORACLE (`ghostty 1.3.1`) portal round-trip**
+- [x] **Step 3: Capture the ORACLE (`ghostty 1.3.1`) portal round-trip**
 
 This is the ground truth the rustty implementation must reproduce. It runs the installed reference binary with one `global:` keybind under a throwaway config dir.
 
@@ -136,7 +136,7 @@ ssh rvm 'chmod +x /tmp/ws15/capture-oracle.sh && /tmp/ws15/capture-oracle.sh'
 
 Expected: a non-zero `GlobalShortcuts` line count and `member=CreateSession` followed by `member=Response` and `member=BindShortcuts`. **Record in the commit message** whether a `Response` with `uint32 0` follows `BindShortcuts` immediately or only after a user dialog is dismissed (GNOME 50 may present an "allow shortcuts" dialog on the VM's physical screen — if the log shows `CreateSession`+`Response 0` but `BindShortcuts` with no `Response`, a dialog IS waiting and Task 8 must include the manual dismissal step).
 
-- [ ] **Step 4: Record the exact request-path convention the oracle used**
+- [x] **Step 4: Record the exact request-path convention the oracle used**
 
 ```bash
 ssh rvm 'grep -B4 -A12 "member=CreateSession" /tmp/ws15/oracle-traffic.log | head -60'
@@ -144,7 +144,7 @@ ssh rvm 'grep -B4 -A12 "member=CreateSession" /tmp/ws15/oracle-traffic.log | hea
 
 Expected: the `handle_token`/`session_handle_token` string values (shape `ghostty_<7 hex chars>`), and later a `Response` signal on a path of the form `/org/freedesktop/portal/desktop/request/<unique_name with : stripped and . → _>/<handle_token>`. This confirms the `request_object_path` construction Task 3 implements.
 
-- [ ] **Step 5: Commit the recorded findings**
+- [x] **Step 5: Commit the recorded findings**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -171,7 +171,7 @@ git push
   - `pub(crate) fn build_shortcut_map(config: &rustty_config::Config) -> Vec<(String, rustty_input::binding::Action)>` — insertion-ordered, key = XDG shortcut id.
   - `pub(crate) fn action_description(action: &rustty_input::binding::Action) -> String`.
 
-- [ ] **Step 1: Add the `rustty-cfg-fmt` dependency**
+- [x] **Step 1: Add the `rustty-cfg-fmt` dependency**
 
 In `crates/rustty-apprt/Cargo.toml`, in the main `[dependencies]` block, immediately after the `rustty-input = { workspace = true }` line, add:
 
@@ -185,7 +185,7 @@ In `crates/rustty-apprt/Cargo.toml`, in the main `[dependencies]` block, immedia
 rustty-cfg-fmt = { workspace = true }
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Append to `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs` (the file has no `mod tests` yet — create it at the end of the file):
 
@@ -269,7 +269,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && git pull && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -20'
@@ -277,7 +277,7 @@ ssh rvm 'cd ~/projects/rustty && git pull && cargo test -p rustty-apprt --featur
 
 Expected: FAIL — `cannot find function build_shortcut_map in this scope` / `cannot find function action_description in this scope`.
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 In `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`, extend the `use` block at the top of the file (after the existing `use super::config::Config;`) with:
 
@@ -360,7 +360,7 @@ pub(crate) fn action_description(action: &Action) -> String {
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -10'
@@ -370,7 +370,7 @@ Expected: `test result: ok. 4 passed`.
 
 If `global_shortcuts_map_only_global_single_action_binds` fails on the expected key strings, do NOT edit the expectation blindly: print the actual map and confirm it against `crates/rustty-apprt/src/gtk/key.rs:72-96` (`xdg_shortcut_from_trigger` emits `SHIFT+`, `CTRL+`, `ALT+`, `LOGO+` in that fixed order, then the GDK keysym name).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -393,7 +393,7 @@ git push
   - `pub(crate) fn request_object_path(unique_name: &str, token: &str) -> String`.
   - `pub(crate) const PORTAL_BUS_NAME/PORTAL_OBJECT_PATH/GLOBAL_SHORTCUTS_IFACE/REQUEST_IFACE/SESSION_IFACE: &str`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add inside the existing `mod tests` in `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`:
 
@@ -445,7 +445,7 @@ Add inside the existing `mod tests` in `crates/rustty-apprt/src/gtk/class/global
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && git pull && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -20'
@@ -453,7 +453,7 @@ ssh rvm 'cd ~/projects/rustty && git pull && cargo test -p rustty-apprt --featur
 
 Expected: FAIL — `cannot find function generate_token` / `cannot find function request_object_path`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Add to `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`, just above `build_shortcut_map`:
 
@@ -502,7 +502,7 @@ pub(crate) fn request_object_path(unique_name: &str, token: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -10'
@@ -510,7 +510,7 @@ ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk globa
 
 Expected: `test result: ok. 7 passed`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -533,7 +533,7 @@ git push
   - `pub(crate) fn bind_shortcuts_payload(handle: &str, map: &[(String, Action)], request_token: &str) -> Option<glib::Variant>` — type `(oa(sa{sv})sa{sv})`, `None` if `handle` is not a valid object path.
   - `pub(crate) fn session_handle_from_results(results: &glib::Variant) -> Option<String>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add inside `mod tests`:
 
@@ -648,7 +648,7 @@ Add inside `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && git pull && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -20'
@@ -656,7 +656,7 @@ ssh rvm 'cd ~/projects/rustty && git pull && cargo test -p rustty-apprt --featur
 
 Expected: FAIL — `cannot find function create_session_payload` (and the other two).
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Add to `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`, after `request_object_path`:
 
@@ -730,7 +730,7 @@ pub(crate) fn session_handle_from_results(results: &glib::Variant) -> Option<Str
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -10'
@@ -738,7 +738,7 @@ ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk globa
 
 Expected: `test result: ok. 11 passed`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -765,7 +765,7 @@ git push
 
 Task 6 fills `request` / `Method`; until then `refresh` calls a `request` that exists but is stubbed to `return` if no connection — which is exactly its production behavior when the app has no bus.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add inside `mod tests`:
 
@@ -836,7 +836,7 @@ Add inside `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && git pull && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -20'
@@ -850,7 +850,7 @@ If the compiler reports a different expected argument type, use the property
 system directly instead — `gs.set_property("config", &cfg);` — which is the same
 write path (`notify::config` still fires, so `refresh` still runs).
 
-- [ ] **Step 3: Add the private portal-session state**
+- [x] **Step 3: Add the private portal-session state**
 
 In `mod imp`, replace the `pub struct GlobalShortcuts { … }` body's trailing brace region by adding these four fields after the existing `dbus_connection` field (keep both existing property fields and their doc comments exactly as they are):
 
@@ -886,7 +886,7 @@ These four fields are plain `RefCell`s with `Default` impls, so the struct's
 `#[derive(Default, Properties)]` still applies unchanged (the `Properties` derive
 ignores fields with no `#[property]` attribute).
 
-- [ ] **Step 4: Replace `refresh` and `close`, and add the two new methods**
+- [x] **Step 4: Replace `refresh` and `close`, and add the two new methods**
 
 In `impl GlobalShortcuts` (the wrapper impl at the bottom of the file), replace the whole existing `fn refresh(&self)` and `fn close(&self)` (currently the two DEFERRAL no-ops) with:
 
@@ -991,7 +991,7 @@ In `impl GlobalShortcuts` (the wrapper impl at the bottom of the file), replace 
     }
 ```
 
-- [ ] **Step 5: Add the temporary `request` seam so the file compiles**
+- [x] **Step 5: Add the temporary `request` seam so the file compiles**
 
 Task 6 replaces this with the real body. Add to the same `impl GlobalShortcuts`:
 
@@ -1024,7 +1024,7 @@ impl Method {
 }
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -10'
@@ -1032,7 +1032,7 @@ ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk globa
 
 Expected: `test result: ok. 14 passed`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1052,7 +1052,7 @@ git push
 - Consumes: `Method`, `create_session_payload`, `bind_shortcuts_payload`, `session_handle_from_results`, `request_object_path`, `generate_token`, `dispatch_activation` (Tasks 3–5); `gio::DBusConnection::{signal_subscribe, signal_unsubscribe, call, unique_name}`, `gio::DBusSignalFlags::{NONE, MATCH_ARG0_PATH}`.
 - Produces: a complete `GlobalShortcuts::request(&self, method: Method)` and `GlobalShortcuts::on_response(&self, method: Method, results: &glib::Variant)`. No new public surface; this task is verified live in Task 8 (a bus round-trip cannot be unit-tested headlessly, which is stated explicitly there).
 
-- [ ] **Step 1: Replace the `request` stub with the real implementation**
+- [x] **Step 1: Replace the `request` stub with the real implementation**
 
 In `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`, replace `fn request(&self, _method: Method) {}` with:
 
@@ -1253,7 +1253,7 @@ In `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`, replace `fn request(
     }
 ```
 
-- [ ] **Step 2: Rewrite the module doc so it no longer advertises a deferral**
+- [x] **Step 2: Rewrite the module doc so it no longer advertises a deferral**
 
 Replace the module header's `# DEFERRAL — the XDG portal round-trip is L6 (portals)` section (currently lines 27–42 of the file) with:
 
@@ -1278,7 +1278,7 @@ Replace the module header's `# DEFERRAL — the XDG portal round-trip is L6 (por
 //! [`super::application`] connects to `core.performAllAction`.
 ```
 
-- [ ] **Step 3: Build and re-run the headless suite**
+- [x] **Step 3: Build and re-run the headless suite**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && git pull && cargo build -p rustty-apprt --features gtk 2>&1 | tail -5 && cargo test -p rustty-apprt --features gtk global_shortcuts_ 2>&1 | tail -10'
@@ -1286,7 +1286,7 @@ ssh rvm 'cd ~/projects/rustty && git pull && cargo build -p rustty-apprt --featu
 
 Expected: `Finished` and `test result: ok. 14 passed`. (No new headless test here — the bus round-trip is verified live in Task 8.)
 
-- [ ] **Step 4: Clippy must stay clean**
+- [x] **Step 4: Clippy must stay clean**
 
 ```bash
 ssh rvm 'cd ~/projects/rustty && cargo clippy -p rustty-apprt --features gtk 2>&1 | tail -15'
@@ -1294,7 +1294,7 @@ ssh rvm 'cd ~/projects/rustty && cargo clippy -p rustty-apprt --features gtk 2>&
 
 Expected: no warnings from `global_shortcuts.rs`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1314,7 +1314,7 @@ git push
 - Consumes: `rustty_core::app::App::<A>::performAllAction(&mut self, rt_app: &A, action: rustty_input::binding::Action) -> Result<(), rustty_core::app::Error>`; `ActionBoxed(pub rustty_input::binding::Action)`.
 - Produces: `imp::Application::perform_all_action_thunk: RefCell<Option<Box<dyn Fn(rustty_input::binding::Action)>>>`, installed by `Application::bind_core_app::<A>()`; `imp::Application::global_shortcut_trigger` now invokes it. Test-only counter `global_shortcut_trigger_count: Cell<u64>` (same precedent as the existing `tick_count`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to the `mod tests` at the bottom of `crates/rustty-apprt/src/gtk/class/application.rs`, next to `application_activate_pushes_new_window`:
 
@@ -1358,7 +1358,7 @@ Add to the `mod tests` at the bottom of `crates/rustty-apprt/src/gtk/class/appli
     }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
 ssh rvm 'bash -lc "
@@ -1369,7 +1369,7 @@ cd ~/projects/rustty && git pull && cargo test -p rustty-apprt --features gtk ap
 
 Expected: FAIL — `no field perform_all_action_thunk on type &imp::Application`.
 
-- [ ] **Step 3: Add the thunk field and the test counter**
+- [x] **Step 3: Add the thunk field and the test counter**
 
 In `crates/rustty-apprt/src/gtk/class/application.rs`, inside `mod imp`'s `pub struct Application`, immediately after the `update_config_thunk` field, add:
 
@@ -1399,7 +1399,7 @@ and, next to the existing `#[cfg(test)] pub tick_count: Cell<u64>` field, add:
         pub global_shortcut_trigger_count: Cell<u64>,
 ```
 
-- [ ] **Step 4: Install the thunk in `bind_core_app`**
+- [x] **Step 4: Install the thunk in `bind_core_app`**
 
 In `Application::bind_core_app`, immediately after the `color_scheme_thunk` installation block (which ends with the per-surface `colorSchemeCallback` loop), add:
 
@@ -1426,7 +1426,7 @@ In `Application::bind_core_app`, immediately after the `color_scheme_thunk` inst
             })));
 ```
 
-- [ ] **Step 5: Fill `global_shortcut_trigger`**
+- [x] **Step 5: Fill `global_shortcut_trigger`**
 
 Replace the placeholder at `crates/rustty-apprt/src/gtk/class/application.rs:778` — the whole doc comment plus `fn global_shortcut_trigger(&self, _action: &ActionBoxed) {}` — with:
 
@@ -1451,7 +1451,7 @@ Replace the placeholder at `crates/rustty-apprt/src/gtk/class/application.rs:778
         }
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```bash
 ssh rvm 'bash -lc "
@@ -1462,7 +1462,7 @@ cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk application_gl
 
 Expected: `test result: ok. 1 passed`.
 
-- [ ] **Step 7: Run the whole gtk suite (headless + display)**
+- [x] **Step 7: Run the whole gtk suite (headless + display)**
 
 ```bash
 ssh rvm 'bash -lc "
@@ -1473,7 +1473,7 @@ cd ~/projects/rustty && cargo test -p rustty-apprt --features gtk 2>&1 | tail -5
 
 Expected: both `test result: ok`, 0 failed. Record the two counts in the commit message.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1495,9 +1495,11 @@ git push
 
 **This is the real verification, not a compile check.** It runs against the live `xdg-desktop-portal-gnome` on the VM's active GNOME session.
 
-**Automation boundary (stated explicitly):** the portal handshake (`CreateSession` → `BindShortcuts` → `Response 0`) IS fully automatable and is asserted by this script. Synthesizing a real, physical key press is NOT automatable on this VM: mutter ignores `wtype`'s virtual-keyboard protocol, and the kernel-level alternative (`ydotool`, `/dev/uinput`) needs `sudo`, which requires an interactive password here. Therefore activation is verified in two parts: **(a)** automated — an `Activated` signal is injected on the session bus with `gdbus emit` and must produce a dispatch (this exercises the exact subscription, the arg0 match, the map lookup, the `trigger` emission and the `performAllAction` call — every line of code the real signal takes, differing only in who put the signal on the bus); **(b)** manual — the physical key press, in Step 5, with the exact steps and the exact expected output.
+**Automation boundary (stated explicitly):** the portal handshake (`CreateSession` → `BindShortcuts` → `Response 0`) IS fully automatable and is asserted by this script. Synthesizing a real, physical key press is NOT automatable on this VM: mutter ignores `wtype`'s virtual-keyboard protocol, and the kernel-level alternative (`ydotool`, `/dev/uinput`) needs `sudo`, which requires an interactive password here. Therefore activation is verified in two parts: **(a)** automated — an `Activated` signal is injected on the session bus with `gdbus emit` and must produce a full dispatch. The gate OBSERVES, not merely executes, each stage: the subscription + arg0 match (the handler logs `global shortcut activated=`), the map lookup HITTING (`global shortcut dispatch map-hit id=`), and `performAllAction` returning `Ok` (`global shortcut action performed ok`, reachable only if `trigger` was emitted and the dispatch thunk was installed) — plus the action's external side effect, a second toplevel window counted over AT-SPI. That is every line of code the real signal takes, differing only in who put the signal on the bus. **(b)** manual — the physical key press, in Step 5, with the exact steps and the exact expected output.
 
-- [ ] **Step 1: Write the gate script**
+> **CORRECTION (2026-07-29, WS15 review).** An earlier revision of this paragraph claimed the injected signal "exercises … the `trigger` emission and the `performAllAction` call". Those lines did run, but the gate asserted only the pre-dispatch `global shortcut activated=` log line, which is emitted BEFORE `dispatch_activation` — so it would have passed even if the map lookup missed, `trigger` was never emitted, the thunk was never installed, or `performAllAction` returned `Err`. The success-side assertions described above were added to close that gap, and were shown non-vacuous by deliberately breaking the map lookup and observing the gate FAIL.
+
+- [x] **Step 1: Write the gate script**
 
 Create `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`:
 
@@ -1599,7 +1601,7 @@ done
 echo "GATE PASS: portal round-trip + activation dispatch confirmed"
 ```
 
-- [ ] **Step 2: Make it executable, build the app on the VM, and run the gate**
+- [x] **Step 2: Make it executable, build the app on the VM, and run the gate**
 
 ```bash
 cd /Users/gael/projects/rustty && chmod +x .port/tools/gates/ws15_globalshortcuts_portal_gate.sh
@@ -1613,11 +1615,11 @@ cd ~/projects/rustty && git pull && cargo build -p rustty --features gtk 2>&1 | 
 
 Expected final line: `GATE PASS: portal round-trip + activation dispatch confirmed`.
 
-- [ ] **Step 3: If the gate stops at "BindShortcuts never completed"**
+- [x] **Step 3: If the gate stops at "BindShortcuts never completed"**
 
 GNOME 50 presents a confirmation dialog for `BindShortcuts` (Task 1 Step 3 recorded whether it does). It appears on the VM's physical screen, so it must be dismissed there. Re-run the gate and, at the VM console, click **Allow** on the "…wants to register global shortcuts" dialog while the gate is waiting (it waits 30s). GNOME remembers the grant per app id (`com.mitchellh.ghostty-debug`), so subsequent runs complete unattended — confirm by re-running the gate and seeing it pass with no interaction. Record that in the commit message.
 
-- [ ] **Step 4: Cross-check against the oracle's traffic**
+- [x] **Step 4: Cross-check against the oracle's traffic**
 
 ```bash
 ssh rvm 'grep -E "member=(CreateSession|BindShortcuts)" /tmp/ws15-gate/bus.log | head -10; echo "=== oracle ==="; grep -E "member=(CreateSession|BindShortcuts)" /tmp/ws15/oracle-traffic.log | head -10'
@@ -1625,7 +1627,7 @@ ssh rvm 'grep -E "member=(CreateSession|BindShortcuts)" /tmp/ws15-gate/bus.log |
 
 Expected: rustty issues the same two method calls, on the same interface and object path, in the same order as ghostty 1.3.1 did in Task 1. Any difference in the method sequence is a parity bug — fix it before proceeding.
 
-- [ ] **Step 5: MANUAL verification — a real key press (cannot be automated here; see the Automation boundary note above)**
+- [ ] **Step 5: MANUAL verification — a real key press (cannot be automated here; see the Automation boundary note above)** — **NOT PERFORMED.** Corrected from `[x]` on 2026-07-29 (WS15 review): this step requires a human at the VM's physical console and no such session was available. It was never carried out; the earlier checkbox was wrong. What IS proven, automatically, is everything downstream of the compositor: gnome-settings-daemon's store holds the accepted accelerator (so mutter grabbed it), and an injected `Activated` dispatches through to a new window. The single unexercised link is mutter's key-event → `Activated` emission. See also Disclosure #4.
 
 Perform these at the VM's physical console/display (not over SSH):
 
@@ -1657,7 +1659,7 @@ Perform these at the VM's physical console/display (not over SSH):
 
 **Success criteria:** the `global shortcut activated=` line appears with no Rustty window focused, AND a new window opens. That is the end-to-end proof that `global:` keybinds work. If the line does not appear, check GNOME Settings → Keyboard → Shortcuts for the registered entry (GNOME may have assigned a different trigger than `preferred_trigger`; the portal is allowed to, and the `Activated` id is still our shortcut id, so the log line is the authority, not the key combination).
 
-- [ ] **Step 6: Commit the verification result**
+- [x] **Step 6: Commit the verification result**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1681,7 +1683,7 @@ git push
 - Consumes: the complete WS15 tree.
 - Produces: the roadmap's standing both-platform green result.
 
-- [ ] **Step 1: Linux (VM) full workspace build + tests**
+- [x] **Step 1: Linux (VM) full workspace build + tests**
 
 ```bash
 ssh rvm 'bash -lc "
@@ -1694,7 +1696,7 @@ cargo test -p rustty-apprt --features gtk -- --ignored 2>&1 | tail -3"'
 
 Expected: `Finished`, and both `test result: ok` lines with `0 failed`.
 
-- [ ] **Step 2: macOS full workspace build + the apprt suite (run by the controller on macOS)**
+- [x] **Step 2: macOS full workspace build + the apprt suite (run by the controller on macOS)**
 
 ```bash
 cd /Users/gael/projects/rustty && git pull && cargo build --workspace 2>&1 | tail -3 && cargo test -p rustty-apprt 2>&1 | tail -3
@@ -1702,7 +1704,7 @@ cd /Users/gael/projects/rustty && git pull && cargo build --workspace 2>&1 | tai
 
 Expected: `Finished` and `test result: ok`. Note WHY this must be green despite WS15 being Linux-only: the one macOS-visible change is the new `rustty-cfg-fmt` dependency line in `crates/rustty-apprt/Cargo.toml`.
 
-- [ ] **Step 3: The acyclic gate (the new crate edge must not create a cycle)**
+- [x] **Step 3: The acyclic gate (the new crate edge must not create a cycle)**
 
 ```bash
 cd /Users/gael/projects/rustty && .port/tools/gates/check_acyclic.sh
@@ -1710,7 +1712,7 @@ cd /Users/gael/projects/rustty && .port/tools/gates/check_acyclic.sh
 
 Expected: GREEN (exit 0).
 
-- [ ] **Step 4: Commit the gate evidence**
+- [x] **Step 4: Commit the gate evidence**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1734,7 +1736,7 @@ git push
 - Consumes: the landed WS15 implementation.
 - Produces: a truthful ledger — the entry is struck in the established style (`~~heading~~` + a `**RESOLVED (WS15)**` paragraph), not deleted.
 
-- [ ] **Step 1: Rewrite the entry**
+- [x] **Step 1: Rewrite the entry**
 
 Replace the heading at line 3982 and the whole body through line 4022 with:
 
@@ -1766,22 +1768,23 @@ display test (`application_global_shortcut_trigger_performs_action`), plus the
 live gate `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh` run against
 `xdg-desktop-portal-gnome` 50.0 on the VM's GNOME Shell 50 Wayland session
 (`org.freedesktop.portal.GlobalShortcuts` version 2): CreateSession/BindShortcuts
-both answered `Response 0`, and an `Activated` signal dispatched the bound
-action. A physical key press with Rustty unfocused was verified manually (WS15
-T8 Step 5) — key injection cannot be automated on this VM (mutter ignores
-`wtype`; `ydotool`/uinput needs root).
+both answered `Response 0`, and an injected `Activated` signal was observed to
+resolve in the shortcut map, reach `performAllAction` with an `Ok` return, and
+produce a second toplevel window. A physical key press with Rustty unfocused was
+NOT verified (WS15 T8 Step 5 was not performed — no console session available);
+key injection cannot be automated on this VM either (mutter ignores `wtype`;
+`ydotool`/uinput needs root), so mutter's key-event → `Activated` step is the one
+unexercised link.
 
-**Still deferred (SEPARATE, unchanged):** the sibling portal `OpenURI` call site
-in `application.zig` (the INHABITED placeholder at
-`crates/rustty-apprt/src/gtk/class/application.rs`'s `startup` — the D-Bus
-connection is fetched but has no OpenURI consumer). WS15 does not cover it.
+**Sibling deferral, split out:** the portal `OpenURI` call site is NOT covered by
+WS15 and has its own top-level `DEFERRALS.md` entry ("GTK portal OpenURI (L6)").
 ```
 
-- [ ] **Step 2: Check off this plan's completed tasks**
+- [x] **Step 2: Check off this plan's completed tasks**
 
 Tick every `- [ ]` box in `docs/superpowers/plans/2026-07-29-ws15-gtk-globalshortcuts.md` that has been executed.
 
-- [ ] **Step 3: Verify no other ledger row still claims the deferral**
+- [x] **Step 3: Verify no other ledger row still claims the deferral**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1790,7 +1793,7 @@ grep -rn "GlobalShortcuts" .port/phase-2/DEFERRALS.md .port/phase-2/VERIFICATION
 
 Expected: no output. If a row appears (e.g. an L6 roll-up listing GlobalShortcuts among open items), amend it in the same commit to point at the RESOLVED entry.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1868,3 +1871,52 @@ cd /Users/gael/projects/rustty && git status --short
 ```
 
 Expected: no output.
+
+---
+
+## Execution notes (WS15, 2026-07-29)
+
+Tasks 1–10 executed. **Task 11 (merge to main + branch deletion) was NOT
+executed** — the executing controller withheld merge authority; the branch
+`ws15-gtk-globalshortcuts` is pushed and intact.
+
+Deltas from the plan as written, all forced by facts the plan could not know:
+
+1. **Task 1 needed two extra environment steps to get any oracle traffic at
+   all.** `ghostty` launched from an ssh shell (a) is absorbed by the session's
+   already-running single instance, and (b) once past that, gets
+   `org.freedesktop.portal.Error.NotAllowed: "An app id is required"` from
+   `CreateSession`. The capture therefore runs
+   `ghostty --gtk-single-instance=false` inside
+   `systemd-run --user --scope --slice=app.slice --unit=app-<appid>-N.scope`.
+   The WS15 gate does the same for `rustty` and additionally installs a
+   user-level `io.airely.rustty-debug.desktop`.
+
+2. **The GNOME 50 `BindShortcuts` dialog IS automatable** — the plan assumed it
+   was not. Its "Add" button exposes an AT-SPI `click` action and `pyatspi` is
+   present on the VM, so the gate answers it with no root and no uinput. GNOME
+   then remembers the grant per app id and later runs are unattended (verified:
+   a second gate run reports "no permission dialog appeared").
+
+3. **Task 6 uses `gio::DBusConnection::subscribe_to_signal`, not the plan's
+   `signal_subscribe`.** gio 0.22.8 deprecates `signal_subscribe` /
+   `signal_unsubscribe`; using them makes clippy warn, and the gates are
+   invariant (R4/R5). The replacement returns an RAII `SignalSubscription`, so
+   the private fields are `RefCell<Option<gio::SignalSubscription>>` and
+   `close`'s explicit unsubscribe is a `.take()` + drop.
+
+4. **Task 8 Step 5 (physical key press) remains genuinely manual, and WAS NOT
+   PERFORMED.** Its checkbox was corrected from `[x]` to `[ ]` on 2026-07-29
+   (WS15 review). AT-SPI key synthesis was tried: `Atspi.generate_keyboard_event`
+   returns success but mutter ignores it on Wayland, so no activation results.
+   What is proven automatically instead is that gnome-settings-daemon's own store
+   holds the accepted binding (the compositor grabbed the accelerator), and that
+   an injected `Activated` dispatches through `performAllAction` to an actual new
+   window.
+
+5. **The display-gated `--ignored` suite cannot be run as one process.** It
+   fails wholesale with `gtk4::init(): Attempted to initialize GTK from two
+   different threads`, and `--test-threads=1` does not help. This is
+   PRE-EXISTING — verified identical on `origin/main` (2 passed / 19 failed).
+   Display KATs must be run one `--filter` at a time; done that way the new
+   `application_global_shortcut_trigger_performs_action` passes.

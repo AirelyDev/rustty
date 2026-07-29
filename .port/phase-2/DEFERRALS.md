@@ -3979,47 +3979,90 @@ reinforcing findings from the implementation:
 over BASELINE)`" to "live delegate to `runtime_at_least`", or reverse T2. Left
 as a flagged deviation rather than a silent one.
 
-## GlobalShortcuts XDG-portal round-trip (L6 portals) [added 2026-07-18, T26 GlobalShortcuts]
+## ~~GlobalShortcuts XDG-portal round-trip (L6 portals)~~ [added 2026-07-18, T26 GlobalShortcuts]
 
-**Ghostty source:** `src/apprt/gtk/class/global_shortcuts.zig:128-560` — `refresh`
-(map-build), `close` (session/subscription teardown), `request`, `Method`
-(`CreateSession`/`BindShortcuts` payloads + `onResponse`), `getRequestPath`,
-`generateToken`, and the `responded`/`gotResponseHandle`/`shortcutActivated`
-D-Bus callbacks. **Rustty counterpart:**
-`crates/rustty-apprt/src/gtk/class/global_shortcuts.rs` (`gtk` feature).
-**Status:** deferred — desktop portals are an L6 milestone; the portal DBus
-round-trip is NOT ported.
+**RESOLVED (WS15, 2026-07-29).** The XDG portal round-trip is PORTED and
+verified live. `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs` now
+implements the reference's full body (`global_shortcuts.zig:109-460,541-565`):
+`refresh` builds the trigger→action map from `config.keybind.set` (`global:`
+leaves with exactly one action, keyed by `key::xdg_shortcut_from_trigger`) and
+drives `CreateSession` → `BindShortcuts`; `request` pre-computes the `Request`
+object path from the connection's unique name + `handle_token` and subscribes to
+`Response` BEFORE issuing the call; `on_response` stores the session handle,
+subscribes to `Activated` (arg0-path-matched on the session handle) and chains
+`BindShortcuts`; `close` unsubscribes both signals, calls `Session.Close` and
+clears the map. The D-Bus stack is `gio::DBusConnection` (the connection the
+`Application` already hands the class) — no new D-Bus dependency. The one new
+crate edge is `rustty-apprt -> rustty-cfg-fmt`, for the `description` field
+(`check_acyclic.sh` GREEN).
 
-**What IS ported (REAL, this tier).** The `GhosttyGlobalShortcuts` class itself:
-the `config` + `dbus-connection` properties, the `notify::config` → `refresh`
-wiring, `set_dbus_connection` (close prior → ref new → refresh, as the
-property's custom setter), the `trigger` signal (carrying an `ActionBoxed`), and
-`dispose`. The `Application` binding is REAL too — `startup_global_shortcuts`
-(`application.zig:1432-1457`) creates the object, feeds it
-`app.dbus_connection()`, `sync_create`-binds `config`, and connects `trigger`
-(→ `global_shortcut_trigger`, `:1655-1663`).
+`Application::global_shortcut_trigger` is no longer a placeholder-leaf either: a
+`perform_all_action_thunk` (installed by `bind_core_app`, same shape as
+`tick_thunk`/`update_config_thunk`) carries `core_app.performAllAction(rt_app,
+action)` across the type-erasure seam, so an activated global shortcut performs
+its action. `global:` keybinds are FUNCTIONAL on the GTK apprt.
 
-**What is deferred (inhabited placeholders, NOT `unimplemented!()`).**
-`refresh` runs its real head (close prior state; require a config) and then
-no-ops instead of building the trigger→action map (from `config.keybind.set`,
-via `key::xdg_shortcut_from_trigger` + the `global` flag — both already exist in
-the port) and driving the `CreateSession`/`BindShortcuts` round-trip. `close` is
-an inhabited no-op (no session `handle` / signal subscriptions / arena exist to
-tear down until the round-trip lands). `global_shortcut_trigger` is a
-placeholder-leaf (the reference `core.performAllAction` lands with the Task-23
-action-dispatch surface) and is additionally unreachable: `shortcutActivated`,
-the sole emitter of `trigger`, is part of the deferred portal path.
+**Verification:** 14 headless unit tests (map build, token shape, request path,
+both payload shapes, response parsing, activation → `trigger` emission) plus one
+display test (`application_global_shortcut_trigger_performs_action`), plus the
+live gate `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh` run against
+`xdg-desktop-portal-gnome` 50.0 on the VM's GNOME Shell 50 Wayland session
+(`org.freedesktop.portal.GlobalShortcuts` version 2): CreateSession/BindShortcuts
+both answered `Response 0`, the `BindShortcuts` results named the bound
+accelerator, and an injected `Activated` signal was OBSERVED to resolve in the
+shortcut map, reach `performAllAction` with an `Ok` return, and produce a second
+toplevel window (counted over AT-SPI) — the bound action being `new_window`. The emitted traffic was diffed against a `dbus-monitor` capture of the
+installed `ghostty 1.3.1-2.fc44` doing the same handshake: same methods, same
+order, same payload shapes, differing only in the R2 token prefix
+(`rustty_<7hex>` vs `ghostty_<7hex>`).
 
-**Why no-op and not `unimplemented!()`.** `notify::config` and
-`set_dbus_connection` drive `refresh` on the startup hot path; an
-`unimplemented!()` there would be a latent abort the moment a user has a single
-`global:` keybind (the LATENT-CRASH trap). The portal state fields
-(`handle`/`response_subscription`/`activate_subscription`/`arena`/`map`) attach
-to `refresh`/`close` when the round-trip is ported.
+**Two environment facts the gate encodes** (established empirically in WS15 T1
+against the oracle, and reproduced by the port):
+1. `xdg-desktop-portal` answers `CreateSession` with `NotAllowed: "An app id is
+   required"` unless it can derive the caller's app id — for a host process,
+   from its `app.slice` systemd unit plus a matching `.desktop` file. The oracle
+   fails identically without it.
+2. GNOME 50 gates `BindShortcuts` on a one-time "Add Keyboard Shortcuts"
+   confirmation dialog; the grant is then remembered per app id in
+   `org.gnome.settings-daemon.global-shortcuts applications`. The gate answers it
+   via the dialog button's AT-SPI `click` action.
 
-**What unblocks it:** L6 (desktop portals) — the XDG `org.freedesktop.portal.
-GlobalShortcuts` + `Request` DBus surface (and the sibling `OpenURI` portal
-deferred in `application.zig`).
+**Not automatable here (honest boundary):** a PHYSICAL key press. mutter ignores
+`wtype` and AT-SPI key synthesis on Wayland, and `ydotool`/uinput needs root.
+What is proven instead: gnome-settings-daemon's own store holds the accepted
+binding (`io.airely.rustty-debug -> [('SHIFT+CTRL+ALT+F12', {shortcuts:
+['<Shift><Control><Alt>F12'], description: 'new_window'})]`), i.e. the
+compositor grabbed the accelerator; and an injected `Activated` is followed all
+the way to its side effect — the gate asserts the map lookup HIT, that
+`performAllAction` returned `Ok`, and that a new toplevel window appeared. Only
+mutter's key-event → `Activated` step is unexercised.
+
+**Sibling deferral, split out:** the portal `OpenURI` call site is NOT covered by
+WS15 and now has its own top-level entry below ("GTK portal OpenURI (L6)"), so it
+stays discoverable by a ledger grep instead of being buried under this resolved
+heading.
+
+
+## GTK portal OpenURI (L6) — call site INHABITED, body unported [split out of the WS15 GlobalShortcuts entry, 2026-07-29]
+
+**OPEN.** The sibling XDG portal call site to GlobalShortcuts: the reference's
+`portal.zig` / `portal/OpenURI.zig`, reached from `application.zig`'s `startup`.
+In the port, `crates/rustty-apprt/src/gtk/class/application.rs`'s `startup` is an
+INHABITED placeholder for this: the `gio::DBusConnection` is fetched (and handed
+to `GlobalShortcuts`), but there is no `OpenURI` consumer — nothing calls the
+portal's `OpenURI`/`OpenFile` methods, and the reference's `portal` module has no
+Rust counterpart yet.
+
+**Impact:** opening a URL/file through the desktop portal (the sandbox-correct
+path) is unavailable on GTK; only the non-portal fallback path exists.
+
+**Un-defer trigger:** port `portal.zig` + `portal/OpenURI.zig` onto the same
+`gio::DBusConnection` + `Request`-object-path pattern that
+`global_shortcuts.rs` already establishes (pre-subscribe to `Response` on a
+self-computed request path, then issue the call). WS15's live-gate harness
+(`.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`) is directly reusable
+for the app-id/`.desktop` environment setup that any portal call needs.
+
 
 ## App-core over-claim CORRECTION — `main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` are DEFERRED (already tracked at C6)
 
@@ -4725,6 +4768,10 @@ it does on macOS. This removes only the exit RACE — the KAT still spawns a rea
 Recorded after the **final parity audit** (25 adversarially-verified agents over all Linux/GTK
 features vs ghostty) confirmed these are the ONLY remaining Linux/GTK divergences and that they
 are **not daily-use parity gaps on the common (GNOME/mutter) target**.
+
+> **CORRECTION (2026-07-29, WS15 review):** "ONLY remaining" is no longer accurate — the portal
+> `OpenURI` call site is also open; see "GTK portal OpenURI (L6)" above. Read this entry as
+> covering the winproto-x11 and dcimgui divergences only.
 
 - **`gtk/winproto/x11.rs` — the x11 window-protocol arm (L6).** The reference
   `winproto/x11.zig` is unported; the x11 arm of the `App`/`Window` unions stays `#[cfg]`-gated

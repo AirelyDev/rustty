@@ -1190,6 +1190,7 @@ dependencies = [
  "rustty-apprt-api",
  "rustty-args",
  "rustty-build-config",
+ "rustty-cfg-fmt",
  "rustty-config",
  "rustty-core",
  "rustty-crash",

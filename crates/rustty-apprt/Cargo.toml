@@ -79,6 +79,13 @@ rustty-inspector = { workspace = true }
 dcimgui-sys = { workspace = true }
 rustty-config = { workspace = true }
 rustty-input = { workspace = true }
+# WS15 (GTK GlobalShortcuts): `Binding.Action::format` is generic over
+# `rustty_cfg_fmt::Writer`; the portal `BindShortcuts` payload needs each action
+# rendered in its parse/format spelling for the shortcut `description` field.
+# Already in the graph transitively (rustty-input deps it); named directly here
+# because Rust needs a direct edge to `use` the crate. Acyclic: rustty-cfg-fmt is
+# a strictly-earlier workspace member with no apprt edge.
+rustty-cfg-fmt = { workspace = true }
 rustty-os = { workspace = true }
 # `rustty_datastruct::blocking_queue::Timeout` — named by the gtk-gated
 # `Application::bind_core_app` seam so `activate` can push `Message::NewWindow`
