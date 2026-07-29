@@ -2585,6 +2585,7 @@ impl<'a, H: Handler> Stream<'a, H> {
             | osc::Command::ConemuRunProcess(_)
             | osc::Command::KittyTextSizing(_)
             | osc::Command::KittyClipboardProtocol(_)
+            | osc::Command::KittyDndProtocol(_)
             | osc::Command::ContextSignal(_) => {
                 // log.debug("unimplemented OSC callback: {}", .{cmd});
             }
