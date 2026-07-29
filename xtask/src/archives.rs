@@ -201,6 +201,40 @@ pub fn cargo_build_json(
     String::from_utf8(out.stdout).map_err(|e| format!("cargo JSON output was not UTF-8: {e}"))
 }
 
+/// Copy `src` to `dst` and run `/usr/bin/ranlib` on the copy.
+///
+/// PORTS `ghostty/src/build/LibtoolStep.zig:54-78` `normalizeArchive`, verbatim
+/// in intent (the oracle runs `/bin/cp "$1" "$2" && /usr/bin/ranlib "$2"` on
+/// EVERY source archive before handing it to `libtool`).
+///
+/// Why: newer Xcode `libtool` can silently DROP 64-bit archive members when the
+/// input archive layout is not what it expects — producing a combined archive
+/// that is missing symbols, nondeterministically, with no error. `ranlib`
+/// rewrites the archive with a regenerated symbol table, normalizing the
+/// layout. rustty is more exposed than the oracle here, because every archive it
+/// folds comes from a `cc`/`ar` build script — exactly the layout the oracle's
+/// comment warns about (INTEGRATION_PARITY §2.5).
+///
+/// The copy matters: the sources are cargo's own build outputs and must not be
+/// rewritten in place, or cargo's freshness tracking sees them change.
+pub fn normalize_archive(src: &Path, dst: &Path) -> Result<(), String> {
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    let _ = std::fs::remove_file(dst);
+    std::fs::copy(src, dst)
+        .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dst.display()))?;
+    let status = Command::new("/usr/bin/ranlib")
+        .arg(dst)
+        .status()
+        .map_err(|e| format!("spawn /usr/bin/ranlib: {e}"))?;
+    if !status.success() {
+        return Err(format!("ranlib {} exited with {status}", dst.display()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +323,65 @@ mod tests {
         };
         let exists = |p: &Path| p == Path::new("/w/b/libz.a");
         assert_eq!(req.resolve_with(&exists).unwrap(), PathBuf::from("/w/b/libz.a"));
+    }
+
+    /// `normalize_archive` must produce a copy WITH a regenerated symbol table
+    /// and leave the source alone. Built from a real object file so the
+    /// assertion exercises the real archive format (macOS only — the fix is a
+    /// Darwin `libtool` interoperability workaround).
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn normalize_archive_regenerates_the_symbol_table() {
+        use std::process::Command;
+
+        let tmp = std::env::temp_dir().join(format!("ws9-ranlib-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let c = tmp.join("p.c");
+        std::fs::write(&c, b"int ws9_probe(void){return 42;}\n").unwrap();
+        let o = tmp.join("p.o");
+        assert!(Command::new("clang")
+            .args(["-c", "-o"])
+            .arg(&o)
+            .arg(&c)
+            .status()
+            .unwrap()
+            .success());
+
+        // `ar rcS` deliberately omits the symbol table (`S` = no index) — the
+        // "unexpected layout" shape LibtoolStep.zig warns about.
+        let src = tmp.join("libws9probe.a");
+        assert!(Command::new("/usr/bin/ar")
+            .arg("rcS")
+            .arg(&src)
+            .arg(&o)
+            .status()
+            .unwrap()
+            .success());
+
+        let toc = |p: &Path| -> String {
+            let out = Command::new("/usr/bin/ar").arg("-t").arg(p).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).to_string()
+        };
+        assert!(
+            !toc(&src).contains("__.SYMDEF"),
+            "precondition: the source archive must have no symbol table"
+        );
+
+        let dst = tmp.join("0-libRusttyKit.a");
+        normalize_archive(&src, &dst).unwrap();
+
+        assert!(
+            toc(&dst).contains("__.SYMDEF"),
+            "normalized archive must carry a regenerated symbol table"
+        );
+        assert!(
+            !toc(&src).contains("__.SYMDEF"),
+            "the source archive must not be modified in place"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// An unlocatable declared archive is a HARD ERROR — never a silent skip.
