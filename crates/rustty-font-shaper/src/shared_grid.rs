@@ -833,6 +833,12 @@ mod tests {
 
     // test "renderGlyph error after cache insert rolls back cache entry"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn render_glyph_error_after_cache_insert_rolls_back_cache_entry() {
         // This test verifies that when renderGlyph fails after inserting a cache
         // entry (via getOrPut), the errdefer properly removes the entry, preventing
@@ -898,6 +904,12 @@ mod tests {
 
     // test "init error"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn init_error() {
         // Test every failure point in `init` and ensure that we don't
         // leak memory (testing.allocator verifies) since we're exiting early.

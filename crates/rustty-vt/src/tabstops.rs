@@ -524,6 +524,12 @@ mod tests {
 
     // test "Tabstops: resize alloc failure preserves state"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn tabstops_resize_alloc_failure_preserves_state() {
         use rustty_util::tripwire::ResetMode;
 
