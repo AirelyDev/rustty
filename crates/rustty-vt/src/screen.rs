@@ -3335,9 +3335,30 @@ impl Screen {
         // errdefer if (!sel.tracked()) tracked_sel.deinit(self);
         let tracked_sel = if sel.tracked() { sel } else { sel.track(self)? };
 
-        // Untrack prior selection
+        // Untrack prior selection pins that aren't also owned by the
+        // replacement. A caller may pass our current tracked selection back to
+        // us by value, so releasing both old pins unconditionally would leave
+        // the replacement pointing at freed pool entries.
         if let Some(old) = self.selection.take() {
-            old.deinit(self);
+            // const new_bounds = tracked_sel.bounds.tracked;
+            // PORT NOTE: `track` always yields `Bounds::Tracked`, so the
+            // reference's unchecked `.tracked` field access is faithful; the
+            // untracked arm is unreachable.
+            let (new_start, new_end): (*mut Pin, *mut Pin) = match tracked_sel.bounds {
+                selection::Bounds::Tracked { start, end } => (start, end),
+                selection::Bounds::Untracked { .. } => unreachable!(),
+            };
+            match old.bounds {
+                selection::Bounds::Untracked { .. } => old.deinit(self),
+                selection::Bounds::Tracked { start, end } => {
+                    if !core::ptr::eq(start, new_start) && !core::ptr::eq(start, new_end) {
+                        self.pages.untrack_pin(start);
+                    }
+                    if !core::ptr::eq(end, new_start) && !core::ptr::eq(end, new_end) {
+                        self.pages.untrack_pin(end);
+                    }
+                }
+            }
         }
         self.selection = Some(tracked_sel);
         self.dirty.selection = true;
@@ -11987,6 +12008,32 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(tracked + 2, s.pages.count_tracked_pins());
+        s.deinit();
+    }
+
+    // test "Screen: reselecting tracked selection preserves its pins"
+    #[test]
+    fn screen_reselecting_tracked_selection_preserves_its_pins() {
+        let mut s = mkscreen(10, 2, 0);
+
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 1, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 3, y: 0 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // `Selection` is `Copy`, so this hands our own tracked selection back
+        // to `select` by value — exactly the aliasing upstream fixes.
+        let current = s.selection.unwrap();
+        s.select(Some(current)).unwrap();
+
+        assert_eq!(selection::Order::Forward, s.selection.unwrap().order(&s));
+
         s.deinit();
     }
 
