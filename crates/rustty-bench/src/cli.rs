@@ -6,7 +6,9 @@ use crate::codepoint_width::CodepointWidth;
 use crate::grapheme_break::GraphemeBreak;
 use crate::is_symbol::IsSymbol;
 use crate::osc_parser::OscParser;
+use crate::page_compression::PageCompression;
 use crate::screen_clone::ScreenClone;
+use crate::scrollback_compression::ScrollbackCompression;
 use crate::terminal_parser::TerminalParser;
 use crate::terminal_stream::TerminalStream;
 use allocator_api2::alloc::Global as Allocator;
@@ -32,6 +34,10 @@ pub enum Action {
     IsSymbol,
     // @"osc-parser",
     OscParser,
+    // @"page-compression",
+    PageCompression,
+    // @"scrollback-compression",
+    ScrollbackCompression,
 }
 
 impl Action {
@@ -46,6 +52,8 @@ impl Action {
             b"terminal-stream" => Some(Action::TerminalStream),
             b"is-symbol" => Some(Action::IsSymbol),
             b"osc-parser" => Some(Action::OscParser),
+            b"page-compression" => Some(Action::PageCompression),
+            b"scrollback-compression" => Some(Action::ScrollbackCompression),
             _ => None,
         }
     }
@@ -206,6 +214,8 @@ pub fn main_action(alloc: Allocator, action: Action, args: Args) -> Result<(), E
         Action::TerminalStream => main_action_impl::<TerminalStream>(alloc, args),
         Action::IsSymbol => main_action_impl::<IsSymbol>(alloc, args),
         Action::OscParser => main_action_impl::<OscParser>(alloc, args),
+        Action::PageCompression => main_action_impl::<PageCompression>(alloc, args),
+        Action::ScrollbackCompression => main_action_impl::<ScrollbackCompression>(alloc, args),
     }
 }
 

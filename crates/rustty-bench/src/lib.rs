@@ -38,6 +38,10 @@ pub mod screen_clone;
 pub mod terminal_parser;
 // pub const IsSymbol = @import("IsSymbol.zig");
 pub mod is_symbol;
+// pub const PageCompression = @import("PageCompression.zig");
+pub mod page_compression;
+// pub const ScrollbackCompression = @import("ScrollbackCompression.zig");
+pub mod scrollback_compression;
 
 // PORT NOTE: `main.zig` re-exports the decls above but omits `OscParser` and
 // `options` (they are reached only via `cli.Action.Struct`). They are declared
@@ -101,6 +105,11 @@ mod tests {
         let _ = core::any::type_name::<crate::terminal_parser::TerminalParser>();
         // pub const IsSymbol = @import("IsSymbol.zig");
         let _ = core::any::type_name::<crate::is_symbol::IsSymbol>();
+        // pub const PageCompression = @import("PageCompression.zig");
+        let _ = core::any::type_name::<crate::page_compression::PageCompression>();
+        // pub const ScrollbackCompression = @import("ScrollbackCompression.zig");
+        let _ =
+            core::any::type_name::<crate::scrollback_compression::ScrollbackCompression>();
         // `options` / `osc_parser` are not re-exported by `main.zig` (see the
         // PORT NOTE above) but are pub mods of this hub, so touch them too.
         let _ = core::any::type_name::<crate::options::DataFile>();
