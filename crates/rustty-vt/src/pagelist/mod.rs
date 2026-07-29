@@ -1037,9 +1037,19 @@ pub struct PageList {
     /// going to risk it.
     pub page_serial: u64,
 
-    /// The lowest still valid serial number that could exist. This allows
-    /// for quick comparisons to find invalid pages in references.
-    pub page_serial_min: u64,
+    /// The first serial in the current whole-list validity epoch. Only `reset`
+    /// advances this value, immediately before rebuilding every page. It is not
+    /// the generation of the first page or the exact minimum live generation.
+    /// Page generations are not monotonic in list order: replacement and split
+    /// operations can put a fresh generation before older live pages.
+    ///
+    /// A generation below this epoch is definitely invalid, allowing O(1)
+    /// rejection in `node_is_valid` and bulk removal of pre-reset search
+    /// results. A generation at or above it is only potentially valid and must
+    /// still be checked against the live list before its coordinates are used.
+    ///
+    /// PORTS: oracle@main PageList.zig `page_serial_epoch` (f6d9a582e).
+    pub page_serial_epoch: u64,
 
     /// Continuation state for incremental page compression. This allows
     /// `compress(CompressionMode::Incremental)` to work. More details on all
@@ -1424,7 +1434,7 @@ impl PageList {
             pool,
             pages: page_list,
             page_serial,
-            page_serial_min: 0,
+            page_serial_epoch: 0,
             page_compression: compress::IncrementalCompressionState::default(),
             page_size,
             explicit_max_size: max_size.unwrap_or(usize::MAX),
@@ -1634,12 +1644,11 @@ impl PageList {
                 actual_total += unsafe { Node::rows(node) as usize };
                 node_ = unsafe { (*node).next };
 
-                // While doing this traversal, verify no node has a serial
-                // number lower than our min.
-                if unsafe { (*node).serial } < self.page_serial_min {
+                // Every live node must belong to the current validity epoch.
+                if unsafe { (*node).serial } < self.page_serial_epoch {
                     // log.warn(
-                    //     "PageList integrity violation: page serial too low serial={} min={}",
-                    //     .{ node.serial, self.page_serial_min },
+                    //     "PageList integrity violation: page serial predates epoch serial={} epoch={}",
+                    //     .{ node.serial, self.page_serial_epoch },
                     // );
                     return Err(IntegrityError::PageSerialInvalid);
                 }
@@ -1762,10 +1771,10 @@ impl PageList {
         // Reset discards all scrollback, so there is nothing left to compress.
         self.page_compression.reset();
 
-        // Invalidate all external page refs to the previous list. The reset below
-        // rebuilds the page list from the pools, so old untracked refs must be
-        // rejected before any validation attempts to inspect their node pointers.
-        self.page_serial_min = self.page_serial;
+        // Begin a new whole-list validity epoch before rebuilding from the pools.
+        // Every old reference now has a serial below the epoch and can be rejected
+        // in O(1), even if the node pool later reuses its pointer address.
+        self.page_serial_epoch = self.page_serial;
 
         // We need enough pages/nodes to keep our active area. This should
         // never fail since we by definition have allocated a page already

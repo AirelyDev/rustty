@@ -560,12 +560,14 @@ impl ScreenSearch {
             // const hl = &self.history_results.items[i];
             let hl = &self.history_results[i];
             // const serials = hl.chunks.items(.serial);
-            // const lowest = serials[0];
-            let lowest = hl.chunks[0].serial;
-            // if (lowest < self.screen.pages.page_serial_min) {
-            if lowest < unsafe { (*self.screen).pages.page_serial_min } {
-                // Everything from here forward we assume is invalid because
-                // our history results only get older.
+            // const first_serial = serials[0];
+            let first_serial = hl.chunks[0].serial;
+            // if (first_serial < self.screen.pages.page_serial_epoch) {
+            if first_serial < unsafe { (*self.screen).pages.page_serial_epoch } {
+                // Only a whole-list reset advances the epoch. Results are
+                // newest to oldest, so this result and the entire remaining
+                // suffix predate that reset. Drop them without scanning the
+                // live page list for every captured chunk.
                 // const alloc = self.allocator();
                 // for (self.history_results.items[i..]) |*prune_hl| prune_hl.deinit(alloc);
                 // self.history_results.shrinkAndFree(alloc, i);

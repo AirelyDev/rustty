@@ -411,9 +411,9 @@ impl PageList {
 
             // We also need to reset the serial number. Since this is the only
             // place we ever reuse a serial number, we also can safely set
-            // page_serial_min to be one more than the old serial because we
+            // page_serial_epoch to be one more than the old serial because we
             // only ever prune the oldest pages.
-            self.page_serial_min = unsafe { (*first).serial } + 1;
+            self.page_serial_epoch = unsafe { (*first).serial } + 1;
             unsafe { (*first).serial = self.page_serial };
             self.page_serial += 1;
 

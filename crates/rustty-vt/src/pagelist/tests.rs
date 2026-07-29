@@ -1471,13 +1471,37 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
     s.deinit();
 }
 
+/// PORTS: oracle f6d9a582e — only `reset` begins a new whole-list validity
+/// epoch. Growth, replacement and splitting must NOT advance it, because
+/// generations are not monotonic in list order.
+#[test]
+fn pagelist_only_reset_advances_the_serial_epoch() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let epoch0 = s.page_serial_epoch;
+    fill_compressible_history(&mut s, 4);
+    assert_eq!(
+        s.page_serial_epoch, epoch0,
+        "growth must not advance the epoch"
+    );
+
+    s.reset();
+    assert!(s.page_serial_epoch > epoch0, "reset begins a new epoch");
+    // Every live node belongs to the current epoch.
+    let mut it = s.pages.first;
+    while !it.is_null() {
+        assert!(unsafe { (*it).serial } >= s.page_serial_epoch);
+        it = unsafe { (*it).next };
+    }
+    s.deinit();
+}
+
 // ref: test "PageList reset invalidates stale untracked refs even if node memory is reused"
 #[test]
 fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     let old_serial = unsafe { (*s.pages.first).serial };
-    assert!(old_serial >= s.page_serial_min);
+    assert!(old_serial >= s.page_serial_epoch);
     assert!(old_serial < s.page_serial);
 
     s.reset();
@@ -1486,10 +1510,10 @@ fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused
     // the node pointer is inspected. Reset rebuilds the page list from the
     // pools, so old untracked refs may contain node pointers that are no
     // longer safe to dereference.
-    assert!(old_serial < s.page_serial_min);
+    assert!(old_serial < s.page_serial_epoch);
 
     let new_serial = unsafe { (*s.pages.first).serial };
-    assert!(new_serial >= s.page_serial_min);
+    assert!(new_serial >= s.page_serial_epoch);
     assert!(new_serial < s.page_serial);
 
     s.deinit();

@@ -456,7 +456,7 @@ impl PageList {
     ///
     /// Callers must ensure that the erased range only removes pages from
     /// the front or back of the linked list, never the middle. Middle-page
-    /// erasure would create serial gaps that page_serial_min cannot
+    /// erasure would create serial gaps that page_serial_epoch cannot
     /// represent, leaving dangling references in consumers such as search.
     /// Use the public eraseHistory/eraseActive wrappers which enforce this.
     fn erase_rows(&mut self, tl_pt: point::Point, bl_pt: Option<point::Point>) {
@@ -605,16 +605,16 @@ impl PageList {
         assert!(!unsafe { (*node).next }.is_null() || !unsafe { (*node).prev }.is_null());
 
         // We only support erasing from the front or back, never the middle.
-        // Middle erasure would create serial gaps that page_serial_min can't
+        // Middle erasure would create serial gaps that page_serial_epoch can't
         // represent. If this ever needs to change, we'll need a more
         // sophisticated invalidation mechanism.
         assert!(unsafe { (*node).prev }.is_null() || unsafe { (*node).next }.is_null());
 
-        // If we're erasing the first page, update page_serial_min so that
+        // If we're erasing the first page, update page_serial_epoch so that
         // any external references holding this page's serial will know it
         // has been invalidated.
         if unsafe { (*node).prev }.is_null() {
-            self.page_serial_min = unsafe { (*(*node).next).serial };
+            self.page_serial_epoch = unsafe { (*(*node).next).serial };
         }
 
         // Update any tracked pins to move to the previous or next page.
