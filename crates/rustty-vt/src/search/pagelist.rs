@@ -836,6 +836,13 @@ mod tests {
         miri,
         ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
     )]
+    // Release lane: this test drives a slow-runtime-safety mechanism (the
+    // pagelist integrity gate / `pin_is_valid`), which the port compiles out
+    // when `debug_assertions` is off — faithful to the reference's
+    // `build_options.slow_runtime_safety`, under which the oracle's test only
+    // exists. Debug-only; it still runs and passes there. (Same convention as
+    // `terminal_full_reset_tracked_pins`.)
+    #[cfg_attr(not(debug_assertions), ignore)]
     #[test]
     fn feed_keeps_its_tracked_pin_within_a_shorter_page() {
         use crate::pagelist::{Node as PlNode, PageList, Pin};
