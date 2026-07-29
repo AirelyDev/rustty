@@ -43,16 +43,26 @@ This is the payoff: rustty's ported Rust terminal engine, linked into the reused
 AppKit app, running as a real macOS terminal.
 
 ### Follow-ups (non-blocking refinements)
-- **Self-contained lib**: currently links system `-lz` + Homebrew `-lintl` because rustty's
-  vendored `libz.a` is inflate-only (no `deflate`; sentry needs it) and `gettext-sys` is the
-  localename slice only (no `dgettext`). Fold full zlib + gettext into the combined lib to
-  drop the system/Homebrew link deps (VALIDATION_REPORT_2 flagged the gettext slice).
+- **Self-contained lib**: ✅ DONE (zlib in the P3 pass, gettext in WS9 2026-07-28).
+  The combined `libRusttyKit.a` carries FULL zlib (inflate + deflate, for sentry's
+  `deflate`) and FULL libintl (`dgettext`/`bindtextdomain`/`textdomain`, from the
+  30-TU vendor of gettext 0.24 mirroring `ghostty/pkg/libintl/build.zig`). Both
+  `-lz` and `-L/opt/homebrew/opt/gettext/lib -lintl` are gone from
+  `OTHER_LDFLAGS`; `crates/rustty-os/build.rs` no longer adds a Homebrew
+  link-search either (review finding WS4-M1, resolved). WS9 also replaced xtask's
+  filesystem-glob archive discovery with a `cargo --message-format=json`-derived
+  set and added the `ranlib` normalization the oracle's LibtoolStep runs. Proof:
+  `bash .port/tools/gates/no_homebrew_gettext_gate.sh` builds Rustty.app with
+  Homebrew's libintl renamed away and asserts the `nm`/`otool` conditions.
 - **Identity rebrand**: DONE, full — user-visible naming (app presents as "Rustty"; bundle id
   `io.airely.rustty`), the app **icon** (`images/Rustty.icon`, `ASSETCATALOG_COMPILER_APPICON_NAME
   = Rustty`), and the on-disk product/executable name (`Rustty.app`/`rustty`) are all rebranded —
   see `REBRAND.md`. Secondary component bundle ids are `io.airely.rustty*` (dock-tile plugin, unit/
   UI test bundles) — no `com.mitchellh.*`/`Ghostty` remnants left on the macOS side.
 - **Deployment target**: ✅ DONE (WS3, 2026-07-23) — xtask pins MACOSX_DEPLOYMENT_TARGET=13.0 on the xcframework cargo build; clean rebuild verified via otool (our own crates' + `-sys` build-script objects all minos 13.0; 383 pre-built Rust-sysroot objects — compiler_builtins/alloc/adler2/etc., not compiled by our build — carry the toolchain's own 11.0 stamp, which is OLDER than 13.0 and so never triggers the linker warning) and a warning-free build-rustty.sh xcodebuild log (`grep -c "was built for newer macOS version"` = 0).
+  Re-verified by WS9 after the xcframework pipeline rewrite (otool `minos`
+  buckets are 13.0 + the toolchain's own sysroot 11.0; zero "built for newer
+  macOS version" warnings in the app link log).
 - **Deferred features**: quicklook, live inspector, the 5 non-display Darwin exports.
 
 ## ✅ CORRECTED (2026-07-12) — the window ACTUALLY RENDERS now (W-ATTACH fixed)
@@ -74,4 +84,5 @@ window + render + shell + input, all driven by rustty's ported Rust core.
 - **P2 on-feature crashers (panic=abort):** `quicklook_font`/`quicklook_word` abort on Look-Up /
   force-click / accessibility; the inspector aborts if opened. Cheap interim: swap the
   `unimplemented!()` leaves for graceful null/false returns, then port the bodies.
-- **P3 polish:** autoreleasepool shim, self-contained zlib+gettext lib, R2 identity rebrand.
+- **P3 polish:** autoreleasepool shim (WS2); self-contained zlib+gettext lib ✅ DONE
+  (zlib P3, gettext WS9); R2 identity rebrand ✅ DONE.
