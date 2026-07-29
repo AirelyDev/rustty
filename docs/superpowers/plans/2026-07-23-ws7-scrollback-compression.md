@@ -51,7 +51,7 @@ Five phases in a single file. **Execution order is A → B → C → D → E.**
 | **D** | Consumer surface: `Terminal` API, config option, renderer-thread scheduling + state handoff, lib-vt C API, inspector, bench actions | D1–D8 | **PARTIALLY** — requires Phase B. D5 (renderer state handoff) and D8 (bench actions) are independent of the rest of D and may be executed out of order. |
 | **E** | Gates: both-platform build, Miri lanes, perf non-regression, ledgers, merge | E1–E6 | **NO** — terminal phase. |
 
-Each phase ends with `cargo test -p rustty-vt --lib` green and a commit. Phases B–E additionally end with `cargo build --workspace` green on **both** macOS and `rvm`.
+Each phase ends with `cargo test -p rustty-vt --lib` green and a commit. Phases B–E additionally end with `cargo check --workspace --all-targets` AND `cargo build --workspace` green on **both** macOS and `rvm`. The `--all-targets` check is the load-bearing half: `cargo build --workspace` compiles neither examples nor test targets.
 
 Branch for the whole workstream (created once, before Task A1):
 
@@ -2798,7 +2798,7 @@ pub struct Node {
 }
 ```
 
-Then `cargo build --workspace` and fix every error, choosing per site using **exactly** the oracle's choice at the corresponding line in `oracle@main:src/terminal/PageList.zig` / `Screen.zig` / `Terminal.zig`:
+Then `cargo check --workspace --all-targets` and fix every error, choosing per site using **exactly** the oracle's choice at the corresponding line in `oracle@main:src/terminal/PageList.zig` / `Screen.zig` / `Terminal.zig`:
 
 | Call-site shape | Replacement |
 |---|---|
@@ -2814,6 +2814,7 @@ Then `cargo build --workspace` and fix every error, choosing per site using **ex
 ```bash
 cargo test -p rustty-vt --lib 2>&1 | tail -3
 cargo test -p rustty-vt-c --lib 2>&1 | tail -3
+cargo check --workspace --all-targets
 cargo build --workspace
 ```
 Expected: the `rustty-vt` count is **identical** to `/tmp/ws7-b5-before.txt`. Not "similar" — identical.
@@ -3581,10 +3582,18 @@ Expected: PASS both. The release run matters: `std_size()` differs between the `
 - [ ] **Step 2: Both-platform build**
 
 ```bash
+cargo check --workspace --all-targets
 cargo build --workspace
-ssh rvm 'cd ~/projects/rustty && cargo build --workspace'
+ssh rvm 'cd ~/projects/rustty && cargo check --workspace --all-targets && cargo build --workspace'
 ```
-Expected: both `Finished`. The Linux leg is the one that exercises the `MADV_DONTNEED` arm of `mem::decommit`.
+Expected: all `Finished`. The Linux leg is the one that exercises the `MADV_DONTNEED` arm of `mem::decommit`.
+
+`--all-targets` is NOT optional and is the reason this step is spelled with
+`cargo check` first: `cargo build --workspace` compiles neither examples nor
+test targets, so a `Node.data` retarget (B5) verified only with `cargo build`
+leaves `examples/` and `#[cfg(test)]` call sites uncompiled. That is exactly
+how three residual sites (`rustty-vt/examples/rss_probe.rs`, and BOTH
+`rustty-font-shaper` shaper test modules) shipped through the original B10.
 
 - [ ] **Step 3: Linux runtime check of the reclamation arm**
 
