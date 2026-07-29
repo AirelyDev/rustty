@@ -247,9 +247,19 @@ impl Thread {
         // allocation; the Rust `Box<Mailbox>` is dropped here to mirror it.
         Mailbox::destroy(core::mem::replace(&mut self.mailbox, Mailbox::create()));
 
-        // if (self.search) |*s| s.deinit();
-        if let Some(s) = self.search.as_mut() {
-            s.deinit();
+        // if (self.search) |*s| {
+        //     self.opts.mutex.lock();
+        //     defer self.opts.mutex.unlock();
+        //     s.deinit(self.opts.terminal);
+        // }
+        //
+        // Cleanup must hold the terminal lock: `Search::deinit` reads the live
+        // ScreenSet to decide which searchers may still untrack their pins.
+        if self.search.is_some() {
+            let mutex = self.opts.mutex;
+            let terminal = self.opts.terminal;
+            let _guard = lock_deferred(mutex);
+            self.search.as_mut().unwrap().deinit(terminal);
         }
     }
 
@@ -532,6 +542,17 @@ impl Thread {
         if self.search.is_none() {
             return Ok(());
         }
+        // self.opts.mutex.lock();
+        // defer self.opts.mutex.unlock();
+        let _guard = lock_deferred(self.opts.mutex);
+
+        // A screen can be removed or replaced between refresh ticks. Reconcile
+        // while holding the terminal lock before touching any ScreenSearch pins.
+        // s.feed(self.alloc, self.opts.terminal);
+        let alloc = self.alloc;
+        let terminal = self.opts.terminal;
+        self.search.as_mut().unwrap().feed(alloc, terminal);
+
         // const screen_search = s.screens.getPtr(s.last_screen.key) orelse return;
         let last_key = self.search.as_ref().unwrap().last_screen.key;
         if self
@@ -544,10 +565,6 @@ impl Thread {
         {
             return Ok(());
         }
-
-        // self.opts.mutex.lock();
-        // defer self.opts.mutex.unlock();
-        let _guard = lock_deferred(self.opts.mutex);
 
         // Make the selection. Ignore the result because we don't
         // care if the selection didn't change.
@@ -647,9 +664,18 @@ impl Thread {
                 return Ok(());
             }
 
-            // s.deinit();
+            // {
+            //     self.opts.mutex.lock();
+            //     defer self.opts.mutex.unlock();
+            //     s.deinit(self.opts.terminal);
+            // }
             // self.search = null;
-            self.search.as_mut().unwrap().deinit();
+            {
+                let mutex = self.opts.mutex;
+                let terminal = self.opts.terminal;
+                let _guard = lock_deferred(mutex);
+                self.search.as_mut().unwrap().deinit(terminal);
+            }
             self.search = None;
 
             // When the search changes then we need to emit that it stopped.
@@ -979,6 +1005,17 @@ pub struct Search {
     // crate for `EnumMap` (see `ScreenSet.all`), keyed by `Key as usize`.
     pub screens: ScreenSearchMap,
 
+    /// ScreenSet generations captured when each searcher was initialized.
+    /// Allocators may reuse a destroyed Screen address, so pointer equality
+    /// alone cannot distinguish replacement screens from stale handles.
+    // screen_generations: std.EnumMap(ScreenSet.Key, usize),
+    //
+    // PORT NOTE: `std.EnumMap(ScreenSet.Key, usize)` — an EnumMap entry can be
+    // ABSENT, and `screenIsValid` distinguishes absent from present, so this is
+    // a per-key `Option<usize>` array (NOT `[usize; COUNT]` like
+    // `ScreenSet.generations`, which is always populated).
+    pub screen_generations: [Option<usize>; Key::COUNT],
+
     /// All state related to screen switches, collected so that when
     /// we switch screens it makes everything related stale, too.
     // last_screen: ScreenState,
@@ -1092,6 +1129,7 @@ impl Search {
         // return .{
         //     .viewport = vp,
         //     .screens = .init(.{}),
+        //     .screen_generations = .init(.{}),
         //     .last_screen = .{ .key = .primary },
         //     .last_complete = false,
         //     .stale_viewport_matches = true,
@@ -1099,6 +1137,7 @@ impl Search {
         Ok(Search {
             viewport: vp,
             screens: ScreenSearchMap::init(),
+            screen_generations: [None, None],
             last_screen: ScreenState {
                 key: ScreenSetKey::Primary,
                 total: None,
@@ -1109,15 +1148,84 @@ impl Search {
         })
     }
 
-    // pub fn deinit(self: *Search) void {
-    pub fn deinit(&mut self) {
+    // pub fn deinit(self: *Search, t: *Terminal) void {
+    //
+    // PORT NOTE: dereferences the raw `*Terminal` to read its `ScreenSet`; the
+    // caller holds the shared mutex (see `Thread::deinit` /
+    // `Thread::change_needle`), matching the reference.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn deinit(&mut self, t: *const Terminal) {
         // self.viewport.deinit();
         self.viewport.deinit();
         // var it = self.screens.iterator();
-        // while (it.next()) |entry| entry.value.deinit();
-        for s in self.screens.entries.iter_mut().flatten() {
-            s.deinit();
+        // while (it.next()) |entry| {
+        //     if (self.screenIsValid(&t.screens, entry.key, entry.value)) {
+        //         entry.value.deinit();
+        //     } else {
+        //         entry.value.deinitScreenInvalid();
+        //     }
+        // }
+        let screens: *const crate::screen_set::ScreenSet = unsafe { &(*t).screens };
+        for key_i in 0..Key::COUNT {
+            let entry_key = Self::key_from_index(key_i);
+            // The reference's `screenIsValid` takes `*const ScreenSearch` only
+            // to read `search.screen`; passing that pointer directly keeps the
+            // `&self` borrow disjoint from the `&mut` entry borrow below.
+            let entry_screen = match self.screens.entries[key_i].as_ref() {
+                Some(ss) => ss.screen,
+                None => continue,
+            };
+            let valid = self.screen_is_valid(screens, entry_key, entry_screen);
+            let entry = self.screens.entries[key_i].as_mut().unwrap();
+            if valid {
+                entry.deinit();
+            } else {
+                entry.deinit_screen_invalid();
+            }
         }
+    }
+
+    /// `std.EnumMap` iteration order — key index to key.
+    fn key_from_index(key_i: usize) -> ScreenSetKey {
+        match key_i {
+            0 => ScreenSetKey::Primary,
+            _ => ScreenSetKey::Alternate,
+        }
+    }
+
+    // fn screenIsValid(
+    //     self: *const Search,
+    //     screens: *const ScreenSet,
+    //     key: ScreenSet.Key,
+    //     search: *const ScreenSearch,
+    // ) bool {
+    //
+    // PORT NOTE: takes the searcher's `screen` pointer rather than the whole
+    // `*const ScreenSearch` — that field is all the reference reads, and this
+    // keeps the borrow disjoint from the caller's `&mut` on the same entry.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    fn screen_is_valid(
+        &self,
+        screens: *const crate::screen_set::ScreenSet,
+        key: ScreenSetKey,
+        search_screen: *mut crate::screen::Screen,
+    ) -> bool {
+        // const generation = self.screen_generations.get(key) orelse return false;
+        let generation = match self.screen_generations[key as usize] {
+            Some(g) => g,
+            None => return false,
+        };
+        // if (generation != screens.generation(key)) return false;
+        if generation != unsafe { (*screens).generation(key) } {
+            return false;
+        }
+        // const actual = screens.get(key) orelse return false;
+        let actual = match unsafe { (*screens).get(key) } {
+            Some(a) => a,
+            None => return false,
+        };
+        // return actual == search.screen;
+        core::ptr::eq(actual, search_screen)
     }
 
     /// Returns true if all searches on all screens are complete.
@@ -1236,34 +1344,37 @@ impl Search {
             // var it = self.screens.iterator();
             // while (it.next()) |entry| {
             for key_i in 0..Key::COUNT {
-                let entry_key = match key_i {
-                    0 => ScreenSetKey::Primary,
-                    _ => ScreenSetKey::Alternate,
+                let entry_key = Self::key_from_index(key_i);
+                let entry_screen = match self.screens.entries[key_i].as_ref() {
+                    Some(ss) => ss.screen,
+                    None => continue,
                 };
-                if self.screens.entries[key_i].is_none() {
-                    continue;
-                }
-                // const remove: bool = remove: {
-                let remove: bool = 'remove: {
-                    // If the screen doesn't exist at all, remove it.
-                    // const actual = t.screens.all.get(entry.key) orelse break :remove true;
-                    let actual = match unsafe { (*t).screens.all[key_i] } {
-                        Some(a) => a,
-                        None => break 'remove true,
-                    };
-
-                    // If the screen pointer changed, remove it, the screen
-                    // was totally reinitialized.
-                    // break :remove actual != entry.value.screen;
-                    !core::ptr::eq(actual, self.screens.entries[key_i].as_ref().unwrap().screen)
-                };
+                // const remove = !self.screenIsValid(
+                //     &t.screens,
+                //     entry.key,
+                //     entry.value,
+                // );
+                let remove: bool = !self.screen_is_valid(
+                    unsafe { &(*t).screens },
+                    entry_key,
+                    entry_screen,
+                );
 
                 // if (remove) {
                 if remove {
-                    // entry.value.deinit();
+                    // entry.value.deinitScreenInvalid();
                     // _ = self.screens.remove(entry.key);
-                    self.screens.entries[key_i].as_mut().unwrap().deinit();
+                    // _ = self.screen_generations.remove(entry.key);
+                    //
+                    // The screen this searcher was built on is gone or was
+                    // replaced, so its tracked pins were freed with that
+                    // screen's PageList pool and must not be untracked.
+                    self.screens.entries[key_i]
+                        .as_mut()
+                        .unwrap()
+                        .deinit_screen_invalid();
                     self.screens.remove(entry_key);
+                    self.screen_generations[key_i] = None;
                 }
             }
         }
@@ -1284,14 +1395,23 @@ impl Search {
                 if self.screens.contains(entry_key) {
                     continue;
                 }
-                // self.screens.put(entry.key, ScreenSearch.init(
+                // const screen_search = ScreenSearch.init(
                 //     alloc,
                 //     entry.value.*,
                 //     self.viewport.needle(),
                 // ) catch |err| switch (err) {
                 let needle_owned: Vec<u8> = self.viewport.needle().to_vec();
                 match ScreenSearch::init(alloc, entry_value, &needle_owned) {
-                    Ok(ss) => self.screens.put(entry_key, ss),
+                    // self.screens.put(entry.key, screen_search);
+                    // self.screen_generations.put(
+                    //     entry.key,
+                    //     t.screens.generation(entry.key),
+                    // );
+                    Ok(ss) => {
+                        self.screens.put(entry_key, ss);
+                        self.screen_generations[key_i] =
+                            Some(unsafe { (*t).screens.generation(entry_key) });
+                    }
                     // error.OutOfMemory => {
                     //     // OOM is probably going to sink the entire ship but
                     //     // we can just ignore it and wait on the next
@@ -2295,5 +2415,84 @@ mod tests {
         thread.deinit();
         t.deinit(alloc);
         drop(ud);
+    }
+
+    /// PORTS: oracle 73ac36fa5
+    /// `test "select after active screen removal"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): rustc/Miri interpreter ICE (operand.rs:160, upstream bug), not a soundness signal; covered natively + by ASan"
+    )]
+    #[test]
+    fn select_after_active_screen_removal() {
+        // const alloc = testing.allocator;
+        let alloc = Allocator;
+        // var mutex: std.Thread.Mutex = .{};
+        let mutex = rustty_zigstd::thread::Mutex::new();
+        // var t: Terminal = try .init(alloc, .{ .cols = 20, .rows = 2 });
+        // defer t.deinit(alloc);
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(20, 2, 10_000)).unwrap();
+
+        // _ = try t.switchScreen(.alternate);
+        t.switch_screen(ScreenSetKey::Alternate).unwrap();
+
+        // var search: Search = try .init(alloc, "needle");
+        // search.feed(alloc, &t);
+        let mut search: Search = Search::init(alloc, b"needle").unwrap();
+        search.feed(alloc, &mut t as *mut Terminal);
+        // try testing.expectEqual(ScreenSet.Key.alternate, search.last_screen.key);
+        assert_eq!(search.last_screen.key, ScreenSetKey::Alternate);
+        // try testing.expect(search.screens.contains(.alternate));
+        assert!(search.screens.contains(ScreenSetKey::Alternate));
+
+        // var thread: Thread = undefined;
+        // thread.search = search;
+        // thread.opts = .{ .mutex = &mutex, .terminal = &t };
+        // defer if (thread.search) |*active| active.deinit(&t);
+        //
+        // PORT NOTE: the reference leaves the rest of `Thread` `undefined` because
+        // `select` only touches `search`/`opts`. Rust has no partially-initialized
+        // struct, so we build a real `Thread` with `Thread::init` (which only adds
+        // an idle xev loop + mailbox) and install the pre-fed `Search`. The extra
+        // `thread.deinit()` at the end also exercises 73ac36fa5's
+        // `Search::deinit(&t)` screen-validity split, which the reference's
+        // `defer active.deinit(&t)` covers separately.
+        let mut thread: Thread = Thread::init(
+            alloc,
+            Options {
+                mutex: &mutex as *const rustty_zigstd::thread::Mutex,
+                terminal: &mut t as *mut Terminal,
+                event_cb: None,
+                event_userdata: core::ptr::null_mut(),
+            },
+        )
+        .unwrap();
+        thread.search = Some(search);
+
+        // _ = try t.switchScreen(.primary);
+        // t.screens.remove(alloc, .alternate);
+        t.switch_screen(ScreenSetKey::Primary).unwrap();
+        t.screens.remove(alloc, ScreenSetKey::Alternate);
+
+        // try thread.select(.next);
+        thread.select(super::super::screen::Select::Next).unwrap();
+        // try testing.expectEqual(
+        //     ScreenSet.Key.primary,
+        //     thread.search.?.last_screen.key,
+        // );
+        assert_eq!(
+            thread.search.as_ref().unwrap().last_screen.key,
+            ScreenSetKey::Primary
+        );
+        // try testing.expect(!thread.search.?.screens.contains(.alternate));
+        assert!(!thread
+            .search
+            .as_ref()
+            .unwrap()
+            .screens
+            .contains(ScreenSetKey::Alternate));
+
+        thread.deinit();
+        t.deinit(alloc);
     }
 }

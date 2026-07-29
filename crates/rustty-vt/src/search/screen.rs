@@ -303,17 +303,48 @@ impl ScreenSearch {
 
     // pub fn deinit(self: *ScreenSearch) void {
     pub fn deinit(&mut self) {
+        // self.deinitInternal(true);
+        self.deinit_internal(true);
+    }
+
+    /// Release owned search state after the underlying Screen has already
+    /// been destroyed. Tracked pins belonged to that Screen's PageList pool
+    /// and were freed with it, so only independently owned memory is freed.
+    ///
+    /// PORTS: oracle@main search/screen.zig `deinitScreenInvalid` (73ac36fa5).
+    // pub fn deinitScreenInvalid(self: *ScreenSearch) void {
+    pub fn deinit_screen_invalid(&mut self) {
+        // self.deinitInternal(false);
+        self.deinit_internal(false);
+    }
+
+    // fn deinitInternal(self: *ScreenSearch, screen_valid: bool) void {
+    fn deinit_internal(&mut self, screen_valid: bool) {
         // const alloc = self.allocator();
         let alloc = self.allocator();
         // self.active.deinit();
         self.active.deinit();
-        // if (self.history) |*h| h.deinit(self.screen);
+        // if (self.history) |*h| {
+        //     if (screen_valid) {
+        //         h.deinit(self.screen);
+        //     } else {
+        //         h.searcher.deinitListInvalid();
+        //     }
+        // }
         if let Some(h) = self.history.as_mut() {
-            h.deinit(self.screen);
+            if screen_valid {
+                h.deinit(self.screen);
+            } else {
+                h.searcher.deinit_list_invalid();
+            }
         }
-        // if (self.selected) |*m| m.deinit(self.screen);
-        if let Some(m) = self.selected.take() {
-            m.deinit(self.screen);
+        // if (screen_valid) {
+        //     if (self.selected) |*m| m.deinit(self.screen);
+        // }
+        if screen_valid {
+            if let Some(m) = self.selected.take() {
+                m.deinit(self.screen);
+            }
         }
         // for (self.active_results.items) |*hl| hl.deinit(alloc);
         // self.active_results.deinit(alloc);
@@ -570,6 +601,30 @@ impl ScreenSearch {
                 // suffix predate that reset. Drop them without scanning the
                 // live page list for every captured chunk.
                 // const alloc = self.allocator();
+                // if (self.selected) |*m| {
+                //     const first_pruned = self.active_results.items.len + i;
+                //     if (m.idx >= first_pruned) {
+                //         m.deinit(self.screen);
+                //         self.selected = null;
+                //     }
+                // }
+                //
+                // A tracked selection can survive a partial history erase (its
+                // pin moves coherently to the next page) while the result it
+                // names is about to be pruned. Drop it (oracle d239f9805).
+                //
+                // PORT NOTE: after f1a5fab45 (C3) only `reset` advances the
+                // epoch, so in the FINAL upstream state this branch is reached
+                // only after a whole-list reset. The guard is kept verbatim: a
+                // selection naming a pre-reset history result must still be
+                // dropped.
+                if let Some(m) = self.selected.as_ref() {
+                    let first_pruned = self.active_results.len() + i;
+                    if m.idx >= first_pruned {
+                        self.selected.take().unwrap().deinit(self.screen);
+                    }
+                }
+
                 // for (self.history_results.items[i..]) |*prune_hl| prune_hl.deinit(alloc);
                 // self.history_results.shrinkAndFree(alloc, i);
                 // return;
@@ -2597,6 +2652,100 @@ mod tests {
         t.deinit(alloc);
     }
 
+    /// PORTS: oracle d239f9805
+    /// `test "select after partial history erase drops a pruned selection"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn select_after_partial_history_erase_drops_a_pruned_selection() {
+        let alloc = Allocator;
+        // PORT NOTE: 80 cols instead of the reference's 10. Nothing in this
+        // test depends on the column count, and 10 cols yields ~35k-row pages
+        // whose row-by-row fill costs ~30s in a debug Rust build.
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+
+        let mut stream = t.vt_stream();
+        stream.next_slice(b"error\r\n");
+        let first = unsafe { (*list).pages.first };
+        while unsafe { (*list).total_pages() } < 3 {
+            stream.next_slice(b"\r\n");
+        }
+        let first_rows = unsafe { crate::pagelist::Node::rows(first) };
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"error").unwrap();
+        search.search_all().unwrap();
+        assert_eq!(search.active_results.len(), 0);
+        assert_eq!(search.history_results.len(), 1);
+        assert!(search.select(Select::Next).unwrap());
+
+        unsafe {
+            (*list).erase_history(Some(point::Point::History(point::Coordinate {
+                x: 0,
+                y: (first_rows - 1) as u32,
+            })))
+        };
+        assert!(!unsafe { (*search.selected.as_ref().unwrap().highlight.start).garbage });
+
+        assert!(!search.select(Select::Next).unwrap());
+        assert!(search.selected.is_none());
+
+        search.deinit();
+        stream.deinit();
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle 86e1f7b8b
+    /// `test "select after history compaction ignores replaced results"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn select_after_history_compaction_ignores_replaced_results() {
+        let alloc = Allocator;
+        // PORT NOTE: 80 cols instead of the reference's 10. Nothing in this
+        // test depends on the column count, and 10 cols yields ~35k-row pages
+        // whose row-by-row fill costs ~30s in a debug Rust build.
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+
+        let mut stream = t.vt_stream();
+        stream.next_slice(b"error\r\n");
+        let first = unsafe { (*list).pages.first };
+        while unsafe { (*list).total_pages() } < 3 {
+            stream.next_slice(b"\r\n");
+        }
+        unsafe {
+            (*list)
+                .split(Pin {
+                    node: first,
+                    y: crate::pagelist::Node::rows(first) / 2,
+                    x: 0,
+                    garbage: false,
+                })
+                .unwrap()
+        };
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"error").unwrap();
+        search.search_all().unwrap();
+        assert_eq!(search.history_results.len(), 1);
+
+        let replacement = unsafe { (*list).compact(first) }.unwrap().unwrap();
+        assert!(!core::ptr::eq(replacement, first));
+
+        assert!(!search.select(Select::Next).unwrap());
+        assert!(search.selected.is_none());
+
+        search.deinit();
+        stream.deinit();
+        t.deinit(alloc);
+    }
+
     /// PORTS: oracle a804e3ac7
     /// `test "select after partial history page erase ignores shifted results"`
     #[cfg_attr(
@@ -2606,7 +2755,10 @@ mod tests {
     #[test]
     fn select_after_partial_history_page_erase_ignores_shifted_results() {
         let alloc = Allocator;
-        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 2, usize::MAX)).unwrap();
+        // PORT NOTE: 80 cols instead of the reference's 10. Nothing in this
+        // test depends on the column count, and 10 cols yields ~35k-row pages
+        // whose row-by-row fill costs ~30s in a debug Rust build.
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
         let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
 
@@ -2654,7 +2806,10 @@ mod tests {
     #[test]
     fn select_after_history_page_split_ignores_moved_results() {
         let alloc = Allocator;
-        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 2, usize::MAX)).unwrap();
+        // PORT NOTE: 80 cols instead of the reference's 10. Nothing in this
+        // test depends on the column count, and 10 cols yields ~35k-row pages
+        // whose row-by-row fill costs ~30s in a debug Rust build.
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
         let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
 

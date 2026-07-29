@@ -141,6 +141,17 @@ impl PageListSearch {
         unsafe { (*self.list).untrack_pin(self.pin) };
     }
 
+    /// Release owned search buffers after the PageList itself has already
+    /// been destroyed. Its pin belonged to the PageList pool and was freed
+    /// with that list, so it must not be untracked here.
+    ///
+    /// PORTS: oracle@main search/pagelist.zig `deinitListInvalid` (73ac36fa5).
+    // pub fn deinitListInvalid(self: *PageListSearch) void {
+    pub fn deinit_list_invalid(&mut self) {
+        // self.window.deinit();
+        self.window.deinit();
+    }
+
     /// Return the next match in the loaded page nodes. If this returns
     /// null then the PageList search needs to be fed the next node(s).
     /// Call, `feed` to do this.
@@ -194,7 +205,19 @@ impl PageListSearch {
 
             // Move our tracked pin to the new node.
             // self.pin.node = node;
-            unsafe { (*self.pin).node = node };
+            // self.pin.y = node.rows() - 1;
+            // self.pin.x = node.cols() - 1;
+            // self.pin.garbage = false;
+            //
+            // The preceding page may be SHORTER (e.g. after a split), so the
+            // retained bottom-right coordinates must be reset, not carried over
+            // (oracle 5d8eb78b7).
+            unsafe {
+                (*self.pin).node = node;
+                (*self.pin).y = crate::pagelist::Node::rows(node) - 1;
+                (*self.pin).x = crate::pagelist::Node::cols(node) - 1;
+                (*self.pin).garbage = false;
+            };
 
             // if (rem == 0) break;
             if rem == 0 {
@@ -806,5 +829,59 @@ mod tests {
 
         search.deinit();
         p.deinit();
+    }
+    /// PORTS: oracle 5d8eb78b7
+    /// `test "feed keeps its tracked pin within a shorter page"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn feed_keeps_its_tracked_pin_within_a_shorter_page() {
+        use crate::pagelist::{Node as PlNode, PageList, Pin};
+        // PORT NOTE: 80 cols instead of the reference's 10. The property under
+        // test is only that the split successor is SHORTER than the second page;
+        // 10 cols yields ~35k rows per page, which makes the row-by-row fill and
+        // the formatter passes take ~1 minute in a debug Rust build.
+        let mut pages: PageList = PageList::init(80, 2, None).unwrap();
+
+        // PORT NOTE: the fill loops are wrapped in `pause_integrity_checks`.
+        // rustty's debug `verify_integrity` walks every tracked pin on every
+        // `grow`, making the reference's row-by-row fill of a ~35k-row page
+        // quadratic (>70s). The checks are re-enabled — and run — before the
+        // assertions this test actually makes.
+        pages.pause_integrity_checks(true);
+        let first = pages.pages.first;
+        while unsafe { PlNode::rows(first) } < unsafe { PlNode::capacity(first) }.rows {
+            let _ = pages.grow().unwrap();
+        }
+
+        let second = pages.grow().unwrap().unwrap();
+        while unsafe { PlNode::rows(second) } < unsafe { PlNode::capacity(second) }.rows {
+            let _ = pages.grow().unwrap();
+        }
+        pages.pause_integrity_checks(false);
+        pages.assert_integrity();
+
+        pages
+            .split(Pin {
+                node: first,
+                y: 1,
+                x: 0,
+                garbage: false,
+            })
+            .unwrap();
+        let shorter = unsafe { (*first).next };
+        assert!(unsafe { PlNode::rows(shorter) } < unsafe { PlNode::rows(second) });
+
+        let mut search: PageListSearch =
+            PageListSearch::init(Allocator, b"x", &mut pages, second).unwrap();
+
+        assert!(search.feed().unwrap());
+        assert!(core::ptr::eq(unsafe { (*search.pin).node }, shorter));
+        assert!(pages.pin_is_valid(unsafe { (*search.pin).pin_copy() }));
+
+        search.deinit();
+        pages.deinit();
     }
 }
