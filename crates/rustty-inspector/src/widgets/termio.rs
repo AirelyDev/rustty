@@ -339,6 +339,7 @@ impl Stream {
                 // _ = cimgui.c.ImGui_TableNextColumn();
                 let _ = unsafe { dcimgui_sys::ImGui_TableNextColumn() };
 
+                // Store the previous selection state to detect changes
                 // const was_selected = ev.imgui_selected;
                 let was_selected = ev.imgui_selected;
 
@@ -349,6 +350,7 @@ impl Stream {
                 }
 
                 // Handle selectable widget
+                // If selection state changed, update keyboard navigation state
                 // if (cimgui.c.ImGui_SelectableBoolPtr("##select", &ev.imgui_selected, SpanAllColumns)) {
                 if unsafe {
                     dcimgui_sys::ImGui_SelectableBoolPtr(
@@ -395,7 +397,9 @@ impl Stream {
                     )
                 };
 
-                // If the event is selected, we render info about it.
+                // If the event is selected, we render info about it. For now
+                // we put this in the last column because that's the widest and
+                // imgui has no way to make a column span.
                 // if (ev.imgui_selected) { ... }
                 if ev.imgui_selected {
                     {
@@ -472,6 +476,7 @@ impl Stream {
                         }
                     }
 
+                    // If this is the selected event and scrolling is needed, scroll to it
                     // if (self.need_scroll_to_selected and self.is_keyboard_selection) {
                     //     cimgui.c.ImGui_SetScrollHereY(0.5);
                     //     self.need_scroll_to_selected = false;
@@ -594,6 +599,7 @@ impl Stream {
             KeyAction::None => {}
             // .up, .down => { ... }
             KeyAction::Up | KeyAction::Down => {
+                // If no event is selected, select the first/last event based on direction
                 // if (self.selected_event_seq == null) {
                 if self.selected_event_seq.is_none() {
                     // if (!events.empty()) {
@@ -648,6 +654,7 @@ impl Stream {
                     }
                 }
 
+                // Mark that we need to scroll to the newly selected item
                 // self.need_scroll_to_selected = true;
                 self.need_scroll_to_selected = true;
                 // self.is_keyboard_selection = true;
@@ -770,15 +777,21 @@ fn dupe_z(src: &[u8]) -> Vec<u8> {
 /// VT event. This isn't public because this is just how we store internal events.
 // const VTEvent = struct { ... };
 //
-// PORT NOTE (arena → Rust ownership): the reference backs raw_description +
-// metadata in a per-event `ArenaAllocator` freed by `deinit`. Under Rust's global
-// allocator (panic=abort) the arena collapses to owned fields that free on `Drop`
-// — the same collapse lib.rs applies to `apprt.Inspector`. `Clone` is required by
-// `CircBuf<VTEvent>`; every field is `Clone`/`Copy`.
+// PORT NOTE (arena → Rust ownership): the reference's first field
+//
+//     /// The arena that all allocated memory for this event is stored.
+//     arena_state: ArenaAllocator.State,
+//
+// backs raw_description + metadata in a per-event `ArenaAllocator` freed by
+// `deinit`. Under Rust's global allocator (panic=abort) the arena collapses to
+// owned fields that free on `Drop` — the same collapse lib.rs applies to
+// `apprt.Inspector`. `Clone` is required by `CircBuf<VTEvent>`; every field is
+// `Clone`/`Copy`.
 #[derive(Clone)]
 pub struct VTEvent {
     // seq: usize = 1,
-    /// Sequence number, monotonically increasing and wrapping on overflow.
+    /// Sequence number, just monotonically increasing and wrapping if
+    /// it ever overflows. It gives us a nice way to visualize progress.
     seq: usize,
 
     // kind: Kind,
@@ -786,9 +799,13 @@ pub struct VTEvent {
     kind: Kind,
 
     // raw_description: [:0]const u8,
-    /// The description of the raw event in a human-friendly format (NUL-term).
+    /// The description of the raw event in a more human-friendly format.
+    /// For example for control sequences this is the full sequence but
+    /// control characters are replaced with human-readable names, e.g.
+    /// 0x07 (bell) becomes BEL. (NUL-terminated, as the reference `[:0]const u8`.)
     raw_description: Vec<u8>,
 
+    /// Various metadata at the time of the event (before processing).
     // cursor: terminal.Screen.Cursor,
     /// Cursor snapshot at event time (INV-8, BY VALUE).
     ///
@@ -859,6 +876,7 @@ impl VTEvent {
         }
     }
 
+    /// Initialize the event information for the given parser action.
     // pub fn init(alloc_gpa, t: *const terminal.Terminal, action: terminal.Parser.Action) !VTEvent {
     //
     // PORT NOTE (INV-8): `t` is a raw `*const Terminal` valid only during the
@@ -917,6 +935,7 @@ impl VTEvent {
     // walks in `Stream::deinit`/the Clear button can call it (nothing to free).
     fn deinit(&self, _alloc_gpa: Allocator) {}
 
+    /// Returns true if the event passes the given filter.
     // pub fn passFilter(self: *const VTEvent, filter: *const cimgui.c.ImGuiTextFilter) bool {
     fn pass_filter(&self, filter: *const dcimgui_sys::ImGuiTextFilter) -> bool {
         // Check our main string
@@ -965,6 +984,7 @@ impl VTEvent {
 // The description encoders (termio.zig:497-573)
 // ----------------------------------------------------------------------------
 
+/// Encode a parser action as a string that we show in the logs.
 // fn encodeAction(alloc, writer, md, action: terminal.Parser.Action) !void {
 fn encode_action(writer: &mut String, md: &mut Metadata, action: &Action) {
     match action {
@@ -1424,7 +1444,8 @@ fn default_cursor() -> Cursor {
 // VTHandler — the parser handler + the R1 self-alias capture state (STEP 2)
 // ============================================================================
 
-/// Our VT stream handler for the Stream widget.
+/// Our VT stream handler for the Stream widget. This isn't public
+/// because there is no reason to use this directly.
 // const VTHandler = struct { ... };
 pub struct VTHandler {
     // state: ?State,
@@ -1450,10 +1471,13 @@ pub struct VTHandler {
 // pub const State = struct { alloc, terminal: *const Terminal, events: *VTEvent.Ring };
 struct State {
     // alloc: Allocator,
+    /// The allocator to use for the events.
     alloc: Allocator,
     // terminal: *const terminal.Terminal,
+    /// The terminal state at the time of the event.
     terminal: *const Terminal,
     // events: *VTEvent.Ring,   — R1: RAW `*mut` self-alias of `Stream.events`.
+    /// The event ring to write events to.
     events: *mut VTEventRing,
 }
 
@@ -1478,6 +1502,7 @@ impl VTHandler {
         }
     }
 
+    /// This is called with every single terminal action.
     // pub fn vtRaw(self: *VTHandler, action: terminal.Parser.Action) !bool {
     //
     // R1 (STEP 2): appends through the RAW `*mut VTEventRing` self-alias copied
@@ -1492,7 +1517,9 @@ impl VTHandler {
                 None => return true,
             };
 
-        // We always increment the sequence number, even if paused/filtered.
+        // We always increment the sequence number, even if we're paused or
+        // filter out the event. This helps show the user that there is a gap
+        // between events and roughly how large that gap was.
         // defer self.current_seq +%= 1;
         //
         // PORT NOTE: the reference `defer` fires on every return path; because the
@@ -1500,6 +1527,7 @@ impl VTHandler {
         // via `ev.seq = self.current_seq`), we apply it explicitly just before
         // each of the four `return` exits rather than via a `self`-borrowing guard.
 
+        // If we're manually paused, we ignore all events.
         // if (self.paused) return true;
         if self.paused {
             self.current_seq = self.current_seq.wrapping_add(1);
@@ -1514,6 +1542,7 @@ impl VTHandler {
         }
 
         // If we requested a specific type to be ignored, ignore it.
+        // We return true because we did "handle" it by ignoring it.
         // if (self.filter_exclude.contains(std.meta.activeTag(action))) return true;
         if self.filter_exclude.contains(ActionTag::of(action)) {
             self.current_seq = self.current_seq.wrapping_add(1);
@@ -1583,7 +1612,8 @@ impl VTHandler {
 // behavior — the per-action `vt` hooks are the trait's default no-ops (matching
 // the reference `vt` no-op).
 impl Handler for VTHandler {
-    // pub fn deinit(self: *VTHandler) void { _ = self; }  // parser stream iface
+    // pub fn deinit(self: *VTHandler) void { _ = self; }
+    // Required for the parser stream interface
     fn deinit(&mut self) {}
 
     // pub fn vtRaw(self, action) !bool — the raw-action hook (returns skip flag).

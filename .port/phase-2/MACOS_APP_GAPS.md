@@ -11,7 +11,7 @@ The app is **one wiring fix away from visible pixels**, and a **small handful of
 **Critical path, in order:**
 1. **W-ATTACH** — route the NSView into the renderer so `layer=Some`. This alone makes pixels appear.
 2. **present() / display-callback / surface_size** — all become live *automatically* once `layer=Some` (they are correct on the `Some(layer)` arm; the no-op arms are the offscreen fallbacks). Requires the attach to run **before** the render thread spawns (`surface.rs:2304`) so `loop_enter` observes `layer=Some`.
-3. **On-feature crash guards** — the ALWAYS-reachable normal path (launch/type/resize/close/scroll/select) contains **zero** live `unimplemented!()`. But **quicklook_font/_word** (Look-Up / force-click, a common trackpad gesture) and the **inspector** abort under `panic=abort`. These are not blank-screen blockers but are near-path crashers worth de-risking to a null/false return.
+3. **On-feature crash guards — RESOLVED.** The ALWAYS-reachable normal path (launch/type/resize/close/scroll/select) contains **zero** live `unimplemented!()`, and so do the on-feature paths that used to abort. **quicklook_font/_word** (Look-Up / force-click) were fully ported in P2.1/P2.2, and the **inspector** was un-deferred by the 2026-07-14 inspector series and signed off at runtime by WS6 (2026-07-28) — cmd-opt-i opens a live, rendering inspector. No crash-guard sentinel remains in the tree.
 
 Nothing in xev, termio, core orchestration, font, or input needs to change for pixels. The render loop is not unported — it is unattached.
 
@@ -63,7 +63,7 @@ On-device visible-window KAT: remains #[ignore] (needs the process main thread);
 |---|---|---|---|
 | **quicklook_font** | `rustty-apprt-c/src/lib.rs:2628` | Force-click "Look Up" **and** any VoiceOver / accessibility query (`SurfaceView_AppKit.swift:1521,1949,2361`) | RESOLVED-STALE (WS2-A, 2026-07-23): fully ported in P2.1/P2.2 before this audit's line refs went stale (now lib.rs:2595/2734, zero unimplemented!()); pinned by quicklook_exports_are_abort_free_on_live_surface + the P2.1/P2.2 unit KATs. |
 | **quicklook_word** | `rustty-apprt-c/src/lib.rs:2688` | QuickLook/Look-Up word gesture (`SurfaceView_AppKit.swift:1512`) | RESOLVED-STALE (WS2-A, 2026-07-23): fully ported in P2.1/P2.2 before this audit's line refs went stale (now lib.rs:2595/2734, zero unimplemented!()); pinned by quicklook_exports_are_abort_free_on_live_surface + the P2.1/P2.2 unit KATs. |
-| **Inspector subsystem** | `rustty-apprt/embedded.rs:1833+`; `rustty-apprt-c/lib.rs` `inspector_metal_*`; `rustty-core/surface.rs:2842/2877` (`activate/deactivateInspector`) | User opens the terminal inspector (cmd-opt-i) | MILESTONE.md lists live inspector as DEFERRED; Swift likely leaves the keybind unbound this milestone. Interim: no-op/return-null leaves. Full fix = dcimgui-sys + ImGui_ImplMetal (Phase-3). |
+| **Inspector subsystem** | `rustty-apprt/embedded.rs:1833+`; `rustty-apprt-c/lib.rs` `inspector_metal_*`; `rustty-core/surface.rs:2842/2877` (`activate/deactivateInspector`) | User opens the terminal inspector (cmd-opt-i) | RESOLVED (WS6, 2026-07-28): dcimgui-sys + ImGui_ImplMetal are wired and proven to RASTERIZE (offscreen real-`MTLDevice` readback KAT `metal_offscreen_render_writes_pixels`), the embedded `Inspector::{init,deinit,initMetal,renderMetal}` + the `rustty_inspector_metal_*` exports + core `activate/deactivateInspector` are all live, and cmd-opt-i opens a live inspector in Rustty.app with populated Terminal/Screen/Keyboard/Terminal IO panels (screenshot-verified; `super+alt+i` is bound by default at `rustty-config/src/value_types.rs:4413`). The ImGuiStyle HiDPI rescale was the last unported body and landed in WS6 T3. |
 
 ### MEDIUM — degraded, post-attach
 | Item | File | Note |
@@ -72,7 +72,7 @@ On-device visible-window KAT: remains #[ignore] (needs the process main thread);
 
 ### LOW — polish / correctly-dead / off-platform
 - **drainMailbox autoreleasepool** ported as no-op scope (`renderer_seam.rs:949`) — slow ObjC leak under sustained mailbox traffic, no correctness/blank impact. Fix via a `rustty_os` autoreleasepool shim. — RESOLVED (WS2-C, 2026-07-23) via rustty_os::autorelease::autoreleasepool wired at renderer_seam.rs drainMailbox.
-- **renderer inspector `overlayFeatures`** (`generic.rs:4566`) — statically unreachable (uninhabited enum); fills with Phase-3 inspector.
+- **renderer inspector `overlayFeatures`** — RESOLVED. The uninhabited-enum claim is obsolete: `overlay_features()` is a live trait method (`rustty-renderer/src/state.rs:48`) implemented by `rustty-inspector`'s `renderer::Info` (`widgets/renderer.rs:295`), and `rebuild_overlay` (`generic.rs:4322`) is a real implementation, not a placeholder.
 - **Backend::childExitedAbnormally** (`termio/backend.rs:180`) — no callers; real path is `Surface::childExitedAbnormally` (`surface.rs:3601`, implemented).
 - **xev ThreadPool** (`thread_pool.rs:77`) — type-surface only; PTY uses `EVFILT_READ`, never the pool.
 - **xev non_macos_seam** (`lib.rs:344`, ~15 sites) — `#[cfg(not(macos))]`, compiled out.
@@ -96,7 +96,7 @@ On-device visible-window KAT: remains #[ignore] (needs the process main thread);
 ### P2 — Common on-feature features (crash-guard first, then implement)
 Parallelizable — three independent leaves:
 - **2a. Crash-guard quicklook** — swap `unimplemented!()` for `null`/`false` returns at `lib.rs:2628/2688`. Trivial, high value (Look-Up is a common gesture + accessibility). Then port the bodies (`quicklook_word` is objc-free; `quicklook_font` needs CoreText).
-- **2b. Crash-guard inspector** — make the E4/embedded + core `activate/deactivateInspector` leaves no-op/null so an accidental keybind degrades gracefully. Full dcimgui-sys inspector is a large Phase-3 item.
+- **2b. Crash-guard inspector — DONE / superseded by WS6 (2026-07-28).** No guard was ultimately needed: rather than degrading the leaves to no-op/null, the full dcimgui-sys + ImGui_ImplMetal inspector was ported (2026-07-14 series) and WS6 closed the residual (`updateContentScale` ImGuiStyle rescale), proved the Metal backend rasterizes, and ran the live cmd-opt-i shakedown.
 - **2c. contentsScale restamp** (medium) — resolve oracle ownership; add Metal `set_content_scale` mailbox message if rustty owns it.
 
 ### P3 — Polish

@@ -13,12 +13,13 @@
 # (`-DIMGUI_HAS_DOCK=1 -DIMGUI_USE_WCHAR32=1 -DIMGUI_DISABLE_OBSOLETE_FUNCTIONS=1
 # -DIMGUI_ENABLE_FREETYPE=1`, plus the non-Windows `IMGUI_IMPL_API=extern "C"`).
 #
-# Scope: the KAT-only FFI leaf provides the Dear ImGui core + C API. The
-# platform rendering backends the reference conditionally compiles
-# (`imgui_impl_metal.mm`, `imgui_impl_osx.mm`, `imgui_impl_opengl3.cpp`) are
-# Objective-C++/GL glue used only by the not-yet-ported renderer/apprt tiers and
-# require Metal/AppKit/GL framework linking; they are deferred until those
-# consumers land (the KAT exercises context lifecycle, no rendering backend).
+# Scope: the FFI provides the Dear ImGui core + C API PLUS the two platform
+# rendering backends its consumers use — `imgui_impl_metal.mm` (macOS, ObjC++,
+# linked against Metal/QuartzCore/Foundation) and `imgui_impl_opengl3.cpp`
+# (non-macOS, for the GTK inspector). `imgui_impl_osx.mm` is intentionally NOT
+# compiled: the macOS host drives input through `rustty_inspector_*` C exports,
+# not through the ImGui OSX platform backend. Backend rasterization is gated by
+# the `tests/metal_offscreen.rs` KAT (macOS) and `opengl3_symbols_link` (Linux).
 #
 # `links` declares the native lib so Cargo enforces one-version linking.
 [package]
@@ -71,3 +72,30 @@ freetype-sys = { path = "../freetype-sys" }
 # (`dcimgui.h`).
 cc = "1"
 bindgen = "0.72"
+
+# TEST-ONLY Metal bindings for `tests/metal_offscreen.rs` (the WS6 Phase-A KAT
+# proving `imgui_impl_metal.mm` actually rasterizes). DEV-dependencies, so they
+# never enter the runtime graph — dcimgui-sys stays a pure -sys leaf and the
+# acyclic gate is untouched. Target-gated to macOS exactly like the Metal arm of
+# build.rs; a Linux/GTK build resolves nothing here. Versions match the rest of
+# the workspace (rustty-renderer/rustty-apprt/rustty-apprt-c all pin objc2 0.6 /
+# objc2-metal 0.3); the per-type objc2-metal feature list mirrors
+# rustty-renderer's, minus the features that crate needs only for its own
+# pipeline/IOSurface paths.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = { version = "0.6" }
+objc2-metal = { version = "0.3", default-features = false, features = [
+    "MTLAllocation",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLPixelFormat",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLResource",
+    "MTLTexture",
+    "MTLTypes",
+    "block2",
+    "dispatch2",
+] }

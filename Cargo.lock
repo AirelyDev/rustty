@@ -149,6 +149,8 @@ dependencies = [
  "bindgen",
  "cc",
  "freetype-sys",
+ "objc2",
+ "objc2-metal",
 ]
 
 [[package]]
