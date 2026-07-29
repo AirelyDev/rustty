@@ -1862,20 +1862,35 @@ fn pagelist_compact_oversized_page() {
 // plain `Vec<u8>` because the test path never touches the pointer alignment.
 #[test]
 fn pagelist_decommit_pool_item_zeroes_the_dirty_region() {
-    let mut buf = vec![0u8; 4096];
-    let ptr = buf.as_mut_ptr();
+    // PORT NOTE (WS7 B1): `decommit_pool_item` now delegates to
+    // `crate::mem::decommit`, whose (oracle-faithful) contract asserts that the
+    // range is page-aligned and a page-size multiple — exactly what a real pool
+    // item is. The buffer is therefore an aligned allocation rather than a
+    // plain `Vec`, mirroring the oracle's own `alignedAlloc(page_size_min)` in
+    // `mem.zig`'s tests.
+    let len = 2 * crate::page::PAGE_SIZE_MIN;
+    let layout = std::alloc::Layout::from_size_align(len, crate::page::PAGE_SIZE_MIN).unwrap();
+    // SAFETY: len > 0 and the layout is valid.
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    assert!(!ptr.is_null());
+    // SAFETY: `ptr` is a live allocation of `len` bytes.
+    let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
 
     // Fully dirty item.
     buf.iter_mut().for_each(|b| *b = 0xAA);
-    super::decommit_pool_item(ptr, buf.len(), buf.len());
+    super::decommit_pool_item(ptr, len, len);
     assert!(buf.iter().all(|&b| b == 0));
 
     // Partially dirty item: an item that hosted a page smaller than the item is
     // only dirty up to the page length; the rest is zero by invariant and must
     // remain zero.
     buf[0..1024].iter_mut().for_each(|b| *b = 0xAA);
-    super::decommit_pool_item(ptr, buf.len(), 1024);
+    super::decommit_pool_item(ptr, len, 1024);
     assert!(buf.iter().all(|&b| b == 0));
+
+    // SAFETY: `ptr`/`layout` are the pair returned by `alloc_zeroed` above and
+    // `buf` is dead here.
+    unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
 // ref: test "PageList destroyed pool page reuse is zeroed"

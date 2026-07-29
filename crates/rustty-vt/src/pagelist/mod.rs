@@ -1763,78 +1763,23 @@ impl PageList {
 /// node into the first pointer-size bytes afterwards, which is safe because
 /// page initialization always overwrites them.
 ///
-/// PORT NOTE (platform primitive): this crate hand-rolls its syscall bindings
-/// rather than depending on the `libc` crate — see `page.rs`'s
-/// `Backing::alloc`/`Backing::free` (`mmap`/`munmap`) and its per-OS const
-/// blocks. `madvise` follows the same pattern below.
+/// PORT NOTE (WS7 B1): this was a hand-rolled `madvise` block in BL-2, written
+/// before the oracle factored the same logic into `src/terminal/mem.zig`.
+/// Upstream now calls `terminal_mem.decommit(.zero, item, page.memory.len)`
+/// here (`oracle@main:src/terminal/PageList.zig:4379`), so this is a thin
+/// wrapper over [`crate::mem::decommit`] in zero mode. Behavior is unchanged:
+/// zero mode guarantees the dirty prefix reads back as zero on every target
+/// (Linux via MADV_DONTNEED's zero-fill guarantee, Darwin via the memset it
+/// performs before MADV_FREE_REUSABLE, everywhere else via the memset
+/// fallback).
+#[inline]
 fn decommit_pool_item(item: *mut u8, item_size: usize, dirty_len: usize) {
-    // In test builds the buffer may come from a plain heap allocation rather
-    // than a bare OS mapping, so madvise is neither safe nor meaningful.
-    // (Zig: `if (comptime builtin.is_test)`.)
-    #[cfg(test)]
-    {
-        let _ = item_size;
-        // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
-        unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
-    }
-
-    // MADV_DONTNEED on a private anonymous mapping immediately reclaims the
-    // pages and guarantees they read back zero-filled on the next access, so
-    // we can skip the memset entirely.
-    //
-    // We use MADV_DONTNEED rather than MADV_FREE deliberately: MADV_FREE
-    // doesn't reduce RSS until memory pressure (invisible to users watching
-    // memory usage) and doesn't guarantee zeroes on the next read.
-    // MADV_DONTNEED's synchronous TLB-shootdown cost only matters at
-    // allocator-level call frequency; page destroys here are rare (clears,
-    // reflow, capacity changes), and the hottest reuse path (grow's
-    // prune-reuse) doesn't go through this function at all.
-    #[cfg(all(not(test), target_os = "linux"))]
-    {
-        // SAFETY: `item` is page-aligned and `item_size` bytes long (the pool
-        // dispenses page-aligned, page-multiple items).
-        if unsafe { madvise(item as *mut core::ffi::c_void, item_size, MADV_DONTNEED) } == 0 {
-            return;
-        }
-        // Fall through to the plain memset if madvise failed.
-        // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
-        unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
-    }
-
-    // On Darwin we zero in place and then mark the memory as reusable, which
-    // removes it from the process footprint until it is touched again.
-    // Contents of reusable memory are either preserved (our zeroes) or
-    // reclaimed and zero-filled on the next access, so the invariant holds
-    // either way. The reuse side calls MADV_FREE_REUSE to fix up footprint
-    // accounting (see `recommit_pool_item`).
-    #[cfg(all(not(test), target_os = "macos"))]
-    {
-        // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
-        unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
-        // SAFETY: `item` is page-aligned and `item_size` bytes long.
-        if unsafe {
-            madvise(
-                item as *mut core::ffi::c_void,
-                item_size,
-                MADV_FREE_REUSABLE,
-            )
-        } != 0
-        {
-            // Best-effort: plain MADV_FREE reclaims under memory pressure only
-            // and needs no reuse pairing.
-            // SAFETY: as above.
-            unsafe { madvise(item as *mut core::ffi::c_void, item_size, MADV_FREE) };
-        }
-    }
-
-    // Every other platform (incl. wasm32, which has no madvise) keeps the
-    // existing memset behavior.
-    #[cfg(all(not(test), not(target_os = "linux"), not(target_os = "macos")))]
-    {
-        let _ = item_size;
-        // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
-        unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
-    }
+    // SAFETY: `item` is a live pool item of `item_size` page-aligned,
+    // page-multiple bytes with `dirty_len <= item_size`, and nothing aliases it
+    // (it has already been removed from the page list).
+    let _ = unsafe {
+        crate::mem::decommit(crate::mem::DecommitMode::Zero, item, item_size, dirty_len)
+    };
 }
 
 /// The counterpart to [`decommit_pool_item`] for buffers handed back out by the
@@ -1843,44 +1788,15 @@ fn decommit_pool_item(item: *mut u8, item_size: usize, dirty_len: usize) {
 /// (touching reusable pages revives them) but footprint reporting can
 /// undercount. Harmless on buffers that were never marked reusable (fresh or
 /// preheated items).
+///
+/// PORT NOTE (WS7 B1): as with `decommit_pool_item`, upstream now spells this
+/// `terminal_mem.recommit(buf)` (`oracle@main:src/terminal/PageList.zig:690`
+/// and `:3897`).
 #[inline]
 fn recommit_pool_item(item: *mut u8, item_size: usize) {
-    #[cfg(all(not(test), target_os = "macos"))]
-    {
-        // SAFETY: `item` is page-aligned and `item_size` bytes long.
-        unsafe { madvise(item as *mut core::ffi::c_void, item_size, MADV_FREE_REUSE) };
-    }
-    #[cfg(not(all(not(test), target_os = "macos")))]
-    {
-        let _ = item;
-        let _ = item_size;
-    }
+    // SAFETY: as above; `item` is a live, page-aligned pool item.
+    unsafe { crate::mem::recommit(item, item_size) };
 }
-
-// Minimal libc binding for `madvise`. `libc` is already a dependency of this
-// crate (used elsewhere, e.g. `rustty-os`'s page allocator), but we hand-roll
-// this binding to match the existing `mmap`/`munmap` bindings in `page.rs`'s
-// `Backing::alloc`/`Backing::free` convention rather than mixing binding
-// styles within the same crate.
-#[cfg(all(not(test), any(target_os = "linux", target_os = "macos")))]
-extern "C" {
-    #[link_name = "madvise"]
-    fn madvise(addr: *mut core::ffi::c_void, len: usize, advice: i32) -> i32;
-}
-
-// <asm-generic/mman-common.h>: `#define MADV_DONTNEED 4` on the Linux
-// architectures this crate targets (x86_64, aarch64); other architectures
-// (e.g. alpha, where it is 6) are not part of the build matrix.
-#[cfg(all(not(test), target_os = "linux"))]
-const MADV_DONTNEED: i32 = 4;
-
-// <sys/mman.h> (macOS SDK): MADV_FREE 5, MADV_FREE_REUSABLE 7, MADV_FREE_REUSE 8.
-#[cfg(all(not(test), target_os = "macos"))]
-const MADV_FREE: i32 = 5;
-#[cfg(all(not(test), target_os = "macos"))]
-const MADV_FREE_REUSABLE: i32 = 7;
-#[cfg(all(not(test), target_os = "macos"))]
-const MADV_FREE_REUSE: i32 = 8;
 
 impl Pin {
     /// Returns a bitwise copy of this pin. The reference passes `Pin` by value
