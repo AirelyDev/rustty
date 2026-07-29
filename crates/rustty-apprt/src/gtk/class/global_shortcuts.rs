@@ -269,6 +269,74 @@ pub(crate) fn request_object_path(unique_name: &str, token: &str) -> String {
     format!("{PORTAL_OBJECT_PATH}/request/{sender}/{token}")
 }
 
+/// PORTS: `global_shortcuts.zig:234-241` — the `CreateSession` payload.
+///
+/// D-Bus signature `(a{sv})`: one options vardict carrying the request's
+/// `handle_token` and the session's `session_handle_token`.
+/// See <https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html>
+pub(crate) fn create_session_payload(request_token: &str, session_token: &str) -> glib::Variant {
+    use glib::prelude::ToVariant as _;
+
+    let options = glib::VariantDict::new(None);
+    options.insert_value("handle_token", &request_token.to_variant());
+    options.insert_value("session_handle_token", &session_token.to_variant());
+    glib::Variant::tuple_from_iter([options.end()])
+}
+
+/// PORTS: `global_shortcuts.zig:244-279` — the `BindShortcuts` payload.
+///
+/// D-Bus signature `(oa(sa{sv})sa{sv})`: the session handle, the shortcut list
+/// (each `(id, {description, preferred_trigger})`), an empty parent-window
+/// identifier, and the request options carrying `handle_token`.
+///
+/// Returns `None` when `handle` is not a valid D-Bus object path — the reference
+/// reaches this point only with a handle the portal itself just gave us
+/// (`:246` `priv.handle orelse return null`), so `None` is the same "skip the
+/// request" outcome without a panic.
+pub(crate) fn bind_shortcuts_payload(
+    handle: &str,
+    map: &[(String, Action)],
+    request_token: &str,
+) -> Option<glib::Variant> {
+    use glib::prelude::ToVariant as _;
+
+    let session = glib::variant::ObjectPath::try_from(handle).ok()?;
+    let entry_ty = glib::VariantTy::new("(sa{sv})").ok()?;
+
+    let entries: Vec<glib::Variant> = map
+        .iter()
+        .map(|(trigger, action)| {
+            let opts = glib::VariantDict::new(None);
+            opts.insert_value("description", &action_description(action).to_variant());
+            opts.insert_value("preferred_trigger", &trigger.to_variant());
+            glib::Variant::tuple_from_iter([trigger.to_variant(), opts.end()])
+        })
+        .collect();
+    let shortcuts = glib::Variant::array_from_iter_with_type(entry_ty, entries);
+
+    let options = glib::VariantDict::new(None);
+    options.insert_value("handle_token", &request_token.to_variant());
+
+    Some(glib::Variant::tuple_from_iter([
+        session.to_variant(),
+        shortcuts,
+        "".to_variant(),
+        options.end(),
+    ]))
+}
+
+/// PORTS: `global_shortcuts.zig:286-293` — read `session_handle` out of a
+/// `Response` results vardict.
+///
+/// PORT NOTE: the reference looks the key up as `&s`. Portal implementations
+/// disagree on whether this field is `s` or `o`, so we accept either
+/// (`glib::Variant::str` covers `s`/`o`/`g`).
+pub(crate) fn session_handle_from_results(results: &glib::Variant) -> Option<String> {
+    let dict = glib::VariantDict::new(Some(results));
+    let value = dict.lookup_value("session_handle", None)?;
+    value.str().map(str::to_owned)
+}
+
 /// PORTS: `global_shortcuts.zig:168-206` — the map-build half of `refresh`.
 ///
 /// Walks the config's keybind set and returns the portal shortcut map: an
@@ -450,5 +518,111 @@ mod tests {
             gtk4::glib::Variant::is_object_path(&path),
             "not a valid object path: {path}"
         );
+    }
+
+    /// PORTS: `global_shortcuts.zig:234-241` — the `CreateSession` payload is a
+    /// 1-tuple holding the options vardict with both tokens.
+    #[test]
+    fn global_shortcuts_create_session_payload() {
+        let v = create_session_payload("rustty_1111111", "rustty_2222222");
+        assert_eq!(v.type_().as_str(), "(a{sv})");
+
+        let dict = gtk4::glib::VariantDict::new(Some(&v.child_value(0)));
+        assert_eq!(
+            dict.lookup::<String>("handle_token").unwrap().as_deref(),
+            Some("rustty_1111111")
+        );
+        assert_eq!(
+            dict.lookup::<String>("session_handle_token")
+                .unwrap()
+                .as_deref(),
+            Some("rustty_2222222")
+        );
+    }
+
+    /// PORTS: `global_shortcuts.zig:244-279` — the `BindShortcuts` payload is
+    /// `(session_handle, [(id, {description, preferred_trigger})], parent_window,
+    /// {handle_token})`.
+    #[test]
+    fn global_shortcuts_bind_shortcuts_payload() {
+        let map = vec![
+            ("LOGO+q".to_owned(), Action::NewWindow),
+            ("SHIFT+CTRL+ALT+F12".to_owned(), Action::ToggleQuickTerminal),
+        ];
+        let v = bind_shortcuts_payload(
+            "/org/freedesktop/portal/desktop/session/1_192/rustty_2222222",
+            &map,
+            "rustty_1111111",
+        )
+        .expect("valid session handle builds a payload");
+
+        assert_eq!(v.type_().as_str(), "(oa(sa{sv})sa{sv})");
+        assert_eq!(
+            v.child_value(0).str(),
+            Some("/org/freedesktop/portal/desktop/session/1_192/rustty_2222222")
+        );
+
+        let shortcuts = v.child_value(1);
+        assert_eq!(shortcuts.n_children(), 2);
+
+        let first = shortcuts.child_value(0);
+        assert_eq!(first.child_value(0).str(), Some("LOGO+q"));
+        let opts = gtk4::glib::VariantDict::new(Some(&first.child_value(1)));
+        assert_eq!(
+            opts.lookup::<String>("description").unwrap().as_deref(),
+            Some("new_window")
+        );
+        assert_eq!(
+            opts.lookup::<String>("preferred_trigger")
+                .unwrap()
+                .as_deref(),
+            Some("LOGO+q")
+        );
+
+        // parent_window is always empty (`:274` `''`).
+        assert_eq!(v.child_value(2).str(), Some(""));
+
+        let tail = gtk4::glib::VariantDict::new(Some(&v.child_value(3)));
+        assert_eq!(
+            tail.lookup::<String>("handle_token").unwrap().as_deref(),
+            Some("rustty_1111111")
+        );
+    }
+
+    /// A malformed session handle can never produce a `(o…)` payload — the
+    /// reference would have already asserted; here we return `None` and skip.
+    #[test]
+    fn global_shortcuts_bind_shortcuts_payload_rejects_bad_handle() {
+        assert!(bind_shortcuts_payload("not a path", &[], "rustty_1111111").is_none());
+    }
+
+    /// PORTS: `global_shortcuts.zig:286-293` — pull `session_handle` out of the
+    /// `Response` results vardict. Portals in the wild type this field as either
+    /// `s` or `o`; both must be accepted.
+    #[test]
+    fn global_shortcuts_session_handle_from_results() {
+        use gtk4::glib::prelude::ToVariant;
+
+        let as_string = gtk4::glib::VariantDict::new(None);
+        as_string.insert_value("session_handle", &"/session/a".to_variant());
+        assert_eq!(
+            session_handle_from_results(&as_string.end()).as_deref(),
+            Some("/session/a")
+        );
+
+        let as_path = gtk4::glib::VariantDict::new(None);
+        as_path.insert_value(
+            "session_handle",
+            &gtk4::glib::variant::ObjectPath::try_from("/session/b")
+                .unwrap()
+                .to_variant(),
+        );
+        assert_eq!(
+            session_handle_from_results(&as_path.end()).as_deref(),
+            Some("/session/b")
+        );
+
+        let empty = gtk4::glib::VariantDict::new(None);
+        assert_eq!(session_handle_from_results(&empty.end()), None);
     }
 }
