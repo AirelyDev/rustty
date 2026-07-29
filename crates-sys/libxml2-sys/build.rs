@@ -268,6 +268,19 @@ fn main() {
     // (build.zig:10).
     build.compile("xml2");
 
+    // `LIBXML_ICONV_ENABLED` (see `ENABLED_OPTIONS`, matching the reference's
+    // `Options.iconv = true` default at build.zig:153) makes `encoding.c`
+    // reference `iconv`/`iconv_open`/`iconv_close`. On Apple platforms those
+    // live in a standalone `libiconv`, NOT in `libSystem`, so a link that only
+    // gets `-lSystem` (as rustc's `-nodefaultlibs` link line does) fails with
+    // undefined `_iconv*` symbols the moment anything actually pulls in
+    // `encoding.o` — e.g. this crate's own KAT test binary. The Zig reference
+    // never hits this because its libc linkage supplies libiconv. glibc and
+    // musl fold iconv into libc, so no directive is needed there.
+    if target_os == "macos" || target_os == "ios" {
+        println!("cargo:rustc-link-lib=iconv");
+    }
+
     // Auto-generate the FFI from `wrapper.h` against the same include path the C
     // build uses.
     let bindings = bindgen::Builder::default()
