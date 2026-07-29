@@ -226,6 +226,49 @@ impl Default for GlobalShortcuts {
 // display and no bus — the oracle keeps them as private methods/`Method` arms
 // on the class, which Zig can test in-file and Rust cannot).
 
+/// The XDG desktop portal's well-known bus name.
+pub(crate) const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
+/// The XDG desktop portal's root object path.
+pub(crate) const PORTAL_OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
+/// `global_shortcuts.zig:450` — the interface every method call targets.
+pub(crate) const GLOBAL_SHORTCUTS_IFACE: &str = "org.freedesktop.portal.GlobalShortcuts";
+/// `global_shortcuts.zig:437` — the interface carrying the `Response` signal.
+pub(crate) const REQUEST_IFACE: &str = "org.freedesktop.portal.Request";
+/// `global_shortcuts.zig:128` — the interface carrying `Close`.
+pub(crate) const SESSION_IFACE: &str = "org.freedesktop.portal.Session";
+
+/// PORTS: `global_shortcuts.zig:625-633` `generateToken`. A random token suitable
+/// for a portal `handle_token` / `session_handle_token`.
+///
+/// R2: the reference prefixes `ghostty_`; rustty prefixes `rustty_`. The reference
+/// draws a `u28` and formats `{x:0<7}` (hex, fill `0`, LEFT-aligned to width 7 —
+/// i.e. zeros are appended, not prepended); Rust's `{:0<7x}` is the same spec.
+pub(crate) fn generate_token() -> String {
+    let mut buf = [0u8; 4];
+    rustty_os::file::crypto_random_bytes(&mut buf);
+    // `std.crypto.random.int(u28)`
+    let v = u32::from_ne_bytes(buf) & 0x0fff_ffff;
+    format!("rustty_{v:0<7x}")
+}
+
+/// PORTS: `global_shortcuts.zig:468-497` `getRequestPath`.
+///
+/// The portal's `Request` object path must be computed by the CLIENT and
+/// subscribed to BEFORE the method call is made: an eager portal implementation
+/// can emit `Response` before a client that waited for the method's return value
+/// has subscribed, and the signal is delivered exactly once. The path is
+/// `/org/freedesktop/portal/desktop/request/<SENDER>/<TOKEN>`, where `<SENDER>` is
+/// the connection's unique name with the leading `:` removed and every `.`
+/// replaced by `_` (`:1.192` → `1_192`); D-Bus object-path components may not
+/// contain `.`.
+pub(crate) fn request_object_path(unique_name: &str, token: &str) -> String {
+    let sender = unique_name
+        .strip_prefix(':')
+        .unwrap_or(unique_name)
+        .replace('.', "_");
+    format!("{PORTAL_OBJECT_PATH}/request/{sender}/{token}")
+}
+
 /// PORTS: `global_shortcuts.zig:168-206` — the map-build half of `refresh`.
 ///
 /// Walks the config's keybind set and returns the portal shortcut map: an
@@ -360,6 +403,52 @@ mod tests {
         assert_eq!(
             action_description(&Action::ToggleQuickTerminal),
             "toggle_quick_terminal"
+        );
+    }
+
+    /// PORTS: `global_shortcuts.zig:625-633` `generateToken`. R2: the reference's
+    /// `ghostty_` prefix becomes `rustty_`; the value is a 28-bit random hex,
+    /// right-padded with `0` to 7 columns (Zig `{x:0<7}` == Rust `{:0<7x}`).
+    #[test]
+    fn global_shortcuts_token_shape() {
+        for _ in 0..64 {
+            let t = generate_token();
+            assert_eq!(t.len(), "rustty_".len() + 7, "token={t}");
+            assert!(t.starts_with("rustty_"), "token={t}");
+            assert!(
+                t["rustty_".len()..].bytes().all(|b| b.is_ascii_hexdigit()),
+                "token tail must be hex: {t}"
+            );
+        }
+        assert_ne!(
+            generate_token(),
+            generate_token(),
+            "tokens must not be constant"
+        );
+    }
+
+    /// PORTS: `global_shortcuts.zig:468-497` `getRequestPath`. The unique name
+    /// loses its leading `:` and every `.` becomes `_`, e.g. `:1.192` → `1_192`.
+    #[test]
+    fn global_shortcuts_request_object_path() {
+        assert_eq!(
+            request_object_path(":1.192", "rustty_abc1230"),
+            "/org/freedesktop/portal/desktop/request/1_192/rustty_abc1230"
+        );
+        assert_eq!(
+            request_object_path(":1.2.3", "rustty_0000000"),
+            "/org/freedesktop/portal/desktop/request/1_2_3/rustty_0000000"
+        );
+    }
+
+    /// The generated path must be a valid D-Bus object path (the portal will
+    /// reject a malformed one, and `signal_subscribe` would silently never fire).
+    #[test]
+    fn global_shortcuts_request_object_path_is_valid() {
+        let path = request_object_path(":1.192", &generate_token());
+        assert!(
+            gtk4::glib::Variant::is_object_path(&path),
+            "not a valid object path: {path}"
         );
     }
 }
