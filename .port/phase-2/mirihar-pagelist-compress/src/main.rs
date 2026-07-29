@@ -45,6 +45,59 @@ use rustty_vt::pagelist::{Node, Storage};
 use rustty_vt::point::{Coordinate, Point};
 use rustty_vt::PageList;
 
+// ---------------------------------------------------------------------------
+// I3 — a counting global allocator.
+//
+// `CompressedPage::encoded` is a global-allocator `Vec`, which is exactly why
+// the repo's page-allocator leak gate cannot see it. A `#[global_allocator]`
+// can, and a binary crate is allowed to install one. This makes the I3 check
+// runnable NATIVELY in milliseconds as well as under Miri, so a regression is
+// demonstrable without a multi-hour interpretation.
+// ---------------------------------------------------------------------------
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicIsize, Ordering};
+
+static LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
+
+struct Counting;
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let p = unsafe { System.alloc(layout) };
+        if !p.is_null() {
+            LIVE_BYTES.fetch_add(layout.size() as isize, Ordering::Relaxed);
+        }
+        p
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE_BYTES.fetch_sub(layout.size() as isize, Ordering::Relaxed);
+        unsafe { System.dealloc(ptr, layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let p = unsafe { System.alloc_zeroed(layout) };
+        if !p.is_null() {
+            LIVE_BYTES.fetch_add(layout.size() as isize, Ordering::Relaxed);
+        }
+        p
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let p = unsafe { System.realloc(ptr, layout, new_size) };
+        if !p.is_null() {
+            LIVE_BYTES.fetch_add(new_size as isize - layout.size() as isize, Ordering::Relaxed);
+        }
+        p
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
+
+fn live_bytes() -> isize {
+    LIVE_BYTES.load(Ordering::Relaxed)
+}
+
+
 // `Node::next` is reached through the intrusive-list trait: the `next` field
 // itself is crate-private (`rustty-vt/examples/rss_probe.rs` does the same).
 use rustty_datastruct::intrusive_linked_list::Node as ListNode;
@@ -237,6 +290,31 @@ fn compress_reset_compress_deinit() {
 ///
 /// Progress goes to STDERR: `println!` is block-buffered when stdout is a pipe,
 /// which makes a long Miri run look hung.
+/// I3, mechanised — run `compress_reset_compress_deinit` under the counting
+/// allocator and assert the process returns to its pre-scenario live-byte
+/// baseline. A first warm-up iteration absorbs one-time lazy initialisation.
+///
+/// Removing the discard-restore loop from `PageList::deinit` (or `reset`) makes
+/// this FAIL with a positive delta equal to the retained encodings, while the
+/// entire native `rustty-vt` suite stays green.
+fn leak_check() {
+    // Warm-up: pay any one-time lazy allocation before the measured run.
+    compress_reset_compress_deinit();
+
+    let before = live_bytes();
+    compress_reset_compress_deinit();
+    let after = live_bytes();
+
+    let delta = after - before;
+    assert_eq!(
+        delta, 0,
+        "PageList leaked {delta} global-allocator bytes across \
+         compress -> reset -> compress -> deinit. The compressed pages' \
+         `encoded` Vec is only freed by the discard-restore in \
+         `PageList::{{deinit,reset}}`; nothing else in the suite can see this."
+    );
+}
+
 fn main() {
     let selected: Vec<String> = std::env::args().skip(1).collect();
     let want = |name: &str| selected.is_empty() || selected.iter().any(|s| s == name);
@@ -256,6 +334,10 @@ fn main() {
     if want("leak") {
         compress_reset_compress_deinit();
         eprintln!("ok  compress_reset_compress_deinit");
+    }
+    if want("leakcheck") {
+        leak_check();
+        eprintln!("ok  leak_check (counting global allocator, delta == 0)");
     }
     eprintln!("all selected scenarios passed (leak check runs at exit)");
 }
