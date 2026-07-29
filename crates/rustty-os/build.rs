@@ -46,25 +46,20 @@ fn main() {
         println!("cargo:rerun-if-changed=cbits/log_shim.c");
     }
 
-    // WS4: `crate::i18n` declares `extern "C" { fn bindtextdomain/textdomain/
-    // dgettext(...) }` (the gettext message-catalog runtime). The vendored
-    // `gettext-sys` crate provides ONLY the gnulib `localename` canonicalizer
-    // (`_libintl_locale_name_canonicalize`) — the catalog API is a documented,
-    // deferred vendor gap (DEFERRALS.md "gettext-sys — self-contained libintl
-    // deferred"). Until that full vendor lands, resolve those three symbols
-    // from Homebrew's `libintl`, mirroring the EXACT flags the Swift app link
-    // already uses (`macos/build-rustty.sh` `OTHER_LDFLAGS`: `-L/opt/homebrew/
-    // opt/gettext/lib -lintl`) so `cargo build`/`cargo test` link the same way
-    // the shipped app does — this is a link-search addition only, not a new
-    // dependency shape (R3: still binding the SAME system gettext library).
-    if target_os == "macos" {
-        // NOTE: `gettext-sys`'s OWN vendored archive is named
-        // `rustty_gettext_localename` (not `intl`, see its build.rs) so this
-        // `-lintl` unambiguously resolves to Homebrew's full libintl and never
-        // silently shadows onto the vendored localename-only slice.
-        println!("cargo:rustc-link-search=native=/opt/homebrew/opt/gettext/lib");
-        println!("cargo:rustc-link-lib=dylib=intl");
-    }
+    // i18n / gettext: NOTHING to emit here.
+    //
+    // `crate::i18n` declares `extern "C" { fn bindtextdomain/textdomain/
+    // dgettext(...) }` (the gettext message-catalog runtime). Those symbols
+    // come from the `gettext-sys` dependency, which as of WS9 vendors the FULL
+    // macOS libintl (the reference's whole `pkg/libintl/build.zig` `srcs` set)
+    // and emits `cargo:rustc-link-lib=static=rustty_intl`.
+    //
+    // WS4 temporarily resolved them from Homebrew with
+    // `-L/opt/homebrew/opt/gettext/lib -lintl`. That was a hard host
+    // dependency on ARM Homebrew for EVERY macOS build (and silently wrong on
+    // Intel Homebrew, which lives under /usr/local) — review finding WS4-M1,
+    // RESOLVED by WS9. Do not reintroduce it: `.port/tools/gates/
+    // no_homebrew_gettext_gate.sh` fails the build if anything does.
 
     println!("cargo:rerun-if-changed=build.rs");
 }
