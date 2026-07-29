@@ -1970,6 +1970,35 @@ fn fill_compressible_history(s: &mut PageList, pages: usize) {
     }
 }
 
+/// PORTS: the memoryStats assertions in oracle 0d015b2fc / 6d5dda40d.
+#[test]
+fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 4);
+
+    let before = s.memory_stats();
+    assert_eq!(before.compressed_pages, 0);
+    assert_eq!(before.encoded_bytes, 0);
+    assert_eq!(before.decommitted_raw_bytes, 0);
+    assert_eq!(before.resident_raw_bytes, before.raw_bytes);
+
+    let _ = s.compress(CompressionMode::Drain);
+    let after = s.memory_stats();
+    assert!(after.compressed_pages >= 1);
+    assert_eq!(after.resident_pages + after.compressed_pages, s.total_pages());
+    assert_eq!(after.raw_bytes, before.raw_bytes);
+    assert_eq!(
+        after.resident_raw_bytes + after.decommitted_raw_bytes,
+        after.raw_bytes
+    );
+    assert!(after.encoded_bytes > 0);
+    // Compression only pays if the encoding is smaller than what it replaced.
+    assert!(after.encoded_bytes < after.decommitted_raw_bytes);
+    assert!(after.estimated_savings() > 0);
+    assert!(after.estimated_resident_bytes() < before.estimated_resident_bytes());
+    s.deinit();
+}
+
 /// Incremental compression converges: repeated steps eventually report
 /// `Complete`, having compressed the cold history.
 #[test]

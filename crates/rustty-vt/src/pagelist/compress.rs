@@ -295,6 +295,57 @@ fn compress_page_tw_check(point: CompressPageFp) -> Result<(), DecommitFailed> {
     COMPRESS_PAGE_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
+/// Snapshot of the storage used by page nodes in this list.
+///
+/// The raw byte counts describe page backing mappings only. They exclude nodes,
+/// allocator metadata, unused preheated pool items, and the small
+/// representation values stored in each node. A compressed page retains its raw
+/// mapping as virtual address space, but its bytes are counted as decommitted
+/// because strict reclamation succeeded before the state was published.
+///
+/// PORTS: oracle@main PageList.zig `MemoryStats`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryStats {
+    /// Pages whose raw backing mappings are resident.
+    pub resident_pages: usize,
+
+    /// Pages represented by encoded storage and a decommitted raw mapping.
+    pub compressed_pages: usize,
+
+    /// Logical bytes in every raw page mapping.
+    pub raw_bytes: usize,
+
+    /// Raw mapping bytes which remain resident.
+    pub resident_raw_bytes: usize,
+
+    /// Raw mapping bytes discarded for compressed pages.
+    pub decommitted_raw_bytes: usize,
+
+    /// Raw allocation bytes which remain physically resident.
+    ///
+    /// This can exceed `resident_raw_bytes` because a pool-owned page uses only
+    /// part of a standard pool item. Compressing such a page decommits its
+    /// initialized range, but the unused tail of the item stays resident.
+    pub resident_backing_bytes: usize,
+
+    /// Exact encoded allocations retained for compressed pages.
+    pub encoded_bytes: usize,
+}
+
+impl MemoryStats {
+    /// Estimate resident page backing storage after compression.
+    pub fn estimated_resident_bytes(&self) -> usize {
+        self.resident_backing_bytes + self.encoded_bytes
+    }
+
+    /// Estimate physical bytes avoided by compressed page backing storage.
+    ///
+    /// PORT NOTE: the oracle's `-|` is a saturating subtraction.
+    pub fn estimated_savings(&self) -> usize {
+        self.decommitted_raw_bytes.saturating_sub(self.encoded_bytes)
+    }
+}
+
 impl PageList {
     /// Attempt to compress one resident page while retaining its raw mapping.
     ///
@@ -553,6 +604,50 @@ impl PageList {
         // the oldest cold page, including pages restored after this pass.
         self.page_compression.reset();
         IncrementalCompressionResult::Complete
+    }
+
+    /// Return a metadata-only snapshot of page backing storage.
+    ///
+    /// This never restores compressed pages. It is intended for diagnostics and
+    /// other infrequent reporting because it traverses the complete page list.
+    ///
+    /// PORTS: oracle@main PageList.zig `memoryStats`.
+    pub fn memory_stats(&self) -> MemoryStats {
+        let mut result = MemoryStats::default();
+        let mut current = self.pages.first;
+        while !current.is_null() {
+            let node = current;
+            // SAFETY: `node` is a live node of this list; metadata never
+            // restores a compressed page.
+            let raw_len = unsafe { (*Node::metadata(node)).memory_len() };
+            let backing_len = match unsafe { (*node).owned } {
+                super::Owned::Pool => std_size(),
+                super::Owned::Heap => raw_len,
+            };
+            debug_assert!(backing_len >= raw_len);
+            result.raw_bytes += raw_len;
+
+            match unsafe { &*core::ptr::addr_of!((*node).data) } {
+                NodeData::Resident(_) => {
+                    result.resident_pages += 1;
+                    result.resident_raw_bytes += raw_len;
+                    result.resident_backing_bytes += backing_len;
+                }
+
+                NodeData::Compressed(compressed) => {
+                    result.compressed_pages += 1;
+                    result.decommitted_raw_bytes += raw_len;
+                    // Strict reclamation covers only Page.memory. A standard
+                    // pool item can have an unused tail which remains resident.
+                    result.resident_backing_bytes += backing_len - raw_len;
+                    result.encoded_bytes += compressed.encoded.len();
+                }
+            }
+
+            current = unsafe { (*node).next };
+        }
+
+        result
     }
 
     /// Compress every fully historical resident page which is currently cold.
