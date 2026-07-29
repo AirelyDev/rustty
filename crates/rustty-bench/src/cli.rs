@@ -269,3 +269,19 @@ fn main_action_impl<B: BenchmarkAction>(alloc: Allocator, args: Args) -> Result<
     result?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Action;
+
+    /// The two new actions are reachable by name, matching the oracle's CLI.
+    ///
+    /// PORT NOTE (WS7 D8): the plan's snippet writes
+    /// `Action::from_name("page-compression")`; the real signature takes a byte
+    /// slice (the Zig `[]const u8` CLI token), so the literals are `b"..."`.
+    #[test]
+    fn bench_registers_compression_actions() {
+        assert!(Action::from_name(b"page-compression").is_some());
+        assert!(Action::from_name(b"scrollback-compression").is_some());
+    }
+}
