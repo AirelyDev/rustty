@@ -916,3 +916,40 @@ findings were FIXED, commit 9e3fe1c, not excepted); (4) documented here with cau
 
 Full per-test list + measured durations: `/Users/gael/.claude/jobs/22556231/tmp/miri_master.txt`
 (regenerable) and the `#[cfg_attr(miri, ignore = "MIRI EXCEPTION ...")]` reason strings in source.
+
+## WS7 Phase A — LZ4 block codec: routed to an isolated harness (2026-07-28)
+
+The plan's task A6 calls for `bash .port/tools/miri-run.sh rustty-vt lz4_ 4 20 10`. That
+harness (and any `cargo +nightly miri test -p rustty-vt`) must first build the whole
+2073-test `rustty-vt` test binary under Miri. On this host that build alone ran **70+
+minutes without completing** and was killed before a single codec test executed. This is
+the same intractability class as the `rustty-vt` full-sweep entry above, except the cost is
+in the *build*, not the tests — so no per-test budget can recover it.
+
+**Routed, not skipped.** `crates/rustty-vt/src/compress/lz4.rs` is a dependency-free leaf
+module, so the established `.port/phase-2/mirihar-*` pattern applies. The harness at
+`.port/phase-2/mirihar-compress-lz4/` includes the **real source file** via
+`#[path = "../../../../crates/rustty-vt/src/compress/lz4.rs"]` — it is not a copy, and it
+interprets any later change to the codec.
+
+| model | command | result | time |
+|---|---|---|---|
+| Stacked Borrows | `cargo +nightly miri run --quiet` | **CLEAN** — no UB, no leak | 41 s |
+| Tree Borrows | `MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q` | **CLEAN** — no UB, no leak | 180 s |
+
+Paths executed under both models: structured page-shaped input, all-zeros (long/wide
+copies), text, incompressible (literal-only), period-1..8 overlapping matches (the
+`copy_match` overlapping wide-copy branches), 17 boundary sizes, the exact-size decode
+contract in both directions, and — the property that actually needs an interpreter —
+decoding of 15 truncations, 64 single-byte corruptions and 64 fully random blocks.
+
+**4-criterion basis:** (1) intractable as measured (70+ min build, killed, no test run);
+(2) compensating coverage — all 15 codec tests pass natively in BOTH release and debug
+(debug = overflow checks on), plus `RUSTTY_LZ4_SLOW=1` exhaustive in both profiles;
+(3) no uncovered unsafe path — **the module contains zero `unsafe`**, so there is no
+raw-pointer provenance for Miri to check; the properties that remain (OOB slice access,
+uninit reads, integer UB, leaks) are exactly what the harness executes; (4) documented
+here with cause, and the harness is committed so it is re-runnable in seconds.
+
+Phase B's `.port/phase-2/mirihar-compress/` (the compress/restore *seam*, which has real
+raw-pointer aliasing) is separate and still owed.
