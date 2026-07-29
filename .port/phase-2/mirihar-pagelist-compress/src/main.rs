@@ -230,14 +230,33 @@ fn compress_reset_compress_deinit() {
     list.deinit();
 }
 
+/// Scenarios can be selected by name on the command line so a single expensive
+/// one (notably the leak scenario) can be re-run in isolation, e.g. when
+/// demonstrating that removing the discard-restore from `PageList::deinit`
+/// makes Miri's leak checker fire. No arguments runs all of them.
+///
+/// Progress goes to STDERR: `println!` is block-buffered when stdout is a pipe,
+/// which makes a long Miri run look hung.
 fn main() {
-    split_holds_page_across_tracked_loop();
-    println!("ok  split_holds_page_across_tracked_loop");
-    page_pointer_survives_sibling_accessors();
-    println!("ok  page_pointer_survives_sibling_accessors");
-    compress_restore_round_trip();
-    println!("ok  compress_restore_round_trip");
-    compress_reset_compress_deinit();
-    println!("ok  compress_reset_compress_deinit");
-    println!("all scenarios passed (leak check runs at exit)");
+    let selected: Vec<String> = std::env::args().skip(1).collect();
+    let want = |name: &str| selected.is_empty() || selected.iter().any(|s| s == name);
+
+    if want("split") {
+        split_holds_page_across_tracked_loop();
+        eprintln!("ok  split_holds_page_across_tracked_loop");
+    }
+    if want("siblings") {
+        page_pointer_survives_sibling_accessors();
+        eprintln!("ok  page_pointer_survives_sibling_accessors");
+    }
+    if want("roundtrip") {
+        compress_restore_round_trip();
+        eprintln!("ok  compress_restore_round_trip");
+    }
+    if want("leak") {
+        compress_reset_compress_deinit();
+        eprintln!("ok  compress_reset_compress_deinit");
+    }
+    eprintln!("all selected scenarios passed (leak check runs at exit)");
 }
+
