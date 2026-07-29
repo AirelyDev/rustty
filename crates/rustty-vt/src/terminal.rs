@@ -4526,15 +4526,81 @@ impl Terminal {
     }
 
     /// Set the pwd for the terminal.
+    // PORT NOTE (aliasing): `pwd` MAY alias `self.pwd` — a caller can hand
+    // `get_pwd()`'s return straight back through the vt-c FFI seam. Every
+    // mutation below therefore goes through a raw `*mut Vec<u8>` and the copy
+    // uses `core::ptr::copy` (memmove, = Zig `std.mem.copyForwards`). NEVER use
+    // `extend_from_slice`/`copy_from_slice` here: both are `memcpy` and are UB
+    // on overlapping ranges. That is upstream a14a619ce.
+    //
+    // PORT FINDING (WS8 T7, proven under Miri): a `&[u8]` parameter is a
+    // STRONGLY PROTECTED `SharedReadOnly` argument for the whole call, so
+    // writing into the bytes it points at is Stacked-Borrows UB even with a
+    // memmove — the protector, not the memcpy, is the blocker (memory:
+    // `rust-mut-args-strongly-protected`). The alias-tolerant entry point is
+    // therefore `set_pwd_raw`, which takes the source as a raw pointer and
+    // forms no reference to it. This `&[u8]` wrapper stays for the many
+    // non-aliasing internal callers; the vt-c FFI seam — the one place a
+    // caller can hand `get_pwd()`'s own bytes back — calls `set_pwd_raw`.
     pub fn set_pwd(&mut self, pwd: &[u8]) -> Result<(), OutOfMemory> {
-        // self.pwd.clearRetainingCapacity();
-        self.pwd.clear();
-        // if (pwd.len > 0) {
-        if !pwd.is_empty() {
-            // try self.pwd.appendSlice(self.gpa(), pwd);
-            self.pwd.extend_from_slice(pwd);
-            // try self.pwd.append(self.gpa(), 0);
-            self.pwd.push(0);
+        // SAFETY: `pwd` is a live slice readable for `pwd.len()` bytes.
+        unsafe { self.set_pwd_raw(pwd.as_ptr(), pwd.len()) }
+    }
+
+    /// `set_pwd` over a raw source, tolerating a source that ALIASES
+    /// `self.pwd` (see the PORT FINDING on `set_pwd`).
+    ///
+    /// # Safety
+    ///
+    /// `src` must be readable for `src_len` bytes. It MAY overlap `self.pwd`'s
+    /// buffer; it must not be derived from a live Rust reference that outlives
+    /// this call.
+    pub unsafe fn set_pwd_raw(
+        &mut self,
+        src: *const u8,
+        src_len: usize,
+    ) -> Result<(), OutOfMemory> {
+        let pwd_len = src_len;
+        // if (pwd.len == 0) { self.pwd.clearRetainingCapacity(); return; }
+        if pwd_len == 0 {
+            self.pwd.clear();
+            return Ok(());
+        }
+
+        // const capacity = std.math.add(usize, pwd.len, 1) catch
+        //     return error.OutOfMemory;
+        let capacity = match pwd_len.checked_add(1) {
+            Some(c) => c,
+            None => return Err(OutOfMemory),
+        };
+
+        // try self.pwd.ensureTotalCapacity(self.gpa(), capacity);
+        //
+        // PORT NOTE: `ensureTotalCapacity` is GROW-ONLY and amortized, so this
+        // is `reserve`, NOT `reserve_exact`. Rust's `reserve` aborts rather
+        // than returning on real OOM, so the failure path is exercised by the
+        // `Reserve` tripwire point (see the terminal.rs tripwire PORT NOTE).
+        // Growing can reallocate, which would invalidate an aliased `pwd` —
+        // that cannot happen in the aliasing case, because an aliased source is
+        // a subslice of `self.pwd`, hence `capacity <= self.pwd.capacity()`.
+        #[cfg(test)]
+        set_string_tw_check(SetStringFp::Reserve)?;
+        let v: *mut Vec<u8> = core::ptr::addr_of_mut!(self.pwd);
+        // SAFETY: `v` is the live `self.pwd`; `src` is readable for `src_len`
+        // bytes and may overlap `*v`'s buffer, which `core::ptr::copy`
+        // (memmove) tolerates. `set_len` exposes `capacity` bytes that are all
+        // written before any read, and `u8` has no drop glue.
+        unsafe {
+            if (*v).capacity() < capacity {
+                (*v).reserve(capacity - (*v).len());
+            }
+            let dst: *mut u8 = (*v).as_mut_ptr();
+            // self.pwd.items.len = capacity;
+            (*v).set_len(capacity);
+            // std.mem.copyForwards(u8, self.pwd.items[0..pwd.len], pwd);
+            core::ptr::copy(src, dst, src_len);
+            // self.pwd.items[pwd.len] = 0;
+            *dst.add(src_len) = 0;
         }
         Ok(())
     }
@@ -4553,15 +4619,65 @@ impl Terminal {
     }
 
     /// Set the title for the terminal, as set by escape sequences (e.g. OSC 0/2).
+    // PORT NOTE (aliasing): `t` MAY alias `self.title` — a caller can hand
+    // `get_title()`'s return straight back through the vt-c FFI seam. Every
+    // mutation below therefore goes through a raw `*mut Vec<u8>` and the copy
+    // uses `core::ptr::copy` (memmove, = Zig `std.mem.copyForwards`). NEVER use
+    // `extend_from_slice`/`copy_from_slice` here: both are `memcpy` and are UB
+    // on overlapping ranges. That is upstream dace6d1c6.
+    //
+    // PORT FINDING (WS8 T7): see the finding on `set_pwd` — the alias-tolerant
+    // entry point is `set_title_raw`.
     pub fn set_title(&mut self, t: &[u8]) -> Result<(), OutOfMemory> {
-        // self.title.clearRetainingCapacity();
-        self.title.clear();
-        // if (t.len > 0) {
-        if !t.is_empty() {
-            // try self.title.appendSlice(self.gpa(), t);
-            self.title.extend_from_slice(t);
-            // try self.title.append(self.gpa(), 0);
-            self.title.push(0);
+        // SAFETY: `t` is a live slice readable for `t.len()` bytes.
+        unsafe { self.set_title_raw(t.as_ptr(), t.len()) }
+    }
+
+    /// `set_title` over a raw source, tolerating a source that ALIASES
+    /// `self.title` (see the PORT FINDING on `set_pwd`).
+    ///
+    /// # Safety
+    ///
+    /// `src` must be readable for `src_len` bytes. It MAY overlap
+    /// `self.title`'s buffer; it must not be derived from a live Rust
+    /// reference that outlives this call.
+    pub unsafe fn set_title_raw(
+        &mut self,
+        src: *const u8,
+        src_len: usize,
+    ) -> Result<(), OutOfMemory> {
+        let t_len = src_len;
+        // if (t.len == 0) { self.title.clearRetainingCapacity(); return; }
+        if t_len == 0 {
+            self.title.clear();
+            return Ok(());
+        }
+
+        // const capacity = std.math.add(usize, t.len, 1) catch
+        //     return error.OutOfMemory;
+        let capacity = match t_len.checked_add(1) {
+            Some(c) => c,
+            None => return Err(OutOfMemory),
+        };
+
+        // try self.title.ensureTotalCapacity(self.gpa(), capacity);
+        //
+        // PORT NOTE: grow-only + amortized => `reserve`, NOT `reserve_exact`.
+        #[cfg(test)]
+        set_string_tw_check(SetStringFp::Reserve)?;
+        let v: *mut Vec<u8> = core::ptr::addr_of_mut!(self.title);
+        // SAFETY: as in `set_pwd` above.
+        unsafe {
+            if (*v).capacity() < capacity {
+                (*v).reserve(capacity - (*v).len());
+            }
+            let dst: *mut u8 = (*v).as_mut_ptr();
+            // self.title.items.len = capacity;
+            (*v).set_len(capacity);
+            // std.mem.copyForwards(u8, self.title.items[0..t.len], t);
+            core::ptr::copy(src, dst, src_len);
+            // self.title.items[t.len] = 0;
+            *dst.add(src_len) = 0;
         }
         Ok(())
     }
@@ -5012,6 +5128,97 @@ mod tests {
                 .unwrap()
         });
         assert_eq!(Ok(()), set_string_tw_check(SetStringFp::Reserve));
+    }
+
+    // test "Terminal: setPwd preserves a sentinel on allocation failure"
+    #[test]
+    fn terminal_set_pwd_preserves_a_sentinel_on_allocation_failure() {
+        let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
+
+        // PORT NOTE: the reference primes the list with
+        // `ensureTotalCapacityPrecise(alloc, 3)` and then fails the NEXT
+        // allocation via `FailingAllocator`. Here the injectable seam is the
+        // `Reserve` tripwire point (see the terminal.rs tripwire PORT NOTE).
+        SET_STRING_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(SetStringFp::Reserve, OutOfMemory)
+        });
+        assert_eq!(Err(OutOfMemory), t.set_pwd(b"pwd"));
+        SET_STRING_TW.with(|tw| {
+            tw.borrow_mut()
+                .end(rustty_util::tripwire::ResetMode::Reset)
+                .unwrap()
+        });
+
+        assert!(t.get_pwd().is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setPwd accepts its current value"
+    #[test]
+    fn terminal_set_pwd_accepts_its_current_value() {
+        let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
+
+        t.set_pwd(b"file:///tmp").unwrap();
+
+        // PORT NOTE: the reference writes `t.setPwd(t.getPwd().?)`. Borrowck
+        // forbids holding the `&[u8]` from `get_pwd` across the `&mut self`
+        // call, so we re-derive the SAME aliasing source as a RAW pointer and
+        // go through `set_pwd_raw`. This is exactly the aliasing the vt-c FFI
+        // seam can produce. Passing it as a `&[u8]` to `set_pwd` instead would
+        // be Stacked-Borrows UB — the argument is strongly protected for the
+        // duration of the call, so writing into it is illegal regardless of
+        // memmove-vs-memcpy (proven under Miri, WS8 T7).
+        let (ptr, len) = {
+            let cur = t.get_pwd().unwrap();
+            (cur.as_ptr(), cur.len())
+        };
+        unsafe { t.set_pwd_raw(ptr, len) }.unwrap();
+
+        assert_eq!(b"file:///tmp".as_slice(), t.get_pwd().unwrap());
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setTitle preserves a sentinel on allocation failure"
+    #[test]
+    fn terminal_set_title_preserves_a_sentinel_on_allocation_failure() {
+        let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
+
+        SET_STRING_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(SetStringFp::Reserve, OutOfMemory)
+        });
+        assert_eq!(Err(OutOfMemory), t.set_title(b"title"));
+        SET_STRING_TW.with(|tw| {
+            tw.borrow_mut()
+                .end(rustty_util::tripwire::ResetMode::Reset)
+                .unwrap()
+        });
+
+        assert!(t.get_title().is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setTitle accepts its current value"
+    #[test]
+    fn terminal_set_title_accepts_its_current_value() {
+        let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
+
+        t.set_title(b"Rustty").unwrap();
+
+        // See the PORT NOTE in `terminal_set_pwd_accepts_its_current_value`.
+        let (ptr, len) = {
+            let cur = t.get_title().unwrap();
+            (cur.as_ptr(), cur.len())
+        };
+        unsafe { t.set_title_raw(ptr, len) }.unwrap();
+
+        assert_eq!(b"Rustty".as_slice(), t.get_title().unwrap());
+
+        t.deinit(Global);
     }
 
     // PORT NOTE: the reference tests call `init(alloc, .{ .cols = .., .rows = .. })`
