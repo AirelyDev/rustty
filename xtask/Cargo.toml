@@ -49,3 +49,7 @@ rustty-extra = { workspace = true }
 # see the `[features]` doc comment for why the previous unconditional force
 # was a bug (Task 18).
 rustty-terminfo = { workspace = true }
+# WS9: parse `cargo build --message-format=json` so the xcframework combine step
+# folds an EXPLICIT, cargo-declared archive set (the port of GhosttyLib.zig's
+# enumerated `deps.add(lib)` list) instead of globbing the target dir.
+serde_json = { workspace = true }

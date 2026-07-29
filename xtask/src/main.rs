@@ -12,6 +12,8 @@ mod wasm_patch_growable_table;
 
 mod dist;
 
+mod archives;
+
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
