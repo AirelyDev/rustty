@@ -2278,15 +2278,23 @@ impl Inspector {
 
     // pub fn updateContentScale(self: *Inspector, x: f64, y: f64) void { ... }
     //
-    // PORT NOTE (blueprint E4: REAL, non-GPU): the one pure-Rust effect — caching
-    // `content_scale` (read by `cursorPosCallback`'s pixel scaling) — is ported LIVE.
-    // The dcimgui style-scaling side effect (`ImGuiStyle_ScaleAllSizes` etc.) is a
-    // documented Phase-3 leaf, elided until dcimgui-sys is wired; the method does NOT
-    // panic.
+    // PORT NOTE (WS6 T3 — Phase-3 leaf CLOSED): both halves are now LIVE. The
+    // pure-Rust half caches `content_scale` (read by `cursorPosCallback`'s pixel
+    // scaling); the dcimgui half default-constructs an `ImGuiStyle` through the
+    // `ext.cpp` constructor shim (a zero-initialized struct is NOT a faithful
+    // substitute — Dear ImGui's `ImGuiStyle::ImGuiStyle()` sets non-zero defaults
+    // such as `CurveTessellationTol`), scales it, and overwrites the context's
+    // active style. Scaling from a FRESH default style each call is what makes
+    // repeated calls idempotent rather than compounding.
     pub fn updateContentScale(&mut self, x: f64, y: f64) {
         // _ = y;   (the vertical scale is unused — `x` drives both axes)
         let _ = y;
-        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);   [dcimgui leaf — deferred]
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        //
+        // INV-11: every dcimgui touch is gated on this Inspector's own context.
+        // SAFETY: `self.ig_ctx` is the live context created by `Inspector::init`
+        // and destroyed only by `Inspector::deinit`.
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
 
         // Cache our scale because we use it for cursor position calculations.
         // self.content_scale = x;
@@ -2300,7 +2308,24 @@ impl Inspector {
         // cimgui.c.ImGuiStyle_ScaleAllSizes(&style, @floatCast(x));
         // const active_style = cimgui.c.ImGui_GetStyle();
         // active_style.* = style;
-        // [dcimgui style-scaling leaf — deferred until dcimgui-sys is wired (Phase-3)]
+        //
+        // PORT NOTE: Zig's `var style: ImGuiStyle = undefined` -> `MaybeUninit`,
+        // initialized in place by the `ext.cpp` constructor shim before any read
+        // (so `assume_init` is sound). `@floatCast(x)` -> `x as f32`.
+        // `active_style.* = style` -> a raw-pointer write; `ImGuiStyle` is a POD
+        // C struct with no `Drop`, so overwriting through the pointer is the
+        // exact Zig semantics.
+        // SAFETY: the current context was set above, so `ImGui_GetStyle()`
+        // returns this Inspector's live style; `style` is fully initialized by
+        // the constructor shim before it is scaled and written back.
+        unsafe {
+            let mut style = core::mem::MaybeUninit::<dcimgui_sys::ImGuiStyle>::uninit();
+            dcimgui_sys::ImGuiStyle_ImGuiStyle(style.as_mut_ptr());
+            let mut style = style.assume_init();
+            dcimgui_sys::ImGuiStyle_ScaleAllSizes(&raw mut style, x as f32);
+            let active_style = dcimgui_sys::ImGui_GetStyle();
+            core::ptr::write(active_style, style);
+        }
     }
 
     // pub fn updateSize(self: *Inspector, width: u32, height: u32) void { ... }
@@ -3075,5 +3100,108 @@ mod host_view_tests {
     fn non_darwin_returns_null() {
         assert!(platform_host_view(&Platform::MacOS(MacOS)).is_null());
         assert!(platform_host_view(&Platform::IOS(IOS)).is_null());
+    }
+}
+
+#[cfg(test)]
+mod inspector_style_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Dear ImGui's "current context" is a plain global (`GImGui`), and the
+    /// default `cargo test` harness runs each `#[test]` on its own thread.
+    /// Serialize every test that creates/destroys a context — same discipline
+    /// as `dcimgui-sys`'s own `IMGUI_CONTEXT_TEST_LOCK`.
+    static IMGUI_CONTEXT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Known-answer test for `Inspector::updateContentScale` (oracle
+    /// `embedded.zig:1111-1126`): the active ImGui style must be REPLACED with
+    /// a default-constructed style scaled by `x`.
+    ///
+    /// Known answers are Dear ImGui 1.92.5's own `ImGuiStyle::ImGuiStyle()`
+    /// defaults (`vendor/imgui/imgui.cpp`) run through `ScaleAllSizes`, which
+    /// is `ImTrunc(value * scale_factor)`:
+    ///   * `WindowPadding`  (8, 8)   -> (16, 16)
+    ///   * `ScrollbarSize`   14.0    -> 28.0
+    ///   * `GrabMinSize`     12.0    -> 24.0
+    ///
+    /// `updateContentScale` never dereferences `self.surface`, so the test
+    /// constructs an `Inspector` with a null surface back-pointer.
+    #[test]
+    fn update_content_scale_rescales_active_imgui_style() {
+        let _guard = IMGUI_CONTEXT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // SAFETY: single-threaded under the lock above; every pointer handed
+        // to Dear ImGui is a live local, and the context is destroyed below.
+        unsafe {
+            let ig_ctx = dcimgui_sys::ImGui_CreateContext(core::ptr::null_mut());
+            assert!(!ig_ctx.is_null(), "ImGui_CreateContext(NULL) returned null");
+
+            let mut inspector = Inspector {
+                surface: core::ptr::null_mut(),
+                ig_ctx,
+                backend: None,
+                content_scale: 1.0,
+                instant: None,
+            };
+
+            // Baseline: the fresh context carries the UNSCALED defaults.
+            let style = dcimgui_sys::ImGui_GetStyle();
+            assert!(!style.is_null(), "ImGui_GetStyle() returned null");
+            assert_eq!((*style).WindowPadding.x, 8.0, "baseline WindowPadding.x");
+            assert_eq!((*style).ScrollbarSize, 14.0, "baseline ScrollbarSize");
+            assert_eq!((*style).GrabMinSize, 12.0, "baseline GrabMinSize");
+
+            inspector.updateContentScale(2.0, 2.0);
+
+            // The pure-Rust effect: the cached scale used by cursorPosCallback.
+            assert_eq!(inspector.content_scale, 2.0, "cached content_scale");
+
+            // The dcimgui effect: the ACTIVE style is the scaled default style.
+            let style = dcimgui_sys::ImGui_GetStyle();
+            assert_eq!((*style).WindowPadding.x, 16.0, "scaled WindowPadding.x");
+            assert_eq!((*style).WindowPadding.y, 16.0, "scaled WindowPadding.y");
+            assert_eq!((*style).ScrollbarSize, 28.0, "scaled ScrollbarSize");
+            assert_eq!((*style).GrabMinSize, 24.0, "scaled GrabMinSize");
+
+            dcimgui_sys::ImGui_DestroyContext(ig_ctx);
+        }
+    }
+
+    /// Scaling is computed from a FRESH default style each call (the oracle
+    /// default-constructs `style` every time), so calling twice with the same
+    /// factor is idempotent — it must NOT compound to 4x.
+    #[test]
+    fn update_content_scale_is_idempotent_not_compounding() {
+        let _guard = IMGUI_CONTEXT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // SAFETY: as above.
+        unsafe {
+            let ig_ctx = dcimgui_sys::ImGui_CreateContext(core::ptr::null_mut());
+            assert!(!ig_ctx.is_null(), "ImGui_CreateContext(NULL) returned null");
+
+            let mut inspector = Inspector {
+                surface: core::ptr::null_mut(),
+                ig_ctx,
+                backend: None,
+                content_scale: 1.0,
+                instant: None,
+            };
+
+            inspector.updateContentScale(2.0, 2.0);
+            inspector.updateContentScale(2.0, 2.0);
+
+            let style = dcimgui_sys::ImGui_GetStyle();
+            assert_eq!(
+                (*style).WindowPadding.x, 16.0,
+                "WindowPadding.x must stay 16 (not compound to 32)"
+            );
+
+            dcimgui_sys::ImGui_DestroyContext(ig_ctx);
+        }
     }
 }
