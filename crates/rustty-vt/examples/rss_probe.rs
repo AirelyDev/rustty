@@ -109,7 +109,9 @@ fn main() {
         use rustty_datastruct::intrusive_linked_list::Node as _;
         let mut node = list.pages.first;
         while !node.is_null() {
-            let page = unsafe { &(*node).data };
+            // Metadata-only: the mapping is all this probe needs, and using
+            // `Node::page` here would restore any compressed page (WS7 B5).
+            let page = unsafe { &*rustty_vt::pagelist::Node::metadata(node) };
             let ptr = page.memory_ptr() as *mut u8;
             let len = page.memory_len();
             let mut off = 0usize;
