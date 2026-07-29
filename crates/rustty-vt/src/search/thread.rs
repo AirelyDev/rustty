@@ -2425,10 +2425,6 @@ mod tests {
 
     /// PORTS: oracle 73ac36fa5
     /// `test "select after active screen removal"`
-    #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): rustc/Miri interpreter ICE (operand.rs:160, upstream bug), not a soundness signal; covered natively + by ASan"
-    )]
     #[test]
     fn select_after_active_screen_removal() {
         // const alloc = testing.allocator;
@@ -2438,14 +2434,20 @@ mod tests {
         // var t: Terminal = try .init(alloc, .{ .cols = 20, .rows = 2 });
         // defer t.deinit(alloc);
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(20, 2, 10_000)).unwrap();
+        // SB: the searcher and the `Thread` hold a raw `*mut Terminal` ACROSS the
+        // screen mutations below. Every mutation must therefore go through THIS
+        // pointer's own tag; a `&mut t` reborrow (`t.switch_screen(..)`) is a
+        // Unique retag that invalidates the stored alias, which Miri proves is
+        // Stacked-Borrows UB (memory: shaper-hook-sb-clean-interleave).
+        let t_ptr: *mut Terminal = core::ptr::addr_of_mut!(t);
 
         // _ = try t.switchScreen(.alternate);
-        t.switch_screen(ScreenSetKey::Alternate).unwrap();
+        unsafe { (*t_ptr).switch_screen(ScreenSetKey::Alternate) }.unwrap();
 
         // var search: Search = try .init(alloc, "needle");
         // search.feed(alloc, &t);
         let mut search: Search = Search::init(alloc, b"needle").unwrap();
-        search.feed(alloc, &mut t as *mut Terminal);
+        search.feed(alloc, t_ptr);
         // try testing.expectEqual(ScreenSet.Key.alternate, search.last_screen.key);
         assert_eq!(search.last_screen.key, ScreenSetKey::Alternate);
         // try testing.expect(search.screens.contains(.alternate));
@@ -2467,7 +2469,7 @@ mod tests {
             alloc,
             Options {
                 mutex: &mutex as *const rustty_zigstd::thread::Mutex,
-                terminal: &mut t as *mut Terminal,
+                terminal: t_ptr,
                 event_cb: None,
                 event_userdata: core::ptr::null_mut(),
             },
@@ -2477,8 +2479,8 @@ mod tests {
 
         // _ = try t.switchScreen(.primary);
         // t.screens.remove(alloc, .alternate);
-        t.switch_screen(ScreenSetKey::Primary).unwrap();
-        t.screens.remove(alloc, ScreenSetKey::Alternate);
+        unsafe { (*t_ptr).switch_screen(ScreenSetKey::Primary) }.unwrap();
+        unsafe { (*t_ptr).screens.remove(alloc, ScreenSetKey::Alternate) };
 
         // try thread.select(.next);
         thread.select(super::super::screen::Select::Next).unwrap();
@@ -2499,6 +2501,6 @@ mod tests {
             .contains(ScreenSetKey::Alternate));
 
         thread.deinit();
-        t.deinit(alloc);
+        unsafe { (*t_ptr).deinit(alloc) };
     }
 }
