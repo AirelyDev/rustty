@@ -1927,9 +1927,9 @@ impl Inspector {
     // `!Inspector` (its only error is `error.OutOfMemory` from `ImGui_CreateContext`)
     // maps to `Result<Inspector, ApprtError>`. `CoreInspector` is
     // `rustty_inspector::Inspector`; `activateInspector` is a core `Surface` method
-    // (still a Phase-3 leaf — Task 6 — so opening the inspector aborts THERE for now,
-    // one step deeper than the previous init-sentinel guard; the reference catches
-    // its error and continues, which Task 6 restores).
+    // and is LIVE (it heap-boxes the core inspector, publishes it onto
+    // `renderer_state` under the mutex, and notifies renderer + termio). Its
+    // error is swallowed here exactly as the reference does.
     pub fn init(surface: *mut Surface) -> Result<Inspector, ApprtError> {
         // const ig_ctx = cimgui.c.ImGui_CreateContext(null) orelse return error.OutOfMemory;
         let ig_ctx = unsafe { dcimgui_sys::ImGui_CreateContext(core::ptr::null_mut()) };
@@ -1981,7 +1981,8 @@ impl Inspector {
     // PORT NOTE (Task 4): core `deactivateInspector` + the ImGui context teardown
     // (shut down the Metal backend if one was initialized, then destroy the
     // context). Reached by [`Surface::freeInspector`]. `deactivateInspector` is a
-    // core `Surface` method (still a Phase-3 leaf — Task 6).
+    // core `Surface` method and is LIVE (it clears the renderer-state aliases
+    // under the mutex, notifies renderer + termio, and frees the core inspector).
     pub fn deinit(&mut self) {
         // self.surface.core_surface.deactivateInspector();
         unsafe { (*self.surface).core_surface.deactivateInspector() };

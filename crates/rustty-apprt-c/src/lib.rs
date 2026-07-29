@@ -28,13 +28,13 @@
 //! `_binding_action`), the `_complete_clipboard_request` sink, and the 10 inspector
 //! exports (`_surface_inspector`/`_inspector_free`/`_set_size`/`_set_content_scale`/
 //! `_mouse_button`/`_mouse_pos`/`_mouse_scroll`/`_key`/`_text`/`_set_focus`). All of
-//! E8/E9 need a live surface (and the per-inspector sinks a live inspector, itself a
-//! Phase-3 dcimgui leaf), so they link now and reach the leaf only when driven. E10
+//! E8/E9 need a live surface (and the per-inspector sinks a live inspector, whose
+//! dcimgui `Inspector::init` is LIVE as of WS6). E10
 //! lands the misc + Darwin-gated tail — `rustty_set_window_background_blur` (a macOS
 //! objc/CGS leaf; non-macOS no-op) plus the six `#[cfg(target_os = "macos")]` Darwin
 //! exports (`_surface_set_display_id`/`_quicklook_font`/`_quicklook_word`/
 //! `_inspector_metal_init`/`_metal_render`/`_metal_shutdown`): renderer/xev/coretext/
-//! objc/Metal Phase-3 leaves (the metal trio delegate to the E4 backend leaves). With
+//! objc/Metal seams (the metal trio delegate to the E4 backend, LIVE as of WS6). With
 //! E10 ALL 71 `ghostty_*` (`rustty_*`) exports exist (71 == 71 vs the reference).
 //! cbindgen header generation + the C compile+link smoke KAT land in E11
 //! (EMBEDDED_BLUEPRINT §3/§6/§7).
@@ -2037,12 +2037,11 @@ pub unsafe extern "C" fn rustty_surface_ime_point(
 // `Target::Surface`) or the core surface directly; the clipboard sink forwards to
 // the backend `Surface::completeClipboardRequest` (E3); the inspector sinks forward
 // to the E4 `Inspector` methods. Every export here needs a LIVE surface (created via
-// `rustty_surface_new`, the Phase-3 GPU-leaf boundary), and the inspector sinks
-// additionally need a LIVE `Inspector` — `ghostty_surface_inspector` reaches the
-// Phase-3 dcimgui `Inspector::init` leaf, so no inspector can yet exist and the
-// per-inspector sinks reach the E4 `unimplemented!()` methods when driven. All link
-// now and reach the leaf only when exercised; NO new `unimplemented!()` leaf is added
-// in apprt-c (DEFERRALS.md, E7/E8 precedent).
+// `rustty_surface_new`), and the inspector sinks additionally need a LIVE
+// `Inspector` — which `rustty_surface_inspector` now really builds: the whole E4
+// chain (`Inspector::{init,deinit,initMetal,renderMetal}`, `Backend::deinit`, the
+// six input sinks and `newFrame`) is LIVE as of WS6. NO `unimplemented!()` leaf is
+// added in apprt-c (DEFERRALS.md, E7/E8 precedent).
 // ===========================================================================
 
 /// C: rustty_surface_request_close
@@ -2289,9 +2288,11 @@ pub unsafe extern "C" fn rustty_surface_inspector(ptr: *mut Surface) -> *mut Ins
     // };
     //
     // PORT NOTE: `?*Inspector` → a nullable `*mut Inspector` (cbindgen emits the raw
-    // pointer; `null` for the error case). `initInspector` reaches the Phase-3 dcimgui
-    // `Inspector::init` leaf at RUNTIME (EMBEDDED_BLUEPRINT §1) — so a live inspector
-    // cannot yet be built; this export links now and panics in that leaf when driven.
+    // pointer; `null` for the error case). `initInspector` -> `Inspector::init` is
+    // FULLY LIVE (WS6): it creates the per-Surface Dear ImGui context, runs
+    // `CoreInspector::setup()`, and activates the core inspector. The `null` return
+    // is the reference's own init-failure path (the macOS host null-guards it in
+    // SurfaceView_AppKit.swift), NOT a port placeholder.
     // SAFETY: `ptr` validity is the caller's contract.
     match unsafe { (*ptr).initInspector() } {
         Ok(v) => v,
@@ -2917,11 +2918,12 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
 //
 // export fn ghostty_inspector_metal_init(ptr: *Inspector, device: objc.c.id) bool { ... }
 //
-// PORT NOTE: delegates to the E4 backend `Inspector::initMetal` (a Phase-3
-// objc/Metal + dcimgui `ImGui_ImplMetal_Init` leaf; DEFERRALS.md E4 item 2). The
-// reference `.fromId(device)` wraps the raw objc id in an `objc.Object`; rustty's
-// `initMetal` takes the opaque `*mut c_void` directly (no objc dep this
-// milestone). No new leaf in apprt-c — the panic is in the E4 backend leaf.
+// PORT NOTE: delegates to the backend `Inspector::initMetal`, which is LIVE
+// (WS6): it sets the Inspector's ImGui context, tears down any prior backend,
+// and calls dcimgui's `ImGui_ImplMetal_Init`. The reference `.fromId(device)`
+// wraps the raw objc id in an `objc.Object`; rustty's `initMetal` takes the
+// opaque `*mut c_void` directly (the id crosses the C ABI untyped) and releases
+// the host's +1 retain on every exit path via its `Defer` guard.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_inspector_metal_init(
@@ -2942,11 +2944,12 @@ pub unsafe extern "C" fn rustty_inspector_metal_init(
 //
 // export fn ghostty_inspector_metal_render(ptr: *Inspector, command_buffer: objc.c.id, descriptor: objc.c.id) void { ... }
 //
-// PORT NOTE: delegates to the E4 backend `Inspector::renderMetal` (a Phase-3
-// objc/Metal render + dcimgui `ImplMetal_NewFrame`/`RenderDrawData` leaf;
-// DEFERRALS.md E4 item 2), catching + logging its error exactly as the reference
-// `catch |err| { log.err(...); return; }`. The two `.fromId(...)` objc-id wraps →
-// opaque `*mut c_void`. No new leaf in apprt-c — the panic is in the E4 backend.
+// PORT NOTE: delegates to the backend `Inspector::renderMetal`, which is LIVE
+// (WS6): the double-frame ImGui loop, the `rustty_inspector::Inspector::render`
+// widget aggregate, the `MTLRenderCommandEncoder` construction, and
+// `ImGui_ImplMetal_RenderDrawData`. Catches + logs its error exactly as the
+// reference `catch |err| { log.err(...); return; }`. The two `.fromId(...)`
+// objc-id wraps → opaque `*mut c_void`.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_inspector_metal_render(
@@ -2974,11 +2977,15 @@ pub unsafe extern "C" fn rustty_inspector_metal_render(
 //
 // export fn ghostty_inspector_metal_shutdown(ptr: *Inspector) void { ... }
 //
-// PORT NOTE: tears down the Metal backend if one was initialized. `Backend::deinit`
-// is the E4 Phase-3 leaf (dcimgui `ImGui_ImplMetal_Shutdown`); it runs only when a
-// backend was actually set, which cannot happen this milestone (`initMetal` is a
-// leaf), so on a live inspector this is a no-op (`backend == None`). Faithful to
-// the reference `if (ptr.backend) |v| { v.deinit(); ptr.backend = null; }`.
+// PORT NOTE: tears down the Metal backend if one was initialized.
+// `Backend::deinit` is LIVE (WS6) and calls dcimgui's `ImGui_ImplMetal_Shutdown`
+// on the `.metal` arm. Faithful to the reference
+// `if (ptr.backend) |v| { v.deinit(); ptr.backend = null; }`.
+//
+// ABI NOTE (R1): the reference's own `ghostty.h` declares this `bool` while
+// `embedded.zig`'s `export fn` returns `void`; `include/rustty-embed.h` mirrors
+// that discrepancy verbatim rather than "fixing" it. The Swift host never calls
+// this export, so nothing reads the return.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_inspector_metal_shutdown(ptr: *mut Inspector) {
