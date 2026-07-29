@@ -480,6 +480,30 @@ fn selection_string_tw_check(point: SelectionStringFp) -> Result<(), OutOfMemory
     SELECTION_STRING_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
+// PORT NOTE: `04810273a`'s rollback test uses `std.testing.FailingAllocator` on
+// `alloc.create(Hyperlink)`. The Rust analogue of that allocation is the
+// `Box::new(source.dupe())` in `start_hyperlink_once`, which aborts rather than
+// returning on OOM, so the injectable seam is a tripwire fail point (same idiom
+// as `SELECTION_STRING_TW` above).
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum StartHyperlinkFp {
+    DupeLink,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static START_HYPERLINK_TW:
+        core::cell::RefCell<rustty_util::tripwire::Module<StartHyperlinkFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn start_hyperlink_tw_check(point: StartHyperlinkFp) -> Result<(), OutOfMemory> {
+    START_HYPERLINK_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 pub struct SelectLine<'a> {
     /// The pin of some part of the line to select.
     pub pin: Pin,
@@ -3052,7 +3076,9 @@ impl Screen {
                 hyperlink::HyperlinkId::Explicit(id.to_vec())
             } else {
                 let implicit = self.cursor.hyperlink_implicit_id;
-                self.cursor.hyperlink_implicit_id += 1;
+                // defer self.cursor.hyperlink_implicit_id +%= 1;
+                self.cursor.hyperlink_implicit_id =
+                    self.cursor.hyperlink_implicit_id.wrapping_add(1);
                 hyperlink::HyperlinkId::Implicit(implicit)
             },
         };
@@ -3069,7 +3095,9 @@ impl Screen {
                 Err(StartHyperlinkOnceError::OutOfMemory) => {
                     // An actual self.alloc OOM is a fatal error.
                     if implicit_inc {
-                        self.cursor.hyperlink_implicit_id -= 1;
+                        // .implicit => self.cursor.hyperlink_implicit_id -%= 1
+                        self.cursor.hyperlink_implicit_id =
+                            self.cursor.hyperlink_implicit_id.wrapping_sub(1);
                     }
                     return Err(pagelist::grow::IncreaseCapacityError::OutOfMemory);
                 }
@@ -3090,7 +3118,9 @@ impl Screen {
                         self.increase_capacity(unsafe { (*self.cursor.page_pin).node }, adj)
                     {
                         if implicit_inc {
-                            self.cursor.hyperlink_implicit_id -= 1;
+                            // .implicit => self.cursor.hyperlink_implicit_id -%= 1
+                        self.cursor.hyperlink_implicit_id =
+                            self.cursor.hyperlink_implicit_id.wrapping_sub(1);
                         }
                         return Err(e);
                     }
@@ -3108,16 +3138,20 @@ impl Screen {
         &mut self,
         source: hyperlink::Hyperlink,
     ) -> Result<(), StartHyperlinkOnceError> {
-        // End any prior hyperlink
-        self.end_hyperlink();
-
         // Allocate our new Hyperlink entry in non-page memory. This
         // lets us quickly get access to URI, ID.
         // PORT NOTE: `alloc.create(Hyperlink)` + `link.* = source.dupe(alloc)`
         // maps to a heap `Box`; `Box::into_raw` yields the `*mut Hyperlink` the
         // cursor stores. On the insert-error path we reclaim the box (mirroring
         // the reference's `errdefer alloc.destroy(link)` / `link.deinit`).
+        #[cfg(test)]
+        start_hyperlink_tw_check(StartHyperlinkFp::DupeLink)
+            .map_err(|_| StartHyperlinkOnceError::OutOfMemory)?;
         let link: *mut hyperlink::Hyperlink = Box::into_raw(Box::new(source.dupe()));
+
+        // End any prior hyperlink only after duplicating the new value. The
+        // source slices are allowed to reference our current hyperlink.
+        self.end_hyperlink();
 
         // Insert the hyperlink into page memory
         let page: *mut Page =
@@ -11979,6 +12013,90 @@ mod tests {
             let page = unsafe { &(*(*s.cursor.page_pin).node).data };
             assert_eq!(0usize, page.hyperlink_set.count());
         }
+        s.deinit();
+    }
+
+    // test "Screen: hyperlink accepts its current values"
+    #[test]
+    fn screen_hyperlink_accepts_its_current_values() {
+        let mut s = mkscreen(5, 5, 0);
+
+        s.start_hyperlink(b"http://example.com", Some(b"current"))
+            .unwrap();
+
+        // PORT NOTE: the reference passes `current.uri` / `current.id.explicit`
+        // straight back into `s.startHyperlink`. Rust's borrow checker forbids
+        // holding `&s.cursor.hyperlink` across the `&mut self` call, so we read
+        // the current values through the RAW pointer the cursor already stores
+        // (`cursor.hyperlink: Option<*mut Hyperlink>`) — the same aliasing the
+        // reference test exercises, expressed in the way this crate allows.
+        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        let (uri_ptr, uri_len) = unsafe { ((*link).uri.as_ptr(), (*link).uri.len()) };
+        let (id_ptr, id_len) = match unsafe { &(*link).id } {
+            crate::hyperlink::HyperlinkId::Explicit(v) => (v.as_ptr(), v.len()),
+            crate::hyperlink::HyperlinkId::Implicit(_) => unreachable!(),
+        };
+        let uri: &[u8] = unsafe { core::slice::from_raw_parts(uri_ptr, uri_len) };
+        let id: &[u8] = unsafe { core::slice::from_raw_parts(id_ptr, id_len) };
+        s.start_hyperlink(uri, Some(id)).unwrap();
+
+        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        assert_eq!(b"http://example.com".as_slice(), unsafe { &(&(*link).uri)[..] });
+        match unsafe { &(*link).id } {
+            crate::hyperlink::HyperlinkId::Explicit(v) => {
+                assert_eq!(b"current".as_slice(), &v[..])
+            }
+            crate::hyperlink::HyperlinkId::Implicit(_) => unreachable!(),
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: implicit hyperlink ID wraps" (success half)
+    #[test]
+    fn screen_implicit_hyperlink_id_wraps() {
+        let mut s = mkscreen(5, 5, 0);
+
+        s.cursor.hyperlink_implicit_id = size::OffsetInt::MAX;
+        s.start_hyperlink(b"http://example.com", None).unwrap();
+
+        assert_eq!(0 as size::OffsetInt, s.cursor.hyperlink_implicit_id);
+        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        match unsafe { &(*link).id } {
+            crate::hyperlink::HyperlinkId::Implicit(v) => {
+                assert_eq!(size::OffsetInt::MAX, *v)
+            }
+            crate::hyperlink::HyperlinkId::Explicit(_) => unreachable!(),
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: implicit hyperlink ID wraps" (allocation-failure rollback half)
+    #[test]
+    fn screen_implicit_hyperlink_id_wrap_rolls_back_on_allocation_failure() {
+        let mut s = mkscreen(5, 5, 0);
+
+        s.cursor.hyperlink_implicit_id = size::OffsetInt::MAX;
+        // PORT NOTE: the reference swaps in a `testing.FailingAllocator`; this
+        // crate's failure-injection seam is the tripwire fail point at the
+        // `Box::new(source.dupe())` allocation in `start_hyperlink_once`.
+        START_HYPERLINK_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(StartHyperlinkFp::DupeLink, OutOfMemory)
+        });
+        assert_eq!(
+            Err(pagelist::grow::IncreaseCapacityError::OutOfMemory),
+            s.start_hyperlink(b"http://example.com", None)
+        );
+        START_HYPERLINK_TW.with(|tw| {
+            tw.borrow_mut()
+                .end(rustty_util::tripwire::ResetMode::Reset)
+                .unwrap()
+        });
+
+        assert_eq!(size::OffsetInt::MAX, s.cursor.hyperlink_implicit_id);
+
         s.deinit();
     }
 
