@@ -183,6 +183,10 @@ pub enum Command {
 
     KittyClipboardProtocol(KittyClipboardProtocol),
 
+    /// Kitty drag and drop protocol (OSC 72)
+    /// https://sw.kovidgoyal.net/kitty/drag-and-drop-protocol/
+    KittyDndProtocol(KittyDndProtocol),
+
     /// OSC 3008. Hierarchical context signalling (UAPI spec).
     /// https://uapi-group.org/specifications/specs/osc_context/
     ContextSignal(parsers::context_signal::Command),
@@ -260,6 +264,7 @@ impl Command {
             Command::ConemuComment(_) => CommandKey::ConemuComment,
             Command::KittyTextSizing(_) => CommandKey::KittyTextSizing,
             Command::KittyClipboardProtocol(_) => CommandKey::KittyClipboardProtocol,
+            Command::KittyDndProtocol(_) => CommandKey::KittyDndProtocol,
             Command::ContextSignal(_) => CommandKey::ContextSignal,
         }
     }
@@ -298,6 +303,7 @@ pub enum CommandKey {
     ConemuComment,
     KittyTextSizing,
     KittyClipboardProtocol,
+    KittyDndProtocol,
     ContextSignal,
 }
 
@@ -308,6 +314,10 @@ pub type SemanticPrompt = parsers::semantic_prompt::Command;
 /// PORT NOTE: `parsers.kitty_clipboard_protocol.OSC` re-exported as
 /// `Command.KittyClipboardProtocol`.
 pub type KittyClipboardProtocol = parsers::kitty_clipboard_protocol::OSC;
+
+/// PORT NOTE: `parsers.kitty_dnd_protocol.OSC` re-exported as
+/// `Command.KittyDndProtocol`.
+pub type KittyDndProtocol = parsers::kitty_dnd_protocol::OSC;
 
 /// PORT NOTE: `Command.ProgressReport` — the ConEmu progress report payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -540,6 +550,7 @@ pub enum State {
     S52,
     S55,
     S66,
+    S72,
     S77,
     S104,
     S110,
@@ -731,6 +742,7 @@ impl<'a> Parser<'a> {
             | Command::ShowDesktopNotification { .. }
             | Command::KittyTextSizing(_)
             | Command::KittyClipboardProtocol(_)
+            | Command::KittyDndProtocol(_)
             | Command::ContextSignal(_) => {}
         }
 
@@ -1016,7 +1028,16 @@ impl<'a> Parser<'a> {
 
             State::S7 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
+                b'2' => self.state = State::S72,
                 b'7' => self.state = State::S77,
+                _ => self.state = State::Invalid,
+            },
+
+            // The oracle uses allocating-mode capture here — same as
+            // `S52`/`S66`/`S5522` — because the protocol allows payloads up to
+            // 4096 bytes per chunk plus metadata, exceeding the fixed buffer.
+            State::S72 => match c {
+                b';' => self.capture_trailing(CaptureMode::Allocating),
                 _ => self.state = State::Invalid,
             },
 
@@ -1115,6 +1136,8 @@ impl<'a> Parser<'a> {
             State::S6 => None,
 
             State::S66 => parsers::kitty_text_sizing::parse(self, terminator_ch),
+
+            State::S72 => parsers::kitty_dnd_protocol::parse(self, terminator_ch),
 
             State::S77 => None,
 
