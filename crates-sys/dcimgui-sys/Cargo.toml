@@ -71,3 +71,30 @@ freetype-sys = { path = "../freetype-sys" }
 # (`dcimgui.h`).
 cc = "1"
 bindgen = "0.72"
+
+# TEST-ONLY Metal bindings for `tests/metal_offscreen.rs` (the WS6 Phase-A KAT
+# proving `imgui_impl_metal.mm` actually rasterizes). DEV-dependencies, so they
+# never enter the runtime graph — dcimgui-sys stays a pure -sys leaf and the
+# acyclic gate is untouched. Target-gated to macOS exactly like the Metal arm of
+# build.rs; a Linux/GTK build resolves nothing here. Versions match the rest of
+# the workspace (rustty-renderer/rustty-apprt/rustty-apprt-c all pin objc2 0.6 /
+# objc2-metal 0.3); the per-type objc2-metal feature list mirrors
+# rustty-renderer's, minus the features that crate needs only for its own
+# pipeline/IOSurface paths.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = { version = "0.6" }
+objc2-metal = { version = "0.3", default-features = false, features = [
+    "MTLAllocation",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLPixelFormat",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLResource",
+    "MTLTexture",
+    "MTLTypes",
+    "block2",
+    "dispatch2",
+] }
