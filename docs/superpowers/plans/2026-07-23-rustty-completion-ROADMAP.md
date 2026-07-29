@@ -82,6 +82,12 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 | **WS13 i18n & docs** | `2026-07-23-ws13-i18n-docs.md` | Vendor the `.po` corpus + msgfmt step (real `share/locale`); mdgen man-page pipeline (markdown→roff); `rustty_translate` live. |
 | **WS14 wasm/WebGL renderer** | `2026-07-23-ws14-wasm-webgl.md` | Port the WebGL backend + wasm entry (`main_wasm`, `Atlas.Wasm` C-ABI/JS surface); build `wasm32` target green; **validate live in Chrome via the browser automation tools** (load harness page, screenshot the rendered canvas, assert glyph output). |
 
+## Housekeeping / project-health backlog (found during the program, not part of the original scope)
+
+| WS | Plan file | Scope |
+|----|-----------|-------|
+| **WS18 release-lane repair** | `TBD — author at start` | `cargo test --release` has **12 failing tests on main** (independently corroborated during the WS7 Phase B review, and present verbatim at `a21f965` — NOT caused by Phase B). Root cause: `rustty_util::tripwire::enabled()` is deliberately `cfg!(debug_assertions)` (the faithful equivalent of Zig's `builtin.is_test`, per its PORT NOTE), so in `--release` the fail-points never trip and every test that expects an injected failure fails. The design is correct; the *tests* are simply not gated to match. Fix: mark the affected tests `#[cfg_attr(not(debug_assertions), ignore)]` — the precedent WS7 Phase B already established for its own new tripwire test. Then make `cargo test --release` a real, green gate so this cannot regress. Scope check: confirm all 12 are genuinely tripwire/allocation-failure tests before blanket-ignoring anything — do NOT silence a real release-only bug. |
+
 ## VM track (Linux — addressable NOW via `ssh rvm`, not deferred)
 
 | WS | Plan file | Scope |
