@@ -41,10 +41,19 @@ for i in $(seq 1 "$N"); do
     echo "--- test output so far ---"
     cat "$log"
     echo "--- cleanup ---"
-    # Kill the harness parent; the kernel then reaps whatever children it can.
-    kill -9 "$pid" 2>/dev/null
+    # Killing ONLY the harness parent is NOT enough: the wedged `?Es` children
+    # can keep the (orphaned, reparented-to-launchd) parent alive indefinitely —
+    # observed surviving for days. SIGKILL the children too, then the parent,
+    # and re-verify in a loop.
+    for round in 1 2 3; do
+      kids="$(pgrep -P "$pid" 2>/dev/null)"
+      [ -n "$kids" ] && kill -9 $kids 2>/dev/null
+      kill -9 "$pid" 2>/dev/null
+      sleep 2
+      kill -0 "$pid" 2>/dev/null || break
+      echo "  (still alive after round $round; retrying)"
+    done
     wait "$pid" 2>/dev/null
-    sleep 2
   else
     wait "$pid"
     rc=$?
