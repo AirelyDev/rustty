@@ -4961,10 +4961,58 @@ impl Terminal {
     }
 }
 
+// PORT NOTE: upstream's `setTitle`/`setPwd` allocation-failure tests
+// (fdd255c78, 1d5b6f90e) use `std.testing.FailingAllocator`. This port's
+// `Allocator` is the infallible `allocator_api2::Global` handle, so the crate's
+// established failure-injection seam is a `rustty_util::tripwire` fail-point
+// module held in a `#[cfg(test)] thread_local!` (same idiom as `tabstops.rs`'s
+// `RESIZE_TW`, `screen.rs`'s `SELECTION_STRING_TW` and `pagelist/mod.rs`'s
+// `INIT_TW`). The single `Reserve` point sits exactly where the reference's
+// `ensureTotalCapacity` can fail, in both `set_pwd` and `set_title`.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum SetStringFp {
+    Reserve,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SET_STRING_TW:
+        core::cell::RefCell<rustty_util::tripwire::Module<SetStringFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+// `try setString_tw.check(point)`. Only compiled in test builds; the call sites
+// are `#[cfg(test)]`-gated so production `set_pwd`/`set_title` are unchanged,
+// mirroring the Zig `enabled = builtin.is_test` gate.
+#[cfg(test)]
+#[inline]
+fn set_string_tw_check(point: SetStringFp) -> Result<(), OutOfMemory> {
+    SET_STRING_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use allocator_api2::alloc::Global;
+
+    // Self-test for the terminal.rs tripwire seam introduced for the
+    // set_title/set_pwd allocation-failure tests (WS8 T5). Mirrors the
+    // tabstops.rs `RESIZE_TW` usage exactly.
+    #[test]
+    fn terminal_set_string_tripwire_seam_arms_and_resets() {
+        SET_STRING_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(SetStringFp::Reserve, OutOfMemory)
+        });
+        assert_eq!(Err(OutOfMemory), set_string_tw_check(SetStringFp::Reserve));
+        SET_STRING_TW.with(|tw| {
+            tw.borrow_mut()
+                .end(rustty_util::tripwire::ResetMode::Reset)
+                .unwrap()
+        });
+        assert_eq!(Ok(()), set_string_tw_check(SetStringFp::Reserve));
+    }
 
     // PORT NOTE: the reference tests call `init(alloc, .{ .cols = .., .rows = .. })`
     // and rely on `Options` field defaults (`max_scrollback = 10_000`,
