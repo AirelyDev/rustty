@@ -870,7 +870,7 @@ impl PageList {
             // we don't know if the source page has a standard size.
             let node = match Self::create_page_ext(
                 &mut pool,
-                unsafe { (*chunk.node).data.capacity },
+                super::CreatePage::new(unsafe { (*chunk.node).data.capacity }),
                 &mut page_serial,
                 Some(&mut page_size),
             ) {

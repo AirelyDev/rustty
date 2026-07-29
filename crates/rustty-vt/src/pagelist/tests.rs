@@ -25,7 +25,7 @@
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
-use super::{std_capacity, std_size, PageList, Pin, Viewport};
+use super::{std_capacity, std_size, Owned, PageList, Pin, Viewport};
 use crate::page::{Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
@@ -1729,22 +1729,109 @@ fn pagelist_grow_non_standard_page_prune_protection() {
     s.deinit();
 }
 
-// ref: test "PageList compact std_size page returns null"
+// ref: test "PageList compact pool page produces exact-size heap page"
 #[test]
-fn pagelist_compact_std_size_page_returns_null() {
+fn pagelist_compact_pool_page_produces_exact_size_heap_page() {
     let mut s = PageList::init(80, 24, Some(0)).unwrap();
 
-    // A freshly created page should be at std_size
+    // A freshly created page is pool-owned at std_size.
     let node = s.pages.first;
+    assert_eq!(unsafe { (*node).owned }, Owned::Pool);
     assert!(unsafe { (*node).data.memory_len } <= std_size());
+    let original_size = unsafe { (*node).data.size };
 
-    // compact should return null since there's nothing to compact
-    let result = s.compact(node).unwrap();
-    assert!(result.is_none());
+    // Compacting it should produce a much smaller exact-size heap page.
+    let new_node = s.compact(node).unwrap().unwrap();
+    assert_eq!(unsafe { (*new_node).owned }, Owned::Heap);
+    assert!(unsafe { (*new_node).data.memory_len } < std_size());
+    assert_eq!(original_size.rows, unsafe { (*new_node).data.size.rows });
+    assert_eq!(original_size.cols, unsafe { (*new_node).data.size.cols });
+    assert!(core::ptr::eq(new_node, s.pages.first));
 
-    // Page should still be the same
-    assert!(core::ptr::eq(node, s.pages.first));
+    // Our page size accounting should exactly match the compacted page since it
+    // is the only page in the list.
+    assert_eq!(unsafe { (*new_node).data.memory_len }, s.page_size);
 
+    // Compacting again should be a no-op since it is already exact.
+    assert!(s.compact(new_node).unwrap().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList compact then grow allocates new page"
+#[test]
+fn pagelist_compact_then_grow_allocates_new_page() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Compact the only page. It now has no spare row capacity.
+    let node = s.compact(s.pages.first).unwrap().unwrap();
+    assert_eq!(unsafe { (*node).data.size.rows }, unsafe {
+        (*node).data.capacity.rows
+    });
+
+    // Growing must allocate a fresh standard page from the pool, exercising
+    // that a compacted page remains a valid live page.
+    let _ = s.grow().unwrap();
+    assert!(!core::ptr::eq(s.pages.first, s.pages.last));
+    assert_eq!(unsafe { (*s.pages.last).owned }, Owned::Pool);
+    assert_eq!(25usize, s.total_rows());
+
+    s.deinit();
+}
+
+// ref: test "PageList compact then reset frees heap pages"
+#[test]
+fn pagelist_compact_then_reset_frees_heap_pages() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    // Compact the only page so the list contains a sub-std_size heap-owned
+    // page.
+    let node = s.compact(s.pages.first).unwrap().unwrap();
+    assert_eq!(unsafe { (*node).owned }, Owned::Heap);
+    assert!(unsafe { (*node).data.memory_len } < std_size());
+
+    // Reset must free the heap page (the leak gate catches leaks and invalid
+    // frees) and rebuild from the pool.
+    s.reset();
+    assert_eq!(unsafe { (*s.pages.first).owned }, Owned::Pool);
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    s.deinit();
+}
+
+// ref: test "PageList compact then clone"
+#[test]
+fn pagelist_compact_then_clone() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Write a marker so we can verify contents survive.
+    {
+        let node = s.pages.first;
+        let rac = unsafe { (*node).data.get_row_and_cell(1, 2) };
+        unsafe { *rac.cell = cell_codepoint('X' as u32) };
+    }
+
+    // Compact so the source list contains a sub-std_size heap page.
+    let node = s.compact(s.pages.first).unwrap().unwrap();
+    assert_eq!(unsafe { (*node).owned }, Owned::Heap);
+    assert!(unsafe { (*node).data.memory_len } < std_size());
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(s.rows as usize, s2.total_rows());
+
+    // Verify the marker survived the clone.
+    {
+        let node2 = s2.pages.first;
+        let rac = unsafe { (*node2).data.get_row_and_cell(1, 2) };
+        assert_eq!('X' as u32, unsafe { (*rac.cell).codepoint() });
+    }
+
+    s2.deinit();
     s.deinit();
 }
 
@@ -1860,6 +1947,47 @@ fn pagelist_compact_oversized_page() {
 // cannot exercise (see `decommit_pool_item`). The reference allocates a
 // page-aligned `std_size` buffer from `testing.allocator`; the Rust port uses a
 // plain `Vec<u8>` because the test path never touches the pointer alignment.
+/// PORTS: oracle@main PageList.zig `Node.Owned` (16e4b5e98) — every node
+/// records how its backing memory was allocated. A heap-owned page smaller than
+/// the standard pool item must still be freed to the heap, never returned to
+/// the pool.
+#[test]
+fn pagelist_node_ownership_is_explicit() {
+    let mut s = PageList::init(80, 24, Some(1000)).unwrap();
+    // Every page allocated for a standard-capacity list is pool owned.
+    let mut it = s.pages.first;
+    while !it.is_null() {
+        assert_eq!(unsafe { (*it).owned }, Owned::Pool);
+        it = unsafe { (*it).next };
+    }
+    s.deinit();
+}
+
+/// An OVERSIZED page (grown past a pool item by capacity increases) is heap
+/// owned, and so is an UNDERSIZED compacted page. Neither may be inferred from
+/// the memory length.
+#[test]
+fn pagelist_oversized_page_is_heap_owned() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    // Increase capacity until the layout no longer fits a pool item.
+    let mut node = s.pages.first;
+    while unsafe { (*node).data.memory_len() } <= std_size() {
+        node = s
+            .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+    assert_eq!(unsafe { (*node).owned }, Owned::Heap);
+
+    // A compacted page is SMALLER than a pool item but still heap owned: the
+    // ownership tag is the only correct source of truth.
+    let compacted = s.compact(node).unwrap().unwrap();
+    assert!(unsafe { (*compacted).data.memory_len() } < std_size());
+    assert_eq!(unsafe { (*compacted).owned }, Owned::Heap);
+
+    s.deinit();
+}
+
 #[test]
 fn pagelist_decommit_pool_item_zeroes_the_dirty_region() {
     // PORT NOTE (WS7 B1): `decommit_pool_item` now delegates to
@@ -1904,7 +2032,7 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
 
     // Create a page and scribble over its entire backing memory, then destroy
     // it so the buffer returns to the pool free list.
-    let node = s.create_page(PageList::initial_capacity(80)).unwrap();
+    let node = s.create_page(super::CreatePage::new(PageList::initial_capacity(80))).unwrap();
     unsafe { (*node).data.size.rows = 1 };
     let mem_ptr = unsafe { (*node).data.memory_ptr };
     let mem_len = unsafe { (*node).data.memory_len };
@@ -1912,7 +2040,7 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
     s.destroy_node(node);
 
     // Reusing the buffer must produce a fully valid, zeroed page.
-    let node2 = s.create_page(PageList::initial_capacity(80)).unwrap();
+    let node2 = s.create_page(super::CreatePage::new(PageList::initial_capacity(80))).unwrap();
     assert_eq!(mem_ptr, unsafe { (*node2).data.memory_ptr });
     unsafe { (*node2).data.size.rows = (*node2).data.capacity.rows };
 
@@ -1935,32 +2063,24 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
     s.deinit();
 }
 
-// ref: test "PageList compact insufficient savings returns null"
+// ref: test "PageList compact after increaseCapacity"
 #[test]
-fn pagelist_compact_insufficient_savings_returns_null() {
+fn pagelist_compact_after_increase_capacity() {
     let mut s = PageList::init(80, 24, Some(0)).unwrap();
 
     let mut node = s.pages.first;
 
-    // Make the page slightly oversized (just one increase)
-    // This might not provide enough savings to justify compaction
+    // Grow the page capacity. The content is unchanged, so compaction should
+    // always shrink it back down to an exact-size heap page.
     node = s
         .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
         .unwrap();
+    let grown_len = unsafe { (*node).data.memory_len };
 
-    // If the page is still at or below std_size, compact returns null
-    if unsafe { (*node).data.memory_len } <= std_size() {
-        let result = s.compact(node).unwrap();
-        assert!(result.is_none());
-    } else {
-        // If it did grow beyond std_size, verify that compaction
-        // works or returns null based on savings calculation
-        let result = s.compact(node).unwrap();
-        // Either it compacted or determined insufficient savings
-        if let Some(new_node) = result {
-            assert!(unsafe { (*new_node).data.memory_len } < unsafe { (*node).data.memory_len });
-        }
-    }
+    let new_node = s.compact(node).unwrap().unwrap();
+    assert_eq!(unsafe { (*new_node).owned }, Owned::Heap);
+    assert!(unsafe { (*new_node).data.memory_len } < grown_len);
+    assert!(unsafe { (*new_node).data.memory_len } < std_size());
 
     s.deinit();
 }

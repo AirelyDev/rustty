@@ -136,7 +136,70 @@ pub struct Node {
     pub(crate) next: *mut Node,
     pub data: Page,
     pub serial: u64,
+
+    /// How the backing memory of the embedded Page was allocated. Pool-owned
+    /// memory is always a full standard-size item from the memory pool,
+    /// regardless of the page layout size. Heap-owned memory is allocated
+    /// directly with the page allocator and is exactly `Page.memory_len()`
+    /// bytes.
+    ///
+    /// This must never be inferred from the memory length: heap-owned pages can
+    /// be smaller than the standard size (e.g. compacted pages), and returning
+    /// one to the pool would corrupt it.
+    ///
+    /// This has no `Default` on purpose so that every construction site is
+    /// forced to make an explicit decision.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.owned` (16e4b5e98).
+    pub owned: Owned,
 }
+
+/// How a node's backing page memory was allocated.
+///
+/// PORTS: oracle@main PageList.zig `Node.Owned` (16e4b5e98).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owned {
+    /// A full standard-size item dispensed by the page pool.
+    Pool,
+    /// An exact-size allocation made directly with the page allocator.
+    Heap,
+}
+
+/// Options for [`PageList::create_page`] / `create_page_ext`.
+///
+/// PORTS: oracle@main PageList.zig `CreatePage` (16e4b5e98).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CreatePage {
+    /// The capacity to allocate the page with.
+    pub cap: Capacity,
+
+    /// Force the page backing memory to be an exact-size heap allocation even
+    /// if it would fit within a standard-size pool item. This is used when
+    /// compacting pages to their minimum size, since a pool item always retains
+    /// a full `std_size` buffer regardless of the page layout.
+    pub exact_size: bool,
+}
+
+impl CreatePage {
+    /// `.{ .cap = cap }` — the oracle's default (`exact_size = false`).
+    #[inline]
+    pub(crate) fn new(cap: Capacity) -> CreatePage {
+        CreatePage {
+            cap,
+            exact_size: false,
+        }
+    }
+
+    /// `.{ .cap = cap, .exact_size = true }`.
+    #[inline]
+    pub(crate) fn exact(cap: Capacity) -> CreatePage {
+        CreatePage {
+            cap,
+            exact_size: true,
+        }
+    }
+}
+
 
 impl rustty_datastruct::intrusive_linked_list::Node for Node {
     #[inline]
@@ -1067,6 +1130,7 @@ impl PageList {
                     next: core::ptr::null_mut(),
                     data,
                     serial: *serial,
+                    owned: if pooled { Owned::Pool } else { Owned::Heap },
                 });
             }
 
@@ -1229,7 +1293,7 @@ impl PageList {
         let mut it = self.pages.first;
         while !it.is_null() {
             let node = it;
-            if Self::page_memory_len(node) > std_size() {
+            if matches!(unsafe { (*node).owned }, Owned::Heap) {
                 Self::free_non_standard_page(node);
             }
             it = unsafe { (*node).next };
@@ -1277,7 +1341,7 @@ impl PageList {
             let mut it = self.pages.first;
             while !it.is_null() {
                 let node = it;
-                if Self::page_memory_len(node) > std_size() {
+                if matches!(unsafe { (*node).owned }, Owned::Heap) {
                     Self::free_non_standard_page(node);
                 }
                 it = unsafe { (*node).next };
@@ -1365,11 +1429,11 @@ impl PageList {
     /// does not do any memory size accounting with max_size/page_size.
     #[inline]
     #[allow(dead_code)]
-    fn create_page(&mut self, cap: Capacity) -> Result<*mut Node, OutOfMemory> {
-        // log.debug("create page cap={}", .{cap});
+    fn create_page(&mut self, opts: CreatePage) -> Result<*mut Node, OutOfMemory> {
+        // log.debug("create page cap={}", .{opts.cap});
         Self::create_page_ext(
             &mut self.pool,
-            cap,
+            opts,
             &mut self.page_serial,
             Some(&mut self.page_size),
         )
@@ -1379,15 +1443,16 @@ impl PageList {
     #[allow(dead_code)]
     fn create_page_ext(
         pool: &mut MemoryPool,
-        cap: Capacity,
+        opts: CreatePage,
         serial: &mut u64,
         total_size: Option<&mut usize>,
     ) -> Result<*mut Node, OutOfMemory> {
         let page = pool.nodes.create().map_err(|_| OutOfMemory)?;
         // errdefer pool.nodes.destroy(page);
 
+        let cap = opts.cap;
         let layout = Page::layout(cap);
-        let pooled = layout.total_size <= std_size();
+        let pooled = !opts.exact_size && layout.total_size <= std_size();
 
         // It would be better to encode this into the Zig error handling
         // system but that is a big undertaking and we only have a few
@@ -1456,6 +1521,7 @@ impl PageList {
                 next: core::ptr::null_mut(),
                 data,
                 serial: *serial,
+                owned: if pooled { Owned::Pool } else { Owned::Heap },
             });
         }
         *serial += 1;
@@ -1490,32 +1556,45 @@ impl PageList {
 
     #[allow(dead_code)]
     fn destroy_node_ext(pool: &mut MemoryPool, node: *mut Node, total_size: Option<&mut usize>) {
-        let page: *mut Page = unsafe { &mut (*node).data };
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        let owned = unsafe { (*node).owned };
+        let (ptr, len) = Self::page_memory(page);
 
-        // Update our accounting for page size
+        // Update our accounting for page size. This must mirror what was added
+        // at creation time: a pool-owned page always accounts for a full pool
+        // item even if its layout is smaller, while a heap-owned page accounts
+        // for its exact memory length.
+        //
+        // PORT NOTE (WS7 B4): this used to subtract `page_memory_len(node)`
+        // unconditionally, which under-counted the release of a pool-owned page
+        // whose layout is smaller than a full pool item.
         if let Some(v) = total_size {
-            *v -= Self::page_memory_len(node);
+            *v -= match owned {
+                Owned::Pool => std_size(),
+                Owned::Heap => len,
+            };
         }
 
-        if Self::page_memory_len(node) <= std_size() {
-            // Reset the memory to zero (and decommit it, where supported) so it
-            // can be reused.
-            //
-            // PORT NOTE (audit #4): this is the REUSED-buffer zeroing. A pooled
-            // buffer returning to the free-list MUST read back as zero here (the
-            // reference `decommitPoolItem(item, page.memory.len)`) so the next
-            // `create()` reusing it hands back observably-zero memory — fresh
-            // slots are lazily OS-zeroed, but a reused slot is not re-`mmap`ed.
-            // `decommit_pool_item` upholds that on every platform (Linux via
-            // MADV_DONTNEED's zero-fill guarantee, everywhere else via the
-            // memset).
-            let (ptr, len) = Self::page_memory(page);
-            decommit_pool_item(ptr, std_size(), len);
-            // SAFETY: `ptr` was handed out by `pool.pages.create()` (a standard
-            // pooled buffer) and has not been destroyed.
-            unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
-        } else {
-            Self::free_non_standard_page(node);
+        match owned {
+            Owned::Pool => {
+                debug_assert!(len <= std_size());
+
+                // Reset the memory to zero (and decommit it, where supported) so
+                // it can be reused.
+                //
+                // PORT NOTE (audit #4): this is the REUSED-buffer zeroing. A
+                // pooled buffer returning to the free-list MUST read back as
+                // zero here (the reference `terminal_mem.decommit(.zero, item,
+                // page.memory.len)`) so the next `create()` reusing it hands
+                // back observably-zero memory — fresh slots are lazily
+                // OS-zeroed, but a reused slot is not re-`mmap`ed.
+                decommit_pool_item(ptr, std_size(), len);
+                // SAFETY: `ptr` was handed out by `pool.pages.create()` (a
+                // standard pooled buffer) and has not been destroyed.
+                unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
+            }
+
+            Owned::Heap => Self::free_non_standard_page(node),
         }
 
         unsafe { pool.nodes.destroy(NonNull::new(node).unwrap()) };
@@ -1577,7 +1656,7 @@ impl PageList {
         let mut it = list.first;
         while !it.is_null() {
             let node = it;
-            if Self::page_memory_len(node) > std_size() {
+            if matches!(unsafe { (*node).owned }, Owned::Heap) {
                 Self::free_non_standard_page(node);
             }
             it = unsafe { (*node).next };

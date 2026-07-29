@@ -350,7 +350,7 @@ impl PageList {
                 }
             };
 
-            let node = self.create_page(cap)?;
+            let node = self.create_page(super::CreatePage::new(cap))?;
             unsafe {
                 (*node).data.size.rows = 1;
             }
@@ -927,7 +927,7 @@ impl PageList {
         // We need to loop because our col growth may force us
         // to split pages.
         while copied < unsafe { (*page).size.rows } {
-            let new_node = match self.create_page(cap) {
+            let new_node = match self.create_page(super::CreatePage::new(cap)) {
                 Ok(n) => n,
                 Err(e) => {
                     // errdefer (replayed): delete any of the nodes we added,
@@ -1991,7 +1991,7 @@ impl ReflowCursor {
         // after reinitializing our cursor on the new page.
         let new_rows = self.new_rows;
 
-        let node = list.create_page(cap)?;
+        let node = list.create_page(super::CreatePage::new(cap))?;
         // errdefer comptime unreachable;
         unsafe {
             (*node).data.size.rows = 1;

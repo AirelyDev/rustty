@@ -58,7 +58,7 @@ impl PageList {
         // `assert_integrity` before every exit past this point.
 
         // Create a new node with the same capacity of managed memory.
-        let target = match self.create_page(unsafe { (*page).capacity }) {
+        let target = match self.create_page(super::CreatePage::new(unsafe { (*page).capacity })) {
             Ok(v) => v,
             Err(_) => return Err(SplitError::OutOfMemory),
         };
@@ -356,11 +356,18 @@ impl PageList {
             }
             unsafe { (*self.viewport_pin).garbage = false };
 
-            // Non-standard pages can't be reused, just destroy them.
-            if Self::page_memory_len(first) > super::std_size() {
-                self.destroy_node(first);
-                // break :prune;
-                return self.grow_alloc(cap);
+            match unsafe { (*first).owned } {
+                // Pool-owned pages are reused below.
+                super::Owned::Pool => {}
+
+                // Heap-owned pages can't be reused because they may be any size
+                // (larger or smaller than a standard page), so just destroy
+                // them.
+                super::Owned::Heap => {
+                    self.destroy_node(first);
+                    // break :prune;
+                    return self.grow_alloc(cap);
+                }
             }
 
             // Reset our memory
@@ -402,7 +409,7 @@ impl PageList {
     /// (including its `defer self.assertIntegrity()` exit).
     fn grow_alloc(&mut self, cap: Capacity) -> Result<Option<*mut Node>, super::OutOfMemory> {
         // We need to allocate a new memory buffer.
-        let next_node = self.create_page(cap)?;
+        let next_node = self.create_page(super::CreatePage::new(cap))?;
         // we don't errdefer this because we've added it to the linked
         // list and its fine to have dangling unused pages.
         unsafe { self.pages.append(next_node) };
@@ -503,7 +510,7 @@ impl PageList {
 
         // Create our new page and clone the old page into it.
         let new_node = self
-            .create_page(cap)
+            .create_page(super::CreatePage::new(cap))
             .map_err(|_| IncreaseCapacityError::OutOfMemory)?;
         // errdefer self.destroyNode(new_node);
         let new_page: *mut Page = unsafe { &mut (*new_node).data };
@@ -555,13 +562,15 @@ impl PageList {
 
     /// Compact a page to use the minimum required memory for the contents
     /// it stores. Returns the new node pointer if compaction occurred, or null
-    /// if the page was already compact or compaction would not provide meaningful
+    /// if the page was already compact or compaction would not provide any
     /// savings.
     ///
-    /// The current design of PageList at the time of writing this doesn't
-    /// allow for smaller than `std_size` nodes so if the current node's backing
-    /// page is standard size or smaller, no compaction will occur. In the
-    /// future we should fix this up.
+    /// The compacted page is always an exact-size heap allocation, never a pool
+    /// item, since a pool item always retains a full `std_size` buffer
+    /// regardless of the page layout. Note that this means that when compacting
+    /// a pool-owned node, the freed pool item is returned to the pool free list,
+    /// so the memory savings are only fully realized once the pool itself is
+    /// reset or freed.
     ///
     /// If this returns OOM, the PageList is left unchanged and no dangling
     /// memory references exist. It is safe to ignore the error and continue using
@@ -579,24 +588,23 @@ impl PageList {
         // We should never have empty rows in our pagelist anyways...
         assert!(unsafe { (*page).size.rows } > 0);
 
-        // We never compact standard size or smaller pages because changing
-        // the capacity to something smaller won't save memory.
-        if Self::page_memory_len(node) <= super::std_size() {
-            self.assert_integrity();
-            return Ok(None);
-        }
-
         // Compute the minimum capacity required for this page's content
         let req_cap = unsafe { (*page).exact_row_capacity(0, (*page).size.rows as usize) };
         let new_size = Page::layout(req_cap).total_size;
-        let old_size = Self::page_memory_len(node);
+
+        // The memory this node currently retains. A pool-owned node always
+        // retains a full pool item no matter its layout size.
+        let old_size: usize = match unsafe { (*node).owned } {
+            super::Owned::Pool => super::std_size(),
+            super::Owned::Heap => Self::page_memory_len(node),
+        };
         if new_size >= old_size {
             self.assert_integrity();
             return Ok(None);
         }
 
         // Create the new smaller page
-        let new_node = self.create_page(req_cap)?;
+        let new_node = self.create_page(super::CreatePage::exact(req_cap))?;
         // errdefer self.destroyNode(new_node);
         let new_page: *mut Page = unsafe { &mut (*new_node).data };
         unsafe { (*new_page).size = (*page).size };
