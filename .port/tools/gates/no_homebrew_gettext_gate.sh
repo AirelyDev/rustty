@@ -147,21 +147,45 @@ ok "combined archive carries a symbol table"
 echo "== 5/5 symbol assertions on the linked app binary =="
 BUILT="$(xcodebuild -project macos/Rustty.xcodeproj -scheme Rustty -configuration Debug \
   -showBuildSettings 2>/dev/null | awk -F' = ' '/ BUILT_PRODUCTS_DIR /{print $2; exit}')"
-BIN="$BUILT/Rustty.app/Contents/MacOS/rustty"
+MACOS_DIR="$BUILT/Rustty.app/Contents/MacOS"
+BIN="$MACOS_DIR/rustty"
 [ -x "$BIN" ] || fail "app binary not found at $BIN"
+
+# In Debug, Xcode's "debug dylib" mode makes `rustty` a ~40KB STUB that merely
+# loads @rpath/rustty.debug.dylib — the ~40MB image that actually contains
+# libRusttyKit.a. Asserting only on the stub would pass vacuously: the stub
+# links nothing but libSystem no matter what libintl does. So assert on EVERY
+# Mach-O image the app ships, and separately require that whichever image
+# carries the archive genuinely DEFINES the gettext symbols.
+IMAGES=("$BIN")
+[ -f "$MACOS_DIR/rustty.debug.dylib" ] && IMAGES+=("$MACOS_DIR/rustty.debug.dylib")
+
 # Same SIGPIPE/pipefail caution as section 4: capture, then grep.
-OTOOL_L="$(mktemp)"; BIN_UNDEF="$(mktemp)"
-otool -L "$BIN" > "$OTOOL_L"
-nm -u "$BIN" 2>/dev/null > "$BIN_UNDEF"
-grep -qi "intl" "$OTOOL_L" && fail "$BIN links a libintl dylib"
-ok "app binary links no libintl dylib"
-grep -qi "homebrew\|/usr/local/opt" "$OTOOL_L" && fail "$BIN links a Homebrew dylib"
-ok "app binary links no Homebrew dylib"
-for sym in _dgettext _bindtextdomain _textdomain; do
-  grep -qx "$sym" "$BIN_UNDEF" && fail "$BIN has undefined $sym"
+DEFINED_SOMEWHERE=0
+for img in "${IMAGES[@]}"; do
+  name="$(basename "$img")"
+  OTOOL_L="$(mktemp)"; BIN_UNDEF="$(mktemp)"; BIN_DEF="$(mktemp)"
+  otool -L "$img" > "$OTOOL_L"
+  nm -u "$img" 2>/dev/null > "$BIN_UNDEF"
+  nm "$img" 2>/dev/null > "$BIN_DEF"
+  grep -qi "intl" "$OTOOL_L" && fail "$img links a libintl dylib"
+  ok "$name links no libintl dylib"
+  grep -qi "homebrew\|/usr/local/opt" "$OTOOL_L" && fail "$img links a Homebrew dylib"
+  ok "$name links no Homebrew dylib"
+  for sym in _dgettext _bindtextdomain _textdomain; do
+    grep -qx "$sym" "$BIN_UNDEF" && fail "$img has undefined $sym"
+  done
+  ok "$name has no undefined gettext symbols"
+  if grep -qE " [Tt] _dgettext\$" "$BIN_DEF" \
+     && grep -qE " [Tt] _bindtextdomain\$" "$BIN_DEF" \
+     && grep -qE " [Tt] _textdomain\$" "$BIN_DEF"; then
+    DEFINED_SOMEWHERE=1
+    ok "$name DEFINES _dgettext/_bindtextdomain/_textdomain (vendored libintl is in the image)"
+  fi
+  rm -f "$OTOOL_L" "$BIN_UNDEF" "$BIN_DEF"
 done
-ok "app binary has no undefined gettext symbols"
-rm -f "$OTOOL_L" "$BIN_UNDEF"
+[ "$DEFINED_SOMEWHERE" -eq 1 ] \
+  || fail "no shipped image DEFINES the gettext symbols — the assertions above were vacuous"
 
 echo
 echo "GATE PASS: Rustty.app builds and links with NO Homebrew gettext available."
