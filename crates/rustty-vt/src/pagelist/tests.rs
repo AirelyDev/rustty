@@ -25,7 +25,7 @@
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
-use super::{std_capacity, std_size, Owned, PageList, Pin, Viewport};
+use super::{std_capacity, std_size, NodeData, Owned, PageList, Pin, Storage, Viewport};
 use crate::page::{Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
@@ -1947,6 +1947,85 @@ fn pagelist_compact_oversized_page() {
 // cannot exercise (see `decommit_pool_item`). The reference allocates a
 // page-aligned `std_size` buffer from `testing.allocator`; the Rust port uses a
 // plain `Vec<u8>` because the test path never touches the pointer alignment.
+/// A node built from a compressed representation restores to the SAME mapping
+/// and yields identical bytes; `page()` transparently restores.
+#[test]
+fn pagelist_node_restore_preserve_recovers_the_same_mapping() {
+    let mut s = PageList::init(20, 5, Some(1000)).unwrap();
+    let node = s.pages.first;
+    unsafe {
+        let page = super::Node::page(node);
+        let ptr = (*page).memory_ptr() as *mut u8;
+        let len = (*page).memory_len();
+        let expected: Vec<u8> = core::slice::from_raw_parts(ptr, len).to_vec();
+
+        let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
+        let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
+        let compressed = crate::compress::CompressedPage::init(
+            page as *const Page,
+            &mut scratch,
+            &mut table,
+        )
+        .unwrap()
+        .unwrap();
+
+        // Model a successful decommit, then publish the compressed state.
+        core::ptr::write_bytes(ptr, 0, len);
+        (*node).data = NodeData::Compressed(compressed);
+        assert_eq!(super::Node::storage(node), Storage::Compressed);
+        assert!(super::Node::page_if_resident(node).is_null());
+
+        // `page()` restores transparently.
+        let restored = super::Node::page(node);
+        assert_eq!(super::Node::storage(node), Storage::Resident);
+        assert_eq!((*restored).memory_ptr(), ptr as *const u8);
+        assert_eq!(core::slice::from_raw_parts(ptr, len), &expected[..]);
+    }
+    s.deinit();
+}
+
+/// `page_preserving_state` reads a compressed node WITHOUT restoring it.
+#[test]
+fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
+    let mut s = PageList::init(20, 5, Some(1000)).unwrap();
+    let node = s.pages.first;
+    unsafe {
+        let page = super::Node::page(node);
+        let ptr = (*page).memory_ptr() as *mut u8;
+        let len = (*page).memory_len();
+        let expected: Vec<u8> = core::slice::from_raw_parts(ptr, len).to_vec();
+
+        let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
+        let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
+        let compressed = crate::compress::CompressedPage::init(
+            page as *const Page,
+            &mut scratch,
+            &mut table,
+        )
+        .unwrap()
+        .unwrap();
+        core::ptr::write_bytes(ptr, 0, len);
+        (*node).data = NodeData::Compressed(compressed);
+
+        let mut preserved = super::Node::page_preserving_state(node);
+        let p = preserved.page();
+        assert_ne!((*p).memory_ptr(), ptr as *const u8);
+        assert_eq!(
+            core::slice::from_raw_parts((*p).memory_ptr(), len),
+            &expected[..]
+        );
+        preserved.deinit();
+
+        // Still compressed, and the discarded mapping is untouched.
+        assert_eq!(super::Node::storage(node), Storage::Compressed);
+        assert!(core::slice::from_raw_parts(ptr, len).iter().all(|&b| b == 0));
+
+        // Restore so deinit's accounting sees a resident page.
+        let _ = super::Node::page(node);
+    }
+    s.deinit();
+}
+
 /// PORTS: oracle@main PageList.zig `Node.Owned` (16e4b5e98) — every node
 /// records how its backing memory was allocated. A heap-owned page smaller than
 /// the standard pool item must still be freed to the heap, never returned to

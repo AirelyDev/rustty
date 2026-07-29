@@ -134,7 +134,7 @@ pub type List = DoublyLinkedList<Node>;
 pub struct Node {
     pub(crate) prev: *mut Node,
     pub(crate) next: *mut Node,
-    pub data: Page,
+    pub data: NodeData,
     pub serial: u64,
 
     /// How the backing memory of the embedded Page was allocated. Pool-owned
@@ -163,6 +163,92 @@ pub enum Owned {
     Pool,
     /// An exact-size allocation made directly with the page allocator.
     Heap,
+}
+
+/// The physical representation of the page contents.
+///
+/// Both states retain the same page mapping and the same `Page` metadata. A
+/// resident page can access the mapping directly since it is, well, resident.
+///
+/// A compressed page owns an encoded copy while the physical memory behind the
+/// raw mapping is discarded. HOWEVER, we retain the virtual allocation so that
+/// restoration is infallible.
+///
+/// PORTS: oracle@main PageList.zig `Node.Data` (421fe8dab).
+pub enum NodeData {
+    Resident(Page),
+    Compressed(crate::compress::CompressedPage),
+}
+
+/// The backing-memory representation currently stored by a node.
+///
+/// PORTS: oracle@main PageList.zig `Node.Storage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Storage {
+    Resident,
+    Compressed,
+}
+
+/// Read-only page with full memory access that doesn't change a node's storage
+/// state: if a node is compressed it remains compressed.
+///
+/// Resident pages are borrowed directly, so they're basically free. Compressed
+/// pages are decoded into an independently owned Page so callers can inspect
+/// their contents. Because resident pages are still borrowed, you have to
+/// continue to have exclusive access to the PageList during this operation.
+///
+/// PORTS: oracle@main PageList.zig `Node.PreservedPage`.
+///
+/// PORT NOTE (WS7 B6): the oracle's `owned` arm carries the `Allocator` that
+/// produced the decode buffer. rustty allocates it from the global allocator,
+/// so the arm carries the raw pointer/length needed to release it instead —
+/// forming a `&mut [u8]` over a decoded page would alias the `Page` value that
+/// names the same bytes.
+pub enum PreservedPage {
+    Borrowed(*const Page),
+    Owned {
+        page: Page,
+        ptr: *mut u8,
+        len: usize,
+    },
+}
+
+impl PreservedPage {
+    /// Return the read-only page represented by this value.
+    #[inline]
+    pub fn page(&self) -> *const Page {
+        match self {
+            PreservedPage::Borrowed(p) => *p,
+            PreservedPage::Owned { page, .. } => page as *const Page,
+        }
+    }
+
+    /// Release storage owned by this preserved page.
+    pub fn deinit(&mut self) {
+        if let PreservedPage::Owned { ptr, len, .. } = *self {
+            // The clone buffer came from the global allocator rather than the
+            // page allocator, so it must not use `Page::deinit`.
+            let layout = Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
+            // SAFETY: `ptr`/`layout` are the pair `page_preserving_state`
+            // allocated below, and the decoded `Page` is dropped with `self`.
+            unsafe { std::alloc::dealloc(ptr, layout) };
+        }
+        // self.* = undefined;
+        *self = PreservedPage::Borrowed(core::ptr::null());
+    }
+}
+
+/// How `Node::restore` should treat the compressed representation.
+///
+/// PORTS: oracle@main PageList.zig `Node.RestoreMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RestoreMode {
+    /// Decode the compressed representation back into the raw mapping.
+    Preserve,
+
+    /// Discard the compressed representation without decoding it. The caller
+    /// must not read the page contents before overwriting them.
+    Discard,
 }
 
 /// Options for [`PageList::create_page`] / `create_page_ext`.
@@ -220,7 +306,10 @@ impl Node {
     /// `node` must point at a live `Node`.
     #[inline]
     pub unsafe fn page(node: *mut Node) -> *mut Page {
-        unsafe { core::ptr::addr_of_mut!((*node).data) }
+        match unsafe { &mut *core::ptr::addr_of_mut!((*node).data) } {
+            NodeData::Resident(p) => p as *mut Page,
+            NodeData::Compressed(_) => unsafe { Node::restore(node, RestoreMode::Preserve) },
+        }
     }
 
     /// Return the terminal page only when its raw memory is resident, else
@@ -237,7 +326,10 @@ impl Node {
     /// `node` must point at a live `Node`.
     #[inline]
     pub unsafe fn page_if_resident(node: *mut Node) -> *mut Page {
-        unsafe { core::ptr::addr_of_mut!((*node).data) }
+        match unsafe { &mut *core::ptr::addr_of_mut!((*node).data) } {
+            NodeData::Resident(p) => p as *mut Page,
+            NodeData::Compressed(_) => core::ptr::null_mut(),
+        }
     }
 
     /// Return a page which the caller KNOWS is already resident.
@@ -253,7 +345,14 @@ impl Node {
     /// `node` must point at a live `Node` whose page is resident.
     #[inline]
     pub unsafe fn page_assume_resident(node: *mut Node) -> *mut Page {
-        unsafe { core::ptr::addr_of_mut!((*node).data) }
+        match unsafe { &mut *core::ptr::addr_of_mut!((*node).data) } {
+            NodeData::Resident(p) => p as *mut Page,
+            NodeData::Compressed(_) => {
+                debug_assert!(false, "page_assume_resident on a compressed node");
+                // SAFETY: the caller contract is that the node is resident.
+                unsafe { core::hint::unreachable_unchecked() }
+            }
+        }
     }
 
     /// Return the embedded Page metadata without restoring its memory.
@@ -264,7 +363,133 @@ impl Node {
     /// `node` must point at a live `Node`.
     #[inline]
     pub unsafe fn metadata(node: *const Node) -> *const Page {
-        unsafe { core::ptr::addr_of!((*node).data) }
+        match unsafe { &*core::ptr::addr_of!((*node).data) } {
+            NodeData::Resident(p) => p as *const Page,
+            NodeData::Compressed(c) => &c.page as *const Page,
+        }
+    }
+
+    /// Return the node's backing-memory representation without restoring it.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.storage`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn storage(node: *const Node) -> Storage {
+        match unsafe { &*core::ptr::addr_of!((*node).data) } {
+            NodeData::Resident(_) => Storage::Resident,
+            NodeData::Compressed(_) => Storage::Compressed,
+        }
+    }
+
+    /// PORTS: oracle@main PageList.zig `Node.isCompressed`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn is_compressed(node: *const Node) -> bool {
+        matches!(unsafe { Node::storage(node) }, Storage::Compressed)
+    }
+
+    /// Return read-only page contents without changing this node's storage.
+    ///
+    /// A compressed node decodes into an exact-sized, page-aligned buffer owned
+    /// by the returned value. The caller must call `PreservedPage::deinit`.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.pagePreservingState`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node` and the caller must retain exclusive
+    /// access to the owning PageList for the lifetime of the result.
+    pub unsafe fn page_preserving_state(node: *const Node) -> PreservedPage {
+        match unsafe { &*core::ptr::addr_of!((*node).data) } {
+            NodeData::Resident(p) => PreservedPage::Borrowed(p as *const Page),
+            NodeData::Compressed(compressed) => {
+                let len = compressed.page.memory_len();
+                let layout = Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
+                // SAFETY: `len > 0` and the layout is valid.
+                let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+                assert!(!ptr.is_null(), "OOM allocating a preserved page buffer");
+
+                // SAFETY: `ptr` is a live, page-aligned, unaliased buffer of
+                // exactly `len` bytes.
+                match unsafe { compressed.clone_buf(ptr, len) } {
+                    Ok(page) => PreservedPage::Owned { page, ptr, len },
+                    Err(_err) => {
+                        // The encoded data was produced by our codec and remains
+                        // immutable while compressed. Failure is internal
+                        // corruption, matching the normal restoration boundary.
+                        // SAFETY: `ptr`/`layout` are the pair allocated above.
+                        unsafe { std::alloc::dealloc(ptr, layout) };
+                        // log.err("failed to clone compressed page err={}", .{err});
+                        panic!("failed to clone compressed terminal page");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Restore this node to the resident representation.
+    ///
+    /// Preserve mode reconstructs the page contents and is used by `page`.
+    /// Discard mode skips decoding for callers which will overwrite or destroy
+    /// the page. Both modes recommit the retained mapping, free the encoded
+    /// allocation, and leave the node in a valid resident state.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.restore` (`noinline`).
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`; in `Discard` mode the caller must
+    /// not read the page contents before overwriting them.
+    #[inline(never)]
+    pub(crate) unsafe fn restore(node: *mut Node, mode: RestoreMode) -> *mut Page {
+        let data = unsafe { core::ptr::addr_of_mut!((*node).data) };
+
+        // Read what we need out of the compressed value and drop the borrow
+        // before overwriting `data`: keeping a reference into the union live
+        // across the write would be Stacked-Borrows UB.
+        let (mem_ptr, mem_len) = match unsafe { &*data } {
+            NodeData::Resident(_) => return unsafe { Node::page_assume_resident(node) },
+            NodeData::Compressed(c) => (c.page.memory_ptr() as *mut u8, c.page.memory_len()),
+        };
+
+        // Decommit only discarded the physical pages. Recommit prepares the
+        // still-reserved mapping for decoding or reuse by the caller.
+        // SAFETY: the retained mapping is live, page-aligned and unaliased.
+        unsafe { crate::mem::recommit(mem_ptr, mem_len) };
+
+        let restored: Page = match mode {
+            RestoreMode::Preserve => {
+                // SAFETY: the mapping was just recommitted and is unaliased.
+                match unsafe {
+                    match &*data {
+                        NodeData::Resident(_) => unreachable!(),
+                        NodeData::Compressed(c) => c.restore(),
+                    }
+                } {
+                    Ok(p) => p,
+                    Err(_err) => {
+                        // Compressed nodes retain the immutable encoding and
+                        // exact output mapping used to create them. Any decode
+                        // error is an internal codec bug or memory corruption.
+                        // log.err("failed to restore compressed page err={}", .{err});
+                        panic!("failed to restore compressed terminal page");
+                    }
+                }
+            }
+
+            RestoreMode::Discard => match unsafe { &*data } {
+                NodeData::Resident(_) => unreachable!(),
+                NodeData::Compressed(c) => c.page.shallow_copy(),
+            },
+        };
+
+        // Replacing `data` drops the CompressedPage, freeing its encoding
+        // (the oracle's explicit `compressed.deinit()`).
+        // SAFETY: `data` points at a live, initialized `NodeData`.
+        unsafe { *data = NodeData::Resident(restored) };
+        unsafe { Node::page_assume_resident(node) }
     }
 
     /// Return the number of populated rows without accessing page memory.
@@ -1228,7 +1453,7 @@ impl PageList {
                 node.as_ptr().write(Node {
                     prev: core::ptr::null_mut(),
                     next: core::ptr::null_mut(),
-                    data,
+                    data: NodeData::Resident(data),
                     serial: *serial,
                     owned: if pooled { Owned::Pool } else { Owned::Heap },
                 });
@@ -1389,12 +1614,19 @@ impl PageList {
         self.tracked_pins = PinSet::new();
 
         // Go through our linked list and deallocate all pages that are
-        // not standard size.
+        // heap-owned (not in the pool).
+        //
+        // PORT NOTE (WS7 B6): every node is discard-restored first, pool-owned
+        // ones included — that is what frees a compressed node's encoded
+        // allocation. Node storage lives in a raw memory pool that never runs
+        // `Drop`, so skipping this would leak the encoding.
         let mut it = self.pages.first;
         while !it.is_null() {
             let node = it;
+            // SAFETY: `node` is a live node of this list.
+            let page = unsafe { Node::restore(node, RestoreMode::Discard) };
             if matches!(unsafe { (*node).owned }, Owned::Heap) {
-                Self::free_non_standard_page(node);
+                Self::free_page_memory(page);
             }
             it = unsafe { (*node).next };
         }
@@ -1435,14 +1667,18 @@ impl PageList {
         let page_count: usize = (self.rows as usize).div_ceil(cap.rows as usize);
 
         // Before resetting our pools we need to free any pages that
-        // are non-standard size since those were allocated outside
-        // the pool.
+        // are heap-owned since those were allocated outside the pool.
+        //
+        // PORT NOTE (WS7 B6): as in `deinit`, every node is discard-restored so
+        // a compressed node's encoded allocation is released.
         {
             let mut it = self.pages.first;
             while !it.is_null() {
                 let node = it;
+                // SAFETY: `node` is a live node of this list.
+                let page = unsafe { Node::restore(node, RestoreMode::Discard) };
                 if matches!(unsafe { (*node).owned }, Owned::Heap) {
-                    Self::free_non_standard_page(node);
+                    Self::free_page_memory(page);
                 }
                 it = unsafe { (*node).next };
             }
@@ -1619,7 +1855,7 @@ impl PageList {
             page.as_ptr().write(Node {
                 prev: core::ptr::null_mut(),
                 next: core::ptr::null_mut(),
-                data,
+                data: NodeData::Resident(data),
                 serial: *serial,
                 owned: if pooled { Owned::Pool } else { Owned::Heap },
             });
@@ -1656,7 +1892,12 @@ impl PageList {
 
     #[allow(dead_code)]
     fn destroy_node_ext(pool: &mut MemoryPool, node: *mut Node, total_size: Option<&mut usize>) {
-        let page: *mut Page = unsafe { Node::page(node) };
+        // Restore in discard mode: the contents are about to be destroyed or
+        // handed back to the pool, so decoding them would be wasted work. This
+        // also frees any encoded allocation the node still owns.
+        //
+        // SAFETY: `node` is live and already removed from the linked list.
+        let page: *mut Page = unsafe { Node::restore(node, RestoreMode::Discard) };
         let owned = unsafe { (*node).owned };
         let (ptr, len) = Self::page_memory(page);
 
@@ -1741,8 +1982,17 @@ impl PageList {
     /// Free a NON-STANDARD page's backing buffer DIRECTLY via the page allocator
     /// (the reference `page_alloc.free(node.data.memory)`).
     fn free_non_standard_page(node: *mut Node) {
-        let page: *const Page = unsafe { &(*Node::page(node)) };
-        let (ptr, len) = Self::page_memory(page as *mut Page);
+        // SAFETY: `node` is live; the metadata carries the mapping to free and
+        // never touches the (possibly discarded) page contents.
+        let page = unsafe { Node::metadata(node) };
+        Self::free_page_memory(page as *mut Page);
+    }
+
+    /// Free a heap-owned page's backing mapping, given the `Page` that names
+    /// it. Split out of `free_non_standard_page` so `deinit`/`reset` can free
+    /// the mapping of a page they have already discard-restored.
+    fn free_page_memory(page: *mut Page) {
+        let (ptr, len) = Self::page_memory(page);
         let layout = Self::non_standard_layout(len);
         let alloc = page_backing_alloc();
         // SAFETY: `ptr`/`len` describe a buffer previously returned by
@@ -1766,7 +2016,9 @@ impl PageList {
     /// `node.data.memory.len`.
     #[inline]
     fn page_memory_len(node: *mut Node) -> usize {
-        unsafe { (*Node::page(node)).memory_len }
+        // Metadata only: the mapping length is identical in both storage
+        // states, so this must never restore a compressed node.
+        unsafe { (*Node::metadata(node)).memory_len }
     }
 
     /// `(node.data.memory.ptr, node.data.memory.len)` via field projection on a

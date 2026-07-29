@@ -369,15 +369,24 @@ impl PageList {
                 }
             }
 
-            // Reset our memory
-            let (buf_ptr, buf_len) = Self::page_memory(unsafe { &mut (*super::Node::page(first)) });
+            // Reset our memory.
+            //
+            // PORT NOTE (WS7 B6): the oracle reaches the buffer via
+            // `first.restore(.discard)` — the contents are about to be zeroed,
+            // so a compressed node must NOT be decoded on the way through.
+            let (buf_ptr, buf_len) = Self::page_memory(unsafe {
+                super::Node::restore(first, super::RestoreMode::Discard)
+            });
             unsafe { core::ptr::write_bytes(buf_ptr, 0, buf_len) };
             assert!(buf_len <= super::std_size());
 
             // Initialize our new page and reinsert it as the last
             unsafe {
-                (*super::Node::page(first)) = Page::init_buf(OffsetBuf::init(buf_ptr), Page::layout(cap));
-                (*super::Node::page(first)).size.rows = 1;
+                (*first).data = super::NodeData::Resident(Page::init_buf(
+                    OffsetBuf::init(buf_ptr),
+                    Page::layout(cap),
+                ));
+                (*super::Node::page_assume_resident(first)).size.rows = 1;
             }
             unsafe { self.pages.insert_after(last, first) };
             self.total_rows += 1;
