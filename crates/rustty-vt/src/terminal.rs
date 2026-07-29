@@ -4748,6 +4748,19 @@ impl Terminal {
                 // `primary.pages.explicit_max_size`.
                 let old_alloc = unsafe { (*old).alloc };
                 let primary_max = unsafe { (*primary).pages.explicit_max_size };
+                // Inherit our Kitty image settings from the primary screen
+                // (see the Options fields below).
+                let (primary_kitty_limit, primary_kitty_loading_limits) =
+                    if crate::options::KITTY_GRAPHICS {
+                        unsafe {
+                            (
+                                (*primary).kitty_images.total_limit,
+                                (*primary).kitty_images.image_limits,
+                            )
+                        }
+                    } else {
+                        (0, kitty::graphics_image::Limits::DIRECT)
+                    };
                 self.screens.get_init(
                     old_alloc,
                     key,
@@ -4772,15 +4785,21 @@ impl Terminal {
                         // .kitty_image_loading_limits = if (comptime build_options.kitty_graphics)
                         //     primary.kitty_images.image_limits
                         // else {},
-                        // PORT NOTE (vt-12 deferral): Kitty graphics
-                        // `ImageStorage` is deferred (build_options.kitty_graphics
-                        // is the disabled case), so these take the disabled-branch
-                        // values: `0` and the empty/void limits. The reference's
-                        // `else {}` is the `void` field; the Rustty `Options` field
-                        // is always `Limits`, so we use `DIRECT` (all-false, the
-                        // empty representation) to stand in for the unused `void`.
-                        kitty_image_storage_limit: 0,
-                        kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+                        // PORT NOTE (WS8 T16): the original vt-12 deferral
+                        // hard-coded `0`/`DIRECT` here on the grounds that
+                        // `build_options.kitty_graphics` was the disabled case.
+                        // Kitty graphics IS enabled in rustty
+                        // (`options::KITTY_GRAPHICS`), so hard-coding `0` gave the
+                        // lazily-created alternate screen a DISABLED image storage
+                        // — kitty graphics silently did not work on the alt
+                        // screen, and `set_limit(0)` also marked the fresh storage
+                        // mutated. Now inherits from the primary, as the reference
+                        // does. The reference's `else {}` is the `void` field; the
+                        // Rustty `Options` field is always `Limits`, so `DIRECT`
+                        // (all-false, the empty representation) stands in for the
+                        // unused `void` on the disabled branch.
+                        kitty_image_storage_limit: primary_kitty_limit,
+                        kitty_image_loading_limits: primary_kitty_loading_limits,
                     },
                 )?
             }
