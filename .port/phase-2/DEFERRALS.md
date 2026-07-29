@@ -953,6 +953,17 @@ NO new verbatim-body deferrals; it RESOLVES/OWNS the following:
 
 ## rustty-inspector C1 (core tier) — key-widget data surface; ImGui GUI deferred to Phase 3
 
+**RESOLVED (WS6, 2026-07-28).** `rustty_inspector::Inspector` is no longer an
+uninhabited enum: the crate is a fully inhabited 13-module port of oracle
+`src/inspector/**` (11 625 Rust LOC vs 4 873 Zig LOC), landed by the 2026-07-14
+inspector series (`b344e09`…`d6be9b2`). The widget-render residual is proven
+ZERO by `python3 .port/tools/gates/check_comment_coverage.py --crate
+rustty-inspector --strict` (WS6 T2), which reports `distinctive ref
+comments=192 missing=0 review=0` → GREEN. The `key.zig` ImGui section named
+below is live, not a comment body. Core stores a live
+`Option<*mut rustty_inspector::Inspector>`. The historical text below is kept
+for provenance only.
+
 Chunk C1 of CORE_BLUEPRINT §6 (§4 "Inspector seam", [ADV-FIX 7]) carves ONLY
 the surface core's input hot path needs. Deferrals created (all 0 tests —
 R1-safe; owner: the Phase-3 inspector port):
@@ -1134,14 +1145,17 @@ break-#1 `GlobalState`/`STATE`/`global_state()` wiring in lib.rs (the
 core-wired `rustty_global::GlobalState<(), rustty_os ResourcesDir>`; `Action`
 stays the deferred cli seam). Deferral ledger:
 
-- **DEFERRED (verbatim, CORE_BLUEPRINT §4 — the ONLY verbatim-comment
-  deferrals in core): `activateInspector`/`deactivateInspector`**
-  (Surface.zig:890/915, ~45 loc) — they `alloc.create`/`deinit` the
-  UNINHABITED Phase-3 `inspectorpkg::Inspector` placeholder (unconstructible
-  until the ImGui inspector tier lands). Bodies preserved verbatim above
-  `unimplemented!()`; `deinit`'s inspector teardown arm is
-  unreachable-by-construction (`unreachable!()` + verbatim body) for the same
-  reason. 0 tests, R1-safe; resolved by the Phase-3 inspector fill.
+- **RESOLVED (WS6, 2026-07-28) — was: DEFERRED (verbatim, CORE_BLUEPRINT §4)
+  `activateInspector`/`deactivateInspector`** (Surface.zig:890/915, ~45 loc).
+  Both are now LIVE bodies at `crates/rustty-core/src/surface.rs:2873` /
+  `:2967` (commit `2dfcc32`): they heap-box the inspector, publish the
+  `*mut dyn InspectorOverlay` + type-erased `inspector_ptr` under
+  `renderer_state.mutex`, and push `Message::Inspector(true/false)` to the
+  renderer mailbox and termio. `deinit`'s inspector teardown arm is reachable
+  and real — the `unreachable!()` is gone. The `keyCallback` inspector
+  defer-block and the `cursorPosCallback` Some-arm are likewise reachable and
+  exercised: the WS6 T5 shakedown shows typed keys landing in the inspector's
+  Keyboard panel and VT traffic in its Terminal IO panel.
 - **Rust-only glue (documented in-file, not deferrals):**
   `InitError` — the typed union of `init`'s *inferred* reference error set
   (oni/renderer/apprt/font-grid/xev/exec/termio/spawn/surface sources);
@@ -1813,9 +1827,12 @@ carries no `test{}` on any deferred surface.
 **`unimplemented!()` audit (C-F, surface.rs + app.rs):** every production
 `unimplemented!()` is a documented placeholder leaf or a DEFERRALS entry below;
 NO stragglers.
-- `surface.rs` — **2** (was 3; the `performBindingAction .search` arm now lands
-  LIVE — see "RESOLVED (`.search` arm)" above): `activateInspector` /
-  `deactivateInspector` (Phase-3 inspector, §4).
+- `surface.rs` — **0** — the two inspector entries were closed by WS6
+  (2026-07-28); re-measured at that time with
+  `grep -c "unimplemented!" crates/rustty-core/src/surface.rs` → `0`, so there
+  is no remaining site to list. (Was 2: `activateInspector` /
+  `deactivateInspector`; was 3 before the `performBindingAction .search` arm
+  landed LIVE — see "RESOLVED (`.search` arm)" above.)
 - `app.rs` — **8**, ALL inside `#[cfg(test)] mod test_runtime` (the §7
   TestSurface fake methods the C4 seam tests do not drive — honest test glue,
   NOT production leaves and NOT deferrals).
@@ -1824,14 +1841,19 @@ NO stragglers.
 **OPEN core deferrals (roll-up — targets: Phase-3 inspector tier / Phase-3 R-d
 GPU renderer / D6 libxev port):**
 
-1. **Inspector activate/deactivate (verbatim-comment deferral, §4).**
+1. **Inspector activate/deactivate — RESOLVED (WS6, 2026-07-28).**
    `Surface.activateInspector` (Surface.zig:890) + `deactivateInspector` (:915)
-   `alloc.create`/`deinit` the UNINHABITED Phase-3 `inspectorpkg::Inspector`
-   placeholder; bodies verbatim above `unimplemented!()`; `deinit`'s inspector
-   teardown arm is `unreachable!()`-by-construction. **Target: Phase-3 inspector
-   tier** (fills `rustty_inspector::Inspector` from the uninhabited enum).
-   (The `keyCallback` inspector defer-block ports REAL — None-arm live, Some-arm
-   unreachable until Phase 3, per §4.)
+   are LIVE at `crates/rustty-core/src/surface.rs:2873` / `:2967` (commit
+   `2dfcc32`): they heap-box the inspector, publish the
+   `*mut dyn InspectorOverlay` + type-erased `inspector_ptr` under
+   `renderer_state.mutex`, and notify renderer + termio via
+   `Message::Inspector(true/false)`. `rustty_inspector::Inspector` is inhabited
+   (13 modules, G3b GREEN — WS6 T2), so nothing here is unconstructible any
+   more; the `unimplemented!()`/`unreachable!()` pair is gone. The
+   `keyCallback` inspector defer-block Some-arm and the `cursorPosCallback`
+   Some-arm are reachable and exercised — the WS6 T5 shakedown shows real
+   keystrokes in the inspector's Keyboard panel and live VT events in its
+   Terminal IO panel.
 
 2. **`performBindingAction .search` arm (Surface.zig:4933) — RESOLVED.** Landed
    LIVE per SEARCH_BINDING_ARM_DESIGN: (a) the vt `Options.mutex` retyped to the
@@ -2106,6 +2128,13 @@ renderer 19, crash 12, termio 44).
 
 ## rustty-apprt embedded E4 (Inspector — dcimgui + Metal) — Phase-3 inhabited placeholder
 
+**RESOLVED IN FULL (WS6, 2026-07-28).** dcimgui-sys IS wired; there is no
+Phase-3 leaf left anywhere on the E4 path. Each of the four deferred items
+below is closed — see the per-item RESOLVED notes. Backend rasterization is
+gated by the offscreen KAT `dcimgui-sys::metal_offscreen_render_writes_pixels`
+(WS6 T1), and ⌘⌥I opens a live, rendering inspector in `Rustty.app`
+(WS6 T5, screenshot-verified). The historical prose below is provenance only.
+
 Chunk E4 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §7, row E4): ports
 `embedded.zig:992-1243` into `crates/rustty-apprt/src/embedded.rs` — the `Inspector`
 (the dcimgui / Dear ImGui + Metal terminal inspector, 1:1 with a Surface) as a
@@ -2120,8 +2149,13 @@ R-d). What is REAL vs leaf:
 - **REAL (non-GPU):** the `Inspector`/`Backend` structs (all fields — `surface`,
   `ig_ctx` as an opaque `*mut c_void` for the un-bound dcimgui `*ImGuiContext`,
   `backend`, `content_scale`, `instant`); `updateContentScale` (caches
-  `content_scale`, the read `cursorPosCallback` needs — the dcimgui style-scaling is
-  elided as a documented leaf, method does NOT panic); `updateSize` (accepts the
+  `content_scale`, the read `cursorPosCallback` needs — **the dcimgui
+  style-scaling is no longer elided: WS6 T3 filled it**, so the method now also
+  runs `ImGui_SetCurrentContext` + `ImGuiStyle_ImGuiStyle` /
+  `ImGuiStyle_ScaleAllSizes` / `ImGui_GetStyle` exactly as the oracle
+  `embedded.zig:1111-1126`, gated by the KATs
+  `update_content_scale_rescales_active_imgui_style` and
+  `update_content_scale_is_idempotent_not_compounding`); `updateSize` (accepts the
   size; the imgui IO `DisplaySize` write is a dcimgui leaf, method does NOT panic —
   the Inspector has no Rust-side size field, `DisplaySize` lives in imgui's IO);
   `queueRender` (forwards LIVE to `Surface::queueInspectorRender`, the draw/refresh
@@ -2131,36 +2165,44 @@ R-d). What is REAL vs leaf:
 Deferred out of E4 (all Phase-3 leaves; NO new capability dropped — R1; every body
 preserved verbatim as comments, never fabricated):
 
-1. **`Inspector::init` / `deinit` — dcimgui context + core inspector Phase-3 leaf.**
-   `init` = `ImGui_CreateContext` + `CoreInspector.setup()` + `activateInspector`;
-   `deinit` = `deactivateInspector` + `ImGui_DestroyContext`. `unimplemented!()`
-   leaves. Because `init` is a leaf, **no live `Inspector` can be constructed this
-   milestone** — `Surface.inspector` stays `None` in practice, so `freeInspector` /
-   `Inspector::deinit` never actually run. **Target: Phase-3 R-d (dcimgui render path).**
+1. **`Inspector::init` / `deinit` — RESOLVED (WS6).** LIVE at
+   `crates/rustty-apprt/src/embedded.rs:1933` / `:1985` (commit `027f695`):
+   `init` = `ImGui_CreateContext` + `CoreInspector::setup()` +
+   `activateInspector`; `deinit` = `deactivateInspector` +
+   `ImGui_DestroyContext`. No `unimplemented!()` remains, live `Inspector`s are
+   constructed routinely, and `freeInspector` / `Inspector::deinit` really run.
 
-2. **`Inspector::initMetal` / `renderMetal` + `Backend::deinit` — objc/Metal Phase-3
-   leaf.** The two objc `objc.Object` handles → opaque `*mut c_void` (no objc2/coretext
-   dep now — blueprint §5/§8.1); `ImGui_ImplMetal_Init`/`NewFrame`/`RenderDrawData` +
-   the `MTLRenderCommandEncoder` msgSends + `ImGui_ImplMetal_Shutdown` are
-   `unimplemented!()` leaves. **Targets of the E10 Darwin CAPI**
-   `ghostty_inspector_metal_init`/`_metal_render`/`_metal_shutdown`. **Phase-3 R-d.**
+2. **`Inspector::initMetal` / `renderMetal` + `Backend::deinit` — RESOLVED
+   (WS6).** LIVE at `embedded.rs:2018` / `:2107` / `:1889` (commits `86b04b4`,
+   `0b8f7af`): real `ImGui_ImplMetal_Init`, the double-frame loop, the
+   `renderCommandEncoderWithDescriptor:` objc2 msgSends,
+   `ImGui_ImplMetal_RenderDrawData`, and `ImGui_ImplMetal_Shutdown` on the
+   `.metal` arm. The two objc handles still cross the C ABI as opaque
+   `*mut c_void`. That the vendored backend genuinely RASTERIZES (not merely
+   links) is proven by the real-`MTLDevice` offscreen readback KAT
+   `dcimgui-sys::metal_offscreen_render_writes_pixels` (WS6 T1). Driven by the
+   live `rustty_inspector_metal_init`/`_metal_render`/`_metal_shutdown` exports.
 
 3. **`Inspector::{mouseButtonCallback,scrollCallback,cursorPosCallback,focusCallback,
    textCallback,keyCallback}` + the private `newFrame` — dcimgui event/IO Phase-3
-   leaves.** Each drives `cimgui.c.ImGuiIO_Add*Event` (+ `key.imguiKey()`, itself the
-   already-deferred `Key::imgui_key` dcimgui binding in rustty-vt). `unimplemented!()`
-   leaves; `textCallback`'s `[:0]const u8` → `&CStr` (NUL sentinel handed to imgui).
-   `newFrame` is a private helper called ONLY by the deferred `renderMetal`, so it
-   carries `#[allow(dead_code)]` until that render path goes live. **Targets of the E9
-   CAPI** `ghostty_inspector_{mouse_button,mouse_scroll,mouse_pos,set_focus,text,key}`.
-   **Phase-3 R-d.**
+   leaves** — **RESOLVED (WS6).** All six callbacks plus the private `newFrame`
+   are LIVE (commit `c62ab07`): each drives the real
+   `dcimgui_sys::ImGuiIO_Add*Event` (+ `Key::imgui_key`, itself now bound).
+   `textCallback`'s `[:0]const u8` → `&CStr` (NUL sentinel handed to imgui).
+   `newFrame` is called by the live `renderMetal`, so the `#[allow(dead_code)]`
+   crutch is gone. Proven end-to-end by the WS6 T5 shakedown: typing
+   `echo hello-ws6` populates the inspector's Keyboard panel with the real
+   press/release rows (`key_o`/`key_l`/`key_w`/`key_s`/`enter`, with UTF-8 and
+   PTY-encoding columns) and its Terminal IO panel with the resulting VT events.
 
-4. **`Surface::initInspector` reaches the `Inspector::init` leaf at RUNTIME.** Ported
-   LIVE (real `Box::into_raw(Box::new(...))` heap-pin, mirroring the reference
-   `alloc.create` + placement `.init`); the `?` on `Inspector::init` panics once a
-   live inspector is requested (the E9 CAPI `ghostty_surface_inspector` seam). No new
-   leaf — LIVE delegation to leaf item 1. The `Inspector` back-pointer to `Surface`
-   is sound: the embedded `Surface` is itself heap-pinned (ADV-FIX 8).
+4. **`Surface::initInspector` — RESOLVED (WS6).** Always LIVE (real
+   `Box::into_raw(Box::new(...))` heap-pin, mirroring the reference
+   `alloc.create` + placement `.init`); it no longer reaches any leaf, because
+   item 1 is live. The `?` on `Inspector::init` is once again the reference's
+   own init-failure path (surfaced as a `null` return from
+   `rustty_surface_inspector`, which the macOS host null-guards), NOT a port
+   placeholder. The `Inspector` back-pointer to `Surface` is sound: the embedded
+   `Surface` is itself heap-pinned (ADV-FIX 8).
 
 **RESOLVED by E4 (were E2 deferrals):** E2 item 1 (`Inspector` E2→E4 sequencing stub)
 — the opaque `_e4: ()` stub + `unimplemented!()` `deinit` are replaced by the real
@@ -4578,55 +4620,46 @@ and any `config.h` additions, expand the `gettext-sys` FFI surface
 stays** — the working build is NOT broken (P3 rule: keep the system/Homebrew link
 when the self-contained swap is a large change).
 
-## P2 crash-guard: on-feature quicklook/inspector leaves [added 2026-07-12, panic=abort abort-policy pass]
+## P2 crash-guard: on-feature quicklook/inspector leaves — RESOLVED [closed 2026-07-28 by WS6]
 
-**Context:** the shipped lib is `panic=abort` (assert-class aborts, like Zig's
-trap). These not-yet-ported FEATURE leaves sit on user-triggerable paths in the
-live macOS app (W-ATTACH), so an `unimplemented!()` there would ABORT THE WHOLE
-APP the instant the user triggers the feature. (`rustty_surface_quicklook_word`
-was un-deferred + fully ported in P2.1 — it is objc-free core/vt, so it is now
-functional, not a guarded leaf. `rustty_surface_quicklook_font` was un-deferred +
-fully ported in P2.2 — it reads the shared font grid's primary CoreText face via
-objc2-core-text and returns the +1 CTFontRef (I16), so it too is now functional;
-the ONE remaining leaf — `Inspector::init` — stays guarded.) Per
-PREPORT_SWIFT_APP §4 abort
-policy, a not-yet-ported FEATURE degrades to a recoverable no-op (faithful, and
-strictly better than aborting). Each `unimplemented!()` was replaced with the
-export's own error-sentinel — which in every case coincides with a genuine
-reference return value — plus an `eprintln!("<feature> not yet ported")` warn and
-a `TODO(port)` (the verbatim reference body is preserved above each). The Zig
-`log.warn`→`eprintln!` mapping matches this codebase's convention (e.g.
-`rustty_surface_inspector`'s `log.err`→`eprintln!`); the `log` crate is not a
-dep of apprt/apprt-c.
+All three guarded leaves are gone; there is no crash-guard sentinel left anywhere
+in the tree (`grep -rn "not yet ported\|TODO(port)" crates/rustty-apprt/src/embedded.rs
+crates/rustty-apprt-c/src/lib.rs` -> no hits).
 
-**Guarded leaves (the REACHABLE-on-feature aborts):**
+- `rustty_surface_quicklook_word` — un-deferred + fully ported in P2.1 (objc-free
+  core/vt).
+- `rustty_surface_quicklook_font` — un-deferred + fully ported in P2.2 (CoreText
+  face read via objc2-core-text, returning the +1 CTFontRef the host releases, I16).
+- `embedded::Inspector::init` — un-deferred by the 2026-07-14 inspector series
+  (`027f695`): it creates the per-Surface Dear ImGui context, runs
+  `CoreInspector::setup()`, and activates the core inspector. The `eprintln!`
+  no-op sentinel and its `Err(ApprtError)` early return were removed with it; the
+  export's `null` return is once again the reference's own init-failure path, not
+  a placeholder. The downstream chain (`deinit`/`initMetal`/`renderMetal`,
+  `Backend::deinit`, the `rustty_inspector_metal_*` exports, core
+  `activate`/`deactivateInspector`, `queueInspectorRender`) is likewise live, so
+  the old "reachability analysis" that justified guarding only `init` no longer
+  applies — nothing downstream is unconstructible any more.
 
-1. **`embedded::Inspector::init`** (`crates/rustty-apprt/src/embedded.rs`).
-   Trigger: opening the inspector (`ghostty_surface_inspector` → `initInspector`
-   → here). This is the FIRST reachable leaf on the inspector feature. Sentinel:
-   `Err(ApprtError)` — the reference's own init-failure path: `rustty_surface_
-   inspector` catches it (`initInspector() catch return null`) and the macOS app
-   null-guards the result (SurfaceView_AppKit.swift:155 `guard let cInspector …
-   else { return nil }`), so the inspector simply does not open.
-
-**Why the downstream inspector leaves need NO guard (reachability analysis):**
-the core `Surface.activateInspector`/`deactivateInspector` (surface.rs), the
-`embedded::Inspector::deinit`/`initMetal`/`renderMetal` leaves, the
-`rustty_inspector_metal_*` exports, and `queueInspectorRender` are ALL reachable
-only via a *live* `Inspector` handle. Guarding `Inspector::init` (#1) makes that
-handle unconstructible, so none of them can fire on-feature — they stay honest
-Phase-3 `unimplemented!()` deferrals (untouched; R5). `activateInspector` /
-`deactivateInspector` additionally have zero live callers (the only reference is
-`Inspector::init`'s own verbatim-commented body). `redrawInspector` /
-`queueInspectorRender` have no C export or Swift caller at all.
-
-**Un-defer trigger:** the Phase-3 renderer/dcimgui fill. `Inspector::init`
-(+ its downstream metal chain) lands with the dcimgui ImGui context + Metal
-backend. On that fill, drop the `eprintln!` guard and restore the verbatim body —
-the export signature already carries the faithful sentinel return. (quicklook_word:
-DONE in P2.1 — objc-free, needed no Phase-3 fill. quicklook_font: DONE in P2.2 —
-the CoreText font-grid read (embedded.zig:2147-2186) landed via objc2-core-text,
-returning the +1 CTFontRef the host releases (I16).)
+**Runtime sign-off (WS6, 2026-07-28):** cmd+opt+i opens a rendering inspector in
+Rustty.app, docked under the terminal with the live
+Terminal / Surface / Keyboard / Terminal IO / Renderer tab bar; the Terminal tab
+shows a populated Screen Status table (primary `active`, alternate
+`(not initialized)`) plus Misc/Layout/Mouse/Color/Modes sections, and the Screen
+sub-window shows live Info/Cell/PageList with a real cursor position. Typed input
+populates the Keyboard panel (per-key press/release rows with UTF-8 + PTY
+encoding) and the Terminal IO panel (live VT events). The ImGui style really
+rescales with display density — verified by an A/B rebuild against a tree with
+WS6 T3 reverted: without T3 the chrome is frozen at the unscaled 1.0 defaults
+(inspector row pitch ~21 px), with T3 it is the default style run through
+`ScaleAllSizes` at the Retina backing scale (row pitch ~27 px, i.e.
+`FramePadding.y` 3 -> 6 exactly as `ImTrunc(v * 2.0)` predicts).
+Screenshots: `/tmp/ws6/inspector-open.png`, `/tmp/ws6/inspector-keyboard.png`,
+`/tmp/ws6/inspector-after-input.png`, `/tmp/ws6/inspector-screen.png`,
+`/tmp/ws6/v2-inspector-open.png` (final HEAD build), and the HiDPI A/B pair
+`/tmp/ws6/ab-NO-T3.png` vs `/tmp/ws6/v2-inspector-open.png`.
+Backend rasterization is additionally gated by the offscreen KAT
+`dcimgui-sys::metal_offscreen_render_writes_pixels`.
 
 ---
 
@@ -4747,13 +4780,17 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
     `try_borrow_mut` failed). Both fixed by the queue-pending prepare/check rewrite. Still-open
     coupled sub-item: `Window` snapshots the decoration mode at init, so a LIVE compositor
     decoration-mode change (now cranked) is not re-read — a separate tracked deferral.
-- **`gtk/class/inspector_*` + `imgui_widget` — the dcimgui terminal inspector (L6).** Already a
-  port-wide tracked deferral (see the `dcimgui`/`imgui` entries above): the `.inspector`
-  performAction arm + `Surface::control_inspector` are placeholder-leaves returning false; the
-  `InspectorWindow`/`imgui_widget` GTypes are unported. Debug/developer-facing only; needs the
-  `imgui`/dcimgui binding (off-by-default `imgui` cargo feature) + ~1.5k lines of inspector UI.
-  Not a daily-use feature; the separate inspector-port plan (`docs/superpowers/plans/
-  2026-07-14-inspector-port.md`) owns it.
+- **`gtk/class/inspector_*` + `imgui_widget` — the dcimgui terminal inspector (L6)
+  — RESOLVED [2026-07-19].** The GTK/OpenGL3 inspector landed (commits `657f223`,
+  `f780650`): the `.inspector` performAction arm and `Surface::control_inspector`
+  are live, the `InspectorWindow`/`imgui_widget` GTypes are ported, and the
+  OpenGL3 backend arm of `dcimgui-sys` (`imgui_impl_opengl3.cpp`, the
+  `#[cfg(not(target_os = "macos"))]` FFI block) is gated by the
+  `opengl3_symbols_link` KAT plus the `gtk_inspector_dump` framebuffer KAT. It
+  shares the same `crates/rustty-inspector` widget render as the macOS/Metal
+  inspector, so WS6's G3b zero-drop proof covers both. The 2026-07-14
+  inspector-port plan is superseded; WS6 closed the macOS half.
+  Remaining Linux debt is the frame-time-plot row in VERIFICATION_DEBT.md.
 - **`+new-window -e <cmd>` argv override — DONE [2026-07-19].** `action_new_window`
   (`class/application.rs`) now parses the received `new-window-command` `as` parameter
   (`-e`/`--command=`/`--working-directory=`/`--title=`) into a `TabOverrides` and opens the window

@@ -47,6 +47,47 @@ there means the macOS shim's wake semantics diverge — capture per-thread backt
 Also worthwhile while there: `cargo build -p rustty-apprt` (macOS apprt untouched this
 session — expected no-op confirmation).
 
+## V1b. macOS terminal inspector (cmd+opt+i) — SIGNED OFF [WS6, 2026-07-28]
+
+**Status: CLOSED.** This entry records the macOS counterpart of the Linux
+inspector debt in V2 item 3 (which stays OPEN for its frame-time-plot check —
+that is a VM-track item).
+
+The macOS Dear ImGui / Metal inspector is runtime-verified. On the WS6 branch
+HEAD, `bash macos/build-rustty.sh` → launch → **cmd+opt+i** opens a live,
+rendering inspector docked under the terminal, with the
+Terminal / Surface / Keyboard / Terminal IO / Renderer tab bar and live values:
+
+- **Terminal** — Screen Status table (primary `active`, alternate
+  `(not initialized)`) + Misc/Layout/Mouse/Color/Modes sections.
+- **Screen** — Info/Cell/PageList sub-tabs with a real cursor position.
+- **Keyboard** — per-key press/release rows with Mods / UTF-8 / PTY-encoding /
+  Binding columns, populated by real typing.
+- **Terminal IO** — the live VT event stream (`csi`/`esc`/`osc` records).
+
+Evidence (screenshots): `/tmp/ws6/inspector-open.png`,
+`/tmp/ws6/inspector-keyboard.png`, `/tmp/ws6/inspector-after-input.png`,
+`/tmp/ws6/inspector-screen.png`, `/tmp/ws6/v2-inspector-open.png`.
+
+**HiDPI style rescale** (the WS6 T3 deliverable) was verified by an A/B rebuild
+rather than a monitor swap (only one built-in Retina display was available):
+with T3 reverted the ImGui chrome is frozen at the unscaled 1.0 defaults
+(inspector row pitch ~21 px, `/tmp/ws6/ab-NO-T3.png`); with T3 it is the default
+style run through `ScaleAllSizes` at the Retina backing scale (row pitch ~27 px,
+i.e. `FramePadding.y` 3 → 6, exactly `ImTrunc(v * 2.0)`).
+
+Backend rasterization is additionally gated in CI-able form by the offscreen
+real-`MTLDevice` readback KAT
+`dcimgui-sys::metal_offscreen_render_writes_pixels`, and the style rescale by
+`update_content_scale_rescales_active_imgui_style` /
+`update_content_scale_is_idempotent_not_compounding`.
+
+**Residual (minor):** a genuine cross-DPI monitor drag was not performed — the
+rescale is proven by the A/B plus the KATs, and the host wiring
+(`InspectorView.swift:173` `updateSize()` → `setContentScale`, computed from
+`convertToBacking`) was read and confirmed. Re-verify opportunistically on a
+multi-display machine.
+
 ## V2. Bare-metal GPU rendering/perf sign-off (blocked: VM is llvmpipe-only)
 
 **Context.** ALL Linux/GTK rendering validation to date ran on llvmpipe (software GL
