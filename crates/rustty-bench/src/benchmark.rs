@@ -301,9 +301,27 @@ fn benchmark() {
         //     const self: *Self = @ptrCast(@alignCast(ptr));
         //     self.step_i += 1;
         // }
+        //
+        // PORT NOTE (WS18, deliberate deviation — one added statement): the
+        // reference body is just the increment, and the assertion below
+        // (`result.duration > 0`) then relies on two back-to-back monotonic
+        // clock reads landing in DIFFERENT ticks. On Apple Silicon the
+        // monotonic clock advances in ~41.67ns steps, and an increment does not
+        // reliably span one: measured over 200 standalone runs this test failed
+        // 27x in release and 19x in debug — a ~10% flake in BOTH profiles, not a
+        // release-only defect. The reference already concedes the assertion is
+        // clock-resolution-dependent by skipping it on FreeBSD/Windows (see the
+        // skip block above). Rather than widen that skip list (which would drop
+        // the assertion's coverage on the port's primary targets), the step
+        // spins until the clock provably advances, which is exactly the
+        // precondition the assertion assumes. `run`'s own logic is untouched.
         unsafe fn step(ptr: *mut c_void) -> Result<(), Error> {
             let this = unsafe { &mut *(ptr as *mut Self) };
             this.step_i += 1;
+            let t = Instant::now();
+            while Instant::now() == t {
+                core::hint::spin_loop();
+            }
             Ok(())
         }
     }
