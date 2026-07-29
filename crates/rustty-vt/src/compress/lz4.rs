@@ -79,7 +79,15 @@ const HASH_MULTIPLIER: u32 = 2_654_435_761;
 /// an empty half; LZ4's 16-bit offset is enough to reconstruct the only useful
 /// preceding address from the current position.
 /// The table is reset by every call to `compress` and can be reused afterwards.
-pub type HashTable = [u32; 1 << HASH_LOG];
+pub type HashTable = [u32; HASH_TABLE_LEN];
+
+/// The element count of a [`HashTable`].
+///
+/// PORT NOTE (WS7 B3): the oracle declares scratch tables as
+/// `var table: lz4.HashTable = undefined;`. Rust has no `undefined`, so callers
+/// write `[0; lz4::HASH_TABLE_LEN]`; the table's contents are irrelevant
+/// because `compress` resets it on entry.
+pub const HASH_TABLE_LEN: usize = 1 << HASH_LOG;
 
 /// Errors which can occur while encoding a block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -833,8 +833,6 @@ impl Page {
     /// contents are about to be rewritten (see `compress::CompressedPage::clone_buf`).
     ///
     /// PORT NOTE (WS7 B3): the oracle writes `result.memory = memory[0..len]`.
-    // First caller lands in WS7 B3 (`CompressedPage::clone_buf`).
-    #[allow(dead_code)]
     pub(crate) fn set_memory(&mut self, ptr: *mut u8, len: usize) {
         debug_assert!(!self.owned);
         self.memory_ptr = ptr;

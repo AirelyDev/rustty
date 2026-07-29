@@ -12,3 +12,7 @@ pub mod lz4;
 // test { _ = @import("lz4_differential.zig"); } (lz4.zig's trailing test block)
 #[cfg(test)]
 mod lz4_differential;
+
+/// The compressed terminal page representation.
+pub mod page;
+pub use page::{required_scratch, CompressedPage};
