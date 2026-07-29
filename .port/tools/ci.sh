@@ -20,6 +20,11 @@
 # GATE SUITE (canonical scripts; ci.sh does NOT reimplement them — it runs them):
 #   G7  check_acyclic.sh             crate graph acyclic (R4)        -> HARD-FAIL
 #   G4  run_differential.sh          differential VT + harness ctrl  -> HARD-FAIL
+#   G-REL check_release_lane.sh      `cargo test --release` green    -> HARD-FAIL
+#                                    (steps 3/4 only cover the DEBUG profile;
+#                                    this is the release counterpart. Build +
+#                                    test under `--release`, watchdogged so a
+#                                    hang is RED rather than an infinite wait.)
 #   G4-uni run_unicode_diff.sh       unicode tables vs LIVE uucode    -> HARD-FAIL
 #                                    (ORACLE #2: rustty's embedded width/symbol/
 #                                    Properties/grapheme tables diffed full-range
@@ -141,6 +146,16 @@ GATE_REGISTRY=(
   "G7|HARD|bash $GATES/check_acyclic.sh"
   "G4|HARD|bash $GATES/run_differential.sh"
   "G4-uni|HARD|bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh"
+  # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
+  # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
+  # across 7 targets. Most were tests driving a seam the port deliberately
+  # compiles out without `debug_assertions` (tripwire fail points, the
+  # slow-runtime-safety integrity gate); those now carry
+  # `#[cfg_attr(not(debug_assertions), ignore)]`, and this gate is what keeps a
+  # NEW release-only failure — or a new injection test that forgot the attribute
+  # — from going unnoticed again. HARD: it is green today and its verdict has a
+  # `--self-test` RED-flip proof.
+  "G-REL|HARD|bash $GATES/check_release_lane.sh"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"

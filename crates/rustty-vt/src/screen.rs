@@ -10973,6 +10973,12 @@ mod tests {
 
     // test "selectionString map allocation failure cleanup"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn selection_string_map_allocation_failure_cleanup() {
         use rustty_util::tripwire::ResetMode;
 
@@ -12285,6 +12291,12 @@ mod tests {
 
     // test "Screen: implicit hyperlink ID wraps" (allocation-failure rollback half)
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn screen_implicit_hyperlink_id_wrap_rolls_back_on_allocation_failure() {
         let mut s = mkscreen(5, 5, 0);
 

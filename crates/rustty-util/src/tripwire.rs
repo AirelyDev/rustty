@@ -347,6 +347,12 @@ mod tests {
     }
 
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn test_anon_0() {
         let mut io: Module<Io, AnyError> = module();
 
@@ -399,6 +405,12 @@ mod tests {
     }
 
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn errorAfter() {
         let mut io: Module<Io, AnyError> = module();
         // Trip after 2 calls (on the 3rd call)

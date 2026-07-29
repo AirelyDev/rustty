@@ -1344,6 +1344,12 @@ mod tests {
 
     // test "init error"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn init_error() {
         // Test every failure point in `init` and ensure that we don't
         // leak memory (testing.allocator verifies) since we're exiting early.
@@ -1372,6 +1378,12 @@ mod tests {
 
     // test "reserve error"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn reserve_error() {
         // Test every failure point in `reserve` and ensure that we don't
         // leak memory (testing.allocator verifies) since we're exiting early.
@@ -1398,6 +1410,12 @@ mod tests {
 
     // test "grow error"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn grow_error() {
         // Test every failure point in `grow` and ensure that we don't
         // leak memory (testing.allocator verifies) since we're exiting early.

@@ -5136,6 +5136,12 @@ mod tests {
     // set_title/set_pwd allocation-failure tests (WS8 T5). Mirrors the
     // tabstops.rs `RESIZE_TW` usage exactly.
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn terminal_set_string_tripwire_seam_arms_and_resets() {
         SET_STRING_TW.with(|tw| {
             tw.borrow_mut()
@@ -5152,6 +5158,12 @@ mod tests {
 
     // test "Terminal: setPwd preserves a sentinel on allocation failure"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn terminal_set_pwd_preserves_a_sentinel_on_allocation_failure() {
         let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
 
@@ -5203,6 +5215,12 @@ mod tests {
 
     // test "Terminal: setTitle preserves a sentinel on allocation failure"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn terminal_set_title_preserves_a_sentinel_on_allocation_failure() {
         let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
 
@@ -15159,6 +15177,12 @@ mod tests {
 
     // test "Terminal: fullReset tracked pins"
     #[test]
+    // WS18 release lane: this test drives a slow-runtime-safety mechanism (the
+    // pagelist integrity gate / `pin_is_valid`), which the port compiles out when
+    // `debug_assertions` is off — faithful to the reference's
+    // `build_options.slow_runtime_safety`, under which the oracle's test only
+    // exists. Debug-only; it still runs and passes there.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn terminal_full_reset_tracked_pins() {
         let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
 
@@ -15254,6 +15278,12 @@ mod tests {
 
     // test "Terminal: resize preserves tabstops on allocation failure"
     #[test]
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn terminal_resize_preserves_tabstops_on_allocation_failure() {
         let alloc = Global;
         let mut t = Terminal::init(alloc, opts(10, 1)).unwrap();

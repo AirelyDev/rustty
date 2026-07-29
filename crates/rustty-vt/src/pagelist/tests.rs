@@ -134,6 +134,12 @@ fn pagelist() {
 
 // ref: test "PageList init error"
 #[test]
+// WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+// fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+// faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+// `debug_assertions` the fail point never trips, so the test can only run in
+// debug — where it still runs and passes. NOT disabled to hide a failure.
+#[cfg_attr(not(debug_assertions), ignore)]
 fn pagelist_init_error() {
     use super::{InitFp, InitPagesFp, OutOfMemory, INIT_PAGES_TW, INIT_TW};
     use rustty_util::tripwire::ResetMode;
@@ -2624,6 +2630,12 @@ fn pagelist_split_preserves_styled_cells() {
 // corrupted `total_rows`, and requires the integrity gate to PANIC on that
 // error exit (pre-fix: the call returned `Err` silently — fail-first).
 #[test]
+// WS18 release lane: this test drives a slow-runtime-safety mechanism (the
+// pagelist integrity gate / `pin_is_valid`), which the port compiles out when
+// `debug_assertions` is off — faithful to the reference's
+// `build_options.slow_runtime_safety`, under which the oracle's test only
+// exists. Debug-only; it still runs and passes there.
+#[cfg_attr(not(debug_assertions), ignore)]
 fn pagelist_erase_row_error_path_runs_integrity_gate() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
