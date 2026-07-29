@@ -333,6 +333,117 @@ fn copy_match(output: &mut [u8], op_: usize, offset: usize, match_len: usize) {
     }
 }
 
+/// Emit one non-final sequence.
+///
+/// A sequence starts with a token, followed by optional literal length bytes,
+/// the literals themselves, the two-byte offset, and optional match length
+/// bytes. This function computes the complete size first so `OutputTooSmall`
+/// is reported without partially writing a sequence.
+fn emit_sequence(
+    output: &mut [u8],
+    op: &mut usize,
+    literals: &[u8],
+    offset: u16,
+    match_len: usize,
+) -> Result<(), CompressError> {
+    debug_assert!(match_len >= MIN_MATCH);
+    debug_assert!(offset > 0);
+
+    let encoded_match_len = match_len - MIN_MATCH;
+
+    // One byte is always needed for the token and two for the offset. Each
+    // length may additionally need extension bytes after its token nibble.
+    let required = 1
+        + encoded_length_bytes(literals.len())
+        + literals.len()
+        + 2
+        + encoded_length_bytes(encoded_match_len);
+    if required > output.len() - *op {
+        return Err(CompressError::OutputTooSmall);
+    }
+
+    let token_pos = *op;
+    *op += 1;
+
+    // Lengths below 15 fit directly in their nibble. Larger values put 15 in
+    // the nibble and encode the remainder immediately after the token.
+    output[token_pos] = ((core::cmp::min(literals.len(), 15) as u8) << 4)
+        | (core::cmp::min(encoded_match_len, 15) as u8);
+
+    // Literal length extensions precede the literals they describe.
+    if literals.len() >= 15 {
+        write_length(output, op, literals.len() - 15);
+    }
+    output[*op..*op + literals.len()].copy_from_slice(literals);
+    *op += literals.len();
+
+    // Match length extensions follow the offset because this is where the
+    // decoder expects them in an LZ4 sequence.
+    write_u16_at(output, *op, offset);
+    *op += 2;
+    if encoded_match_len >= 15 {
+        write_length(output, op, encoded_match_len - 15);
+    }
+
+    Ok(())
+}
+
+/// Emit the literal-only sequence which terminates every block.
+///
+/// There is no offset or match length after these bytes. As with
+/// `emit_sequence`, capacity is checked before modifying the output.
+fn emit_last_literals(
+    output: &mut [u8],
+    op: &mut usize,
+    literals: &[u8],
+) -> Result<(), CompressError> {
+    let required = 1 + encoded_length_bytes(literals.len()) + literals.len();
+    if required > output.len() - *op {
+        return Err(CompressError::OutputTooSmall);
+    }
+
+    output[*op] = (core::cmp::min(literals.len(), 15) as u8) << 4;
+    *op += 1;
+    if literals.len() >= 15 {
+        write_length(output, op, literals.len() - 15);
+    }
+    output[*op..*op + literals.len()].copy_from_slice(literals);
+    *op += literals.len();
+
+    Ok(())
+}
+
+/// Return the number of extension bytes needed when a length is represented by
+/// a token nibble plus zero or more bytes. An extended length always ends with
+/// a byte below 255, so an exact multiple of 255 requires a final zero byte.
+fn encoded_length_bytes(encoded_len: usize) -> usize {
+    if encoded_len < 15 {
+        return 0;
+    }
+    (encoded_len - 15) / 255 + 1
+}
+
+/// Write the portion of a length which did not fit in the token nibble.
+///
+/// Each 255 byte means "add 255 and continue". The final byte is always less
+/// than 255 and may be zero.
+fn write_length(output: &mut [u8], op: &mut usize, length_: usize) {
+    let mut length = length_;
+    while length >= 255 {
+        output[*op] = 255;
+        *op += 1;
+        length -= 255;
+    }
+    output[*op] = length as u8;
+    *op += 1;
+}
+
+/// Write an unaligned little-endian `u16` at `position`.
+#[inline(always)]
+fn write_u16_at(output: &mut [u8], position: usize, value: u16) {
+    output[position..position + 2].copy_from_slice(&value.to_le_bytes());
+}
+
 // -- Unaligned little-endian reads / intra-buffer wide copies --------------
 //
 // PORT NOTE: the oracle uses `std.mem.readInt(..., .little)` on a fixed-size
@@ -511,5 +622,47 @@ mod tests {
             decompress(&[0], &mut output[0..1]),
             Err(DecompressError::OutputSizeMismatch)
         );
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "maximum match offset compatibility vector"`
+    ///
+    /// Builds a maximum-offset block using the encoder's own `write_length`,
+    /// then decodes it. This is the encoder/decoder handshake at the format's
+    /// 16-bit offset boundary.
+    #[test]
+    fn lz4_maximum_match_offset_compatibility_vector() {
+        let literal_len: usize = u16::MAX as usize;
+        let extension_len = (literal_len - 15) / 255 + 1;
+        let mut encoded = vec![0u8; 1 + extension_len + literal_len + 2];
+        let mut output = vec![0u8; literal_len + MIN_MATCH];
+
+        let mut op: usize = 0;
+        encoded[op] = 0xF0;
+        op += 1;
+        write_length(&mut encoded, &mut op, literal_len - 15);
+        for (i, byte) in encoded[op..op + literal_len].iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        op += literal_len;
+        write_u16_at(&mut encoded, op, u16::MAX);
+        op += 2;
+
+        assert_eq!(encoded.len(), op);
+        assert_eq!(decompress(&encoded, &mut output), Ok(output.len()));
+        assert_eq!(
+            &encoded[1 + extension_len..1 + extension_len + 4],
+            &output[literal_len..]
+        );
+    }
+
+    /// Direct unit coverage for the extension-byte length encoding rule: an
+    /// exact multiple of 255 needs a trailing zero byte.
+    #[test]
+    fn lz4_encoded_length_bytes_boundaries() {
+        assert_eq!(encoded_length_bytes(0), 0);
+        assert_eq!(encoded_length_bytes(14), 0);
+        assert_eq!(encoded_length_bytes(15), 1);
+        assert_eq!(encoded_length_bytes(15 + 254), 1);
+        assert_eq!(encoded_length_bytes(15 + 255), 2);
     }
 }
