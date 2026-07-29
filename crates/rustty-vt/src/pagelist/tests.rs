@@ -1947,6 +1947,137 @@ fn pagelist_compact_oversized_page() {
 // cannot exercise (see `decommit_pool_item`). The reference allocates a
 // page-aligned `std_size` buffer from `testing.allocator`; the Rust port uses a
 // plain `Vec<u8>` because the test path never touches the pointer alignment.
+/// Write highly compressible rows until the list holds at least `pages` pages.
+fn fill_compressible_history(s: &mut PageList, pages: usize) {
+    let mut iterations = 0usize;
+    while s.total_pages() < pages {
+        let _ = s.grow().unwrap();
+        // Write a compressible marker so the page is not entirely zeroes (a
+        // fully-zero page compresses too, but this keeps the workload honest).
+        let node = s.pages.last;
+        unsafe {
+            let page = super::Node::page(node);
+            let rows = (*page).size.rows as usize;
+            let cols = (*page).size.cols as usize;
+            if rows > 0 && cols > 0 {
+                let rac = (*page).get_row_and_cell(0, rows - 1);
+                *rac.cell = cell_codepoint('a' as u32);
+            }
+        }
+        iterations += 1;
+        assert!(iterations < 100_000, "history did not grow to {pages} pages");
+    }
+}
+
+/// A cold history page compresses, its mapping is discarded, and reading it
+/// back restores identical bytes.
+#[test]
+fn pagelist_compress_page_round_trips_a_cold_history_page() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 3);
+
+    let node = s.pages.first;
+    let (ptr, len, expected) = unsafe {
+        let p = super::Node::page(node);
+        let ptr = (*p).memory_ptr() as *mut u8;
+        let len = (*p).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+
+    assert!(s.compress_page(node));
+    assert_eq!(unsafe { super::Node::storage(node) }, Storage::Compressed);
+    // The test build of `mem::decommit` zeroes instead of calling madvise.
+    assert!(unsafe { core::slice::from_raw_parts(ptr, len) }
+        .iter()
+        .all(|&b| b == 0));
+
+    let restored = unsafe { super::Node::page(node) };
+    assert_eq!(unsafe { (*restored).memory_ptr() }, ptr as *const u8);
+    assert_eq!(
+        unsafe { core::slice::from_raw_parts(ptr, len) },
+        &expected[..]
+    );
+    s.deinit();
+}
+
+/// Compressing twice is a no-op: `compress_page` only accepts resident nodes.
+#[test]
+fn pagelist_compress_page_rejects_an_already_compressed_node() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 3);
+    let node = s.pages.first;
+    assert!(s.compress_page(node));
+    assert!(!s.compress_page(node));
+    let _ = unsafe { super::Node::page(node) };
+    s.deinit();
+}
+
+/// A failing strict decommit leaves the node resident and its mapping intact.
+#[test]
+fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
+    use rustty_util::tripwire::ResetMode;
+
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 3);
+
+
+    let node = s.pages.first;
+    let (ptr, len, expected) = unsafe {
+        let p = super::Node::page(node);
+        let ptr = (*p).memory_ptr() as *mut u8;
+        let len = (*p).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+
+    super::compress::COMPRESS_PAGE_TW.with(|tw| {
+        tw.borrow_mut().errorAlways(
+            super::compress::CompressPageFp::Decommit,
+            super::compress::DecommitFailed,
+        )
+    });
+    assert!(!s.compress_page(node));
+    assert_eq!(unsafe { super::Node::storage(node) }, Storage::Resident);
+    assert_eq!(
+        unsafe { core::slice::from_raw_parts(ptr, len) },
+        &expected[..]
+    );
+
+    // With the tripwire disarmed, the same page compresses normally.
+    super::compress::COMPRESS_PAGE_TW
+        .with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    assert!(s.compress_page(node));
+    let _ = unsafe { super::Node::page(node) };
+    s.deinit();
+}
+
+/// A full pass compresses every complete offscreen history page and leaves the
+/// viewport and active pages resident.
+#[test]
+fn pagelist_compress_full_leaves_viewport_and_active_resident() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 4);
+
+    s.compress_full();
+
+    let active = s.get_top_left(point::Tag::Active).node;
+    let viewport_first = s.get_top_left(point::Tag::Viewport).node;
+    let viewport_last = s.get_bottom_right(point::Tag::Viewport).unwrap().node;
+    assert_eq!(unsafe { super::Node::storage(active) }, Storage::Resident);
+    assert_eq!(
+        unsafe { super::Node::storage(viewport_first) },
+        Storage::Resident
+    );
+    assert_eq!(
+        unsafe { super::Node::storage(viewport_last) },
+        Storage::Resident
+    );
+    assert_eq!(
+        unsafe { super::Node::storage(s.pages.first) },
+        Storage::Compressed
+    );
+    s.deinit();
+}
+
 /// A node built from a compressed representation restores to the SAME mapping
 /// and yields identical bytes; `page()` transparently restores.
 #[test]

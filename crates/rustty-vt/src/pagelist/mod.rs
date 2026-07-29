@@ -66,6 +66,7 @@
 // Cluster sub-files (each an `impl PageList {}` carrying that cluster's owner
 // doc headers). See the module doc comment above for the cluster map.
 pub mod access;
+pub mod compress;
 pub mod erase;
 pub mod grow;
 pub mod iter;
