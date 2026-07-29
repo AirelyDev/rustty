@@ -3079,23 +3079,36 @@ impl Renderer {
         // re-deref it FRESH at every use, matching the Zig `state.terminal.…` re-walk.
         let t = state.terminal; // *mut Terminal
 
-        // Hand-rolled `defer state.mutex.unlock()` (macos_impl §C.4/RISK-5): the
+        // Hand-rolled `defer state.unlockDemand()` (macos_impl §C.4/RISK-5): the
         // guard-less `Mutex` has no RAII drop, and the lock is held across THREE exits
         // — the sync-output early `return`, the `terminal_state.update(...)?`
         // propagation, and normal fall-through. This `Drop` fires on all three.
-        struct Unlock<'a>(&'a Mutex);
+        //
+        // (D4, oracle d34b54e9b: the guard now borrows the whole `State` because the
+        // release path is `unlock_demand`, not a bare `mutex.unlock` — it must also
+        // bump the handoff generation and wake parked yielders. A shared `&State` is
+        // disjoint from the `&mut self` uses inside the block, exactly as the bare
+        // `&Mutex` was.)
+        struct Unlock<'a>(&'a state::State);
         impl Drop for Unlock<'_> {
             fn drop(&mut self) {
-                self.0.unlock();
+                // SAFETY: same as the `lock_demand` below — `state.mutex` is the live
+                // shared render mutex, held by this frame.
+                unsafe { self.0.unlock_demand() };
             }
         }
 
         // Update all our data as tightly as possible within the mutex.
         let mut critical: Critical = {
+            // Lock while signaling demand so the IO parse thread can't starve us.
+            // See renderer::State::lock_demand.
+            //
+            // SAFETY: `state.mutex` points at the live shared render-state mutex and
+            // this frame does not already hold it.
             unsafe {
-                (*state.mutex).lock();
+                state.lock_demand();
             }
-            let _mutex_guard = Unlock(unsafe { &*state.mutex });
+            let _mutex_guard = Unlock(state);
 
             // If we're in a synchronized output state, we pause all rendering.
             if unsafe { (*t).modes.get(Mode::SynchronizedOutput) } {
@@ -4226,6 +4239,10 @@ mod tests {
             inspector_ptr: None,
             preedit: None,
             mouse: state::Mouse::default(),
+            // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
         };
         // Drive the full pipeline through update_frame: fills cells + uniforms;
         // rebuild_cells sets dirty. cursor_blink_visible=true ⇒ visible block cursor.

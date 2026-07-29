@@ -139,6 +139,10 @@ impl Harness {
                 inspector_ptr: None,
                 preedit: None,
                 mouse: rustty_renderer::state::Mouse::default(),
+                // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
             }));
 
         // A throwaway renderer mailbox (pushes queue; the io thread's

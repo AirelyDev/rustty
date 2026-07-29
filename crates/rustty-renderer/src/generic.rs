@@ -4482,18 +4482,24 @@ mod macos_impl {
             // re-walk (Chunk 3c §C.2).
             let t = state.terminal; // *mut Terminal
 
-            // Hand-rolled `defer state.mutex.unlock()` (Chunk 3c §C.4/RISK-5): the
+            // Hand-rolled `defer state.unlockDemand()` (Chunk 3c §C.4/RISK-5): the
             // guard-less `rustty_zigstd::thread::Mutex` has no RAII drop, and the lock
             // is held across THREE exits — the sync-output early `return`, the
             // `terminal_state.update(...)?` propagation (the sole propagating `?`,
-            // INSIDE the lock), and normal fall-through. This `Drop` over `&Mutex`
-            // fires on all three. Sound: it borrows the mutex allocation behind
-            // `state.mutex`, disjoint from `self`, so it does not clash with the
+            // INSIDE the lock), and normal fall-through. This `Drop` fires on all
+            // three. Sound: it borrows `state` SHAREDLY (and through it the mutex
+            // allocation), disjoint from `self`, so it does not clash with the
             // `&mut self.terminal_state` / `&mut *t` uses inside the block.
-            struct Unlock<'a>(&'a Mutex);
+            //
+            // (D4, oracle d34b54e9b: the guard borrows the whole `&State` rather than
+            // just `&Mutex` because the release path is now `unlock_demand`, which
+            // must also bump the handoff generation and wake parked yielders.)
+            struct Unlock<'a>(&'a state::State);
             impl Drop for Unlock<'_> {
                 fn drop(&mut self) {
-                    self.0.unlock();
+                    // SAFETY: as for the `lock_demand` below — `state.mutex` is the
+                    // live shared render mutex, held by this frame.
+                    unsafe { self.0.unlock_demand() };
                 }
             }
 
@@ -4506,10 +4512,15 @@ mod macos_impl {
                 //     std.log.err("[updateFrame critical time] start={}\tduration={} us", .{ start_micro, end.since(start) / std.time.ns_per_us });
                 // }
 
+                // Lock while signaling demand so the IO parse thread can't starve
+                // us. See renderer::State::lock_demand.
+                //
+                // SAFETY: `state.mutex` points at the live shared render-state mutex
+                // and this frame does not already hold it.
                 unsafe {
-                    (*state.mutex).lock();
+                    state.lock_demand();
                 }
-                let _mutex_guard = Unlock(unsafe { &*state.mutex });
+                let _mutex_guard = Unlock(state);
 
                 // If we're in a synchronized output state, we pause all rendering.
                 if unsafe { (*t).modes.get(Mode::SynchronizedOutput) } {
@@ -6539,6 +6550,10 @@ mod macos_impl {
                 inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
+                // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
             };
             // Drive the full pipeline through update_frame (3c): fills cells + uniforms;
             // rebuild_cells sets dirty. cursor_blink_visible=true ⇒ visible block cursor.
@@ -6642,6 +6657,10 @@ mod macos_impl {
                 inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
+                // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
             };
             r.update_frame(&st, true).unwrap();
 
@@ -6798,6 +6817,10 @@ mod macos_impl {
                 inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
+                // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
             };
             r.update_frame(&st, true).unwrap();
             r.draw_frame(true).unwrap();
@@ -6921,6 +6944,10 @@ mod macos_impl {
                     inspector_ptr: None,
                     preedit: None,
                     mouse: state::Mouse::default(),
+                    // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                    demand: Default::default(),
+                    handoff_gen: Default::default(),
+                    handoff_park: Default::default(),
                 };
                 r.update_frame(&st, true).unwrap();
                 r.draw_frame(true).unwrap();
@@ -7052,6 +7079,10 @@ mod macos_impl {
                 inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
+                // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
             };
             r.update_frame(&st, true).unwrap();
             r.draw_frame(true).unwrap();
@@ -7134,6 +7165,10 @@ mod macos_impl {
                 inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
+                // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
             };
             r.update_frame(&st, true).unwrap();
 
@@ -7277,6 +7312,10 @@ mod macos_impl {
                 inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
+                // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
             };
             r.update_frame(&st, true).unwrap();
 
