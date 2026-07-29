@@ -8,9 +8,7 @@
 //! (oracle origin/main; commits 9156ada16, 70e788f06, e7969ed43, f8c217e55,
 //! 181254d36, 95685afd2).
 
-use super::{
-    std_size, MemoryPool, Node, NodeData, OutOfMemory, PageList,
-};
+use super::{std_size, MemoryPool, Node, NodeData, OutOfMemory, PageList};
 use crate::compress;
 use crate::mem;
 use crate::point;
@@ -83,9 +81,8 @@ impl CompressionScratch {
                 // buffers reading back as zero.
                 //
                 // SAFETY: `ptr` is the live pool item this value borrowed.
-                let _ = unsafe {
-                    mem::decommit(mem::DecommitMode::Zero, ptr, std_size(), std_size())
-                };
+                let _ =
+                    unsafe { mem::decommit(mem::DecommitMode::Zero, ptr, std_size(), std_size()) };
                 // SAFETY: `ptr` came from `pool.pages.create()`.
                 unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
             }
@@ -352,7 +349,8 @@ impl MemoryStats {
     ///
     /// PORT NOTE: the oracle's `-|` is a saturating subtraction.
     pub fn estimated_savings(&self) -> usize {
-        self.decommitted_raw_bytes.saturating_sub(self.encoded_bytes)
+        self.decommitted_raw_bytes
+            .saturating_sub(self.encoded_bytes)
     }
 }
 

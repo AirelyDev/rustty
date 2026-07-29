@@ -347,7 +347,8 @@ mod tests {
 
         let restored_hyperlink_id = restored.lookup_hyperlink(restored_rac.cell).unwrap();
         let base = restored.memory_ptr();
-        let restored_hyperlink = unsafe { &*restored.hyperlink_set.get(base, restored_hyperlink_id) };
+        let restored_hyperlink =
+            unsafe { &*restored.hyperlink_set.get(base, restored_hyperlink_id) };
         assert_eq!(
             unsafe { restored_hyperlink.uri.slice(base) },
             b"https://rustty.org/docs"
@@ -423,11 +424,11 @@ mod tests {
         let mut scratch = vec![0u8; required_scratch(memory_len).unwrap()];
         let mut table: lz4::HashTable = [0; lz4::HASH_TABLE_LEN];
 
-        assert!(
-            unsafe { CompressedPage::init(&resident as *const Page, &mut scratch, &mut table) }
-                .unwrap()
-                .is_none()
-        );
+        assert!(unsafe {
+            CompressedPage::init(&resident as *const Page, &mut scratch, &mut table)
+        }
+        .unwrap()
+        .is_none());
         assert_eq!(bytes(ptr, memory_len), expected);
 
         resident.deinit();

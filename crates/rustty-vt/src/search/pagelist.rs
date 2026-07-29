@@ -322,7 +322,8 @@ mod tests {
 
         // Fill up first page
         // const first_page_rows = t.screens.active.pages.pages.first.?.data.capacity.rows;
-        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
         // for (0..first_page_rows - 1) |_| s.nextSlice("\r\n");
         for _ in 0..first_page_rows - 1 {
             s.next_slice(b"\r\n");
@@ -394,7 +395,8 @@ mod tests {
         let mut s = t.vt_stream();
 
         // Fill up first page
-        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.next_slice(b"\r\n");
         }
@@ -447,7 +449,8 @@ mod tests {
 
         let mut s = t.vt_stream();
 
-        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
 
         // Fill first page with a match at the end
         for _ in 0..first_page_rows - 1 {
@@ -504,7 +507,8 @@ mod tests {
 
         let mut s = t.vt_stream();
 
-        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
 
         // Fill first page ending with "Te"
         for _ in 0..first_page_rows - 1 {
@@ -591,7 +595,8 @@ mod tests {
 
         let mut s = t.vt_stream();
 
-        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
 
         // Fill first page ending with "Te"
         for _ in 0..first_page_rows - 1 {

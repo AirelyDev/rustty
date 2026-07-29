@@ -22,10 +22,10 @@
 // are reproduced verbatim.
 #![allow(clippy::while_immutable_condition)]
 
+use super::compress::{CompressionMode, IncrementalCompressionResult};
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
-use super::compress::{CompressionMode, IncrementalCompressionResult};
 use super::{std_capacity, std_size, NodeData, Owned, PageList, Pin, Storage, Viewport};
 use crate::page::{Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
@@ -1304,7 +1304,8 @@ fn pagelist_increaseCapacity_multi_page() {
     // Grow to create a second page
     let page1_node = s.pages.last;
     unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(true) };
-    for _ in 0..(unsafe { super::Node::capacity(page1_node).rows - super::Node::rows(page1_node) }) {
+    for _ in 0..(unsafe { super::Node::capacity(page1_node).rows - super::Node::rows(page1_node) })
+    {
         assert!(s.grow().unwrap().is_none());
     }
     unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(false) };
@@ -1363,7 +1364,11 @@ fn pagelist_increaseCapacity_preserves_dirty_flag() {
     assert!(unsafe { (*super::Node::page(new_node)).dirty });
 
     // Row dirty flags should be preserved
-    let new_rows = unsafe { (*super::Node::page(new_node)).rows.ptr((*super::Node::page(new_node)).memory_ptr()) };
+    let new_rows = unsafe {
+        (*super::Node::page(new_node))
+            .rows
+            .ptr((*super::Node::page(new_node)).memory_ptr())
+    };
     assert!(unsafe { (*new_rows.add(0)).dirty() });
     assert!(!unsafe { (*new_rows.add(1)).dirty() });
     assert!(unsafe { (*new_rows.add(2)).dirty() });
@@ -1436,7 +1441,10 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
     // Fresh pool slot: the very first page handed out at init is lazily
     // OS-zeroed mmap memory (no eager memset); every active cell reads empty.
     let mut s = PageList::init(80, 24, None).unwrap();
-    assert_eq!(unsafe { (*super::Node::page(s.pages.first)).memory_len }, std_size());
+    assert_eq!(
+        unsafe { (*super::Node::page(s.pages.first)).memory_len },
+        std_size()
+    );
     assert_all_cells_zero(&s, "fresh");
 
     // Reused slot after reset: scribble non-zero bytes across the ENTIRE page
@@ -1751,7 +1759,10 @@ fn pagelist_compact_pool_page_produces_exact_size_heap_page() {
 
     // Our page size accounting should exactly match the compacted page since it
     // is the only page in the list.
-    assert_eq!(unsafe { (*super::Node::page(new_node)).memory_len }, s.page_size);
+    assert_eq!(
+        unsafe { (*super::Node::page(new_node)).memory_len },
+        s.page_size
+    );
 
     // Compacting again should be a no-op since it is already exact.
     assert!(s.compact(new_node).unwrap().is_none());
@@ -1848,7 +1859,8 @@ fn pagelist_compact_oversized_page() {
     // Grow until we have multiple pages
     let page1_node = s.pages.first;
     unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(true) };
-    for _ in 0..(unsafe { super::Node::capacity(page1_node).rows - super::Node::rows(page1_node) }) {
+    for _ in 0..(unsafe { super::Node::capacity(page1_node).rows - super::Node::rows(page1_node) })
+    {
         let _ = s.grow().unwrap();
     }
     unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(false) };
@@ -1966,7 +1978,10 @@ fn fill_compressible_history(s: &mut PageList, pages: usize) {
             }
         }
         iterations += 1;
-        assert!(iterations < 100_000, "history did not grow to {pages} pages");
+        assert!(
+            iterations < 100_000,
+            "history did not grow to {pages} pages"
+        );
     }
 }
 
@@ -1985,7 +2000,10 @@ fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
     let _ = s.compress(CompressionMode::Drain);
     let after = s.memory_stats();
     assert!(after.compressed_pages >= 1);
-    assert_eq!(after.resident_pages + after.compressed_pages, s.total_pages());
+    assert_eq!(
+        after.resident_pages + after.compressed_pages,
+        s.total_pages()
+    );
     assert_eq!(after.raw_bytes, before.raw_bytes);
     assert_eq!(
         after.resident_raw_bytes + after.decommitted_raw_bytes,
@@ -2161,7 +2179,6 @@ fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
     fill_compressible_history(&mut s, 3);
 
-
     let node = s.pages.first;
     let (ptr, len, expected) = unsafe {
         let p = super::Node::page(node);
@@ -2184,8 +2201,7 @@ fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
     );
 
     // With the tripwire disarmed, the same page compresses normally.
-    super::compress::COMPRESS_PAGE_TW
-        .with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    super::compress::COMPRESS_PAGE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
     assert!(s.compress_page(node));
     let _ = unsafe { super::Node::page(node) };
     s.deinit();
@@ -2233,13 +2249,10 @@ fn pagelist_node_restore_preserve_recovers_the_same_mapping() {
 
         let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
         let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
-        let compressed = crate::compress::CompressedPage::init(
-            page as *const Page,
-            &mut scratch,
-            &mut table,
-        )
-        .unwrap()
-        .unwrap();
+        let compressed =
+            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
+                .unwrap()
+                .unwrap();
 
         // Model a successful decommit, then publish the compressed state.
         core::ptr::write_bytes(ptr, 0, len);
@@ -2269,13 +2282,10 @@ fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
 
         let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
         let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
-        let compressed = crate::compress::CompressedPage::init(
-            page as *const Page,
-            &mut scratch,
-            &mut table,
-        )
-        .unwrap()
-        .unwrap();
+        let compressed =
+            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
+                .unwrap()
+                .unwrap();
         core::ptr::write_bytes(ptr, 0, len);
         (*node).data = NodeData::Compressed(compressed);
 
@@ -2290,7 +2300,9 @@ fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
 
         // Still compressed, and the discarded mapping is untouched.
         assert_eq!(super::Node::storage(node), Storage::Compressed);
-        assert!(core::slice::from_raw_parts(ptr, len).iter().all(|&b| b == 0));
+        assert!(core::slice::from_raw_parts(ptr, len)
+            .iter()
+            .all(|&b| b == 0));
 
         // Restore so deinit's accounting sees a resident page.
         let _ = super::Node::page(node);
@@ -2383,7 +2395,9 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
 
     // Create a page and scribble over its entire backing memory, then destroy
     // it so the buffer returns to the pool free list.
-    let node = s.create_page(super::CreatePage::new(PageList::initial_capacity(80))).unwrap();
+    let node = s
+        .create_page(super::CreatePage::new(PageList::initial_capacity(80)))
+        .unwrap();
     unsafe { (*super::Node::page(node)).size.rows = 1 };
     let mem_ptr = unsafe { (*super::Node::page(node)).memory_ptr };
     let mem_len = unsafe { (*super::Node::page(node)).memory_len };
@@ -2391,12 +2405,15 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
     s.destroy_node(node);
 
     // Reusing the buffer must produce a fully valid, zeroed page.
-    let node2 = s.create_page(super::CreatePage::new(PageList::initial_capacity(80))).unwrap();
+    let node2 = s
+        .create_page(super::CreatePage::new(PageList::initial_capacity(80)))
+        .unwrap();
     assert_eq!(mem_ptr, unsafe { (*super::Node::page(node2)).memory_ptr });
     unsafe { (*super::Node::page(node2)).size.rows = super::Node::capacity(node2).rows };
 
-    let cells_len =
-        unsafe { super::Node::capacity(node2).cols as usize * super::Node::capacity(node2).rows as usize };
+    let cells_len = unsafe {
+        super::Node::capacity(node2).cols as usize * super::Node::capacity(node2).rows as usize
+    };
     {
         let page = unsafe { &(*super::Node::page(node2)) };
         for i in 0..cells_len {

@@ -637,9 +637,10 @@ impl Pin {
             return stylepkg::Style::default();
         }
         unsafe {
-            *(*super::Node::page(self.node))
-                .styles
-                .get((*super::Node::page(self.node)).memory_ptr(), (*cell).style_id())
+            *(*super::Node::page(self.node)).styles.get(
+                (*super::Node::page(self.node)).memory_ptr(),
+                (*cell).style_id(),
+            )
         }
     }
 }

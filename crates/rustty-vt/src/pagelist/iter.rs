@@ -546,7 +546,11 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn rows(self) -> *mut [pagepkg::Row] {
-        let rows_ptr = unsafe { (*super::Node::page(self.node)).rows.ptr((*super::Node::page(self.node)).memory_ptr()) };
+        let rows_ptr = unsafe {
+            (*super::Node::page(self.node))
+                .rows
+                .ptr((*super::Node::page(self.node)).memory_ptr())
+        };
         core::ptr::slice_from_raw_parts_mut(
             unsafe { rows_ptr.add(self.start as usize) },
             (self.end - self.start) as usize,

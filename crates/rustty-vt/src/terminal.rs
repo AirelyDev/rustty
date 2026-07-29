@@ -3513,9 +3513,8 @@ impl Terminal {
         // const left: [*]Cell = @ptrCast(self.screens.active.cursor.page_cell);
         let left: *mut pagepkg::Cell = unsafe { (*self.screens.active).cursor.page_cell };
         // var page = &self.screens.active.cursor.page_pin.node.data;
-        let page: *mut Page = unsafe {
-            crate::pagelist::Node::page((*(*self.screens.active).cursor.page_pin).node)
-        };
+        let page: *mut Page =
+            unsafe { crate::pagelist::Node::page((*(*self.screens.active).cursor.page_pin).node) };
 
         // If our X is a wide spacer tail then we need to erase the
         // previous cell too so we don't split a multi-cell character.
@@ -3644,9 +3643,8 @@ impl Terminal {
         // const left: [*]Cell = @ptrCast(self.screens.active.cursor.page_cell);
         let left: *mut pagepkg::Cell = unsafe { (*self.screens.active).cursor.page_cell };
         // var page = &self.screens.active.cursor.page_pin.node.data;
-        let page: *mut Page = unsafe {
-            crate::pagelist::Node::page((*(*self.screens.active).cursor.page_pin).node)
-        };
+        let page: *mut Page =
+            unsafe { crate::pagelist::Node::page((*(*self.screens.active).cursor.page_pin).node) };
 
         // Remaining cols from our cursor to the right margin.
         let rem = self.scrolling_region.right - unsafe { (*self.screens.active).cursor.x } + 1;
@@ -3743,9 +3741,8 @@ impl Terminal {
         // const cells: [*]Cell = @ptrCast(self.screens.active.cursor.page_cell);
         let cells: *mut pagepkg::Cell = unsafe { (*self.screens.active).cursor.page_cell };
 
-        let page: *mut Page = unsafe {
-            crate::pagelist::Node::page((*(*self.screens.active).cursor.page_pin).node)
-        };
+        let page: *mut Page =
+            unsafe { crate::pagelist::Node::page((*(*self.screens.active).cursor.page_pin).node) };
         let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
         let cells_slice = core::ptr::slice_from_raw_parts_mut(cells, count as usize);
 
@@ -3828,9 +3825,8 @@ impl Terminal {
             == ansi::ProtectedMode::Iso
             || protected_req;
 
-        let page: *mut Page = unsafe {
-            crate::pagelist::Node::page((*(*self.screens.active).cursor.page_pin).node)
-        };
+        let page: *mut Page =
+            unsafe { crate::pagelist::Node::page((*(*self.screens.active).cursor.page_pin).node) };
         let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
         // cells[start..end]
         let cells_slice = core::ptr::slice_from_raw_parts_mut(
@@ -5337,7 +5333,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2764);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
 
@@ -6064,9 +6062,8 @@ mod tests {
         t.print(0x1F600).unwrap(); // Smiley face
                                    // verify we have styles in our style map
         {
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert_eq!(1usize, unsafe { (*page).styles.count() });
         }
 
@@ -6077,9 +6074,8 @@ mod tests {
 
         // verify our style is gone
         {
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert_eq!(0usize, unsafe { (*page).styles.count() });
         }
 
@@ -6102,9 +6098,8 @@ mod tests {
         t.print(0x1F600).unwrap(); // Smiley face
                                    // verify we have styles in our style map
         {
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert_eq!(1usize, unsafe { (*page).styles.count() });
         }
 
@@ -6115,9 +6110,8 @@ mod tests {
 
         // verify our style is gone
         {
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert_eq!(0usize, unsafe { (*page).styles.count() });
         }
 
@@ -6151,7 +6145,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F468);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
         {
@@ -6160,7 +6156,10 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
             assert!(!unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
-            assert!(unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.is_none());
+            assert!(unsafe {
+                (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell)
+            }
+            .is_none());
         }
         {
             let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
@@ -6168,7 +6167,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F469);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
         {
@@ -6177,7 +6178,10 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
             assert!(!unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
-            assert!(unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.is_none());
+            assert!(unsafe {
+                (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell)
+            }
+            .is_none());
         }
         {
             let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
@@ -6185,7 +6189,10 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F467);
             assert!(!unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
-            assert!(unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.is_none());
+            assert!(unsafe {
+                (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell)
+            }
+            .is_none());
         }
         {
             let list_cell = t.active_mut().pages.get_cell(screen_pt(5, 0)).unwrap();
@@ -6193,7 +6200,10 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
             assert!(!unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
-            assert!(unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.is_none());
+            assert!(unsafe {
+                (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell)
+            }
+            .is_none());
         }
 
         assert!(t.is_dirty(screen_pt(0, 0)));
@@ -6232,7 +6242,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F468);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 4);
         }
         {
@@ -6361,7 +6373,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2614);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
 
@@ -6398,7 +6412,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x26C8);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
 
@@ -6446,7 +6462,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2614);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
 
@@ -6647,7 +6665,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2764);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
 
@@ -6680,7 +6700,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2764);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
         {
@@ -6689,7 +6711,9 @@ mod tests {
             assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2764);
             assert!(unsafe { (*cell).has_grapheme() });
             assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
-            let cps = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }.unwrap();
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
             assert_eq!(cps.len(), 1);
         }
 
@@ -6762,7 +6786,8 @@ mod tests {
 
         t.cursor_down((rows - 1) as usize);
 
-        let page_cap_rows = unsafe { crate::pagelist::Node::capacity(t.active_mut().pages.pages.first).rows };
+        let page_cap_rows =
+            unsafe { crate::pagelist::Node::capacity(t.active_mut().pages.pages.first).rows };
         for _ in rows..page_cap_rows {
             t.index().unwrap();
         }
@@ -11640,7 +11665,9 @@ mod tests {
             assert!(unsafe { (*row).hyperlink() });
             let cell = list_cell.cell;
             assert!(unsafe { (*cell).hyperlink() });
-            let id = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_hyperlink(cell) }.unwrap();
+            let id =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_hyperlink(cell) }
+                    .unwrap();
             assert_eq!(id, 1 as crate::hyperlink::Id);
         }
         {
@@ -11649,7 +11676,8 @@ mod tests {
             assert!(!unsafe { (*row).hyperlink() });
             let cell = list_cell.cell;
             assert!(!unsafe { (*cell).hyperlink() });
-            let id = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_hyperlink(cell) };
+            let id =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_hyperlink(cell) };
             assert!(id.is_none());
         }
 
@@ -11765,7 +11793,9 @@ mod tests {
             assert!(unsafe { (*row).hyperlink() });
             let cell = list_cell.cell;
             assert!(unsafe { (*cell).hyperlink() });
-            let id = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_hyperlink(cell) }.unwrap();
+            let id =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_hyperlink(cell) }
+                    .unwrap();
             assert_eq!(id, 1 as crate::hyperlink::Id);
         }
         {
@@ -11774,7 +11804,8 @@ mod tests {
             assert!(!unsafe { (*row).hyperlink() });
             let cell = list_cell.cell;
             assert!(!unsafe { (*cell).hyperlink() });
-            let id = unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_hyperlink(cell) };
+            let id =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_hyperlink(cell) };
             assert!(id.is_none());
         }
 
@@ -13729,9 +13760,8 @@ mod tests {
             let cell = list_cell.cell;
             assert_eq!(unsafe { (*cell).content_codepoint() }, 'A' as u21);
             assert!(unsafe { (*cell).style_id() } != 0);
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert!(
                 unsafe {
                     (*page)
@@ -15655,9 +15685,8 @@ mod tests {
         // Verify that our style is set
         {
             assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert_eq!(1_usize, unsafe { (*page).styles.count() });
             assert!(
                 unsafe {
@@ -15683,9 +15712,8 @@ mod tests {
         // Verify that our style is still set
         {
             assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert_eq!(1_usize, unsafe { (*page).styles.count() });
             assert!(
                 unsafe {
@@ -15771,9 +15799,8 @@ mod tests {
         // Verify that our style is set
         {
             assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert_eq!(1_usize, unsafe { (*page).styles.count() });
             assert!(
                 unsafe {
@@ -15800,9 +15827,8 @@ mod tests {
         // Verify that our style is still set
         {
             assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
-            let page = unsafe {
-                crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node)
-            };
+            let page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
             assert_eq!(1_usize, unsafe { (*page).styles.count() });
             assert!(
                 unsafe {

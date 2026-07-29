@@ -252,7 +252,9 @@ pub unsafe fn grid_ref_hyperlink_uri(
     // const rac = p.node.data.getRowAndCell(p.x, p.y);
     // const cell = rac.cell;
     // SAFETY: `p.node` is a live page node (the pin came from a valid ref).
-    let rac = unsafe { (*rustty_vt::pagelist::Node::page(p.node)).get_row_and_cell(p.x as usize, p.y as usize) };
+    let rac = unsafe {
+        (*rustty_vt::pagelist::Node::page(p.node)).get_row_and_cell(p.x as usize, p.y as usize)
+    };
     let cell = rac.cell;
 
     // if (!cell.hyperlink) { out_len.* = 0; return .success; }
@@ -275,7 +277,9 @@ pub unsafe fn grid_ref_hyperlink_uri(
     // page memory base outlives the borrowed `uri` slice (read immediately).
     let uri: &[u8] = unsafe {
         let base = (*rustty_vt::pagelist::Node::page(p.node)).memory_ptr();
-        let entry = (*rustty_vt::pagelist::Node::page(p.node)).hyperlink_set.get(base, link_id);
+        let entry = (*rustty_vt::pagelist::Node::page(p.node))
+            .hyperlink_set
+            .get(base, link_id);
         (*entry).uri.slice(base)
     };
 

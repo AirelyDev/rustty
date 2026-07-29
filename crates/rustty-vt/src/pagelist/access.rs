@@ -1078,9 +1078,10 @@ impl Cell {
             return stylepkg::Style::default();
         }
         unsafe {
-            *(*super::Node::page(self.node))
-                .styles
-                .get((*super::Node::page(self.node)).memory_ptr(), (*self.cell).style_id())
+            *(*super::Node::page(self.node)).styles.get(
+                (*super::Node::page(self.node)).memory_ptr(),
+                (*self.cell).style_id(),
+            )
         }
     }
 

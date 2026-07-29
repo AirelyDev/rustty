@@ -80,7 +80,8 @@ impl PageList {
 
         // Copy our old data. This should NOT fail because we have the
         // capacity of the old page which already fits the data we requested.
-        if let Err(_err) = unsafe { (*target_page).clone_from(page, y_start as usize, y_end as usize) }
+        if let Err(_err) =
+            unsafe { (*target_page).clone_from(page, y_start as usize, y_end as usize) }
         {
             // log.err(
             //     "error cloning rows for split err={}",

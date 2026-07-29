@@ -9663,8 +9663,7 @@ where
         //
         // (the receiver is kept for signature parity.)
         // const page = &pin.node.data;
-        let page: *mut terminal::page::Page =
-            unsafe { terminal::pagelist::Node::page(pin.node) };
+        let page: *mut terminal::page::Page = unsafe { terminal::pagelist::Node::page(pin.node) };
         // const cell = pin.rowAndCell().cell;
         let cell = pin.row_and_cell().cell;
         // const link_id = page.lookupHyperlink(cell) orelse return null;

@@ -1965,7 +1965,8 @@ mod tests {
         )
         .unwrap();
 
-        let first_page_cap = unsafe { crate::pagelist::Node::capacity((*t.screens.active).pages.pages.first).rows };
+        let first_page_cap =
+            unsafe { crate::pagelist::Node::capacity((*t.screens.active).pages.pages.first).rows };
 
         {
             let mut s = t.vt_stream();

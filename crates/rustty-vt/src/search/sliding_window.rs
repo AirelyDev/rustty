@@ -892,7 +892,8 @@ impl SlidingWindow {
         //     return error.OutOfMemory;
         // };
         {
-            let page: *const crate::page::Page = unsafe { &(*crate::pagelist::Node::page(meta.node)) };
+            let page: *const crate::page::Page =
+                unsafe { &(*crate::pagelist::Node::page(meta.node)) };
             let mut formatter: PageFormatter = PageFormatter::init(
                 page,
                 Options {
@@ -923,7 +924,10 @@ impl SlidingWindow {
         //         },
         //     );
         // }
-        let row = unsafe { (*crate::pagelist::Node::page(node)).get_row(crate::pagelist::Node::rows(node) as usize - 1) };
+        let row = unsafe {
+            (*crate::pagelist::Node::page(node))
+                .get_row(crate::pagelist::Node::rows(node) as usize - 1)
+        };
         if !unsafe { (*row).wrap() } {
             encoded.push(b'\n');
             let last = meta
@@ -2042,7 +2046,8 @@ mod tests {
         assert!(core::ptr::eq(s.pages.pages.first, s.pages.pages.last));
         let node: *mut Node = s.pages.pages.first;
         unsafe {
-            let row = (*crate::pagelist::Node::page(node)).get_row(crate::pagelist::Node::rows(node) as usize - 1);
+            let row = (*crate::pagelist::Node::page(node))
+                .get_row(crate::pagelist::Node::rows(node) as usize - 1);
             (*row).set_wrap(true);
         }
 
@@ -2440,7 +2445,8 @@ mod tests {
         assert!(core::ptr::eq(s.pages.pages.first, s.pages.pages.last));
         let node: *mut Node = s.pages.pages.first;
         unsafe {
-            let row = (*crate::pagelist::Node::page(node)).get_row(crate::pagelist::Node::rows(node) as usize - 1);
+            let row = (*crate::pagelist::Node::page(node))
+                .get_row(crate::pagelist::Node::rows(node) as usize - 1);
             (*row).set_wrap(true);
         }
 
@@ -2586,7 +2592,8 @@ mod tests {
         // without creating a slow test.
         let node: *mut Node = s.pages.pages.first;
         unsafe {
-            let last_row = (*crate::pagelist::Node::page(node)).get_row(crate::pagelist::Node::rows(node) as usize - 1);
+            let last_row = (*crate::pagelist::Node::page(node))
+                .get_row(crate::pagelist::Node::rows(node) as usize - 1);
             (*last_row).set_wrap(true);
         }
 

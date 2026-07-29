@@ -43,7 +43,11 @@ impl PageList {
         let pn = self.pin(pt).unwrap();
 
         let mut node = pn.node;
-        let mut rows = unsafe { (*super::Node::page(node)).rows.ptr((*super::Node::page(node)).memory_ptr()) };
+        let mut rows = unsafe {
+            (*super::Node::page(node))
+                .rows
+                .ptr((*super::Node::page(node)).memory_ptr())
+        };
 
         // In order to move the following rows up we rotate the rows array by 1.
         // The rotate operation turns e.g. [ 0 1 2 3 ] in to [ 1 2 3 0 ], which
@@ -187,7 +191,11 @@ impl PageList {
         let pn = self.pin(pt).unwrap();
 
         let mut node: *mut Node = pn.node;
-        let mut rows = unsafe { (*super::Node::page(node)).rows.ptr((*super::Node::page(node)).memory_ptr()) };
+        let mut rows = unsafe {
+            (*super::Node::page(node))
+                .rows
+                .ptr((*super::Node::page(node)).memory_ptr())
+        };
 
         // If the row limit is less than the remaining rows before the end of the
         // page, then we clear the row, rotate it to the end of the boundary limit

@@ -279,7 +279,10 @@ impl ViewportSearch {
             // const end: *PageList.List.Node = fingerprint.nodes[fingerprint.nodes.len - 1];
             let end: *mut Node = fp_nodes[fp_nodes.len() - 1];
             // if (!end.data.getRow(end.data.size.rows - 1).wrap) break :trailing;
-            let end_row = unsafe { (*crate::pagelist::Node::page(end)).get_row(crate::pagelist::Node::rows(end) as usize - 1) };
+            let end_row = unsafe {
+                (*crate::pagelist::Node::page(end))
+                    .get_row(crate::pagelist::Node::rows(end) as usize - 1)
+            };
             if !unsafe { (*end_row).wrap() } {
                 break 'trailing;
             }
@@ -623,7 +626,8 @@ mod tests {
 
         // Fill up first page
         // const first_page_rows = t.screens.active.pages.pages.first.?.data.capacity.rows;
-        let first_page_rows = unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity((*active_ptr).pages.pages.first).rows };
         // s.nextSlice("Fizz\r\n");
         s.next_slice(b"Fizz\r\n");
         // for (1..first_page_rows - 1) |_| s.nextSlice("\r\n");
