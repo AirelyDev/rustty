@@ -641,3 +641,110 @@ Session history: pre-branch 0/1/13 → r1 10/1/3 (−5.8%) → r2 12/0/2 (−10.
   explosion); pointer-memoization dominated by the plain hoist.
 - Lane worktrees merged and removed (A/B/D); lane C worktree left (no commits).
 - Raw sweeps: `.port/phase-2/perf-v5/` (+ per-lane raw in d812712).
+
+---
+
+# WS7 D8 — compression benchmark numbers (2026-07-29)
+
+Machine: Apple M4 Pro (`Mac16,7`), macOS 25.5.0. Binary:
+`cargo build -p rustty-bench --profile release-fast` (the ReleaseFast-parity
+profile; `overflow-checks = false`). Timing: single-process monotonic wall clock,
+1 warmup + 7–9 reps, **median** — the same methodology as
+`.port/phase-0/baseline/run_benchmarks.py`. `hyperfine` is **not installed** on
+this host, so the AGENTS.md-preferred harness was not used; the medians below
+come from the equivalent single-process harness. No benchmarks were run in
+parallel.
+
+## Corpora
+
+| corpus | bytes | provenance |
+|---|---|---|
+| `.port/phase-0/baseline/corpora/ascii.bin` | 67 108 864 | phase-0 `ghostty-gen +ascii` corpus (random printable ASCII) |
+| `/tmp/.../scratchpad/pages.raw` | 49 561 600 | **121 × exactly 409 600 B real page backing-memory dumps**, produced from `ascii.bin` by a scratch tool kept OUTSIDE the repo (oracle `src/benchmark/AGENTS.md`: keep large corpora outside the repository). Reproduce: parse `ascii.bin` into a 120×80 `Terminal` with `max_scrollback = 50_000_000` and concatenate `Page::memory_ptr()[..memory_len()]` for every fully-historical node. |
+
+`pages.raw` is the input the oracle's own `PageCompression` doc-comment asks for
+("a raw dump of actual page backing memory is the most representative input").
+
+## Compression ratio
+
+| measurement | pages | raw | encoded | ratio | savings |
+|---|---|---|---|---|---|
+| `+page-compression --mode=report --data=pages.raw` | 121 | 49 561 600 | 17 421 184 | **35.15 %** | — |
+| `+scrollback-compression --mode=report --max-scrollback=50000000 --data=ascii.bin` | 121 | 49 561 600 | 17 421 184 | **35.15 %** | 32 140 416 (**−64.9 %**) |
+| `+scrollback-compression --mode=report --data=ascii.bin` (10 MB default) | 23 | 9 420 800 | 3 311 367 | 35.15 % | 6 109 433 |
+| `+scrollback-compression --mode=report --data=ascii-small.bin` | 5 | 2 048 000 | 719 967 | 35.15 % | 1 328 033 |
+| `+page-compression --mode=report --data=ascii.bin` | 164 | 67 108 864 | 67 372 298 | 100.39 % | — |
+
+The two independent paths (standalone codec over a page dump vs. the live
+`PageList` over the same terminal state) agree to 4 significant figures — a
+useful cross-check that neither benchmark is measuring the wrong bytes.
+The 100.39 % row is **not** a scrollback ratio: random printable ASCII is
+incompressible for a pure LZ77 codec, so it measures the format's
+one-literal-run expansion bound. It is recorded only as the worst case.
+
+## Codec throughput (`+page-compression`, `pages.raw`)
+
+Per-pass cost isolated by the loop slope `(t(loops=N) − t(loops=1)) / (N−1)`,
+which removes process spawn, corpus read, and (for `decompress`) the untimed
+pre-encode + round-trip verification.
+
+| mode | t(loops=1) | t(loops=41) | per pass | throughput (49.56 MB raw / pass) | stability |
+|---|---|---|---|---|---|
+| noop | 0.0109 s | — | — | — | stable (3.1 % spread) |
+| compress | 0.0625 s | 2.0107 s | 48.7 ms | **1.02 GB/s** | **stable** — the 11-loop and 41-loop slopes agree to 0.9 % (1.027 vs 1.018 GB/s) |
+| decompress | 0.0957 s | 0.6658 s | 14.3 ms | **~3.5 GB/s** | **NOISY** — 8–17 % rep spread; the 11-loop slope gives 3.12 GB/s vs 3.48 GB/s at 41 loops. Treat as **3.1–3.5 GB/s**, not a single figure. |
+| store | 0.0606 s | 0.5601 s (loops=11) | 50.0 ms | 0.99 GB/s | stable (4.0 % spread) |
+
+`store` (exact-sized encoded allocation + bounded-ring eviction) costs
+**+2.6 %** over the allocation-free `compress` path — i.e. the retained
+representation's allocator traffic is not a material part of compression cost.
+
+## PageList transition cost (`+scrollback-compression`, `ascii.bin`)
+
+This benchmark has **no `--loops`** (faithful to the oracle), so the only signal
+is whole-process wall clock and the untimed setup (VT parse of 64 MiB) dominates.
+
+| mode | 10 MB scrollback (default) | 50 MB scrollback |
+|---|---|---|
+| noop (setup baseline) | 0.3483 s | 0.3542 s |
+| compress | 0.3596 s (**Δ +11.3 ms**) | 0.4031 s (**Δ +48.9 ms**) |
+| incremental (`compress(Drain)`) | 0.3569 s (Δ +8.6 ms) | 0.4071 s (Δ +52.9 ms) |
+| restore (visit every cold node through `Node::page`) | 0.3574 s (Δ +9.1 ms) | 0.4194 s (Δ +65.2 ms) |
+
+**Measurement-honesty caveats — read before quoting these deltas:**
+
+1. **At the 10 MB default the deltas are NOT resolvable.** Rep spread on the
+   noop baseline is 3.8–4.5 %, i.e. ±14 ms on a 348 ms process — larger than the
+   8.6–11.3 ms deltas themselves. The 10 MB column must not be used for
+   branch-to-branch comparison; `incremental` appearing *faster* than `compress`
+   there is noise, not a result.
+2. **At 50 MB the deltas are resolvable** (49–65 ms against a ±13 ms band) and
+   are the numbers Phase E should compare against.
+3. `compress` at 50 MB: 48.9 ms for 49.56 MB = **1.01 GB/s**, matching the
+   standalone codec's 1.02 GB/s to within 1 %. The `PageList` state transition,
+   scratch borrow from the page pool, and `madvise` therefore add **no
+   measurable cost** on top of the encoder.
+4. `incremental` (drain) costs **+8 %** over monolithic `compress` — the
+   candidate-bounded steps plus the final no-work verification pass.
+5. `restore` (65.2 ms) is **4.6× the decoder's own 14.3 ms**. Restoration is
+   dominated by `MADV_FREE_REUSE` recommit and the page faults from re-touching
+   49.56 MB, not by LZ4 decoding. Worth stating explicitly so a future
+   "decompression is slow" investigation starts in the right place.
+6. **Peak RSS is not a reclamation metric.** `/usr/bin/time -l` shows
+   `--mode=compress` at 75 399 168 B peak vs `--mode=noop` at 57 114 624 B —
+   *higher*, because the 17.4 MB of encoded blocks raise the high-water mark
+   while the source pages are still resident, and `MADV_FREE_REUSABLE` does not
+   lower an already-set peak. The `savings=` figure the benchmark prints is
+   `decommitted_raw_bytes − encoded_bytes`, an **estimate**. Confirming actual
+   physical reclamation is Task E5's live check, not D8's.
+
+## First real `madvise` execution
+
+D8 is the first path to run `mem::decommit`'s **real** OS arms (a release binary
+⇒ `cfg!(test)` is false, so the zeroing simulation is not used). Evidence that it
+works on macOS: `compressed=121` in the release binary. `compress_page` returns
+`false` and leaves the node resident whenever `decommit` fails, so a non-zero
+compressed count *is* proof that `madvise(MADV_FREE_REUSABLE)` succeeded — 121
+times. The Linux `MADV_DONTNEED` arm is **not** covered by this run (macOS only,
+per D8's scope here).
+

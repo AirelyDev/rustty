@@ -44,6 +44,12 @@ rustty-identity = { workspace = true }
 rustty-vt = { workspace = true, features = ["simd"] }
 rustty-simd = { workspace = true }
 rustty-unicode = { workspace = true }
+# WS7 D8: the `+scrollback-compression` bench walks the PageList node chain the
+# way the oracle does (`node.next`). `PageList.Node`'s intrusive links are
+# `pub(crate)` in rustty-vt and are reached through the
+# `rustty_datastruct::intrusive_linked_list::Node` trait, so that crate (member 4,
+# strictly-earlier than rustty-bench — acyclic) is a direct dependency.
+rustty-datastruct = { workspace = true }
 # `cli.args.parse` / `cli.args.argsIterator` (the Options parsing + argv iterator).
 # rustty-args is member 15, strictly-earlier than rustty-bench (28) — acyclic (R4).
 rustty-args = { workspace = true }
