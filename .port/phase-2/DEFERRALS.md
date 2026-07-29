@@ -4982,6 +4982,82 @@ From **WS7 Phase B review (I2 harness run)**:
 
 ---
 
+## `threadEnter` error arms should drain the pty master BEFORE `stop()` — residual cure for the teardown wedge [added 2026-07-29, WS-hang review I3]
+
+**What is outstanding.** `Exec::threadEnter`
+(`crates/rustty-termio/src/exec.rs`) has several failure arms — `pipe()`,
+`xev::Timer::init`, `xev::Process::init`, and the read-thread `spawn` failure
+(i.e. fd- or thread-exhaustion) — and every one of them calls
+`self.subprocess.stop()` on the way out. Those arms run **before the io-reader
+thread exists**, so at that moment the child is a freshly-forked `login(1)` with
+output already queued on the pty slave and **nobody reading the master**. That is
+exactly the condition under which a SIGHUP'd session leader wedges
+uninterruptibly in the kernel exit path (macOS state `?Es`) and becomes
+permanently unreapable — see the `killPid bounded wait` divergence entry for the
+mechanism.
+
+**The cure.** Reorder those arms so the pty master is DRAINED (or at minimum a
+drain is in flight) before `stop()` is called — the same invariant the normal
+close path gets for free from `threadExit`, which calls `stop()` while the
+io-reader thread is still draining. Concretely this means the error arms need
+access to a drain step that today only exists once the read thread is up, so the
+fix is a restructuring of `threadEnter`'s setup/teardown ordering (and probably a
+small "drain the master once, synchronously" helper shared with the read thread),
+not a local edit.
+
+**Why deferred.** (a) It is a larger restructuring of `threadEnter`'s error
+handling than the hang fix needed, on arms that only fire under fd/thread
+exhaustion. (b) The bounded `killPid` already converts the symptom from "rustty
+hangs forever and can never be closed" into "rustty closes in ≤ `KILL_ABANDON`
+(10s), leaving the wedged child to launchd" — the liveness defect is gone; what
+remains is a stranded child and a 10s stall on a rare path. (c) **Upstream
+Ghostty has the same ordering** in `src/termio/Exec.zig` and therefore the same
+latent defect, so fixing it here is a divergence to design deliberately (and
+ideally to upstream) rather than to bolt on during a hang fix.
+
+**Where the evidence is.** `.port/tools/repro_subprocess_hang.sh` reproduces the
+no-drainer wedge deterministically (pre-fix: 12/12 hangs), and
+`.port/tools/capture_subprocess_hang.sh` captures the `sample`/`ps` state showing
+the child in `?Es` and the parent spinning inside `killPid`.
+
+---
+
+## `posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race [added 2026-07-29, WS-hang review M1]
+
+**What is outstanding.** `crates/rustty-termio/src/command.rs`'s
+`posix_waitpid` treats every non-`EINTR` errno as `unreachable!("waitpid:
+unexpected errno")`, which in Rust is an unconditional panic. `ECHILD` is
+reachable in rustty because there is a **second reaper**:
+`crates/rustty-xev/src/process.rs` calls `waitpid(pid, &mut status, 0)` in the
+`.proc` completion trampoline. If that completion fires while `killPid` is in its
+SIGHUP/`waitpid(WNOHANG)` loop, the loop's next `waitpid` returns `ECHILD` and
+rustty **aborts** instead of simply ending the loop (the child is, after all,
+gone — which is what the loop was waiting for).
+
+**Correcting the review's premise.** The review suggested the oracle's `killPid`
+"breaks on any non-`EINTR` error". It does not: ghostty's `killPid` calls Zig
+std's `posix.waitpid`, which itself has `.CHILD => unreachable, // The process
+specified does not exist. It would be a race condition to handle this error.`
+**So the port is FAITHFUL here** — the crash exposure is inherited, not
+introduced. The difference is only in how the two languages cash out
+`unreachable`: Zig's is a no-op/UB in `ReleaseFast`, Rust's always panics.
+
+**Why deferred rather than fixed now.** `posix_waitpid` is a shared Zig-std shim
+(`Command::wait` uses it too) whose return type `WaitPidResult` has no error
+channel, so making the `ECHILD` race end the loop gracefully means either
+changing that shim's signature and every caller, or special-casing `ECHILD`
+inside `killPid` — both of which are divergences from the Zig-std shim contract
+that this port reproduces verbatim elsewhere. That is a deliberate design
+decision to make on its own, not a drive-by in a hang fix.
+
+**Suggested resolution when picked up.** Give `posix_waitpid` an `ECHILD`-aware
+variant (or return `Option<WaitPidResult>`) used only by `killPid`, and treat
+`ECHILD` there as "reaped by someone else" → break the loop, matching the loop's
+actual intent. Record it as a `[R1-DIVERGENCE]` alongside the bounded wait, since
+it deviates from the Zig-std shim.
+
+---
+
 # Justified R1 Divergences (NOT deferrals — deliberate, permanent)
 
 Divergences from the oracle that are intentional and will NOT be "completed"
@@ -4995,10 +5071,14 @@ rationale — never an accident.
 SIGHUP)`, then `waitpid(pid, WNOHANG)`, sleep 10ms, repeat — until the child is
 reaped. There is no deadline and no escalation.
 
-**Divergence:** rustty's `killPid` bounds that loop:
-- `0 .. KILL_ESCALATE` (5s) — byte-for-byte the reference behavior (SIGHUP only).
-- past `KILL_ESCALATE` — escalate the process-group signal to `SIGKILL`.
-- at `KILL_ABANDON` (10s) — stop waiting; return `KillError::Abandoned`.
+**Divergence:** rustty's `killPid` adds exactly ONE deadline and changes nothing
+else:
+- `0 .. KILL_ABANDON` (10s) — byte-for-byte the reference behavior: `killpg(pgid,
+  SIGHUP)` + `waitpid(pid, WNOHANG)` + 10ms sleep, repeated. Not one signal,
+  argument or ordering differs.
+- at `KILL_ABANDON` — stop waiting and return `KillError::Abandoned` instead of
+  looping forever. The child is left alive (or wedged) and reparented to
+  launchd; the caller (`stop`) proceeds with teardown.
 
 **Why fidelity is overruled (liveness > R1):** on macOS a child can become
 permanently unreapable. A `login(1)` — a session leader — that is SIGHUP'd while
@@ -5019,22 +5099,76 @@ exactly what un-wedges the child. **But `threadEnter`'s error arms also call
 (fd/thread exhaustion). On those arms the child is a freshly-forked `login` with
 pending output and no reader: precisely the wedging condition. That is a
 genuine, if narrow, unrecoverable-hang bug. Upstream Ghostty has the same
-ordering and therefore the same latent defect.
+ordering and therefore the same latent defect. (The residual cure for those arms
+is tracked as an open deferral — see "`threadEnter` error arms should drain the
+pty master before `stop()`".)
 
-**How the divergence is bounded:** it is confined to the pathological case. A
-child that exits normally is reaped on the first or second iteration, far inside
-the 5s grace period, so every healthy teardown is observationally identical to
-the oracle. The `SIGKILL` escalation is arguably *closer* to the reference's own
-stated intent ("we will not rest until the entire family tree is obliterated"),
-since it also kills descendants that survived the setsid/execve race and ignore
-SIGHUP. Abandoning a child we provably cannot reap is strictly better than
-wedging the application forever.
+**PRECISE GUARANTEE — scope of the behavior change.** An earlier revision of
+this entry claimed "every healthy teardown is observationally identical to the
+oracle". That over-claimed. The guarantee that actually holds is:
 
-**Guard:** `exec::tests::kill_pid_bounded_when_child_is_unreapable` (a
-bound-regression guard — it can only fail by hanging, which is how removing the
-bound would fail it). Whether the child wedges on any given run is
-timing-dependent; the deterministic evidence is
-`.port/tools/repro_subprocess_hang.sh` (pre-fix: 12/12 hangs).
+> rustty is observationally identical to the oracle for any teardown that
+> **completes within `KILL_ABANDON`**. For teardowns that take longer it is
+> **not** identical: the oracle keeps SIGHUPing forever, rustty stops waiting.
+
+Two distinguishable cases live past the deadline, and only the first is
+pathological:
+
+1. **Unreapable (`?Es`).** Waiting longer provably cannot succeed, so
+   abandoning loses nothing. This is the case the divergence exists for.
+2. **Alive, reapable, but SLOW** — a shell trapping/ignoring SIGHUP, a
+   `zshexit`/history flush over a stalled network filesystem, an ssh
+   multiplexer or a DB client flushing state. **ACCEPTED CONSEQUENCE:** we stop
+   waiting for such a child and no longer collect its exit status; it is
+   reparented to launchd. Note what we deliberately do *not* do: we do not kill
+   it. Its cleanup runs to completion, so there is **no data loss**, and the
+   signals it received are exactly the ones the oracle would have sent. The
+   entire observable difference is "rustty finished closing while the child was
+   still tidying up".
+
+**Rejected design: the SIGKILL escalation (removed in review follow-up I1).**
+An intermediate revision added `KILL_ESCALATE` (5s), past which the
+process-group signal became `SIGKILL`. It was **removed**, because it is useless
+where it was needed and harmful where it was not:
+
+- **For the `?Es` case it does nothing.** An `E`-state process has already
+  entered the kernel exit path and is SIGKILL-immune — that immunity is the very
+  property that makes the wedge unreapable. So the escalation contributed
+  *zero* liveness for the only case that motivated the divergence; all of the
+  liveness comes from `KILL_ABANDON`.
+- **For case 2 it caused real harm.** It converted "slow cleanup that eventually
+  finishes" into "killed mid-cleanup": a truncated history file, a half-flushed
+  client. That is user data loss, in a case that is not pathological and where
+  the oracle would have waited. And `killPid` cannot distinguish case 2 from a
+  SIGHUP-ignoring child — they look identical from the inside.
+- **Its only genuine beneficiary** was a child that ignores SIGHUP but *is*
+  killable, which the escalation would kill instead of abandoning at 10s. But
+  the oracle never kills such a child either, so abandoning it is *closer* to
+  the reference; inventing a SIGKILL that the user's shell never asked for is
+  not worth the case-2 exposure.
+- Its stated secondary justification ("closer to the reference's own intent —
+  it also kills descendants that survived the setsid/execve race and ignore
+  SIGHUP") was **vacuous**: the loop's exit condition is `waitpid(pid)` on the
+  *direct child* only. Surviving descendants never gate the loop, so escalation
+  could only ever affect the group during a window that a healthy teardown never
+  reaches.
+
+The surviving design is therefore the **minimal** divergence that achieves
+liveness: a single wall-clock deadline bolted onto an otherwise byte-for-byte
+faithful loop.
+
+**Guard:** none in-suite, deliberately. The former
+`exec::tests::kill_pid_bounded_when_child_is_unreapable` was **deleted** in
+review follow-up I2: it reproduced the wedging condition inside the default
+`cargo test`, asserted nothing that could fail (it reaped in milliseconds on
+ordinary runs, and its `KILL_ABANDON + 20s` threshold would have passed even if
+`KILL_ABANDON` were tripled), its only failure mode was *hanging* — the exact CI
+failure this work removes — and it stranded an abandoned `?Es` child on the
+developer's machine on every run. A deterministic replacement is not available
+either: with the escalation gone the sole divergence is a wall-clock deadline,
+which cannot be asserted without spending `KILL_ABANDON` seconds and stranding a
+child. The deterministic evidence lives out-of-suite in
+`.port/tools/repro_subprocess_hang.sh` (pre-fix: 12/12 hangs; post-fix: 0).
 
 **Related, NOT diverged:** `getpgid`'s retry loop is also unbounded in both the
 oracle and the port. It is left verbatim — it terminates as soon as the child

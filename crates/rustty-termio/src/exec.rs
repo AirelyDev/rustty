@@ -596,9 +596,14 @@ impl Exec {
         Ok(())
     }
 
-    // DEFERRED (D6 xev thread lifecycle, 0 tests — R1-safe): the body writes
-    // the read-thread quit pipe and joins the read thread (join-by-value —
-    // the D6 thread-lifecycle modeling owns it). Preserved verbatim:
+    // [M3 / review follow-up] This function is FULLY IMPLEMENTED (an earlier
+    // "DEFERRED (D6 xev thread lifecycle)" header here was stale). Everything
+    // below is ported: `externalExit`, `stop()`, the read-thread quit-pipe
+    // write, the windows `CancelIoEx` arm and the read-thread join. It matters
+    // that this is real code, because the `killPid` divergence note above leans
+    // on it: the ORDERING here (`stop()` runs while the io-reader thread is
+    // still draining the pty master) is what keeps the normal close path off
+    // the wedging condition. Do not reorder it. Reference, verbatim:
     //
     // pub fn threadExit(self: *Exec, td: *termio.Termio.ThreadData) void {
     //     assert(td.backend == .exec);
@@ -2887,6 +2892,7 @@ pub enum KillError {
     /// [R1-DIVERGENCE, liveness] `killPid` gave up waiting for a child that
     /// cannot be reaped. See `KILL_ABANDON` and the divergence note on
     /// `killPid`. Non-fatal: the caller (`stop`) proceeds with teardown.
+    #[allow(dead_code)] // M4: never constructed on windows (killPid is posix-only).
     Abandoned,
 }
 
@@ -2916,29 +2922,58 @@ pub enum KillError {
 // outranking strict R1 fidelity. Upstream Ghostty has the same ordering and so
 // presumably the same latent bug.
 //
-// The divergence is confined to the PATHOLOGICAL case; a child that exits
-// normally is reaped on the first or second iteration, well inside the grace
-// period, so observable behavior is unchanged for every healthy teardown:
+// SHAPE OF THE DIVERGENCE — exactly one deadline, no signal change:
 //
-//   * 0 .. KILL_ESCALATE   — verbatim reference behavior (SIGHUP + WNOHANG).
-//   * KILL_ESCALATE ..     — escalate to SIGKILL. This is a strict improvement
-//                            even within the reference's own stated intent
-//                            ("we will not rest until the entire family tree is
-//                            obliterated"): it kills descendants that survived
-//                            the setsid/execve race AND ignore SIGHUP.
-//   * KILL_ABANDON         — give up and return. The child is unreapable, so
-//                            waiting longer cannot succeed; it is left to be
-//                            reparented to launchd. Abandoning a zombie we
-//                            cannot reap is strictly better than wedging the
-//                            application forever.
+//   * 0 .. KILL_ABANDON — VERBATIM reference behavior: `killpg(pgid, SIGHUP)`
+//                         + `waitpid(WNOHANG)` + 10ms sleep, repeated. Not one
+//                         signal, argument or ordering differs.
+//   * at KILL_ABANDON   — stop waiting and return `KillError::Abandoned`
+//                         instead of looping forever. The child is left alive
+//                         (or wedged) and reparented to launchd; the caller
+//                         (`stop`) proceeds with teardown.
 //
-/// Grace period during which `killPid` behaves exactly like the reference
-/// (SIGHUP only). Chosen generously so a shell doing legitimate exit work
-/// (writing history, running `zshexit`, …) is never escalated against.
-#[cfg(not(windows))]
-const KILL_ESCALATE: std::time::Duration = std::time::Duration::from_secs(5);
-
+// PRECISE GUARANTEE (do not over-claim this): rustty is observationally
+// identical to the oracle for any teardown that COMPLETES WITHIN
+// `KILL_ABANDON`. It is NOT identical for teardowns that take longer — for
+// those the oracle keeps SIGHUPing forever and rustty stops waiting. Two
+// distinguishable cases live past the deadline:
+//
+//   1. The child is `?Es`-wedged and therefore UNREAPABLE. Waiting longer
+//      provably cannot succeed, so abandoning loses nothing. This is the case
+//      the divergence exists for.
+//   2. The child is alive and reapable but slow — a shell trapping/ignoring
+//      SIGHUP, a `zshexit`/history flush over a stalled network filesystem, an
+//      ssh multiplexer or DB client flushing state. ACCEPTED CONSEQUENCE: we
+//      stop waiting for it and no longer collect its exit status; it is
+//      reparented to launchd. Note what we deliberately do NOT do: we do not
+//      kill it. Its cleanup runs to completion, so there is no data loss, and
+//      the signals it received are exactly the ones the oracle would have sent.
+//
+// WHY THERE IS NO SIGKILL ESCALATION (a rejected earlier design; see the
+// DEFERRALS.md entry for the full reasoning). An intermediate version escalated
+// the process-group signal to SIGKILL after a 5s grace period. It was removed
+// because it is useless where it was needed and harmful where it was not:
+//
+//   * For the `?Es` case it does NOTHING. An `E`-state process has already
+//     entered the kernel exit path; it is SIGKILL-immune (this is the very
+//     property that makes the wedge unreapable). Liveness there comes entirely
+//     from the deadline, never from the signal.
+//   * For case 2 above it converts "slow cleanup that eventually finishes"
+//     into "killed mid-cleanup", i.e. a truncated history file or a half-
+//     flushed client — real user data loss, in a case that is NOT pathological
+//     and where the oracle would have waited.
+//   * Its only genuine beneficiary is a child that ignores SIGHUP but is
+//     killable, which the escalation would kill rather than abandon. The
+//     oracle never kills such a child either, so abandoning it is closer to
+//     the reference, and the alternative (inventing a SIGKILL the user's shell
+//     never asked for) is not worth the data-loss exposure in case 2 — the two
+//     are indistinguishable from inside `killPid`.
+//
+// The result is the MINIMAL divergence that achieves liveness: a single
+// deadline, added to an otherwise byte-for-byte faithful loop.
+//
 /// Hard deadline after which `killPid` stops blocking the teardown.
+/// Everything before it is verbatim reference behavior.
 #[cfg(not(windows))]
 const KILL_ABANDON: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -2999,22 +3034,17 @@ fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
     // while (true) {
     //
     // [R1-DIVERGENCE] the reference loop is unbounded; this one is bounded by
-    // KILL_ESCALATE / KILL_ABANDON. See the divergence note above.
+    // KILL_ABANDON. The signal sent is unchanged (always SIGHUP, as in the
+    // reference). See the divergence note above.
     let started = std::time::Instant::now();
     loop {
-        // [R1-DIVERGENCE] escalate SIGHUP -> SIGKILL past the grace period.
         let elapsed = started.elapsed();
-        let sig = if elapsed >= KILL_ESCALATE {
-            libc::SIGKILL
-        } else {
-            libc::SIGHUP
-        };
 
         // switch (posix.errno(c.killpg(pgid, c.SIGHUP))) {
         //     .SUCCESS => log.debug("process group killed pgid={}", .{pgid}),
         //     else => |err| killpg: { ... },
         // }
-        let rc = unsafe { libc::killpg(pgid, sig) };
+        let rc = unsafe { libc::killpg(pgid, libc::SIGHUP) };
         if rc == 0 {
             // log.debug("process group killed pgid={}", .{pgid});
         } else {
@@ -3050,10 +3080,14 @@ fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
             break;
         }
 
-        // [R1-DIVERGENCE] hard deadline: the child is unreapable (an `?Es`
-        // macOS process is SIGKILL-immune and `waitpid` never returns it), so
-        // waiting longer cannot succeed. Give up rather than wedge teardown
-        // forever; the child is reparented to launchd when we exit.
+        // [R1-DIVERGENCE] hard deadline — the ONLY divergence in this loop.
+        // In the case this exists for the child is unreapable (an `?Es` macOS
+        // process is SIGKILL-immune and `waitpid` never returns it), so waiting
+        // longer provably cannot succeed. Give up rather than wedge teardown
+        // forever; the child is reparented to launchd when we exit. A merely
+        // SLOW-but-reapable child is also abandoned here (accepted consequence,
+        // see the note above) — but it is never killed, so its cleanup still
+        // completes.
         if elapsed >= KILL_ABANDON {
             // log.warn("child pid={} unreapable after {}s, abandoning", ...);
             return Err(KillError::Abandoned);
@@ -4364,15 +4398,54 @@ mod tests {
         // 26.5.1: reading ~37 pending bytes un-wedges the child instantly.
         // The drainer reads until EOF (all slave refs closed at reap), exactly
         // the upstream runtime condition; nothing this KAT asserts changed.
+        //
+        // [M2 / review follow-up] The drainer is itself BOUNDED. It polls with
+        // a timeout and gives up after DRAIN_DEADLINE rather than blocking in
+        // `read` until EOF. RISK IT REMOVES: if the child ever wedges anyway,
+        // the bounded `killPid` abandons it WITHOUT reaping — so the slave fds
+        // are never closed, the master never reaches EOF, and an unbounded
+        // drainer would block forever in `read`. `drainer.join()` below would
+        // then hang the test, reintroducing on the TEST side exactly the CI
+        // hang the bounded `killPid` removes on the production side. The
+        // deadline is far longer than any legitimate drain (which finishes in
+        // microseconds) and longer than `KILL_ABANDON`, so it never masks a
+        // real failure — it only guarantees `join()` returns.
         let master_fd = fds.read;
-        let drainer = std::thread::spawn(move || loop {
+        let drainer = std::thread::spawn(move || {
+            const DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+            let deadline = std::time::Instant::now() + DRAIN_DEADLINE;
             let mut buf = [0u8; 4096];
-            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
-            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            if n <= 0 {
-                break;
+            while std::time::Instant::now() < deadline {
+                // SAFETY: `master_fd` is the live pty master (closed only after
+                // this thread is joined); `poll` writes only `revents`.
+                let mut pfd = libc::pollfd {
+                    fd: master_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let pr = unsafe { libc::poll(&mut pfd, 1, 100) };
+                if pr < 0 {
+                    if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                        continue;
+                    }
+                    break;
+                }
+                if pr == 0 {
+                    // Timed out with nothing pending; re-check the deadline.
+                    continue;
+                }
+                // SAFETY: as above; `read` writes at most `buf.len()` bytes.
+                let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
+                if n < 0 {
+                    if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                        continue;
+                    }
+                    // EIO on macOS == all slave refs closed, i.e. EOF.
+                    break;
+                }
+                if n == 0 {
+                    break;
+                }
             }
         });
 
@@ -4394,7 +4467,8 @@ mod tests {
         assert!(subprocess.process.is_none(), "stop() clears the process");
 
         // The child is reaped, so every slave fd is closed and the drainer has
-        // hit EOF; join it BEFORE closing the master (its fd copy).
+        // hit EOF; join it BEFORE closing the master (its fd copy). Bounded by
+        // DRAIN_DEADLINE above, so this join always returns.
         drainer.join().expect("drainer join");
 
         // Close the master (read/write) fd so the test leaks nothing.
@@ -4406,73 +4480,33 @@ mod tests {
         subprocess.deinit();
     }
 
-    // KAT (rustty-only margin) — LIVENESS PROOF for the [R1-DIVERGENCE] bounded
-    // `killPid` wait (see `KILL_ESCALATE` / `KILL_ABANDON`).
+    // [I2 / review follow-up] REMOVED: `kill_pid_bounded_when_child_is_unreapable`.
     //
-    // This is the WEDGING shape: start a real pty child (macOS wraps it in
-    // `login(1)`) and tear it down with NO reader draining the pty master —
-    // the situation `threadEnter`'s error arms produce in production (they call
-    // `stop()` before the io-reader thread exists). The SIGHUP'd `login` wedges
-    // uninterruptibly in the kernel exit path (state `?Es`, SIGKILL-immune) and
-    // is never reapable.
+    // An earlier revision carried an in-suite "bound regression guard" that
+    // deliberately reproduced the WEDGING condition (start a real pty child,
+    // then `stop()` with NO drainer) inside the DEFAULT `cargo test`. It was
+    // deleted, not weakened:
     //
-    // HONESTY NOTE on what this test does and does not prove. Whether the child
-    // actually wedges is TIMING-DEPENDENT (it needs `login` to have output
-    // queued when the SIGHUP lands), so a given run may reap normally in
-    // milliseconds. This test is therefore a BOUND-REGRESSION GUARD: whenever
-    // the wedge does occur it must still return within KILL_ABANDON, and it can
-    // only fail by hanging — which is precisely how it would fail if the bound
-    // were removed. The DETERMINISTIC proof that the wedge is real and that the
-    // bound tames it is `.port/tools/repro_subprocess_hang.sh` (pre-fix: 12/12
-    // hangs; against the unbounded loop the no-drainer workload never returns,
-    // against the bounded loop it always does).
+    //   * It asserted nothing useful. Whether the child actually wedges is
+    //     timing-dependent, so it reaped in milliseconds on ordinary runs, and
+    //     its threshold (`KILL_ABANDON + 20s`) was loose enough that tripling
+    //     `KILL_ABANDON` would still have passed it.
+    //   * Its only failure mode was HANGING — which is precisely the CI failure
+    //     this whole work exists to eliminate.
+    //   * It reintroduced the process-stranding hazard (an abandoned `?Es`
+    //     `login(1)` on the developer's machine) on every test run.
     //
-    // The abandoned child is reparented to launchd and reaped when this test
-    // binary exits — which it now can.
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn kill_pid_bounded_when_child_is_unreapable() {
-        use allocator_api2::alloc::Global;
-
-        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-
-        let cfg = Config {
-            command: Some(configpkg::command::Command::Shell(b"exit 0".to_vec())),
-            env: EnvMap::new(),
-            env_override: configpkg::RepeatableStringMap::default(),
-            shell_integration: configpkg::value_types::ShellIntegration::Detect,
-            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
-            cursor_blink: None,
-            working_directory: None,
-            resources_dir: None,
-            term: b"xterm-256color".to_vec(),
-            rt_pre_exec_info: RtPreExecInfo,
-            rt_post_fork_info: RtPostForkInfo,
-        };
-
-        let mut subprocess = Subprocess::init(Global, cfg).expect("Subprocess::init");
-        let fds = subprocess.start(Global).expect("Subprocess::start");
-
-        // NO drainer: this is the wedging condition, deliberately.
-        let started = std::time::Instant::now();
-        subprocess.stop();
-        let elapsed = started.elapsed();
-
-        // The bound held. Slack over KILL_ABANDON covers a loaded machine.
-        assert!(
-            elapsed < KILL_ABANDON + std::time::Duration::from_secs(20),
-            "killPid must be BOUNDED (R1-divergence): stop() took {elapsed:?}, \
-             expected < {:?}. An unbounded loop hangs here forever.",
-            KILL_ABANDON + std::time::Duration::from_secs(20),
-        );
-        assert!(subprocess.process.is_none(), "stop() clears the process");
-
-        // SAFETY: the pty master returned by `start()`, closed exactly once.
-        unsafe {
-            libc::close(fds.read);
-        }
-        subprocess.deinit();
-    }
+    // A deterministic replacement was considered and rejected as well: the only
+    // shape that would deterministically exercise "new logic" is a child that
+    // survives SIGHUP but not SIGKILL, and after the I1 decision there IS no
+    // SIGKILL escalation left to exercise — the sole divergence is a wall-clock
+    // deadline, which cannot be asserted without spending `KILL_ABANDON`
+    // seconds and stranding a child.
+    //
+    // The deterministic evidence lives out-of-suite, where it belongs:
+    // `.port/tools/repro_subprocess_hang.sh` (pre-fix 12/12 hangs, post-fix
+    // 0 hangs) plus the `killPid bounded wait` divergence entry in
+    // `.port/phase-2/DEFERRALS.md`.
 
     // A trivial `AppMailbox` test double: it accepts every push (returns a
     // non-zero queue size) and records nothing. Enough for the exit / termios /
