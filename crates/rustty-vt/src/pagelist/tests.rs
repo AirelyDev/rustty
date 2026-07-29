@@ -2145,6 +2145,15 @@ fn pagelist_compress_page_rejects_an_already_compressed_node() {
 }
 
 /// A failing strict decommit leaves the node resident and its mapping intact.
+///
+/// PORT NOTE (WS7 B10): tripwire injection is compiled out when
+/// `debug_assertions` is off, so this test is inert under `--release`. It is
+/// ignored there rather than left to fail (the other tripwire tests in this file
+/// predate that convention and are part of the known-red `--release` set).
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "tripwire failure injection is disabled without debug_assertions"
+)]
 #[test]
 fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
     use rustty_util::tripwire::ResetMode;

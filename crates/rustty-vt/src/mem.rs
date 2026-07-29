@@ -78,6 +78,7 @@ unsafe fn madvise(ptr: *mut u8, len: usize, advice: i32) -> bool {
 /// See the POSIX variant above; this stub never touches memory.
 #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 #[inline]
+#[allow(dead_code)] // no caller on targets without retained-mapping reclaim (e.g. wasm32)
 unsafe fn madvise(_ptr: *mut u8, _len: usize, _advice: i32) -> bool {
     false
 }
