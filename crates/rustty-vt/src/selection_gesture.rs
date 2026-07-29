@@ -825,13 +825,27 @@ fn drag_selection(
     // Rectangular selections are handled similarly, except that
     // entire columns are considered rather than individual cells.
 
+    // if (geometry.columns == 0 or geometry.cell_width == 0) return null;
+    if geometry.columns == 0 || geometry.cell_width == 0 {
+        return None;
+    }
+
     // We only include cells in the selection if the threshold point lies
     // between the start and end points of the selection. A threshold of
     // 60% of the cell width was chosen empirically because it felt good.
     let threshold_point: u32 = f64::round(geometry.cell_width as f64 * 0.6) as u32;
 
     // We use this to clamp the pixel positions below.
-    let max_x = geometry.columns * geometry.cell_width - 1;
+    // const pixel_span = std.math.mul(u32, geometry.columns, geometry.cell_width)
+    //     catch std.math.maxInt(u32);
+    // const max_x = pixel_span - 1;
+    // PORT NOTE: `pixel_span` is >= 1 because both factors are non-zero after
+    // the early return above, so the `- 1` cannot underflow.
+    let pixel_span: u32 = geometry
+        .columns
+        .checked_mul(geometry.cell_width)
+        .unwrap_or(u32::MAX);
+    let max_x = pixel_span - 1;
 
     // We need to know how far across in the cell the drag pos is, so
     // we subtract the padding and then take it modulo the cell width.
@@ -1763,6 +1777,75 @@ mod tests {
         let __ev6 = test_drag(&mut t, 3, 1, 39.0, 100.0);
         let _ = gesture.drag(&mut t, __ev6);
         assert_eq!(Autoscroll::Down, gesture.left_drag_autoscroll);
+
+        gesture.deinit(&mut t);
+        t.deinit(Allocator);
+    }
+
+    // test "SelectionGesture drag clamps unrepresentable positions"
+    //
+    // PORT NOTE (08e376f23 pt.1 — VERIFIED NON-ISSUE in Rust): upstream adds
+    // `pixelFromFloat` because Zig's `@intFromFloat` panics on NaN and on
+    // out-of-range values. Rust's `f64 as u32` is saturating and NaN-safe by
+    // language definition (RFC 2884), and `f64::max(0.0, NaN) == 0.0`, so the
+    // existing `f64::max(0.0, ..) as u32` sites already have `pixelFromFloat`'s
+    // semantics. This test is a documentation-value regression lock, not a bug
+    // fix.
+    #[test]
+    fn drag_clamps_unrepresentable_positions() {
+        let mut t = Terminal::init(Allocator, opts(5, 5)).unwrap();
+
+        let mut gesture: SelectionGesture = SelectionGesture::INIT;
+
+        let mut press_event = test_press(&mut t, 1, 1, Some(std::time::Instant::now()));
+        press_event.xpos = 10.0;
+        let _ = gesture.press(&mut t, press_event).unwrap();
+
+        let __drag1 = test_drag(&mut t, 1, 1, f64::INFINITY, 50.0);
+        let positive = gesture.drag(&mut t, __drag1).unwrap();
+        assert!(test_pin(&mut t, 1, 1).eql(positive.start()));
+        assert!(test_pin(&mut t, 1, 1).eql(positive.end()));
+
+        let __drag2 = test_drag(&mut t, 1, 1, f64::NAN, 50.0);
+        assert!(gesture.drag(&mut t, __drag2).is_none());
+
+        gesture.deinit(&mut t);
+        t.deinit(Allocator);
+    }
+
+    // test "SelectionGesture drag saturates overflowing geometry"
+    #[test]
+    fn drag_saturates_overflowing_geometry() {
+        let mut t = Terminal::init(Allocator, opts(5, 5)).unwrap();
+
+        let mut gesture: SelectionGesture = SelectionGesture::INIT;
+
+        let __press = test_press(&mut t, 1, 1, Some(std::time::Instant::now()));
+        let _ = gesture.press(&mut t, __press).unwrap();
+
+        let mut drag_event = test_drag(&mut t, 1, 1, 10.0, 50.0);
+        drag_event.geometry.columns = u32::MAX;
+        drag_event.geometry.cell_width = u32::MAX;
+        assert!(gesture.drag(&mut t, drag_event).is_none());
+
+        gesture.deinit(&mut t);
+        t.deinit(Allocator);
+    }
+
+    // test "SelectionGesture drag rejects empty geometry"
+    #[test]
+    fn drag_rejects_empty_geometry() {
+        let mut t = Terminal::init(Allocator, opts(5, 5)).unwrap();
+
+        let mut gesture: SelectionGesture = SelectionGesture::INIT;
+
+        let __press = test_press(&mut t, 1, 1, Some(std::time::Instant::now()));
+        let _ = gesture.press(&mut t, __press).unwrap();
+
+        let mut drag_event = test_drag(&mut t, 1, 1, 10.0, 50.0);
+        drag_event.geometry.columns = 0;
+        drag_event.geometry.cell_width = 0;
+        assert!(gesture.drag(&mut t, drag_event).is_none());
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
