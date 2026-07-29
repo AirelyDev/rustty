@@ -273,6 +273,18 @@ mod imp {
         pub update_config_thunk:
             RefCell<Option<Box<dyn Fn(&rustty_config::Config) -> Result<(), rustty_core::app::Error>>>>,
 
+        /// rustty-only seam carrying the monomorphized global-shortcut dispatch
+        /// (`self.core().performAllAction(self.rt(), action)`,
+        /// `application.zig:1660`, `globalShortcutTrigger`). Same type-erasure
+        /// rationale as [`Self::tick_thunk`]: the non-generic `Application` cannot
+        /// name the concrete `rustty_core::app::App<A>` its type-erased
+        /// `core_app`/`rt_app` pointers refer to, so
+        /// [`super::Application::bind_core_app`] captures both here. `None` until
+        /// bound — a global shortcut then performs nothing (faithful to a
+        /// not-yet-wired core).
+        #[allow(clippy::type_complexity)]
+        pub perform_all_action_thunk: RefCell<Option<Box<dyn Fn(rustty_input::binding::Action)>>>,
+
         /// Test-only instrumentation: how many times the hand-rolled run loop has
         /// executed the inline core tick (`application.zig:552`). The
         /// `application_run_loop_ticks_then_quits` KAT asserts this is ≥ 1 to prove
@@ -281,6 +293,13 @@ mod imp {
         /// production carries no extra field.
         #[cfg(test)]
         pub tick_count: Cell<u64>,
+
+        /// Test-only instrumentation: how many times a portal `trigger` reached
+        /// the core dispatch (`application.zig:1660` leaves no observable, so the
+        /// port adds one — the `tick_count` precedent). `#[cfg(test)]` so
+        /// production carries no extra field.
+        #[cfg(test)]
+        pub global_shortcut_trigger_count: Cell<u64>,
     }
 
     #[glib::object_subclass]
@@ -766,16 +785,23 @@ mod imp {
         }
 
         /// PORTS: `application.zig:1655-1663` `globalShortcutTrigger`. Perform the
-        /// activated global shortcut's action across all surfaces.
+        /// activated global shortcut's action across all surfaces, via the
+        /// monomorphized [`Self::perform_all_action_thunk`]
+        /// ([`super::Application::bind_core_app`] installs it). An unbound core
+        /// performs nothing.
         ///
-        /// PORT NOTE (placeholder-leaf): the reference calls
-        /// `self.core().performAllAction(self.rt(), action.*)` (`:1660`) — the
-        /// core "perform on every surface" dispatch, which lands with the
-        /// action-dispatch surface (Task 23). This handler is currently unreachable
-        /// regardless: the sole emitter of `trigger` is the XDG portal activation
-        /// path (`shortcutActivated`), deferred with the portal tier (L6), so no
-        /// global shortcut fires yet.
-        fn global_shortcut_trigger(&self, _action: &ActionBoxed) {}
+        /// `pub(super)` (the reference's method is file-private) so the KAT in the
+        /// outer module's `mod tests` can drive it directly; `mod imp`'s own call
+        /// site in `startup_global_shortcuts` is unaffected.
+        pub(super) fn global_shortcut_trigger(&self, action: &ActionBoxed) {
+            #[cfg(test)]
+            self.global_shortcut_trigger_count
+                .set(self.global_shortcut_trigger_count.get() + 1);
+
+            if let Some(thunk) = self.perform_all_action_thunk.borrow().as_ref() {
+                thunk(action.0.clone());
+            }
+        }
 
         /// PORTS: `application.zig:1608-1653` `showConfigErrorsDialog`. Presents (or
         /// refreshes) the config-diagnostics dialog when the config has diagnostics.
@@ -1636,6 +1662,7 @@ fn deinit_private(priv_: &imp::Application) {
     priv_.needs_confirm_quit_thunk.replace(None);
     priv_.update_config_thunk.replace(None);
     priv_.color_scheme_thunk.replace(None);
+    priv_.perform_all_action_thunk.replace(None);
 
     // `if (priv.saved_language) |language| alloc.free(language)` (`:442`) —
     // clearing drops the `CString`.
@@ -2355,6 +2382,27 @@ impl Application {
                         //     .{err},
                         // );
                     }
+                }
+            })));
+
+        // The global-shortcut dispatch (`globalShortcutTrigger`,
+        // `application.zig:1655-1663`): `core_app.performAllAction(rt_app,
+        // action)`. `performAllAction` takes `&mut App<A>` and `rt_app: &A`; both
+        // are BACKREFs owned by libghostty-core / the apprt `App`, never freed
+        // here. It runs on the app thread (the GTK main loop delivers the portal
+        // `Activated` signal there).
+        self.imp()
+            .perform_all_action_thunk
+            .replace(Some(Box::new(move |action: rustty_input::binding::Action| {
+                let Some(rt_app) = rt_app else {
+                    return;
+                };
+                // SAFETY: as above — app-thread-only access to the two backrefs.
+                if let Err(_err) =
+                    unsafe { &mut *core_app }.performAllAction(unsafe { &*rt_app }, action)
+                {
+                    // log.warn("failed to perform action={}", .{err});
+                    eprintln!("warn(gtk): failed to perform global shortcut action");
                 }
             })));
     }
@@ -4289,6 +4337,44 @@ mod tests {
                 "startup must register the '{expected}' action; got {names:?}"
             );
         }
+    }
+
+    /// PORTS: `application.zig:1655-1663` `globalShortcutTrigger`. A `trigger`
+    /// from the GlobalShortcuts portal performs the action on the core app via
+    /// `performAllAction`. Requires a display only because `build_test_app`
+    /// constructs a real `GtkApplication`.
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn application_global_shortcut_trigger_performs_action() {
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+
+        let mut core_app: Box<CoreApp<Double>> =
+            CoreApp::<Double>::create(Global).expect("core app");
+        let core_ptr: *mut CoreApp<Double> = &mut *core_app;
+
+        let app = build_test_app(core_ptr.cast());
+        assert!(
+            app.imp().perform_all_action_thunk.borrow().is_none(),
+            "unbound core app installs no dispatch thunk"
+        );
+
+        app.bind_core_app::<Double>();
+        assert!(
+            app.imp().perform_all_action_thunk.borrow().is_some(),
+            "bind_core_app must install the performAllAction thunk"
+        );
+
+        app.imp()
+            .global_shortcut_trigger(&ActionBoxed(rustty_input::binding::Action::NewWindow));
+
+        assert_eq!(
+            app.imp().global_shortcut_trigger_count.get(),
+            1,
+            "the trigger handler must reach the core dispatch exactly once"
+        );
     }
 
     /// PORTS: `application.zig:1459-1473` `activate`. Activating queues exactly one
