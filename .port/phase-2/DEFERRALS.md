@@ -4926,3 +4926,56 @@ emits the `share/ghostty/` parity dir. Residual: live `+list-themes` CLI
 count + in-window OSC7 observation re-queued to WS4 (blocked on
 `rustty_cli_try_action`'s non-null arm). Ledger: INTEGRATION_PARITY.md
 §2.1/§2.2 struck RESOLVED same-commit.
+
+## Deferred to WS7 D6 (inspector compression memory view)
+
+From **WS7 Phase B review (I1)** — these need the final
+`oracle@main:src/inspector/widgets/pagelist.zig` (`70e788f06` + `6d5dda40d`):
+
+1. **`crates/rustty-inspector/src/widgets/pagelist.rs` cell-detail path still
+   restores.** The page-TREE loop was fixed in the Phase B review (it now uses
+   `Node::rows`/`page_if_resident`/`storage`/`page_preserving_state`, guarded by
+   `ws7_tests::pagelist_widget_page_tree_never_restores`). The CELL-detail path
+   (`Node::page(cell.node)` at the style / hyperlink / grapheme tables) still
+   restores the ONE page holding the inspected cell. Fixing it faithfully is the
+   D6 restructure, not a local edit: the oracle replaced `pages.getCell(pt)` with
+   `pages.pin(pt)` + `pin.node.pagePreservingState(...)` + an `InspectedCell`
+   struct, and threads the resulting `page: *const Page` through
+   `cell_info.draw`, `hyperlinkTable` and `graphemeTable`. D6 must port that end
+   state and then tighten the guard test to the plan's stricter form
+   (`!src.contains("Node::page(")` over the WHOLE file).
+
+2. **`PageList::Limits` / `Limits::enforce` has no rustty counterpart.** The
+   oracle's 11th `markActivity` call site (`oracle@main:PageList.zig:6312`, inside
+   `Limits.enforce`) therefore has nothing to port onto. rustty's PageList carries
+   its byte limit as a plain field with no `Limits` struct, so there are 10
+   `mark_activity` sites, not 11. See the PORT NOTE next to `mark_activity` in
+   `crates/rustty-vt/src/pagelist/compress.rs`. If a `Limits` struct is ever
+   introduced, `enforce` must `mark_activity` on entry.
+
+## Deferred to WS7 Phase E (Miri / gates)
+
+From **WS7 Phase B review (I2 harness run)**:
+
+1. **`compress_page` feeds uninitialized bytes to LZ4 (Miri SB, OPEN).**
+   `.port/phase-2/mirihar-pagelist-compress`'s `roundtrip`/`leak` scenarios abort with
+   "constructing invalid value of type `[u8; 8]`: encountered uninitialized memory" inside
+   `lz4::compress` reading the page mapping (`compress/page.rs:137` ->
+   `pagelist/compress.rs:406`). **Not pre-existing — introduced by B7; the Phase A codec
+   is not implicated and `main` is unaffected** (nothing merged today feeds a page mapping
+   to LZ4). `rustty-os`'s `cfg(miri)` page allocator hands out zeroed memory, so the uninit
+   bytes are real de-initialization from typed writes of padded structs into the mapping,
+   not an FFI/Miri artifact; impact is bounded by blast radius (padding/inter-table gaps
+   only — worst case a spurious verify failure or differing padding after restore, never
+   cell corruption). Full write-up, backtrace and candidate resolutions in
+   `.port/phase-2/MIRI_EXCEPTIONS.md` ("WS7 Phase B"), including a cheaper fourth
+   resolution (zero the sub-table gaps / write through a pre-zeroed `MaybeUninit` at
+   construction, removing the uninit at the source instead of the read). Phase E must
+   either fix it or record a formal 4-criterion exception; it must NOT be left silently
+   red.
+2. **I3 leak check is a manual proof artifact, not a gate.** Nothing in `.port/tools/` or
+   `ci.sh` runs any `mirihar-*` crate, so `.port/phase-2/mirihar-pagelist-compress`'s
+   `leakcheck` scenario (native, milliseconds, no Miri needed) demonstrates leak-freedom
+   but does not automatically catch a future regression. This matches existing repo
+   precedent (`mirihar-compress-lz4`, `mirihar-chunk3b`), so it is not being wired now —
+   but at minimum the native `leakcheck` scenario should be wired into a gate in Phase E.

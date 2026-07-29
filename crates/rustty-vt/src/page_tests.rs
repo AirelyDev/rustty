@@ -2837,4 +2837,32 @@ mod tests {
         cloned.deinit();
         page.deinit();
     }
+
+    /// A shallow copy aliases the SAME backing mapping and never owns it.
+    ///
+    /// PORT NOTE (WS7 B2): the oracle expresses this as a plain Zig struct copy
+    /// (`.page = source.*` in compress/Page.zig); rustty's `Page` is not `Copy`
+    /// so the copy is an explicit helper and this test pins its contract.
+    #[test]
+    fn page_shallow_copy_aliases_the_same_mapping_and_is_unowned() {
+        let mut page = Page::init(Capacity {
+            cols: 10,
+            rows: 8,
+            ..std_capacity()
+        })
+        .unwrap();
+        page.size = PageSize { cols: 9, rows: 7 };
+        page.dirty = true;
+
+        let copy = page.shallow_copy();
+        assert_eq!(copy.memory_ptr(), page.memory_ptr());
+        assert_eq!(copy.memory_len(), page.memory_len());
+        assert_eq!(copy.size, page.size);
+        assert_eq!(copy.capacity, page.capacity);
+        assert!(copy.dirty);
+        // Dropping `copy` must not free the mapping; `page.deinit()` below would
+        // then double-free and the test allocator/leak gate would catch it.
+        drop(copy);
+        page.deinit();
+    }
 }

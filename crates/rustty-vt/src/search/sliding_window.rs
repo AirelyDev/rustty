@@ -597,7 +597,7 @@ impl SlidingWindow {
                     //     .start = @intCast(map.y),
                     //     .end = meta.node.data.size.rows,
                     // });
-                    let node_rows = unsafe { (*meta.node).data.size.rows };
+                    let node_rows = unsafe { crate::pagelist::Node::rows(meta.node) };
                     self.chunk_buf.push(crate::highlight::Chunk {
                         node: meta.node,
                         serial: meta.serial,
@@ -657,7 +657,7 @@ impl SlidingWindow {
                     //     .start = 0,
                     //     .end = meta.node.data.size.rows,
                     // });
-                    let node_rows = unsafe { (*meta.node).data.size.rows };
+                    let node_rows = unsafe { crate::pagelist::Node::rows(meta.node) };
                     self.chunk_buf.push(crate::highlight::Chunk {
                         node: meta.node,
                         serial: meta.serial,
@@ -782,7 +782,7 @@ impl SlidingWindow {
                     // starts[0] = ends[0] - 1;
                     self.chunk_buf[0].start = self.chunk_buf[0].end - 1;
                     // ends[0] = nodes[0].data.size.rows;
-                    self.chunk_buf[0].end = unsafe { (*self.chunk_buf[0].node).data.size.rows };
+                    self.chunk_buf[0].end = unsafe { crate::pagelist::Node::rows(self.chunk_buf[0].node) };
                     // ends[nodes.len - 1] = starts[nodes.len - 1] + 1;
                     self.chunk_buf[chunks_len - 1].end = self.chunk_buf[chunks_len - 1].start + 1;
                     // starts[nodes.len - 1] = 0;
@@ -892,7 +892,8 @@ impl SlidingWindow {
         //     return error.OutOfMemory;
         // };
         {
-            let page: *const crate::page::Page = unsafe { &(*meta.node).data };
+            let page: *const crate::page::Page =
+                unsafe { &(*crate::pagelist::Node::page(meta.node)) };
             let mut formatter: PageFormatter = PageFormatter::init(
                 page,
                 Options {
@@ -923,7 +924,10 @@ impl SlidingWindow {
         //         },
         //     );
         // }
-        let row = unsafe { (*node).data.get_row((*node).data.size.rows as usize - 1) };
+        let row = unsafe {
+            (*crate::pagelist::Node::page(node))
+                .get_row(crate::pagelist::Node::rows(node) as usize - 1)
+        };
         if !unsafe { (*row).wrap() } {
             encoded.push(b'\n');
             let last = meta
@@ -1634,7 +1638,7 @@ mod tests {
 
         // Fill up the first page. The final bytes in the first page
         // are "boo!"
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -1697,7 +1701,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -1759,7 +1763,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -1812,7 +1816,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -1853,7 +1857,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -1892,7 +1896,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -1932,7 +1936,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -2042,7 +2046,8 @@ mod tests {
         assert!(core::ptr::eq(s.pages.pages.first, s.pages.pages.last));
         let node: *mut Node = s.pages.pages.first;
         unsafe {
-            let row = (*node).data.get_row((*node).data.size.rows as usize - 1);
+            let row = (*crate::pagelist::Node::page(node))
+                .get_row(crate::pagelist::Node::rows(node) as usize - 1);
             (*row).set_wrap(true);
         }
 
@@ -2173,7 +2178,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -2237,7 +2242,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -2292,7 +2297,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -2333,7 +2338,7 @@ mod tests {
 
         let mut s = screen_init(80, 24, 1000);
 
-        let first_page_rows = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
         for _ in 0..first_page_rows - 1 {
             s.test_write_string(b"\n").unwrap();
         }
@@ -2440,7 +2445,8 @@ mod tests {
         assert!(core::ptr::eq(s.pages.pages.first, s.pages.pages.last));
         let node: *mut Node = s.pages.pages.first;
         unsafe {
-            let row = (*node).data.get_row((*node).data.size.rows as usize - 1);
+            let row = (*crate::pagelist::Node::page(node))
+                .get_row(crate::pagelist::Node::rows(node) as usize - 1);
             (*row).set_wrap(true);
         }
 
@@ -2586,7 +2592,8 @@ mod tests {
         // without creating a slow test.
         let node: *mut Node = s.pages.pages.first;
         unsafe {
-            let last_row = (*node).data.get_row((*node).data.size.rows as usize - 1);
+            let last_row = (*crate::pagelist::Node::page(node))
+                .get_row(crate::pagelist::Node::rows(node) as usize - 1);
             (*last_row).set_wrap(true);
         }
 

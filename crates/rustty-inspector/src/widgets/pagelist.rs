@@ -209,10 +209,20 @@ impl Inspector {
             // while (node) |page_node| : (node = page_node.prev) {
             while !node.is_null() {
                 let page_node = node;
-                // const page = &page_node.data;
-                let page = unsafe { &(*page_node).data };
-                // row_offset -= page.size.rows;
-                row_offset -= page.size.rows as usize;
+                // const rows = page_node.rows();
+                // const resident = page_node.pageIfResident();
+                // const compressed = page_node.storage() == .compressed;
+                //
+                // PORT NOTE (WS7): NONE of these three restore a compressed
+                // page. Reading the header through `Node::page` would restore
+                // every compressed history page the moment this tab is opened,
+                // silently undoing scrollback compression.
+                let rows = unsafe { rustty_vt::pagelist::Node::rows(page_node) };
+                let resident = unsafe { rustty_vt::pagelist::Node::page_if_resident(page_node) };
+                let compressed = unsafe { rustty_vt::pagelist::Node::storage(page_node) }
+                    == rustty_vt::pagelist::Storage::Compressed;
+                // row_offset -= rows;
+                row_offset -= rows as usize;
                 // index -= 1;
                 index -= 1;
 
@@ -225,14 +235,16 @@ impl Inspector {
 
                 // Open up the tree node.
                 // if (!widgets.page.treeNode(.{
-                //     .page = page,
+                //     .cols = page_node.cols(),
+                //     .rows = rows,
                 //     .index = index,
-                //     .row_range = .{ row_offset, row_offset + page.size.rows - 1 },
+                //     .row_range = .{ row_offset, row_offset + rows - 1 },
                 //     .active = node == active_pin.node,
                 //     .viewport = node == viewport_pin.node,
+                //     .compressed = compressed,
+                //     .dirty = if (resident) |page| page.isDirty() else null,
                 // })) continue;
                 // defer cimgui.c.ImGui_TreePop();
-                // widgets.page.inspector(page);
                 //
                 // PORT NOTE: the reference `continue` skips the `TreePop`/inspector
                 // but still runs the loop-continue expression `node =
@@ -240,14 +252,46 @@ impl Inspector {
                 // `node`-advance below always runs; the two `defer`s fire LIFO at
                 // block exit (TreePop before PopID) exactly as the reference does.
                 if super::page::treeNode(super::page::TreeNodeState {
-                    page,
+                    cols: unsafe { rustty_vt::pagelist::Node::cols(page_node) },
+                    rows,
                     index,
-                    row_range: [row_offset, row_offset + page.size.rows as usize - 1],
+                    row_range: [row_offset, row_offset + rows as usize - 1],
                     active: core::ptr::eq(page_node, active_pin.node),
                     viewport: core::ptr::eq(page_node, viewport_pin.node),
+                    compressed,
+                    dirty: if resident.is_null() {
+                        None
+                    } else {
+                        Some(unsafe { (*resident).is_dirty() })
+                    },
                 }) {
                     let _tree_pop = Defer(|| unsafe { dcimgui_sys::ImGui_TreePop() });
-                    super::page::inspector(page);
+
+                    // Decode compressed contents into a temporary page. The
+                    // original node stays compressed while its entry is open.
+                    // var preserved = page_node.pagePreservingState(
+                    //     std.heap.page_allocator,
+                    // ) catch {
+                    //     cimgui.c.ImGui_TextDisabled(
+                    //         "(unable to copy compressed page)",
+                    //     );
+                    //     continue;
+                    // };
+                    // defer preserved.deinit();
+                    // widgets.page.inspector(preserved.page());
+                    //
+                    // PORT NOTE (WS7): `page_preserving_state` is infallible in
+                    // rustty — it panics on OOM (Rust's global-allocator
+                    // contract) rather than returning an error, so there is no
+                    // counterpart to the reference's `catch` arm and its
+                    // "(unable to copy compressed page)" text is unreachable.
+                    // The `defer preserved.deinit()` is spelled as a sequential
+                    // call: a `Defer` closure would have to capture `preserved`
+                    // mutably while `page()` still borrows it.
+                    let mut preserved =
+                        unsafe { rustty_vt::pagelist::Node::page_preserving_state(page_node) };
+                    super::page::inspector(unsafe { &*preserved.page() });
+                    preserved.deinit();
                 }
 
                 // : (node = page_node.prev)
@@ -1314,10 +1358,9 @@ impl CellChooser {
         if unsafe { (*cell.cell).style_id() } != stylepkg::DEFAULT_ID {
             unsafe { dcimgui_sys::ImGui_SeparatorText(c"Style".as_ptr()) };
             let style = unsafe {
-                *(*cell.node)
-                    .data
+                *(*rustty_vt::pagelist::Node::page(cell.node))
                     .styles
-                    .get((*cell.node).data.memory_ptr(), (*cell.cell).style_id())
+                    .get((*rustty_vt::pagelist::Node::page(cell.node)).memory_ptr(), (*cell.cell).style_id())
             };
             super::style::table(style, None);
         }
@@ -1373,7 +1416,7 @@ fn hyperlinkTable(cell: &Cell) {
     let _end_table = Defer(|| unsafe { dcimgui_sys::ImGui_EndTable() });
 
     // const page = &cell.node.data;
-    let page = unsafe { &(*cell.node).data };
+    let page = unsafe { &(*rustty_vt::pagelist::Node::page(cell.node)) };
     let base = page.memory_ptr();
     // const link_id = page.lookupHyperlink(cell.cell) orelse {
     //     cimgui.c.ImGui_TableNextRow();
@@ -1503,7 +1546,7 @@ fn graphemeTable(cell: &Cell) {
     //     cimgui.c.ImGui_TextDisabled("(missing grapheme data)");
     //     return;
     // };
-    let page = unsafe { &(*cell.node).data };
+    let page = unsafe { &(*rustty_vt::pagelist::Node::page(cell.node)) };
     let cps = match page.lookup_grapheme(cell.cell) {
         Some(cps) => cps,
         None => {
@@ -1777,7 +1820,7 @@ impl CellInfo {
                 )
             } {
                 let _end_list_box = Defer(|| unsafe { dcimgui_sys::ImGui_EndListBox() });
-                if let Some(cps) = unsafe { (*cell.node).data.lookup_grapheme(cell.cell) } {
+                if let Some(cps) = unsafe { (*rustty_vt::pagelist::Node::page(cell.node)).lookup_grapheme(cell.cell) } {
                     let mut buf: [u8; 96] = [0; 96];
                     for &cp in cps {
                         let label = cp_label(&mut buf, cp);
@@ -1993,8 +2036,51 @@ impl CellInfo {
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
             helpMarker(c"OSC8 hyperlink ID associated with this cell.");
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
-            let link_id = unsafe { (*cell.node).data.lookup_hyperlink(cell.cell) }.unwrap_or(0);
+            let link_id = unsafe { (*rustty_vt::pagelist::Node::page(cell.node)).lookup_hyperlink(cell.cell) }.unwrap_or(0);
             unsafe { dcimgui_sys::ImGui_Text(c"id=%d".as_ptr(), link_id as c_int) };
         }
+    }
+}
+
+#[cfg(test)]
+mod ws7_tests {
+    /// A source guard that the page-tree loop reads compressed pages through
+    /// the NON-RESTORING accessors.
+    ///
+    /// The inspector widgets are ImGui draw code with no unit-test harness, so
+    /// this is the only mechanised check available. It exists because a single
+    /// `Node::page` in this loop silently decompresses the ENTIRE scrollback
+    /// the moment the PageList tab is opened — undoing WS7 with no visible
+    /// symptom and no failing test anywhere else in the suite.
+    ///
+    /// The oracle (`oracle@main:src/inspector/widgets/pagelist.zig:79-105`)
+    /// uses `rows()`, `pageIfResident()`, `storage()` and
+    /// `pagePreservingState()`, and never `page()`.
+    #[test]
+    fn pagelist_widget_page_tree_never_restores() {
+        let src = include_str!("pagelist.rs");
+
+        // The page-tree loop, delimited by its own landmarks.
+        let start = src
+            .find("let mut node = pages.pages.last;")
+            .expect("page-tree loop start landmark");
+        let end = src[start..]
+            .find("// : (node = page_node.prev)")
+            .expect("page-tree loop end landmark")
+            + start;
+        let loop_src = &src[start..end];
+
+        assert!(
+            !loop_src.contains("Node::page("),
+            "the pagelist page-tree loop must not restore compressed pages"
+        );
+        assert!(
+            loop_src.contains("Node::rows(")
+                && loop_src.contains("Node::page_if_resident(")
+                && loop_src.contains("Node::storage(")
+                && loop_src.contains("Node::page_preserving_state("),
+            "the pagelist page-tree loop must read pages through the \
+             non-restoring accessors"
+        );
     }
 }

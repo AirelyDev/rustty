@@ -132,13 +132,13 @@ fn style_id_refcount_page_style_set_seam() {
 
     // Reach the active page via the crate's public raw-pointer chain:
     //   screens.active : *mut Screen  →  cursor.page_pin : *mut Pin
-    //   (*pin).node : *mut Node       →  node.data : Page
+    //   (*pin).node : *mut Node       →  Node::page(node) : *mut Page
     let count = |t: &Terminal| -> usize {
         unsafe {
             let screen = &*t.screens.active;
             let pin = &*screen.cursor.page_pin;
-            let node = &*pin.node;
-            node.data.styles.count()
+            let page = rustty_vt::pagelist::Node::page(pin.node);
+            (*page).styles.count()
         }
     };
 

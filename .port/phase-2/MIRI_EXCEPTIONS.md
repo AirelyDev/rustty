@@ -953,3 +953,85 @@ here with cause, and the harness is committed so it is re-runnable in seconds.
 
 Phase B's `.port/phase-2/mirihar-compress/` (the compress/restore *seam*, which has real
 raw-pointer aliasing) is separate and still owed.
+
+## WS7 Phase B — compressed scrollback pages: isolated harness + one OPEN finding (2026-07-29)
+
+Harness: `.port/phase-2/mirihar-pagelist-compress/` — a binary crate that depends on the
+REAL `rustty-vt` by path (only the library is built under Miri, not the 2136-test test
+binary, which has never completed on this host — see the Phase A entry above). Scenarios
+are selectable: `split`, `siblings`, `roundtrip`, `leak`, `leakcheck`.
+
+Accommodations (all `cfg(miri)`, none affecting production behaviour):
+`rustty-os`'s page allocator already served page memory from the std heap under
+`cfg(miri)`; `crates/rustty-vt/src/mem.rs`'s `can_reclaim`/`decommit`/`recommit` now take
+their simulated arm under `cfg!(miri)` as well as `cfg!(test)` (Miri has no FFI, so
+`madvise` is uncallable, and the std heap is not an OS mapping); the harness sets
+`[profile.dev] debug-assertions = false` because `Page::assert_integrity` is O(page), runs
+on nearly every PageList mutation, and adds no SB/TB or leak coverage.
+
+| scenario | model | result | time |
+|---|---|---|---|
+| `split` + `siblings` (the I2 aliasing proof) | Stacked Borrows | **CLEAN** — no UB, no leak | ~4 min |
+| `split` with the PRE-FIX reference-derived `Node::page` | Stacked Borrows | **UB reproduced as predicted** (see below) | ~3 min |
+| `roundtrip` + `leak` | Stacked Borrows | **OPEN FINDING** — see below | ~45 min |
+
+### The I2 negative control (this is the proof the fix is load-bearing)
+
+Restoring B6's `match &mut *addr_of_mut!((*node).data) { Resident(p) => p as *mut Page }`
+body and running `split` gives, at `pagelist/grow.rs:128` (inside `split`'s clear-rows
+block, after the tracked-pin loop):
+
+```
+error: Undefined Behavior: trying to retag from <364963> for SharedReadOnly permission
+       at alloc1161[0x1e8], but that tag does not exist in the borrow stack for this location
+help: <364963> was created by a SharedReadWrite retag at offsets [0x1e8..0x378]
+help: <364963> was later invalidated at offsets [0x1e0..0x390] by a Unique retag
+```
+
+Exactly the predicted failure: the `&mut NodeData` in the second accessor call is the
+`Unique` retag that invalidates the first call's result. With the `#[repr(C, u8)]` +
+`offset_of!` accessors it is clean.
+
+### OPEN FINDING — uninit bytes in the page mapping fed to LZ4
+
+`roundtrip`/`leak` abort in `compress_page`:
+
+```
+error: Undefined Behavior: constructing invalid value of type [u8; 8]: at [2],
+       encountered uninitialized memory, but expected an integer
+  3: rustty_vt::compress::lz4::read_u64            compress/lz4.rs:720
+  4: rustty_vt::compress::lz4::match_end_position  compress/lz4.rs:355
+  5: rustty_vt::compress::lz4::compress            compress/lz4.rs:214
+  6: rustty_vt::compress::CompressedPage::init     compress/page.rs:137
+  7: PageList::compress_page                       pagelist/compress.rs:406
+```
+
+This is **not pre-existing** — it is **introduced by B7; the Phase A codec is not
+implicated and `main` is unaffected**. `rustty-os/src/page_allocator.rs`'s `cfg(miri)` arm
+(`miri_alloc::allocate`) serves page memory via `Global.allocate_zeroed`, so under Miri the
+mapping IS fully initialized on handout — identical to the mmap contract. The uninit bytes
+Miri reports are therefore real de-initialization: typed writes of padded Rust structs into
+the mapping (`Cell`/`Row` are `repr(transparent) u64` with no padding, so the candidates are
+the style/hyperlink/string/grapheme table entries and the alignment gaps between
+sub-tables), not a Miri-vs-FFI artifact. The defect is entirely at the B7 call site —
+`CompressedPage::init`'s `slice::from_raw_parts(raw_ptr, raw_len)` reads the WHOLE mapping
+including those never-written gaps. Phase A's LZ4 codec faithfully reads whatever slice
+it is given (every Phase A test feeds it a fully-initialized `Vec`), and nothing merged to
+`main` today feeds a page mapping to LZ4 — merging Phase B is what introduces the exposure.
+
+The correct impact justification is blast radius, not FFI: the poisoned bytes are padding /
+inter-table gaps only, never live cell data. Under the Rust abstract machine, LLVM would
+have to materialize genuinely inconsistent values across two reads of the *same* padding
+byte for this to do anything at all; the worst realistic outcome is a spurious B7 verify
+failure (the page simply stays resident — a SAFE failure) or differing padding bytes after
+a decompress/restore round-trip — never cell corruption. A future, more aggressive compiler
+could in principle exploit the formal UB, but not into anything worse than that.
+
+**Status: OPEN, scheduled to WS7 Phase E** (see `.port/phase-2/DEFERRALS.md`). Candidate
+resolutions: zero the padding on write, read the mapping through a `freeze`/volatile
+path before compressing, or a documented per-path exception. A cheaper fourth option:
+zero the sub-table gaps / write padded entries through a pre-zeroed `MaybeUninit` at the
+point they are constructed, which removes the uninit at the source instead of papering
+over the read. It does NOT affect the I2 or I3 evidence: `split`/`siblings` are SB-clean
+with the negative control reproducing the exact predicted UB, and the I3 leak check is
+proven failing-then-passing natively through the harness's counting `#[global_allocator]`.

@@ -22,10 +22,11 @@
 // are reproduced verbatim.
 #![allow(clippy::while_immutable_condition)]
 
+use super::compress::{CompressionMode, IncrementalCompressionResult};
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
-use super::{std_capacity, std_size, PageList, Pin, Viewport};
+use super::{std_capacity, std_size, NodeData, Owned, PageList, Pin, Storage, Viewport};
 use crate::page::{Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
@@ -289,17 +290,17 @@ fn pagelist_pointFromPin_active_with_history() {
 fn pagelist_pointFromPin_active_from_prior_page() {
     let mut s = PageList::init(80, 24, None).unwrap();
     // Grow so we take up at least 5 pages.
-    let page_cap = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
-    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
     for _ in 0..(page_cap as usize * 5) {
         if let Some(new_page) = s.grow().unwrap() {
-            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
             cur_page = new_page;
-            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
         }
     }
-    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
 
     {
         assert_eq!(
@@ -341,17 +342,17 @@ fn pagelist_pointFromPin_traverse_pages() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up at least 2 pages.
-    let page_cap = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
-    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
     for _ in 0..(page_cap as usize * 2) {
         if let Some(new_page) = s.grow().unwrap() {
-            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
             cur_page = new_page;
-            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
         }
     }
-    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
 
     {
         let pages = s.total_pages();
@@ -749,7 +750,7 @@ fn pagelist_init_more_than_max_cols() {
 
     // We expect a single, non-standard page
     assert!(!s.pages.first.is_null());
-    assert!(unsafe { (*s.pages.first).data.memory_len } > std_size());
+    assert!(unsafe { (*super::Node::page(s.pages.first)).memory_len } > std_size());
 
     // Initial total rows should be our row count
     assert_eq!(s.rows as usize, s.total_rows);
@@ -834,8 +835,8 @@ fn pagelist_grow_allows_exceeding_max_size_for_active_area() {
         while !it.is_null() {
             let page = it;
             unsafe {
-                (*page).data.size.rows = 1;
-                (*page).data.capacity.rows = 1;
+                (*super::Node::page(page)).size.rows = 1;
+                (*super::Node::page(page)).capacity.rows = 1;
             }
             it = unsafe { (*page).next };
         }
@@ -870,7 +871,7 @@ fn pagelist_grow_prune_required_with_a_single_page() {
         // This is important because it triggers a scenario where our calculated
         // minSize() which is supposed to accommodate 2 pages is no longer true.
         loop {
-            let layout = Page::layout(unsafe { (*s.pages.first).data.capacity });
+            let layout = Page::layout(unsafe { super::Node::capacity(s.pages.first) });
             if layout.total_size > std_size() {
                 break;
             }
@@ -887,7 +888,7 @@ fn pagelist_grow_prune_required_with_a_single_page() {
     // page.
     let rem = {
         let page = s.pages.first;
-        unsafe { (*page).data.capacity.rows - (*page).data.size.rows }
+        unsafe { super::Node::capacity(page).rows - super::Node::rows(page) }
     };
     for _ in 0..rem {
         assert!(s.grow().unwrap().is_none());
@@ -930,7 +931,7 @@ fn pagelist_grow_prune_miri_tractable() {
 
     // Fill page 1 to capacity surgically (constant-time).
     unsafe {
-        let first = &mut (*s.pages.first).data;
+        let first = &mut (*super::Node::page(s.pages.first));
         first.size.rows = first.capacity.rows;
     }
     s.total_rows = s.total_rows();
@@ -943,7 +944,7 @@ fn pagelist_grow_prune_miri_tractable() {
 
     // Fill page 2 to capacity surgically.
     unsafe {
-        let last = &mut (*s.pages.last).data;
+        let last = &mut (*super::Node::page(s.pages.last));
         last.size.rows = last.capacity.rows;
     }
     s.total_rows = s.total_rows();
@@ -968,7 +969,7 @@ fn pagelist_grow_prune_miri_tractable() {
     assert!(core::ptr::eq(first_before, reused));
     assert!(core::ptr::eq(s.pages.last, reused));
     assert_eq!(2, s.total_pages());
-    assert_eq!(1, unsafe { (*reused).data.size.rows });
+    assert_eq!(1, unsafe { super::Node::rows(reused) });
 
     // The tracked pin in the pruned page was remapped to the new first page's
     // top-left and marked garbage.
@@ -1009,7 +1010,7 @@ fn pagelist_grow_fit_in_capacity() {
 
     // So we know we're using capacity to grow
     {
-        let last = unsafe { &(*s.pages.last).data };
+        let last = unsafe { &(*super::Node::page(s.pages.last)) };
         assert!(last.size.rows < last.capacity.rows);
     }
 
@@ -1038,7 +1039,7 @@ fn pagelist_grow_allocate() {
     // Grow to capacity
     let last_node = s.pages.last;
     let (last_cap_rows, last_size_rows) = {
-        let last = unsafe { &(*s.pages.last).data };
+        let last = unsafe { &(*super::Node::page(s.pages.last)) };
         (last.capacity.rows, last.size.rows)
     };
     for _ in 0..(last_cap_rows - last_size_rows) {
@@ -1078,11 +1079,11 @@ fn pagelist_grow_allocate() {
 fn pagelist_increaseCapacity_to_increase_styles() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
 
-    let original_styles_cap = unsafe { (*s.pages.first).data.capacity.styles };
+    let original_styles_cap = unsafe { super::Node::capacity(s.pages.first).styles };
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Write all our data so we can assert its the same after
         for y in 0..s.rows as usize {
@@ -1102,7 +1103,7 @@ fn pagelist_increaseCapacity_to_increase_styles() {
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { &(*s.pages.first).data };
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
 
         // Verify capacity doubled
         assert_eq!(original_styles_cap * 2, page.capacity.styles);
@@ -1124,11 +1125,11 @@ fn pagelist_increaseCapacity_to_increase_styles() {
 fn pagelist_increaseCapacity_to_increase_graphemes() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
 
-    let original_cap = unsafe { (*s.pages.first).data.capacity.grapheme_bytes };
+    let original_cap = unsafe { super::Node::capacity(s.pages.first).grapheme_bytes };
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
@@ -1146,7 +1147,7 @@ fn pagelist_increaseCapacity_to_increase_graphemes() {
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { &(*s.pages.first).data };
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
 
         assert_eq!(original_cap * 2, page.capacity.grapheme_bytes);
 
@@ -1166,11 +1167,11 @@ fn pagelist_increaseCapacity_to_increase_graphemes() {
 fn pagelist_increaseCapacity_to_increase_hyperlinks() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
 
-    let original_cap = unsafe { (*s.pages.first).data.capacity.hyperlink_bytes };
+    let original_cap = unsafe { super::Node::capacity(s.pages.first).hyperlink_bytes };
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
@@ -1188,7 +1189,7 @@ fn pagelist_increaseCapacity_to_increase_hyperlinks() {
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { &(*s.pages.first).data };
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
 
         assert_eq!(original_cap * 2, page.capacity.hyperlink_bytes);
 
@@ -1208,11 +1209,11 @@ fn pagelist_increaseCapacity_to_increase_hyperlinks() {
 fn pagelist_increaseCapacity_to_increase_string_bytes() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
 
-    let original_cap = unsafe { (*s.pages.first).data.capacity.string_bytes };
+    let original_cap = unsafe { super::Node::capacity(s.pages.first).string_bytes };
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
@@ -1230,7 +1231,7 @@ fn pagelist_increaseCapacity_to_increase_string_bytes() {
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { &(*s.pages.first).data };
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
 
         assert_eq!(original_cap * 2, page.capacity.string_bytes);
 
@@ -1288,7 +1289,7 @@ fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
             Err(err) => {
                 // Before OutOfSpace, we should have reached maxInt
                 assert_eq!(IncreaseCapacityError::OutOfSpace, err);
-                assert_eq!(max_styles, unsafe { (*s.pages.first).data.capacity.styles });
+                assert_eq!(max_styles, unsafe { super::Node::capacity(s.pages.first).styles });
                 break;
             }
         }
@@ -1308,19 +1309,20 @@ fn pagelist_increaseCapacity_multi_page() {
 
     // Grow to create a second page
     let page1_node = s.pages.last;
-    unsafe { (*page1_node).data.pause_integrity_checks(true) };
-    for _ in 0..(unsafe { (*page1_node).data.capacity.rows - (*page1_node).data.size.rows }) {
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(true) };
+    for _ in 0..(unsafe { super::Node::capacity(page1_node).rows - super::Node::rows(page1_node) })
+    {
         assert!(s.grow().unwrap().is_none());
     }
-    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(false) };
     assert!(s.grow().unwrap().is_some());
 
     // Now we have two pages
     assert!(!core::ptr::eq(s.pages.first, s.pages.last));
     let page2_node = s.pages.last;
 
-    let page1_styles_cap = unsafe { (*s.pages.first).data.capacity.styles };
-    let page2_styles_cap = unsafe { (*page2_node).data.capacity.styles };
+    let page1_styles_cap = unsafe { super::Node::capacity(s.pages.first).styles };
+    let page2_styles_cap = unsafe { super::Node::capacity(page2_node).styles };
 
     // Increase capacity on the first page only
     let _ = s
@@ -1329,12 +1331,12 @@ fn pagelist_increaseCapacity_multi_page() {
 
     // First page capacity should be doubled
     assert_eq!(page1_styles_cap * 2, unsafe {
-        (*s.pages.first).data.capacity.styles
+        super::Node::capacity(s.pages.first).styles
     });
 
     // Second page should be unchanged
     assert_eq!(page2_styles_cap, unsafe {
-        (*s.pages.last).data.capacity.styles
+        super::Node::capacity(s.pages.last).styles
     });
 
     s.deinit();
@@ -1347,7 +1349,7 @@ fn pagelist_increaseCapacity_preserves_dirty_flag() {
 
     // Set page dirty flag and mark some rows as dirty
     let new_node = {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         unsafe { (*page).dirty = true };
 
         let base = unsafe { (*page).memory_ptr() };
@@ -1365,10 +1367,14 @@ fn pagelist_increaseCapacity_preserves_dirty_flag() {
     };
 
     // The page dirty flag should be preserved
-    assert!(unsafe { (*new_node).data.dirty });
+    assert!(unsafe { (*super::Node::page(new_node)).dirty });
 
     // Row dirty flags should be preserved
-    let new_rows = unsafe { (*new_node).data.rows.ptr((*new_node).data.memory_ptr()) };
+    let new_rows = unsafe {
+        (*super::Node::page(new_node))
+            .rows
+            .ptr((*super::Node::page(new_node)).memory_ptr())
+    };
     assert!(unsafe { (*new_rows.add(0)).dirty() });
     assert!(!unsafe { (*new_rows.add(1)).dirty() });
     assert!(unsafe { (*new_rows.add(2)).dirty() });
@@ -1422,11 +1428,11 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
         let mut it = s.pages.first;
         while !it.is_null() {
             let node = it;
-            let rows = unsafe { (*node).data.size.rows };
-            let cols = unsafe { (*node).data.size.cols };
+            let rows = unsafe { super::Node::rows(node) };
+            let cols = unsafe { super::Node::cols(node) };
             for y in 0..rows {
                 for x in 0..cols {
-                    let rac = unsafe { (*node).data.get_row_and_cell(x as usize, y as usize) };
+                    let rac = unsafe { (*super::Node::page(node)).get_row_and_cell(x as usize, y as usize) };
                     let cell = unsafe { *rac.cell };
                     assert!(
                         cell.is_empty() && cell.to_bits() == Cell::zeroed().to_bits(),
@@ -1441,7 +1447,10 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
     // Fresh pool slot: the very first page handed out at init is lazily
     // OS-zeroed mmap memory (no eager memset); every active cell reads empty.
     let mut s = PageList::init(80, 24, None).unwrap();
-    assert_eq!(unsafe { (*s.pages.first).data.memory_len }, std_size());
+    assert_eq!(
+        unsafe { (*super::Node::page(s.pages.first)).memory_len },
+        std_size()
+    );
     assert_all_cells_zero(&s, "fresh");
 
     // Reused slot after reset: scribble non-zero bytes across the ENTIRE page
@@ -1450,8 +1459,8 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
     // even though the slot was not freshly mmap'd.
     {
         let first = s.pages.first;
-        let ptr = unsafe { (*first).data.memory_ptr() } as *mut u8;
-        let len = unsafe { (*first).data.memory_len };
+        let ptr = unsafe { (*super::Node::page(first)).memory_ptr() } as *mut u8;
+        let len = unsafe { (*super::Node::page(first)).memory_len };
         unsafe {
             core::ptr::write_bytes(ptr, 0xAB, len);
         }
@@ -1580,18 +1589,18 @@ fn pagelist_grow_reuses_non_standard_page_without_leak() {
     let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
 
     // Increase the first page capacity to make it non-standard (larger than std_size).
-    while unsafe { (*s.pages.first).data.memory_len } <= std_size() {
+    while unsafe { (*super::Node::page(s.pages.first)).memory_len } <= std_size() {
         let _ = s
             .increase_capacity(s.pages.first, Some(IncreaseCapacity::GraphemeBytes))
             .unwrap();
     }
 
     // The first page should now have non-standard memory size.
-    assert!(unsafe { (*s.pages.first).data.memory_len } > std_size());
+    assert!(unsafe { (*super::Node::page(s.pages.first)).memory_len } > std_size());
 
     // First, fill up the first page's capacity
     let first_page = s.pages.first;
-    while unsafe { (*first_page).data.size.rows < (*first_page).data.capacity.rows } {
+    while unsafe { super::Node::rows(first_page) < super::Node::capacity(first_page).rows } {
         let _ = s.grow().unwrap();
     }
 
@@ -1601,23 +1610,23 @@ fn pagelist_grow_reuses_non_standard_page_without_leak() {
 
     // Continue growing until we exceed max_size AND the last page is full
     while s.page_size + std_size() <= s.max_size()
-        || unsafe { (*s.pages.last).data.size.rows < (*s.pages.last).data.capacity.rows }
+        || unsafe { super::Node::rows(s.pages.last) < super::Node::capacity(s.pages.last).rows }
     {
         let _ = s.grow().unwrap();
     }
 
     // The first page should still be non-standard
-    assert!(unsafe { (*s.pages.first).data.memory_len } > std_size());
+    assert!(unsafe { (*super::Node::page(s.pages.first)).memory_len } > std_size());
 
     // Verify we have enough rows for active area (so prune path isn't skipped)
     assert!(s.total_rows() >= s.rows as usize);
 
     // Verify last page is full (so grow will need to allocate/reuse)
-    assert!(unsafe { (*s.pages.last).data.size.rows == (*s.pages.last).data.capacity.rows });
+    assert!(unsafe { super::Node::rows(s.pages.last) == super::Node::capacity(s.pages.last).rows });
 
     // Remember the first page memory pointer before the reuse attempt
     let first_page_ptr = s.pages.first;
-    let first_page_mem_ptr = unsafe { (*s.pages.first).data.memory_ptr() };
+    let first_page_mem_ptr = unsafe { (*super::Node::page(s.pages.first)).memory_ptr() };
 
     // Create a tracked pin pointing to the non-standard first page
     let tracked_pin = s
@@ -1643,7 +1652,7 @@ fn pagelist_grow_reuses_non_standard_page_without_leak() {
     // If the non-standard page was properly destroyed and not reused,
     // the last page should not have the same memory pointer
     assert!(!core::ptr::eq(
-        unsafe { (*s.pages.last).data.memory_ptr() },
+        unsafe { (*super::Node::page(s.pages.last)).memory_ptr() },
         first_page_mem_ptr,
     ));
 
@@ -1679,18 +1688,18 @@ fn pagelist_grow_non_standard_page_prune_protection() {
     let mut s = PageList::init(80, rows_count, Some(std_size())).unwrap();
 
     // Make the first page non-standard
-    while unsafe { (*s.pages.first).data.memory_len } <= std_size() {
+    while unsafe { (*super::Node::page(s.pages.first)).memory_len } <= std_size() {
         let _ = s
             .increase_capacity(s.pages.first, Some(IncreaseCapacity::GraphemeBytes))
             .unwrap();
     }
-    assert!(unsafe { (*s.pages.first).data.memory_len } > std_size());
+    assert!(unsafe { (*super::Node::page(s.pages.first)).memory_len } > std_size());
 
     let first_page_node = s.pages.first;
-    let first_page_cap = unsafe { (*first_page_node).data.capacity.rows };
+    let first_page_cap = unsafe { super::Node::capacity(first_page_node).rows };
 
     // Fill first page to capacity
-    while unsafe { (*first_page_node).data.size.rows } < first_page_cap {
+    while unsafe { super::Node::rows(first_page_node) } < first_page_cap {
         let _ = s.grow().unwrap();
     }
 
@@ -1702,8 +1711,8 @@ fn pagelist_grow_non_standard_page_prune_protection() {
 
     // Fill the second page to capacity so that the next grow() triggers prune
     let last_node = s.pages.last;
-    let second_cap = unsafe { (*last_node).data.capacity.rows };
-    while unsafe { (*last_node).data.size.rows } < second_cap {
+    let second_cap = unsafe { super::Node::capacity(last_node).rows };
+    while unsafe { super::Node::rows(last_node) } < second_cap {
         let _ = s.grow().unwrap();
     }
 
@@ -1722,7 +1731,7 @@ fn pagelist_grow_non_standard_page_prune_protection() {
     assert!(s.total_rows() >= s.rows as usize);
 
     // Verify last page is at capacity (so grow must prune or allocate new)
-    assert_eq!(second_cap, unsafe { (*last_node).data.size.rows });
+    assert_eq!(second_cap, unsafe { super::Node::rows(last_node) });
 
     // The next grow should trigger prune consideration.
     // Without the fix, this would destroy the non-standard first page,
@@ -1735,22 +1744,112 @@ fn pagelist_grow_non_standard_page_prune_protection() {
     s.deinit();
 }
 
-// ref: test "PageList compact std_size page returns null"
+// ref: test "PageList compact pool page produces exact-size heap page"
 #[test]
-fn pagelist_compact_std_size_page_returns_null() {
+fn pagelist_compact_pool_page_produces_exact_size_heap_page() {
     let mut s = PageList::init(80, 24, Some(0)).unwrap();
 
-    // A freshly created page should be at std_size
+    // A freshly created page is pool-owned at std_size.
     let node = s.pages.first;
-    assert!(unsafe { (*node).data.memory_len } <= std_size());
+    assert_eq!(unsafe { (*node).owned }, Owned::Pool);
+    assert!(unsafe { (*super::Node::page(node)).memory_len } <= std_size());
+    let original_size = unsafe { (*super::Node::page(node)).size };
 
-    // compact should return null since there's nothing to compact
-    let result = s.compact(node).unwrap();
-    assert!(result.is_none());
+    // Compacting it should produce a much smaller exact-size heap page.
+    let new_node = s.compact(node).unwrap().unwrap();
+    assert_eq!(unsafe { (*new_node).owned }, Owned::Heap);
+    assert!(unsafe { (*super::Node::page(new_node)).memory_len } < std_size());
+    assert_eq!(original_size.rows, unsafe { super::Node::rows(new_node) });
+    assert_eq!(original_size.cols, unsafe { super::Node::cols(new_node) });
+    assert!(core::ptr::eq(new_node, s.pages.first));
 
-    // Page should still be the same
-    assert!(core::ptr::eq(node, s.pages.first));
+    // Our page size accounting should exactly match the compacted page since it
+    // is the only page in the list.
+    assert_eq!(
+        unsafe { (*super::Node::page(new_node)).memory_len },
+        s.page_size
+    );
 
+    // Compacting again should be a no-op since it is already exact.
+    assert!(s.compact(new_node).unwrap().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList compact then grow allocates new page"
+#[test]
+fn pagelist_compact_then_grow_allocates_new_page() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Compact the only page. It now has no spare row capacity.
+    let node = s.compact(s.pages.first).unwrap().unwrap();
+    assert_eq!(unsafe { super::Node::rows(node) }, unsafe {
+        super::Node::capacity(node).rows
+    });
+
+    // Growing must allocate a fresh standard page from the pool, exercising
+    // that a compacted page remains a valid live page.
+    let _ = s.grow().unwrap();
+    assert!(!core::ptr::eq(s.pages.first, s.pages.last));
+    assert_eq!(unsafe { (*s.pages.last).owned }, Owned::Pool);
+    assert_eq!(25usize, s.total_rows());
+
+    s.deinit();
+}
+
+// ref: test "PageList compact then reset frees heap pages"
+#[test]
+fn pagelist_compact_then_reset_frees_heap_pages() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    // Compact the only page so the list contains a sub-std_size heap-owned
+    // page.
+    let node = s.compact(s.pages.first).unwrap().unwrap();
+    assert_eq!(unsafe { (*node).owned }, Owned::Heap);
+    assert!(unsafe { (*super::Node::page(node)).memory_len } < std_size());
+
+    // Reset must free the heap page (the leak gate catches leaks and invalid
+    // frees) and rebuild from the pool.
+    s.reset();
+    assert_eq!(unsafe { (*s.pages.first).owned }, Owned::Pool);
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    s.deinit();
+}
+
+// ref: test "PageList compact then clone"
+#[test]
+fn pagelist_compact_then_clone() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Write a marker so we can verify contents survive.
+    {
+        let node = s.pages.first;
+        let rac = unsafe { (*super::Node::page(node)).get_row_and_cell(1, 2) };
+        unsafe { *rac.cell = cell_codepoint('X' as u32) };
+    }
+
+    // Compact so the source list contains a sub-std_size heap page.
+    let node = s.compact(s.pages.first).unwrap().unwrap();
+    assert_eq!(unsafe { (*node).owned }, Owned::Heap);
+    assert!(unsafe { (*super::Node::page(node)).memory_len } < std_size());
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(s.rows as usize, s2.total_rows());
+
+    // Verify the marker survived the clone.
+    {
+        let node2 = s2.pages.first;
+        let rac = unsafe { (*super::Node::page(node2)).get_row_and_cell(1, 2) };
+        assert_eq!('X' as u32, unsafe { (*rac.cell).codepoint() });
+    }
+
+    s2.deinit();
     s.deinit();
 }
 
@@ -1765,11 +1864,12 @@ fn pagelist_compact_oversized_page() {
 
     // Grow until we have multiple pages
     let page1_node = s.pages.first;
-    unsafe { (*page1_node).data.pause_integrity_checks(true) };
-    for _ in 0..(unsafe { (*page1_node).data.capacity.rows - (*page1_node).data.size.rows }) {
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(true) };
+    for _ in 0..(unsafe { super::Node::capacity(page1_node).rows - super::Node::rows(page1_node) })
+    {
         let _ = s.grow().unwrap();
     }
-    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(false) };
     let _ = s.grow().unwrap();
     assert!(!core::ptr::eq(s.pages.first, s.pages.last));
 
@@ -1777,7 +1877,7 @@ fn pagelist_compact_oversized_page() {
 
     // Write content to verify it's preserved
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        let page = unsafe { super::Node::page(node) };
         for y in 0..unsafe { (*page).size.rows } as usize {
             for x in 0..s.cols as usize {
                 let rac = unsafe { (*page).get_row_and_cell(x, y) };
@@ -1799,18 +1899,18 @@ fn pagelist_compact_oversized_page() {
         .unwrap();
 
     // Make the page oversized
-    while unsafe { (*node).data.memory_len } <= std_size() {
+    while unsafe { (*super::Node::page(node)).memory_len } <= std_size() {
         node = s
             .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
             .unwrap();
     }
-    assert!(unsafe { (*node).data.memory_len } > std_size());
-    let oversized_len = unsafe { (*node).data.memory_len };
-    let original_size = unsafe { (*node).data.size };
+    assert!(unsafe { (*super::Node::page(node)).memory_len } > std_size());
+    let oversized_len = unsafe { (*super::Node::page(node)).memory_len };
+    let original_size = unsafe { (*super::Node::page(node)).size };
     let second_node = unsafe { (*node).next };
 
     // Set dirty flag after increaseCapacity
-    unsafe { (*node).data.dirty = true };
+    unsafe { (*super::Node::page(node)).dirty = true };
 
     // Compact the page
     let new_node = s.compact(node).unwrap();
@@ -1818,14 +1918,14 @@ fn pagelist_compact_oversized_page() {
     let new_node = new_node.unwrap();
 
     // Verify memory is smaller
-    assert!(unsafe { (*new_node).data.memory_len } < oversized_len);
+    assert!(unsafe { (*super::Node::page(new_node)).memory_len } < oversized_len);
 
     // Verify size preserved
-    assert_eq!(original_size.rows, unsafe { (*new_node).data.size.rows });
-    assert_eq!(original_size.cols, unsafe { (*new_node).data.size.cols });
+    assert_eq!(original_size.rows, unsafe { super::Node::rows(new_node) });
+    assert_eq!(original_size.cols, unsafe { super::Node::cols(new_node) });
 
     // Verify dirty flag preserved
-    assert!(unsafe { (*new_node).data.dirty });
+    assert!(unsafe { (*super::Node::page(new_node)).dirty });
 
     // Verify linked list integrity
     assert!(core::ptr::eq(new_node, s.pages.first));
@@ -1840,7 +1940,7 @@ fn pagelist_compact_oversized_page() {
 
     // Verify content preserved
     {
-        let page = unsafe { &(*new_node).data };
+        let page = unsafe { &(*super::Node::page(new_node)) };
         for y in 0..page.size.rows as usize {
             for x in 0..s.cols as usize {
                 let rac = page.get_row_and_cell(x, y);
@@ -1866,22 +1966,428 @@ fn pagelist_compact_oversized_page() {
 // cannot exercise (see `decommit_pool_item`). The reference allocates a
 // page-aligned `std_size` buffer from `testing.allocator`; the Rust port uses a
 // plain `Vec<u8>` because the test path never touches the pointer alignment.
+/// Write highly compressible rows until the list holds at least `pages` pages.
+fn fill_compressible_history(s: &mut PageList, pages: usize) {
+    let mut iterations = 0usize;
+    while s.total_pages() < pages {
+        let _ = s.grow().unwrap();
+        // Write a compressible marker so the page is not entirely zeroes (a
+        // fully-zero page compresses too, but this keeps the workload honest).
+        let node = s.pages.last;
+        unsafe {
+            let page = super::Node::page(node);
+            let rows = (*page).size.rows as usize;
+            let cols = (*page).size.cols as usize;
+            if rows > 0 && cols > 0 {
+                let rac = (*page).get_row_and_cell(0, rows - 1);
+                *rac.cell = cell_codepoint('a' as u32);
+            }
+        }
+        iterations += 1;
+        assert!(
+            iterations < 100_000,
+            "history did not grow to {pages} pages"
+        );
+    }
+}
+
+/// PORTS: the memoryStats assertions in oracle 0d015b2fc / 6d5dda40d.
+#[test]
+fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 4);
+
+    let before = s.memory_stats();
+    assert_eq!(before.compressed_pages, 0);
+    assert_eq!(before.encoded_bytes, 0);
+    assert_eq!(before.decommitted_raw_bytes, 0);
+    assert_eq!(before.resident_raw_bytes, before.raw_bytes);
+
+    let _ = s.compress(CompressionMode::Drain);
+    let after = s.memory_stats();
+    assert!(after.compressed_pages >= 1);
+    assert_eq!(
+        after.resident_pages + after.compressed_pages,
+        s.total_pages()
+    );
+    assert_eq!(after.raw_bytes, before.raw_bytes);
+    assert_eq!(
+        after.resident_raw_bytes + after.decommitted_raw_bytes,
+        after.raw_bytes
+    );
+    assert!(after.encoded_bytes > 0);
+    // Compression only pays if the encoding is smaller than what it replaced.
+    assert!(after.encoded_bytes < after.decommitted_raw_bytes);
+    assert!(after.estimated_savings() > 0);
+    assert!(after.estimated_resident_bytes() < before.estimated_resident_bytes());
+    s.deinit();
+}
+
+/// Incremental compression converges: repeated steps eventually report
+/// `Complete`, having compressed the cold history.
+#[test]
+fn pagelist_compress_incremental_converges_to_complete() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 6);
+
+    let mut steps = 0usize;
+    loop {
+        match s.compress(CompressionMode::Incremental) {
+            IncrementalCompressionResult::Pending => {
+                steps += 1;
+                assert!(steps < 10_000, "incremental compression did not converge");
+            }
+            IncrementalCompressionResult::Complete => break,
+            IncrementalCompressionResult::Unsupported => {
+                panic!("test builds always support strict reclamation")
+            }
+        }
+    }
+    assert_eq!(
+        unsafe { super::Node::storage(s.pages.first) },
+        Storage::Compressed
+    );
+    s.deinit();
+}
+
+/// `Drain` performs incremental steps until the pass and its verification pass
+/// finish, in one call.
+#[test]
+fn pagelist_compress_drain_finishes_in_one_call() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 6);
+    assert_eq!(
+        s.compress(CompressionMode::Drain),
+        IncrementalCompressionResult::Complete
+    );
+    assert_eq!(
+        unsafe { super::Node::storage(s.pages.first) },
+        Storage::Compressed
+    );
+    s.deinit();
+}
+
+/// PageList mutations bump the activity token so schedulers know to recompress.
+#[test]
+fn pagelist_mutations_mark_compression_activity() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let before = s.page_compression.activity_serial;
+    fill_compressible_history(&mut s, 2);
+    assert_ne!(s.page_compression.activity_serial, before);
+
+    // Compression itself changes representation, not the activity token.
+    let after_growth = s.page_compression.activity_serial;
+    let _ = s.compress(CompressionMode::Drain);
+    assert_eq!(s.page_compression.activity_serial, after_growth);
+    s.deinit();
+}
+
+/// A node destroyed between steps must not strand the traversal cursor: the
+/// next step restarts safely rather than skipping newly allocated pages.
+#[test]
+fn pagelist_compress_incremental_restarts_after_list_mutation() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 6);
+    assert_eq!(
+        s.compress(CompressionMode::Incremental),
+        IncrementalCompressionResult::Pending
+    );
+
+    // Erase the history the cursor is standing on, then keep stepping.
+    s.erase_history(None);
+    fill_compressible_history(&mut s, 4);
+
+    let mut steps = 0usize;
+    while s.compress(CompressionMode::Incremental) == IncrementalCompressionResult::Pending {
+        steps += 1;
+        assert!(steps < 10_000);
+    }
+    s.deinit();
+}
+
+/// Full mode compresses everything eligible and leaves no continuation state.
+#[test]
+fn pagelist_compress_full_mode_leaves_no_continuation() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 4);
+
+    assert_eq!(
+        s.compress(CompressionMode::Full),
+        IncrementalCompressionResult::Complete
+    );
+    assert_eq!(
+        unsafe { super::Node::storage(s.pages.first) },
+        Storage::Compressed
+    );
+    assert_eq!(s.page_compression.last_serial, None);
+    assert!(!s.page_compression.flags.verifying);
+    assert!(!s.page_compression.flags.did_compress);
+    s.deinit();
+}
+
+/// A cold history page compresses, its mapping is discarded, and reading it
+/// back restores identical bytes.
+#[test]
+fn pagelist_compress_page_round_trips_a_cold_history_page() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 3);
+
+    let node = s.pages.first;
+    let (ptr, len, expected) = unsafe {
+        let p = super::Node::page(node);
+        let ptr = (*p).memory_ptr() as *mut u8;
+        let len = (*p).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+
+    assert!(s.compress_page(node));
+    assert_eq!(unsafe { super::Node::storage(node) }, Storage::Compressed);
+    // The test build of `mem::decommit` zeroes instead of calling madvise.
+    assert!(unsafe { core::slice::from_raw_parts(ptr, len) }
+        .iter()
+        .all(|&b| b == 0));
+
+    let restored = unsafe { super::Node::page(node) };
+    assert_eq!(unsafe { (*restored).memory_ptr() }, ptr as *const u8);
+    assert_eq!(
+        unsafe { core::slice::from_raw_parts(ptr, len) },
+        &expected[..]
+    );
+    s.deinit();
+}
+
+/// Compressing twice is a no-op: `compress_page` only accepts resident nodes.
+#[test]
+fn pagelist_compress_page_rejects_an_already_compressed_node() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 3);
+    let node = s.pages.first;
+    assert!(s.compress_page(node));
+    assert!(!s.compress_page(node));
+    let _ = unsafe { super::Node::page(node) };
+    s.deinit();
+}
+
+/// A failing strict decommit leaves the node resident and its mapping intact.
+///
+/// PORT NOTE (WS7 B10): tripwire injection is compiled out when
+/// `debug_assertions` is off, so this test is inert under `--release`. It is
+/// ignored there rather than left to fail (the other tripwire tests in this file
+/// predate that convention and are part of the known-red `--release` set).
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "tripwire failure injection is disabled without debug_assertions"
+)]
+#[test]
+fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
+    use rustty_util::tripwire::ResetMode;
+
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 3);
+
+    let node = s.pages.first;
+    let (ptr, len, expected) = unsafe {
+        let p = super::Node::page(node);
+        let ptr = (*p).memory_ptr() as *mut u8;
+        let len = (*p).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+
+    super::compress::COMPRESS_PAGE_TW.with(|tw| {
+        tw.borrow_mut().errorAlways(
+            super::compress::CompressPageFp::Decommit,
+            super::compress::DecommitFailed,
+        )
+    });
+    assert!(!s.compress_page(node));
+    assert_eq!(unsafe { super::Node::storage(node) }, Storage::Resident);
+    assert_eq!(
+        unsafe { core::slice::from_raw_parts(ptr, len) },
+        &expected[..]
+    );
+
+    // With the tripwire disarmed, the same page compresses normally.
+    super::compress::COMPRESS_PAGE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    assert!(s.compress_page(node));
+    let _ = unsafe { super::Node::page(node) };
+    s.deinit();
+}
+
+/// A full pass compresses every complete offscreen history page and leaves the
+/// viewport and active pages resident.
+#[test]
+fn pagelist_compress_full_leaves_viewport_and_active_resident() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 4);
+
+    s.compress_full();
+
+    let active = s.get_top_left(point::Tag::Active).node;
+    let viewport_first = s.get_top_left(point::Tag::Viewport).node;
+    let viewport_last = s.get_bottom_right(point::Tag::Viewport).unwrap().node;
+    assert_eq!(unsafe { super::Node::storage(active) }, Storage::Resident);
+    assert_eq!(
+        unsafe { super::Node::storage(viewport_first) },
+        Storage::Resident
+    );
+    assert_eq!(
+        unsafe { super::Node::storage(viewport_last) },
+        Storage::Resident
+    );
+    assert_eq!(
+        unsafe { super::Node::storage(s.pages.first) },
+        Storage::Compressed
+    );
+    s.deinit();
+}
+
+/// A node built from a compressed representation restores to the SAME mapping
+/// and yields identical bytes; `page()` transparently restores.
+#[test]
+fn pagelist_node_restore_preserve_recovers_the_same_mapping() {
+    let mut s = PageList::init(20, 5, Some(1000)).unwrap();
+    let node = s.pages.first;
+    unsafe {
+        let page = super::Node::page(node);
+        let ptr = (*page).memory_ptr() as *mut u8;
+        let len = (*page).memory_len();
+        let expected: Vec<u8> = core::slice::from_raw_parts(ptr, len).to_vec();
+
+        let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
+        let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
+        let compressed =
+            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
+                .unwrap()
+                .unwrap();
+
+        // Model a successful decommit, then publish the compressed state.
+        core::ptr::write_bytes(ptr, 0, len);
+        (*node).data = NodeData::Compressed(compressed);
+        assert_eq!(super::Node::storage(node), Storage::Compressed);
+        assert!(super::Node::page_if_resident(node).is_null());
+
+        // `page()` restores transparently.
+        let restored = super::Node::page(node);
+        assert_eq!(super::Node::storage(node), Storage::Resident);
+        assert_eq!((*restored).memory_ptr(), ptr as *const u8);
+        assert_eq!(core::slice::from_raw_parts(ptr, len), &expected[..]);
+    }
+    s.deinit();
+}
+
+/// `page_preserving_state` reads a compressed node WITHOUT restoring it.
+#[test]
+fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
+    let mut s = PageList::init(20, 5, Some(1000)).unwrap();
+    let node = s.pages.first;
+    unsafe {
+        let page = super::Node::page(node);
+        let ptr = (*page).memory_ptr() as *mut u8;
+        let len = (*page).memory_len();
+        let expected: Vec<u8> = core::slice::from_raw_parts(ptr, len).to_vec();
+
+        let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
+        let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
+        let compressed =
+            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
+                .unwrap()
+                .unwrap();
+        core::ptr::write_bytes(ptr, 0, len);
+        (*node).data = NodeData::Compressed(compressed);
+
+        let mut preserved = super::Node::page_preserving_state(node);
+        let p = preserved.page();
+        assert_ne!((*p).memory_ptr(), ptr as *const u8);
+        assert_eq!(
+            core::slice::from_raw_parts((*p).memory_ptr(), len),
+            &expected[..]
+        );
+        preserved.deinit();
+
+        // Still compressed, and the discarded mapping is untouched.
+        assert_eq!(super::Node::storage(node), Storage::Compressed);
+        assert!(core::slice::from_raw_parts(ptr, len)
+            .iter()
+            .all(|&b| b == 0));
+
+        // Restore so deinit's accounting sees a resident page.
+        let _ = super::Node::page(node);
+    }
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `Node.Owned` (16e4b5e98) — every node
+/// records how its backing memory was allocated. A heap-owned page smaller than
+/// the standard pool item must still be freed to the heap, never returned to
+/// the pool.
+#[test]
+fn pagelist_node_ownership_is_explicit() {
+    let mut s = PageList::init(80, 24, Some(1000)).unwrap();
+    // Every page allocated for a standard-capacity list is pool owned.
+    let mut it = s.pages.first;
+    while !it.is_null() {
+        assert_eq!(unsafe { (*it).owned }, Owned::Pool);
+        it = unsafe { (*it).next };
+    }
+    s.deinit();
+}
+
+/// An OVERSIZED page (grown past a pool item by capacity increases) is heap
+/// owned, and so is an UNDERSIZED compacted page. Neither may be inferred from
+/// the memory length.
+#[test]
+fn pagelist_oversized_page_is_heap_owned() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    // Increase capacity until the layout no longer fits a pool item.
+    let mut node = s.pages.first;
+    while unsafe { (*super::Node::page(node)).memory_len() } <= std_size() {
+        node = s
+            .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+    assert_eq!(unsafe { (*node).owned }, Owned::Heap);
+
+    // A compacted page is SMALLER than a pool item but still heap owned: the
+    // ownership tag is the only correct source of truth.
+    let compacted = s.compact(node).unwrap().unwrap();
+    assert!(unsafe { (*super::Node::page(compacted)).memory_len() } < std_size());
+    assert_eq!(unsafe { (*compacted).owned }, Owned::Heap);
+
+    s.deinit();
+}
+
 #[test]
 fn pagelist_decommit_pool_item_zeroes_the_dirty_region() {
-    let mut buf = vec![0u8; 4096];
-    let ptr = buf.as_mut_ptr();
+    // PORT NOTE (WS7 B1): `decommit_pool_item` now delegates to
+    // `crate::mem::decommit`, whose (oracle-faithful) contract asserts that the
+    // range is page-aligned and a page-size multiple — exactly what a real pool
+    // item is. The buffer is therefore an aligned allocation rather than a
+    // plain `Vec`, mirroring the oracle's own `alignedAlloc(page_size_min)` in
+    // `mem.zig`'s tests.
+    let len = 2 * crate::page::PAGE_SIZE_MIN;
+    let layout = std::alloc::Layout::from_size_align(len, crate::page::PAGE_SIZE_MIN).unwrap();
+    // SAFETY: len > 0 and the layout is valid.
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    assert!(!ptr.is_null());
+    // SAFETY: `ptr` is a live allocation of `len` bytes.
+    let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
 
     // Fully dirty item.
     buf.iter_mut().for_each(|b| *b = 0xAA);
-    super::decommit_pool_item(ptr, buf.len(), buf.len());
+    super::decommit_pool_item(ptr, len, len);
     assert!(buf.iter().all(|&b| b == 0));
 
     // Partially dirty item: an item that hosted a page smaller than the item is
     // only dirty up to the page length; the rest is zero by invariant and must
     // remain zero.
     buf[0..1024].iter_mut().for_each(|b| *b = 0xAA);
-    super::decommit_pool_item(ptr, buf.len(), 1024);
+    super::decommit_pool_item(ptr, len, 1024);
     assert!(buf.iter().all(|&b| b == 0));
+
+    // SAFETY: `ptr`/`layout` are the pair returned by `alloc_zeroed` above and
+    // `buf` is dead here.
+    unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
 // ref: test "PageList destroyed pool page reuse is zeroed"
@@ -1895,22 +2401,27 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
 
     // Create a page and scribble over its entire backing memory, then destroy
     // it so the buffer returns to the pool free list.
-    let node = s.create_page(PageList::initial_capacity(80)).unwrap();
-    unsafe { (*node).data.size.rows = 1 };
-    let mem_ptr = unsafe { (*node).data.memory_ptr };
-    let mem_len = unsafe { (*node).data.memory_len };
+    let node = s
+        .create_page(super::CreatePage::new(PageList::initial_capacity(80)))
+        .unwrap();
+    unsafe { (*super::Node::page(node)).size.rows = 1 };
+    let mem_ptr = unsafe { (*super::Node::page(node)).memory_ptr };
+    let mem_len = unsafe { (*super::Node::page(node)).memory_len };
     unsafe { core::ptr::write_bytes(mem_ptr, 0xAA, mem_len) };
     s.destroy_node(node);
 
     // Reusing the buffer must produce a fully valid, zeroed page.
-    let node2 = s.create_page(PageList::initial_capacity(80)).unwrap();
-    assert_eq!(mem_ptr, unsafe { (*node2).data.memory_ptr });
-    unsafe { (*node2).data.size.rows = (*node2).data.capacity.rows };
+    let node2 = s
+        .create_page(super::CreatePage::new(PageList::initial_capacity(80)))
+        .unwrap();
+    assert_eq!(mem_ptr, unsafe { (*super::Node::page(node2)).memory_ptr });
+    unsafe { (*super::Node::page(node2)).size.rows = super::Node::capacity(node2).rows };
 
-    let cells_len =
-        unsafe { (*node2).data.capacity.cols as usize * (*node2).data.capacity.rows as usize };
+    let cells_len = unsafe {
+        super::Node::capacity(node2).cols as usize * super::Node::capacity(node2).rows as usize
+    };
     {
-        let page = unsafe { &(*node2).data };
+        let page = unsafe { &(*super::Node::page(node2)) };
         for i in 0..cells_len {
             let rac =
                 page.get_row_and_cell(i % page.size.cols as usize, i / page.size.cols as usize);
@@ -1920,38 +2431,30 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
             assert!(bytes.iter().all(|&b| b == 0));
         }
     }
-    unsafe { (*node2).data.assert_integrity() };
+    unsafe { (*super::Node::page(node2)).assert_integrity() };
     s.destroy_node(node2);
 
     s.deinit();
 }
 
-// ref: test "PageList compact insufficient savings returns null"
+// ref: test "PageList compact after increaseCapacity"
 #[test]
-fn pagelist_compact_insufficient_savings_returns_null() {
+fn pagelist_compact_after_increase_capacity() {
     let mut s = PageList::init(80, 24, Some(0)).unwrap();
 
     let mut node = s.pages.first;
 
-    // Make the page slightly oversized (just one increase)
-    // This might not provide enough savings to justify compaction
+    // Grow the page capacity. The content is unchanged, so compaction should
+    // always shrink it back down to an exact-size heap page.
     node = s
         .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
         .unwrap();
+    let grown_len = unsafe { (*super::Node::page(node)).memory_len };
 
-    // If the page is still at or below std_size, compact returns null
-    if unsafe { (*node).data.memory_len } <= std_size() {
-        let result = s.compact(node).unwrap();
-        assert!(result.is_none());
-    } else {
-        // If it did grow beyond std_size, verify that compaction
-        // works or returns null based on savings calculation
-        let result = s.compact(node).unwrap();
-        // Either it compacted or determined insufficient savings
-        if let Some(new_node) = result {
-            assert!(unsafe { (*new_node).data.memory_len } < unsafe { (*node).data.memory_len });
-        }
-    }
+    let new_node = s.compact(node).unwrap().unwrap();
+    assert_eq!(unsafe { (*new_node).owned }, Owned::Heap);
+    assert!(unsafe { (*super::Node::page(new_node)).memory_len } < grown_len);
+    assert!(unsafe { (*super::Node::page(new_node)).memory_len } < std_size());
 
     s.deinit();
 }
@@ -1966,7 +2469,7 @@ fn pagelist_split_at_middle_row() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Write content to rows: row 0 gets codepoint 0, row 1 gets 1, etc.
         for y in 0..unsafe { (*page).size.rows } as usize {
@@ -1990,8 +2493,8 @@ fn pagelist_split_at_middle_row() {
     assert!(!s.pages.first.is_null());
     assert!(!unsafe { (*s.pages.first).next }.is_null());
 
-    let first_page = unsafe { &(*s.pages.first).data };
-    let second_page = unsafe { &(*(*s.pages.first).next).data };
+    let first_page = unsafe { &(*super::Node::page(s.pages.first)) };
+    let second_page = unsafe { &(*super::Node::page((*s.pages.first).next)) };
 
     // First page should have rows 0-4 (5 rows)
     assert_eq!(5, first_page.size.rows as usize);
@@ -2018,7 +2521,7 @@ fn pagelist_split_at_middle_row() {
 fn pagelist_split_at_row_0_is_no_op() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Write content to all rows
     for y in 0..unsafe { (*page).size.rows } as usize {
@@ -2042,7 +2545,7 @@ fn pagelist_split_at_row_0_is_no_op() {
     assert!(unsafe { (*s.pages.first).next }.is_null());
 
     // Verify all content is still in the original page
-    let page = unsafe { &(*s.pages.first).data };
+    let page = unsafe { &(*super::Node::page(s.pages.first)) };
     assert_eq!(10, page.size.rows as usize);
     for y in 0..10 {
         let rac = page.get_row_and_cell(0, y);
@@ -2058,7 +2561,7 @@ fn pagelist_split_at_last_row() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Write content to all rows
         for y in 0..unsafe { (*page).size.rows } as usize {
@@ -2082,8 +2585,8 @@ fn pagelist_split_at_last_row() {
     assert!(!s.pages.first.is_null());
     assert!(!unsafe { (*s.pages.first).next }.is_null());
 
-    let first_page = unsafe { &(*s.pages.first).data };
-    let second_page = unsafe { &(*(*s.pages.first).next).data };
+    let first_page = unsafe { &(*super::Node::page(s.pages.first)) };
+    let second_page = unsafe { &(*super::Node::page((*s.pages.first).next)) };
 
     // First page should have 9 rows
     assert_eq!(9, first_page.size.rows as usize);
@@ -2361,8 +2864,8 @@ fn pagelist_split_middle_page_preserves_linked_list_order() {
     // Now we have 2 pages
     let page1 = s.pages.first;
     let page2 = unsafe { (*s.pages.first).next };
-    assert_eq!(4, unsafe { (*page1).data.size.rows } as usize);
-    assert_eq!(8, unsafe { (*page2).data.size.rows } as usize);
+    assert_eq!(4, unsafe { super::Node::rows(page1) } as usize);
+    assert_eq!(8, unsafe { super::Node::rows(page2) } as usize);
 
     // Split page2 at row 4 to create: page1 -> page2 (rows 0-3) -> page3 (rows 4-7)
     let split_pin2 = Pin {
@@ -2394,9 +2897,9 @@ fn pagelist_split_middle_page_preserves_linked_list_order() {
     assert!(unsafe { (*last).next }.is_null());
 
     // Verify row counts
-    assert_eq!(4, unsafe { (*first).data.size.rows } as usize);
-    assert_eq!(4, unsafe { (*middle).data.size.rows } as usize);
-    assert_eq!(4, unsafe { (*last).data.size.rows } as usize);
+    assert_eq!(4, unsafe { super::Node::rows(first) } as usize);
+    assert_eq!(4, unsafe { super::Node::rows(middle) } as usize);
+    assert_eq!(4, unsafe { super::Node::rows(last) } as usize);
 
     s.deinit();
 }
@@ -2419,7 +2922,7 @@ fn pagelist_split_last_page_makes_new_page_the_last() {
 
     // Now split the last page
     let last_before_split = s.pages.last;
-    assert_eq!(5, unsafe { (*last_before_split).data.size.rows } as usize);
+    assert_eq!(5, unsafe { super::Node::rows(last_before_split) } as usize);
 
     let split_pin2 = Pin {
         node: last_before_split,
@@ -2438,8 +2941,8 @@ fn pagelist_split_last_page_makes_new_page_the_last() {
     assert!(unsafe { (*new_last).next }.is_null());
 
     // Verify row counts: original last has 2 rows, new last has 3 rows
-    assert_eq!(2, unsafe { (*last_before_split).data.size.rows } as usize);
-    assert_eq!(3, unsafe { (*new_last).data.size.rows } as usize);
+    assert_eq!(2, unsafe { super::Node::rows(last_before_split) } as usize);
+    assert_eq!(3, unsafe { super::Node::rows(new_last) } as usize);
 
     s.deinit();
 }
@@ -2481,9 +2984,9 @@ fn pagelist_split_first_page_keeps_original_as_first() {
     assert!(core::ptr::eq(second_page, unsafe { (*inserted).next }));
 
     // Verify row counts: first has 2, inserted has 3, second has 5
-    assert_eq!(2, unsafe { (*s.pages.first).data.size.rows } as usize);
-    assert_eq!(3, unsafe { (*inserted).data.size.rows } as usize);
-    assert_eq!(5, unsafe { (*second_page).data.size.rows } as usize);
+    assert_eq!(2, unsafe { super::Node::rows(s.pages.first) } as usize);
+    assert_eq!(3, unsafe { super::Node::rows(inserted) } as usize);
+    assert_eq!(5, unsafe { super::Node::rows(second_page) } as usize);
 
     s.deinit();
 }
@@ -2494,7 +2997,7 @@ fn pagelist_split_preserves_wrap_flags() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Set wrap flags on rows that will be in the second page after split
         // Row 5: wrap = true (this is the start of a wrapped line)
@@ -2524,7 +3027,7 @@ fn pagelist_split_preserves_wrap_flags() {
     };
     s.split(split_pin).unwrap();
 
-    let second_page = unsafe { &(*(*s.pages.first).next).data };
+    let second_page = unsafe { &(*super::Node::page((*s.pages.first).next)) };
 
     // Verify wrap flags are preserved in new page
     // Original row 5 is now row 0 in second page
@@ -2557,7 +3060,7 @@ fn pagelist_split_preserves_styled_cells() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Create a style and apply it to cells in rows 5-7 (which will be in the second page)
         let style = Style {
@@ -2593,8 +3096,8 @@ fn pagelist_split_preserves_styled_cells() {
     };
     s.split(split_pin).unwrap();
 
-    let first_page = unsafe { &(*s.pages.first).data };
-    let second_page = unsafe { &(*(*s.pages.first).next).data };
+    let first_page = unsafe { &(*super::Node::page(s.pages.first)) };
+    let second_page = unsafe { &(*super::Node::page((*s.pages.first).next)) };
 
     // First page should have no styles (all styled rows moved to second page)
     assert_eq!(0, first_page.styles.count());
@@ -2642,7 +3145,7 @@ fn pagelist_erase_row_error_path_runs_integrity_gate() {
     // Give the (future) second page's top row a styled cell, then split so
     // pages.first (rows 0-4) has a next page whose row 0 carries the style.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let base = unsafe { (*page).memory_ptr() };
         let style = Style {
             flags: stylepkg::Flags {
@@ -2672,7 +3175,7 @@ fn pagelist_erase_row_error_path_runs_integrity_gate() {
     // Fill the FIRST page's style set to capacity with unique (orphan) styles
     // so the erase's cross-page clone cannot add the styled row's style there.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let base = unsafe { (*page).memory_ptr() };
         let mut n: u32 = 1;
         loop {
@@ -2717,7 +3220,7 @@ fn pagelist_split_preserves_grapheme_clusters() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Add a grapheme cluster to row 6 (will be row 1 in second page after split at 5)
         {
@@ -2748,8 +3251,8 @@ fn pagelist_split_preserves_grapheme_clusters() {
     };
     s.split(split_pin).unwrap();
 
-    let first_page = unsafe { &(*s.pages.first).data };
-    let second_page = unsafe { &(*(*s.pages.first).next).data };
+    let first_page = unsafe { &(*super::Node::page(s.pages.first)) };
+    let second_page = unsafe { &(*super::Node::page((*s.pages.first).next)) };
 
     // First page should have no graphemes (the grapheme row moved to second page)
     assert_eq!(0, first_page.grapheme_count());
@@ -2778,7 +3281,7 @@ fn pagelist_split_preserves_hyperlinks() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
     let hyperlink_id = {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Add a hyperlink to row 7 (will be row 2 in second page after split at 5)
         let hyperlink_id = unsafe {
@@ -2808,8 +3311,8 @@ fn pagelist_split_preserves_hyperlinks() {
     };
     s.split(split_pin).unwrap();
 
-    let first_page = unsafe { &(*s.pages.first).data };
-    let second_page = unsafe { &(*(*s.pages.first).next).data };
+    let first_page = unsafe { &(*super::Node::page(s.pages.first)) };
+    let second_page = unsafe { &(*super::Node::page((*s.pages.first).next)) };
 
     // First page should have no hyperlinks (the hyperlink row moved to second page)
     assert_eq!(0, first_page.hyperlink_set.count());
@@ -3519,7 +4022,7 @@ fn pagelist_jump_zero_prompts() {
     let mut s = PageList::init(5, 3, None).unwrap();
     s.grow_rows(3).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     {
         let rac = unsafe { (*page).get_row_and_cell(0, 1) };
         unsafe {
@@ -3554,7 +4057,7 @@ fn screen_jump_back_one_prompt() {
     let mut s = PageList::init(5, 3, None).unwrap();
     s.grow_rows(3).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     {
         let rac = unsafe { (*page).get_row_and_cell(0, 1) };
         unsafe {
@@ -3731,7 +4234,7 @@ fn pagelist_grow_prune_scrollback() {
     // Grow to capacity
     let page1_node = s.pages.last;
     let (page1_cap_rows, page1_size_rows) = {
-        let page1 = unsafe { &(*page1_node).data };
+        let page1 = unsafe { &(*super::Node::page(page1_node)) };
         (page1.capacity.rows, page1.size.rows)
     };
     for _ in 0..(page1_cap_rows - page1_size_rows) {
@@ -3741,7 +4244,7 @@ fn pagelist_grow_prune_scrollback() {
     // Grow and allocate one more page. Then fill that page up.
     let page2_node = s.grow().unwrap().unwrap();
     let (page2_cap_rows, page2_size_rows) = {
-        let page2 = unsafe { &(*page2_node).data };
+        let page2 = unsafe { &(*super::Node::page(page2_node)) };
         (page2.capacity.rows, page2.size.rows)
     };
     for _ in 0..(page2_cap_rows - page2_size_rows) {
@@ -3826,7 +4329,7 @@ fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
     // Grow to capacity of first page
     let page1_node = s.pages.last;
     let (page1_cap_rows, page1_size_rows) = {
-        let page1 = unsafe { &(*page1_node).data };
+        let page1 = unsafe { &(*super::Node::page(page1_node)) };
         (page1.capacity.rows, page1.size.rows)
     };
     for _ in 0..(page1_cap_rows - page1_size_rows) {
@@ -3836,7 +4339,7 @@ fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
     // Grow and allocate second page, then fill it up
     let page2_node = s.grow().unwrap().unwrap();
     let (page2_cap_rows, page2_size_rows) = {
-        let page2 = unsafe { &(*page2_node).data };
+        let page2 = unsafe { &(*super::Node::page(page2_node)) };
         (page2.capacity.rows, page2.size.rows)
     };
     for _ in 0..(page2_cap_rows - page2_size_rows) {
@@ -3899,7 +4402,7 @@ fn pagelist_eraseRows_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up several pages worth of history
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     {
         let mut cur_page = s.pages.last;
         for _ in 0..(page_cap_rows as usize * 3) {
@@ -3961,7 +4464,7 @@ fn pagelist_eraseRow_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up several pages worth of history
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     {
         let mut cur_page = s.pages.last;
         for _ in 0..(page_cap_rows as usize * 3) {
@@ -4020,7 +4523,7 @@ fn pagelist_eraseRowBounded_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up several pages worth of history
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     {
         let mut cur_page = s.pages.last;
         for _ in 0..(page_cap_rows as usize * 3) {
@@ -4080,7 +4583,7 @@ fn pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up several pages worth of history
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     {
         let mut cur_page = s.pages.last;
         for _ in 0..(page_cap_rows as usize * 3) {
@@ -4144,7 +4647,7 @@ fn pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache() 
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up several pages worth of history
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     {
         let mut cur_page = s.pages.last;
         for _ in 0..(page_cap_rows as usize * 4) {
@@ -4210,7 +4713,7 @@ fn pagelist_eraseRowBounded_exhausts_pages_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up several pages worth of history
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     {
         let mut cur_page = s.pages.last;
         for _ in 0..(page_cap_rows as usize * 3) {
@@ -4284,7 +4787,7 @@ fn pagelist_increaseCapacity_after_col_shrink() {
     assert_eq!(5, s.cols);
 
     {
-        let page = unsafe { &(*s.pages.first).data };
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
         assert_eq!(5, page.size.cols);
         assert!(page.capacity.cols >= 10);
     }
@@ -4295,7 +4798,7 @@ fn pagelist_increaseCapacity_after_col_shrink() {
         .unwrap();
 
     {
-        let page = unsafe { &(*s.pages.first).data };
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
         // size.cols should still be 5, not reverted to capacity.cols
         assert_eq!(5, page.size.cols);
         assert_eq!(5, s.cols);
@@ -4339,14 +4842,14 @@ fn pagelist_pageIterator_two_pages() {
     // Grow to capacity
     let page1_node = s.pages.last;
     let (page1_cap_rows, page1_size_rows) = {
-        let page1 = unsafe { &(*page1_node).data };
+        let page1 = unsafe { &(*super::Node::page(page1_node)) };
         (page1.capacity.rows, page1.size.rows)
     };
-    unsafe { (*page1_node).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(true) };
     for _ in 0..(page1_cap_rows - page1_size_rows) {
         assert!(s.grow().unwrap().is_none());
     }
-    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(false) };
     assert!(s.grow().unwrap().is_some());
 
     // Iterate the active area
@@ -4358,9 +4861,9 @@ fn pagelist_pageIterator_two_pages() {
     {
         let chunk = it.next().unwrap();
         assert!(core::ptr::eq(chunk.node, s.pages.first));
-        let start = unsafe { (*chunk.node).data.size.rows } - s.rows + 1;
+        let start = unsafe { super::Node::rows(chunk.node) } - s.rows + 1;
         assert_eq!(start, chunk.start);
-        assert_eq!(unsafe { (*chunk.node).data.size.rows }, chunk.end);
+        assert_eq!(unsafe { super::Node::rows(chunk.node) }, chunk.end);
     }
     {
         let chunk = it.next().unwrap();
@@ -4382,14 +4885,14 @@ fn pagelist_pageIterator_history_two_pages() {
     // Grow to capacity
     let page1_node = s.pages.last;
     let (page1_cap_rows, page1_size_rows) = {
-        let page1 = unsafe { &(*page1_node).data };
+        let page1 = unsafe { &(*super::Node::page(page1_node)) };
         (page1.capacity.rows, page1.size.rows)
     };
-    unsafe { (*page1_node).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(true) };
     for _ in 0..(page1_cap_rows - page1_size_rows) {
         assert!(s.grow().unwrap().is_none());
     }
-    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(false) };
     assert!(s.grow().unwrap().is_some());
 
     // Iterate the active area
@@ -4446,14 +4949,14 @@ fn pagelist_pageIterator_reverse_two_pages() {
     // Grow to capacity
     let page1_node = s.pages.last;
     let (page1_cap_rows, page1_size_rows) = {
-        let page1 = unsafe { &(*page1_node).data };
+        let page1 = unsafe { &(*super::Node::page(page1_node)) };
         (page1.capacity.rows, page1.size.rows)
     };
-    unsafe { (*page1_node).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(true) };
     for _ in 0..(page1_cap_rows - page1_size_rows) {
         assert!(s.grow().unwrap().is_none());
     }
-    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(false) };
     assert!(s.grow().unwrap().is_some());
 
     // Iterate the active area
@@ -4474,9 +4977,9 @@ fn pagelist_pageIterator_reverse_two_pages() {
     {
         let chunk = it.next().unwrap();
         assert!(core::ptr::eq(chunk.node, s.pages.first));
-        let start = unsafe { (*chunk.node).data.size.rows } - s.rows + 1;
+        let start = unsafe { super::Node::rows(chunk.node) } - s.rows + 1;
         assert_eq!(start, chunk.start);
-        assert_eq!(unsafe { (*chunk.node).data.size.rows }, chunk.end);
+        assert_eq!(unsafe { super::Node::rows(chunk.node) }, chunk.end);
         count += (chunk.end - chunk.start) as usize;
     }
     assert!(it.next().is_none());
@@ -4493,14 +4996,14 @@ fn pagelist_pageIterator_reverse_history_two_pages() {
     // Grow to capacity
     let page1_node = s.pages.last;
     let (page1_cap_rows, page1_size_rows) = {
-        let page1 = unsafe { &(*page1_node).data };
+        let page1 = unsafe { &(*super::Node::page(page1_node)) };
         (page1.capacity.rows, page1.size.rows)
     };
-    unsafe { (*page1_node).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(true) };
     for _ in 0..(page1_cap_rows - page1_size_rows) {
         assert!(s.grow().unwrap().is_none());
     }
-    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(page1_node)).pause_integrity_checks(false) };
     assert!(s.grow().unwrap().is_some());
 
     // Iterate the active area
@@ -4527,7 +5030,7 @@ fn pagelist_pageIterator_reverse_history_two_pages() {
 fn pagelist_cellIterator() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
         for x in 0..s.cols as usize {
             let rac = unsafe { (*page).get_row_and_cell(x, y) };
@@ -4580,7 +5083,7 @@ fn pagelist_cellIterator() {
 fn pagelist_cellIterator_reverse() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
         for x in 0..s.cols as usize {
             let rac = unsafe { (*page).get_row_and_cell(x, y) };
@@ -4633,7 +5136,7 @@ fn pagelist_cellIterator_reverse() {
 fn pagelist_promptIterator_left_up() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     // Normal prompt
     {
         let rac = unsafe { (*page).get_row_and_cell(0, 3) };
@@ -4694,7 +5197,7 @@ fn pagelist_promptIterator_left_up() {
 fn pagelist_promptIterator_right_down() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     // Normal prompt
     {
         let rac = unsafe { (*page).get_row_and_cell(0, 3) };
@@ -4755,7 +5258,7 @@ fn pagelist_promptIterator_right_down() {
 fn pagelist_promptIterator_right_down_continuation_at_start() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt continuation at row 0 (no prior rows - simulates trimmed scrollback)
     {
@@ -4802,7 +5305,7 @@ fn pagelist_promptIterator_right_down_continuation_at_start() {
 fn pagelist_promptIterator_right_down_with_prompt_before_continuation() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 2, continuation on rows 3-4
     // Starting iteration from row 3 should still find the prompt at row 2
@@ -4845,7 +5348,7 @@ fn pagelist_promptIterator_right_down_with_prompt_before_continuation() {
 fn pagelist_promptIterator_right_down_limit_inclusive() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -4881,7 +5384,7 @@ fn pagelist_promptIterator_right_down_limit_inclusive() {
 fn pagelist_promptIterator_left_up_limit_inclusive() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -4918,7 +5421,7 @@ fn pagelist_promptIterator_left_up_limit_inclusive() {
 fn pagelist_highlightSemanticContent_prompt() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -4971,7 +5474,7 @@ fn pagelist_highlightSemanticContent_prompt() {
 fn pagelist_highlightSemanticContent_prompt_with_output() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -5033,7 +5536,7 @@ fn pagelist_highlightSemanticContent_prompt_with_output() {
 fn pagelist_highlightSemanticContent_prompt_multiline() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt starts on row 5
     {
@@ -5088,7 +5591,7 @@ fn pagelist_highlightSemanticContent_prompt_multiline() {
 fn pagelist_highlightSemanticContent_prompt_only() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5 with only prompt content (no input)
     {
@@ -5133,7 +5636,7 @@ fn pagelist_highlightSemanticContent_prompt_only() {
 fn pagelist_highlightSemanticContent_prompt_to_end_of_screen() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Single prompt on row 15, no following prompt
     {
@@ -5180,7 +5683,7 @@ fn pagelist_highlightSemanticContent_prompt_to_end_of_screen() {
 fn pagelist_highlightSemanticContent_input_basic() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -5234,7 +5737,7 @@ fn pagelist_highlightSemanticContent_input_basic() {
 fn pagelist_highlightSemanticContent_input_with_output() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -5296,7 +5799,7 @@ fn pagelist_highlightSemanticContent_input_with_output() {
 fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -5368,7 +5871,7 @@ fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
 fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5 with only prompt, then immediately output
     {
@@ -5413,7 +5916,7 @@ fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
 fn pagelist_highlightSemanticContent_input_to_end_of_screen() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Single prompt on row 15, no following prompt
     {
@@ -5460,7 +5963,7 @@ fn pagelist_highlightSemanticContent_input_to_end_of_screen() {
 fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5 with only prompt content, no input or output
     {
@@ -5506,7 +6009,7 @@ fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
 fn pagelist_highlightSemanticContent_output_basic() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -5574,7 +6077,7 @@ fn pagelist_highlightSemanticContent_output_basic() {
 fn pagelist_highlightSemanticContent_output_multiline() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -5658,7 +6161,7 @@ fn pagelist_highlightSemanticContent_output_multiline() {
 fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5
     {
@@ -5736,7 +6239,7 @@ fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
 fn pagelist_highlightSemanticContent_output_to_end_of_screen() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Single prompt on row 15, no following prompt
     {
@@ -5803,7 +6306,7 @@ fn pagelist_highlightSemanticContent_output_to_end_of_screen() {
 fn pagelist_highlightSemanticContent_output_no_output_returns_null() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5 with only prompt and input, no output
     {
@@ -5860,7 +6363,7 @@ fn pagelist_highlightSemanticContent_output_skips_empty_cells() {
     // doesn't fill the entire row - trailing cells have default .output.
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Prompt on row 5 - only fills first 3 cells, rest are empty with default .output
     {
@@ -5936,17 +6439,17 @@ fn pagelist_erase() {
     assert_eq!(1_usize, s.total_pages());
 
     // Grow so we take up at least 5 pages.
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
-    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
     for _ in 0..(page_cap_rows as usize * 5) {
         if let Some(new_page) = s.grow().unwrap() {
-            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
             cur_page = new_page;
-            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
         }
     }
-    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
     assert_eq!(6_usize, s.total_pages());
 
     // Our total rows should be large
@@ -5970,17 +6473,17 @@ fn pagelist_erase_reaccounts_page_size() {
     let start_size = s.page_size;
 
     // Grow so we take up at least 5 pages.
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
-    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
     for _ in 0..(page_cap_rows as usize * 5) {
         if let Some(new_page) = s.grow().unwrap() {
-            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
             cur_page = new_page;
-            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
         }
     }
-    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
     assert!(s.page_size > start_size);
 
     // Erase the entire history, we should be back to just our active set.
@@ -5996,17 +6499,17 @@ fn pagelist_erase_row_with_tracked_pin_resets_to_top_left() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up at least 5 pages.
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
-    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
     for _ in 0..(page_cap_rows as usize * 5) {
         if let Some(new_page) = s.grow().unwrap() {
-            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
             cur_page = new_page;
-            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
         }
     }
-    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
 
     // Our total rows should be large
     assert!(s.total_rows > s.rows as usize);
@@ -6090,17 +6593,17 @@ fn pagelist_erase_resets_viewport_to_active_if_moves_within_active() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up at least 5 pages.
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
-    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
     for _ in 0..(page_cap_rows as usize * 5) {
         if let Some(new_page) = s.grow().unwrap() {
-            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
             cur_page = new_page;
-            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
         }
     }
-    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
 
     // Move our viewport to the top
     s.scroll(Scroll::DeltaRow(-(s.total_rows as isize)));
@@ -6119,17 +6622,17 @@ fn pagelist_erase_resets_viewport_if_inside_erased_page_but_not_active() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up at least 5 pages.
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
-    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
     for _ in 0..(page_cap_rows as usize * 5) {
         if let Some(new_page) = s.grow().unwrap() {
-            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
             cur_page = new_page;
-            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
         }
     }
-    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
 
     // Move our viewport to the top
     s.scroll(Scroll::DeltaRow(-(s.total_rows as isize)));
@@ -6151,17 +6654,17 @@ fn pagelist_erase_resets_viewport_to_active_if_top_is_inside_active() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     // Grow so we take up at least 5 pages.
-    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
-    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
     for _ in 0..(page_cap_rows as usize * 5) {
         if let Some(new_page) = s.grow().unwrap() {
-            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
             cur_page = new_page;
-            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+            unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(true) };
         }
     }
-    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    unsafe { (*super::Node::page(cur_page)).pause_integrity_checks(false) };
 
     // Move our viewport to the top
     s.scroll(Scroll::Top);
@@ -6192,7 +6695,7 @@ fn pagelist_erase_a_one_row_active() {
 
     // Write our letter
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         for y in 0..s.rows as usize {
             let rac = unsafe { (*page).get_row_and_cell(0, y) };
             unsafe {
@@ -6349,18 +6852,18 @@ fn pagelist_eraseRowBounded_full_rows_two_pages() {
 
     // Grow to two pages so our active area straddles
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page = unsafe { super::Node::page(s.pages.last) };
         unsafe { (*page).pause_integrity_checks(true) };
         let to_grow =
             unsafe { (*page).capacity.rows } as usize - unsafe { (*page).size.rows } as usize;
         for _ in 0..to_grow {
             let _ = s.grow().unwrap();
         }
-        unsafe { (*s.pages.last).data.pause_integrity_checks(false) };
+        unsafe { (*super::Node::page(s.pages.last)).pause_integrity_checks(false) };
         s.grow_rows(5).unwrap();
         assert_eq!(2_usize, s.total_pages());
         assert_eq!(5 as size::CellCountInt, unsafe {
-            (*s.pages.last).data.size.rows
+            super::Node::rows(s.pages.last)
         });
     }
 
@@ -6393,12 +6896,12 @@ fn pagelist_eraseRowBounded_full_rows_two_pages() {
     {
         let prev = unsafe { (*s.pages.last).prev };
         assert!(core::ptr::eq(prev, unsafe { (*p_first).node }));
-        let first_rows = unsafe { (*(*p_first).node).data.size.rows };
+        let first_rows = unsafe { super::Node::rows((*p_first).node) };
         assert_eq!((first_rows - 1) as usize, unsafe { (*p_first).y } as usize);
         assert_eq!(0 as size::CellCountInt, unsafe { (*p_first).x });
 
         assert!(core::ptr::eq(prev, unsafe { (*p_first_out).node }));
-        let first_out_rows = unsafe { (*(*p_first_out).node).data.size.rows };
+        let first_out_rows = unsafe { super::Node::rows((*p_first_out).node) };
         assert_eq!((first_out_rows - 2) as usize, unsafe { (*p_first_out).y }
             as usize);
         assert_eq!(0 as size::CellCountInt, unsafe { (*p_first_out).x });
@@ -6424,13 +6927,13 @@ fn pagelist_eraseRowBounded_full_rows_two_pages() {
     // In page in first page is shifted
     let prev = unsafe { (*s.pages.last).prev };
     assert!(core::ptr::eq(prev, unsafe { (*p_first).node }));
-    let first_rows = unsafe { (*(*p_first).node).data.size.rows };
+    let first_rows = unsafe { super::Node::rows((*p_first).node) };
     assert_eq!((first_rows - 2) as usize, unsafe { (*p_first).y } as usize);
     assert_eq!(0 as size::CellCountInt, unsafe { (*p_first).x });
 
     // Out page in first page should not be shifted
     assert!(core::ptr::eq(prev, unsafe { (*p_first_out).node }));
-    let first_out_rows = unsafe { (*(*p_first_out).node).data.size.rows };
+    let first_out_rows = unsafe { super::Node::rows((*p_first_out).node) };
     assert_eq!((first_out_rows - 2) as usize, unsafe { (*p_first_out).y }
         as usize);
     assert_eq!(0 as size::CellCountInt, unsafe { (*p_first_out).x });
@@ -6522,7 +7025,7 @@ fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
         // `&...first.?.data` is a Zig pointer). A real `&mut` held across the
         // loop below is invalidated under Stacked Borrows by the shared retag
         // through `Pin::row_and_cell`, so we keep a raw pointer and deref per use.
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         let style = Style {
             flags: stylepkg::Flags {
@@ -6539,7 +7042,7 @@ fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
             point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
             Some(point::Point::Screen(point::Coordinate { x: 0, y: 9 })),
         );
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let base = unsafe { (*page).memory_ptr() };
         while let Some(p) = it.next() {
             let rac = p.row_and_cell();
@@ -6569,7 +7072,7 @@ fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
 
     {
         assert!(core::ptr::eq(s2.pages.first, s2.pages.last));
-        let page = unsafe { &(*s2.pages.first).data };
+        let page = unsafe { &(*super::Node::page(s2.pages.first)) };
         assert_eq!(0, page.styles.count());
     }
 
@@ -6811,7 +7314,7 @@ fn pagelist_resize_no_reflow_less_rows() {
 
     // This is required for our writing below to work
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Write into all rows so we don't get trim behavior
     for y in 0..s.rows as usize {
@@ -6849,7 +7352,7 @@ fn pagelist_resize_no_reflow_one_rows() {
 
     // This is required for our writing below to work
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Write into all rows so we don't get trim behavior
     for y in 0..s.rows as usize {
@@ -6887,7 +7390,7 @@ fn pagelist_resize_no_reflow_less_rows_cursor_on_bottom() {
 
     // This is required for our writing below to work
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Write into all rows so we don't get trim behavior
     for y in 0..s.rows as usize {
@@ -6954,7 +7457,7 @@ fn pagelist_resize_no_reflow_less_rows_cursor_in_scrollback() {
 
     // This is required for our writing below to work
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Write into all rows so we don't get trim behavior
     for y in 0..s.rows as usize {
@@ -7019,7 +7522,7 @@ fn pagelist_resize_no_reflow_less_rows_cursor_in_scrollback() {
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines() {
     let mut s = PageList::init(10, 5, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Write codepoint into first line
     {
@@ -7091,7 +7594,7 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines() {
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() {
     let mut s = PageList::init(10, 5, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Write codepoint into first line
     {
@@ -7146,7 +7649,7 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() 
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
     let mut s = PageList::init(100, 5, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Resize to take up two pages
     {
@@ -7188,7 +7691,7 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
 fn pagelist_resize_no_reflow_more_rows_extends_blank_lines() {
     let mut s = PageList::init(10, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
 
     // Write codepoint into first line
     {
@@ -7285,7 +7788,7 @@ fn pagelist_resize_no_reflow_less_cols() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(5usize, cells.len());
     }
 
@@ -7322,7 +7825,7 @@ fn pagelist_resize_no_reflow_less_cols_pin_in_trimmed_cols() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(5usize, cells.len());
     }
 
@@ -7341,7 +7844,7 @@ fn pagelist_resize_no_reflow_less_cols_clears_graphemes() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
     // Add a grapheme.
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     {
         let rac = unsafe { (*page).get_row_and_cell(9, 0) };
         unsafe {
@@ -7369,7 +7872,7 @@ fn pagelist_resize_no_reflow_less_cols_clears_graphemes() {
         None,
     );
     while let Some(chunk) = it.next() {
-        assert_eq!(0usize, unsafe { (*chunk.node).data.grapheme_count() });
+        assert_eq!(0usize, unsafe { (*super::Node::page(chunk.node)).grapheme_count() });
     }
 
     s.deinit();
@@ -7397,7 +7900,7 @@ fn pagelist_resize_no_reflow_more_cols() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(10usize, cells.len());
     }
 
@@ -7410,7 +7913,7 @@ fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
     let mut s = PageList::init(2, 3, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -7457,7 +7960,7 @@ fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -7502,7 +8005,7 @@ fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
     // Place a spacer_head at the last column (col 4) on two rows
     // to simulate a wide character that didn't fit at the right edge.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Row 0: 'x' at col 0..3, spacer_head at col 4, wrap = true
         {
@@ -7545,7 +8048,7 @@ fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
 
     // Verify the old spacer_head positions are now narrow.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         {
             let rac = unsafe { (*page).get_row_and_cell(4, 0) };
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
@@ -7626,8 +8129,8 @@ fn pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page() {
             if page == s.pages.last {
                 break;
             }
-            assert_eq!(unsafe { (*page).data.capacity.rows }, unsafe {
-                (*page).data.size.rows
+            assert_eq!(unsafe { super::Node::capacity(page).rows }, unsafe {
+                super::Node::rows(page)
             });
             it = unsafe { (*page).next };
         }
@@ -7636,7 +8139,7 @@ fn pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page() {
     // Now we need to resize again to a col size that further shrinks
     // our last capacity.
     {
-        let page = unsafe { &(*s.pages.first).data };
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
         assert!(page.size.rows == page.capacity.rows);
         let new_cols = {
             let mut new_cols = page.size.cols + 50;
@@ -7674,8 +8177,8 @@ fn pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page() {
             if page == s.pages.last {
                 break;
             }
-            assert_eq!(unsafe { (*page).data.capacity.rows }, unsafe {
-                (*page).data.size.rows
+            assert_eq!(unsafe { super::Node::capacity(page).rows }, unsafe {
+                super::Node::rows(page)
             });
             it = unsafe { (*page).next };
         }
@@ -7715,7 +8218,7 @@ fn pagelist_resize_no_reflow_less_cols_then_more_cols() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(5usize, cells.len());
     }
 
@@ -7745,7 +8248,7 @@ fn pagelist_resize_no_reflow_less_rows_and_cols() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(5usize, cells.len());
     }
 
@@ -7813,7 +8316,7 @@ fn pagelist_resize_less_rows_and_cols_cursor_near_top_pushed_to_scrollback() {
         );
         while let Some(p) = it.next() {
             let rac = p.row_and_cell();
-            let cells = unsafe { (*p.node).data.get_cells(rac.row) };
+            let cells = unsafe { (*super::Node::page(p.node)).get_cells(rac.row) };
             let len = cells.len();
             for x in 0..len {
                 unsafe {
@@ -7890,7 +8393,7 @@ fn pagelist_resize_no_reflow_more_rows_and_less_cols() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(5usize, cells.len());
     }
 
@@ -7954,7 +8457,7 @@ fn pagelist_resize_no_reflow_empty_screen() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(10usize, cells.len());
     }
 
@@ -7982,7 +8485,7 @@ fn pagelist_resize_no_reflow_more_cols_forces_smaller_cap() {
     let mut s = PageList::init(cap.cols, cap.rows, None).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
                 let rac = unsafe { (*page).get_row_and_cell(x, y) };
@@ -8011,7 +8514,7 @@ fn pagelist_resize_no_reflow_more_cols_forces_smaller_cap() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(cap2.cols as usize, cells.len());
         assert_eq!('A' as u32, unsafe {
             (*(*cells).as_ptr()).content_codepoint()
@@ -8030,7 +8533,7 @@ fn pagelist_resize_no_reflow_more_rows_adds_blank_rows_if_cursor_at_bottom() {
     s.grow_rows(2).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         for y in 0..s.total_rows() {
             let rac = unsafe { (*page).get_row_and_cell(0, y) };
             unsafe {
@@ -8128,7 +8631,7 @@ fn pagelist_resize_reflow_more_cols_no_wrapped_rows() {
     let mut s = PageList::init(5, 3, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
                 let rac = unsafe { (*page).get_row_and_cell(x, y) };
@@ -8156,7 +8659,7 @@ fn pagelist_resize_reflow_more_cols_no_wrapped_rows() {
     );
     while let Some(offset) = it.next() {
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(10usize, cells.len());
         assert_eq!('A' as u32, unsafe {
             (*(*cells).as_ptr()).content_codepoint()
@@ -8172,7 +8675,7 @@ fn pagelist_resize_reflow_more_cols_wrapped_rows() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         for y in 0..s.rows as usize {
             if y % 2 == 0 {
                 let rac = unsafe { (*page).get_row_and_cell(0, y) };
@@ -8219,7 +8722,7 @@ fn pagelist_resize_reflow_more_cols_wrapped_rows() {
         // First row should be unwrapped
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert_eq!(4usize, cells.len());
         assert_eq!('A' as u32, unsafe {
@@ -8240,7 +8743,7 @@ fn pagelist_resize_reflow_invalidates_viewport_offset_cache() {
     s.grow_rows(20).unwrap();
 
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page = unsafe { super::Node::page(s.pages.last) };
         for y in 0..s.rows as usize {
             if y % 2 == 0 {
                 let rac = unsafe { (*page).get_row_and_cell(0, y) };
@@ -8326,7 +8829,7 @@ fn pagelist_resize_reflow_more_cols_creates_multiple_pages() {
     // Wrap every other row so every line is wrapped for reflow
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         for y in 0..s.rows as usize {
             if y % 2 == 0 {
                 let rac = unsafe { (*page).get_row_and_cell(0, y) };
@@ -8366,8 +8869,8 @@ fn pagelist_resize_reflow_more_cols_creates_multiple_pages() {
             count += 1;
 
             // All pages should have the new capacity
-            assert_eq!(newcap.cols, unsafe { (*it).data.capacity.cols });
-            assert_eq!(newcap.rows, unsafe { (*it).data.capacity.rows });
+            assert_eq!(newcap.cols, unsafe { super::Node::capacity(it).cols });
+            assert_eq!(newcap.rows, unsafe { super::Node::capacity(it).rows });
 
             it = unsafe { (*it).next };
         }
@@ -8389,12 +8892,12 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary() {
 
     // Grow to the capacity of the first page.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         unsafe { (*page).pause_integrity_checks(true) };
         for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8403,7 +8906,7 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary() {
     // At this point, we have some rows on the first page, and some on the second.
     // We can now wrap across the boundary condition.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let y = unsafe { (*page).size.rows as usize - 1 };
         {
             let rac = unsafe { (*page).get_row_and_cell(0, y) };
@@ -8417,7 +8920,7 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary() {
         }
     }
     {
-        let page2 = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page2 = unsafe { super::Node::page(s.pages.last) };
         let y = 0;
         {
             let rac = unsafe { (*page2).get_row_and_cell(0, y) };
@@ -8494,12 +8997,12 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary_cursor_in_second_p
 
     // Grow to the capacity of the first page.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         unsafe { (*page).pause_integrity_checks(true) };
         for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8508,7 +9011,7 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary_cursor_in_second_p
     // At this point, we have some rows on the first page, and some on the second.
     // We can now wrap across the boundary condition.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let y = unsafe { (*page).size.rows as usize - 1 };
         {
             let rac = unsafe { (*page).get_row_and_cell(0, y) };
@@ -8522,7 +9025,7 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary_cursor_in_second_p
         }
     }
     {
-        let page2 = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page2 = unsafe { super::Node::page(s.pages.last) };
         let y = 0;
         {
             let rac = unsafe { (*page2).get_row_and_cell(0, y) };
@@ -8598,12 +9101,12 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
 
     // Grow to the capacity of the first page.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         unsafe { (*page).pause_integrity_checks(true) };
         for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(5).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8612,7 +9115,7 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
     // At this point, we have some rows on the first page, and some on the second.
     // We can now wrap across the boundary condition.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let y = unsafe { (*page).size.rows as usize - 1 };
         {
             let rac = unsafe { (*page).get_row_and_cell(0, y) };
@@ -8626,7 +9129,7 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
         }
     }
     {
-        let page2 = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page2 = unsafe { super::Node::page(s.pages.last) };
         let y = 0;
         {
             let rac = unsafe { (*page2).get_row_and_cell(0, y) };
@@ -8773,7 +9276,7 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
 fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     {
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -8832,7 +9335,7 @@ fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row() {
 fn pagelist_resize_reflow_more_cols_cursor_in_not_wrapped_row() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     {
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -8891,7 +9394,7 @@ fn pagelist_resize_reflow_more_cols_cursor_in_not_wrapped_row() {
 fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row_that_isnt_unwrapped() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     {
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -8966,7 +9469,7 @@ fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let rac = unsafe { (*page).get_row_and_cell(0, 1) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
@@ -8983,7 +9486,7 @@ fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let rac = unsafe { (*page).get_row_and_cell(0, 1) };
         assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
     }
@@ -9004,12 +9507,12 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     // Grow to the capacity of the first page and add
     // one more row so that we have two pages total.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         unsafe { (*page).pause_integrity_checks(true) };
         for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -9040,7 +9543,7 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     // Almost hit string alloc cap in bottom right of first page.
     // Mark the final row as wrapped.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let id = unsafe {
             (*page).insert_hyperlink(hyperlink::Hyperlink {
                 id: hyperlink::HyperlinkId::Implicit(0),
@@ -9073,7 +9576,7 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     // Almost hit string alloc cap in top left of second page.
     // Mark the first row as a wrap continuation.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page = unsafe { super::Node::page(s.pages.last) };
         let id = unsafe {
             (*page).insert_hyperlink(hyperlink::Hyperlink {
                 id: hyperlink::HyperlinkId::Implicit(1),
@@ -9122,12 +9625,12 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
     // Grow to the capacity of the first page and add
     // one more row so that we have two pages total.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         unsafe { (*page).pause_integrity_checks(true) };
         for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -9163,7 +9666,7 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
     // Almost hit grapheme alloc cap in bottom right of first page.
     // Mark the final row as wrapped.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let rac = unsafe {
             (*page).get_row_and_cell(
                 (*page).size.cols as usize - 1,
@@ -9182,7 +9685,7 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
     // Almost hit grapheme alloc cap in top left of second page.
     // Mark the first row as a wrap continuation.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page = unsafe { super::Node::page(s.pages.last) };
         let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
             (*rac.row).set_wrap(true);
@@ -9217,12 +9720,12 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
     // Grow to the capacity of the first page and add
     // one more row so that we have two pages total.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         unsafe { (*page).pause_integrity_checks(true) };
         for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -9237,7 +9740,7 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
     // Give each cell in the final row of the first page a unique style.
     // Mark the final row as wrapped.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let base = unsafe { (*page).memory_ptr() };
         for x in 0..s.cols as usize {
             let style = Style {
@@ -9267,7 +9770,7 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
     // Do the same for the first row of the second page.
     // Mark the first row as a wrap continuation.
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page = unsafe { super::Node::page(s.pages.last) };
         let base = unsafe { (*page).memory_ptr() };
         for x in 0..s.cols as usize {
             let style = Style {
@@ -9311,7 +9814,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -9359,7 +9862,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -9388,7 +9891,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
     let mut s = PageList::init(2, 3, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -9450,7 +9953,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -9494,7 +9997,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_still_requires_wide_spacer_head() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -9540,7 +10043,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_still_requires_wide_spacer_head() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -9579,7 +10082,7 @@ fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt() {
     let mut s = PageList::init(4, 4, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
@@ -9630,7 +10133,7 @@ fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt_on_first
     let mut s = PageList::init(4, 4, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
@@ -9647,7 +10150,7 @@ fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt_on_first
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
     }
@@ -9661,7 +10164,7 @@ fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
     let mut s = PageList::init(4, 4, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
@@ -9678,7 +10181,7 @@ fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
     }
@@ -9691,7 +10194,7 @@ fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
 fn pagelist_resize_reflow_less_cols_no_wrapped_rows() {
     let mut s = PageList::init(10, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
         let end = 4;
         assert!(end < s.cols as usize);
@@ -9723,7 +10226,7 @@ fn pagelist_resize_reflow_less_cols_no_wrapped_rows() {
             let mut offset_copy = pin_copy(&offset as *const Pin as *mut Pin);
             offset_copy.x = x as size::CellCountInt;
             let rac = offset_copy.row_and_cell();
-            let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+            let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
             assert_eq!(5usize, cells.len());
             assert_eq!(x as u32, unsafe {
                 (*(*cells).as_ptr().add(x)).content_codepoint()
@@ -9739,7 +10242,7 @@ fn pagelist_resize_reflow_less_cols_no_wrapped_rows() {
 fn pagelist_resize_reflow_less_cols_wrapped_rows() {
     let mut s = PageList::init(4, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
         for x in 0..s.cols as usize {
             let rac = unsafe { (*page).get_row_and_cell(x, y) };
@@ -9777,7 +10280,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows() {
         // First row should be wrapped
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(0u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
@@ -9785,7 +10288,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(2u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
@@ -9794,7 +10297,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows() {
         // First row should be wrapped
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(0u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
@@ -9802,7 +10305,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(2u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
@@ -9817,7 +10320,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
     let mut s = PageList::init(4, 2, None).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
                 let rac = unsafe { (*page).get_row_and_cell(x, y) };
@@ -9851,7 +10354,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
     }
 
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     let mut it = s.row_iterator(
         super::iter::Direction::RightDown,
         point::Point::Screen(point::Coordinate::default()),
@@ -9861,7 +10364,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
         // First row should be wrapped
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(0u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
@@ -9869,7 +10372,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert!(unsafe { (*rac.row).grapheme() });
         assert_eq!(2usize, cells.len());
@@ -9883,7 +10386,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
         // First row should be wrapped
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(0u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
@@ -9891,7 +10394,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert!(unsafe { (*rac.row).grapheme() });
         assert_eq!(2usize, cells.len());
@@ -9910,7 +10413,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
 fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_row() {
     let mut s = PageList::init(4, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
         for x in 0..s.cols as usize {
             let rac = unsafe { (*page).get_row_and_cell(x, y) };
@@ -9954,7 +10457,7 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
     let mut s = PageList::init(4, 3, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -10014,7 +10517,7 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -10052,7 +10555,7 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
 fn pagelist_resize_reflow_less_cols_cursor_goes_to_scrollback() {
     let mut s = PageList::init(4, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
         for x in 0..s.cols {
             let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
@@ -10092,7 +10595,7 @@ fn pagelist_resize_reflow_less_cols_cursor_goes_to_scrollback() {
 fn pagelist_resize_reflow_less_cols_cursor_in_unchanged_row() {
     let mut s = PageList::init(4, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
         for x in 0..2 {
             let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
@@ -10135,7 +10638,7 @@ fn pagelist_resize_reflow_less_cols_cursor_in_unchanged_row() {
 fn pagelist_resize_reflow_less_cols_cursor_in_blank_cell() {
     let mut s = PageList::init(6, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
         for x in 0..2 {
             let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
@@ -10178,7 +10681,7 @@ fn pagelist_resize_reflow_less_cols_cursor_in_blank_cell() {
 fn pagelist_resize_reflow_less_cols_cursor_in_final_blank_cell() {
     let mut s = PageList::init(6, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
         for x in 0..2 {
             let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
@@ -10221,7 +10724,7 @@ fn pagelist_resize_reflow_less_cols_cursor_in_final_blank_cell() {
 fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_blank_cell() {
     let mut s = PageList::init(6, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
         for x in 0..2 {
             let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
@@ -10264,7 +10767,7 @@ fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_blank_cell() {
 fn pagelist_resize_reflow_less_cols_blank_lines() {
     let mut s = PageList::init(4, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..1 {
         for x in 0..4 {
             let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
@@ -10293,7 +10796,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines() {
         // First row should be wrapped
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(0u32, unsafe { (*cells)[0].content_codepoint() });
@@ -10301,7 +10804,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(2u32, unsafe { (*cells)[0].content_codepoint() });
@@ -10315,7 +10818,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines() {
 fn pagelist_resize_reflow_less_cols_blank_lines_between() {
     let mut s = PageList::init(4, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     {
         for x in 0..4 {
             let rac = unsafe { (*page).get_row_and_cell(x as usize, 0) };
@@ -10356,7 +10859,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(0u32, unsafe { (*cells)[0].content_codepoint() });
@@ -10364,7 +10867,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!(2u32, unsafe { (*cells)[0].content_codepoint() });
@@ -10378,7 +10881,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between() {
 fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
     let mut s = PageList::init(5, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     {
         let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
@@ -10410,7 +10913,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!('A' as u32, unsafe { (*cells)[0].content_codepoint() });
@@ -10418,13 +10921,13 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert_eq!(0u32, unsafe { (*cells)[0].content_codepoint() });
     }
     {
         let offset = it.next().unwrap();
         let rac = offset.row_and_cell();
-        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        let cells = unsafe { (*super::Node::page(offset.node)).get_cells(rac.row) };
         assert!(!unsafe { (*rac.row).wrap() });
         assert_eq!(2usize, cells.len());
         assert_eq!('C' as u32, unsafe { (*cells)[0].content_codepoint() });
@@ -10438,7 +10941,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
 fn pagelist_resize_reflow_less_cols_cursor_not_on_last_line_preserves_location() {
     let mut s = PageList::init(5, 5, Some(1)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+    let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
         for x in 0..2 {
             let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
@@ -10498,7 +11001,7 @@ fn pagelist_resize_reflow_less_cols_copy_style() {
     let mut s = PageList::init(4, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Create a style
         let style = Style {
@@ -10549,10 +11052,9 @@ fn pagelist_resize_reflow_less_cols_copy_style() {
             assert!(style_id != 0);
 
             let style = unsafe {
-                &*(*offset.node)
-                    .data
+                &*(*super::Node::page(offset.node))
                     .styles
-                    .get((*offset.node).data.memory_ptr(), style_id)
+                    .get((*super::Node::page(offset.node)).memory_ptr(), style_id)
             };
             assert!(style.flags.bold);
 
@@ -10569,7 +11071,7 @@ fn pagelist_resize_reflow_less_cols_to_eliminate_a_wide_char() {
     let mut s = PageList::init(2, 1, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -10601,7 +11103,7 @@ fn pagelist_resize_reflow_less_cols_to_eliminate_a_wide_char() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -10619,7 +11121,7 @@ fn pagelist_resize_reflow_less_cols_to_wrap_a_wide_char() {
     let mut s = PageList::init(3, 1, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -10657,7 +11159,7 @@ fn pagelist_resize_reflow_less_cols_to_wrap_a_wide_char() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -10691,7 +11193,7 @@ fn pagelist_resize_reflow_less_cols_to_wrap_a_multi_codepoint_grapheme_with_a_sp
     let mut s = PageList::init(4, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // We want to make the screen look like this:
         //
@@ -10763,7 +11265,7 @@ fn pagelist_resize_reflow_less_cols_to_wrap_a_multi_codepoint_grapheme_with_a_sp
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         {
             let rac = unsafe { (*page).get_row_and_cell(0, 0) };
@@ -10828,7 +11330,7 @@ fn pagelist_resize_reflow_less_cols_copy_kitty_placeholder() {
     let mut s = PageList::init(4, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Write unicode placeholders
         for x in 0..s.cols as usize - 1 {
@@ -10877,7 +11379,7 @@ fn pagelist_resize_reflow_more_cols_clears_kitty_placeholder() {
     let mut s = PageList::init(4, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Write unicode placeholders
         for x in 0..s.cols as usize - 1 {
@@ -10934,7 +11436,7 @@ fn pagelist_resize_reflow_wrap_moves_kitty_placeholder() {
     let mut s = PageList::init(4, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
 
         // Write unicode placeholders
         for x in 2..s.cols as usize - 1 {
@@ -10992,7 +11494,7 @@ fn pagelist_resize_reflow_grapheme_map_capacity_exceeded() {
     // during reflow. Since each source page can only hold this many graphemes,
     // we create two source pages with graphemes that will merge into one
     // destination page.
-    let grapheme_capacity = unsafe { (*s.pages.first).data.grapheme_capacity() };
+    let grapheme_capacity = unsafe { (*super::Node::page(s.pages.first)).grapheme_capacity() };
     // Use slightly more than half the capacity per page, so combined they
     // exceed the capacity of a single destination page.
     let graphemes_per_page = grapheme_capacity / 2 + grapheme_capacity / 4;
@@ -11000,13 +11502,13 @@ fn pagelist_resize_reflow_grapheme_map_capacity_exceeded() {
     // Grow to the capacity of the first page and add more rows
     // so that we have two pages total.
     {
-        let cap_rows = unsafe { (*s.pages.first).data.capacity.rows };
-        let size_rows = unsafe { (*s.pages.first).data.size.rows };
-        unsafe { (*s.pages.first).data.pause_integrity_checks(true) };
+        let cap_rows = unsafe { super::Node::capacity(s.pages.first).rows };
+        let size_rows = unsafe { super::Node::rows(s.pages.first) };
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(true) };
         for _ in size_rows..cap_rows {
             let _ = s.grow().unwrap();
         }
-        unsafe { (*s.pages.first).data.pause_integrity_checks(false) };
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(graphemes_per_page).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -11025,7 +11527,7 @@ fn pagelist_resize_reflow_grapheme_map_capacity_exceeded() {
 
     // Add graphemes to the end of the first page (last rows)
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let page = unsafe { super::Node::page(s.pages.first) };
         let start_row = unsafe { (*page).size.rows as usize - graphemes_per_page };
         for i in 0..graphemes_per_page {
             let y = start_row + i;
@@ -11041,7 +11543,7 @@ fn pagelist_resize_reflow_grapheme_map_capacity_exceeded() {
 
     // Add graphemes to the beginning of the second page
     {
-        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let page = unsafe { super::Node::page(s.pages.last) };
         let count = unsafe { core::cmp::min(graphemes_per_page, (*page).size.rows as usize) };
         for y in 0..count {
             let rac = unsafe { (*page).get_row_and_cell(0, y) };
@@ -11094,7 +11596,7 @@ fn pagelist_resize_grow_cols_with_unwrap_fixes_viewport_pin() {
         None,
     );
     while let Some(chunk) = it.next() {
-        let page = unsafe { core::ptr::addr_of_mut!((*chunk.node).data) };
+        let page = unsafe { super::Node::page(chunk.node) };
         for y in chunk.start as usize..chunk.end as usize {
             let rac = unsafe { (*page).get_row_and_cell(0, y) };
             if y % 2 == 0 {
@@ -11168,16 +11670,16 @@ fn pagelist_resize_no_reflow_more_cols_remaps_pins_in_backfill_path() {
         x: 0,
         y: 0,
     })));
-    assert!(unsafe { (*first_page).data.size.rows < (*first_page).data.capacity.rows });
+    assert!(unsafe { super::Node::rows(first_page) < super::Node::capacity(first_page).rows });
 
     // Ensure the resize takes the slow path (new capacity > current capacity).
     let new_cols: size::CellCountInt = cols + 1;
-    let adjusted = unsafe { (*second_page).data.capacity }
+    let adjusted = unsafe { super::Node::capacity(second_page) }
         .adjust(crate::page::Adjustment {
             cols: Some(new_cols),
         })
         .unwrap();
-    assert!(unsafe { (*second_page).data.capacity.cols } < adjusted.cols);
+    assert!(unsafe { super::Node::capacity(second_page).cols } < adjusted.cols);
 
     // Track a pin in row 0 of the second page. This row will be copied
     // to the first page during backfill and the pin must be remapped.
@@ -11218,7 +11720,7 @@ fn pagelist_resize_no_reflow_more_cols_remaps_pins_in_backfill_path() {
         it = unsafe { (*it).next };
     }
     assert!(found);
-    assert!(unsafe { (*tracked).y < (*(*tracked).node).data.size.rows });
+    assert!(unsafe { (*tracked).y < super::Node::rows((*tracked).node) });
 
     // Verify the pin still points to the cell with our marker content.
     let cell = unsafe { (*tracked).row_and_cell().cell };
@@ -11346,7 +11848,7 @@ fn pagelist_pagepool_no_leak_resize_reflow() {
             );
             while let Some(p) = it.next() {
                 let rac = p.row_and_cell();
-                let cells = unsafe { (*p.node).data.get_cells(rac.row) };
+                let cells = unsafe { (*super::Node::page(p.node)).get_cells(rac.row) };
                 let len = cells.len();
                 for x in 0..len {
                     unsafe {

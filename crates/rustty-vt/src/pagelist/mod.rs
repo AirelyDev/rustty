@@ -66,6 +66,7 @@
 // Cluster sub-files (each an `impl PageList {}` carrying that cluster's owner
 // doc headers). See the module doc comment above for the cluster map.
 pub mod access;
+pub mod compress;
 pub mod erase;
 pub mod grow;
 pub mod iter;
@@ -134,8 +135,497 @@ pub type List = DoublyLinkedList<Node>;
 pub struct Node {
     pub(crate) prev: *mut Node,
     pub(crate) next: *mut Node,
-    pub data: Page,
+    pub data: NodeData,
     pub serial: u64,
+
+    /// How the backing memory of the embedded Page was allocated. Pool-owned
+    /// memory is always a full standard-size item from the memory pool,
+    /// regardless of the page layout size. Heap-owned memory is allocated
+    /// directly with the page allocator and is exactly `Page.memory_len()`
+    /// bytes.
+    ///
+    /// This must never be inferred from the memory length: heap-owned pages can
+    /// be smaller than the standard size (e.g. compacted pages), and returning
+    /// one to the pool would corrupt it.
+    ///
+    /// This has no `Default` on purpose so that every construction site is
+    /// forced to make an explicit decision.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.owned` (16e4b5e98).
+    pub owned: Owned,
+}
+
+/// How a node's backing page memory was allocated.
+///
+/// PORTS: oracle@main PageList.zig `Node.Owned` (16e4b5e98).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owned {
+    /// A full standard-size item dispensed by the page pool.
+    Pool,
+    /// An exact-size allocation made directly with the page allocator.
+    Heap,
+}
+
+/// The physical representation of the page contents.
+///
+/// Both states retain the same page mapping and the same `Page` metadata. A
+/// resident page can access the mapping directly since it is, well, resident.
+///
+/// A compressed page owns an encoded copy while the physical memory behind the
+/// raw mapping is discarded. HOWEVER, we retain the virtual allocation so that
+/// restoration is infallible.
+///
+/// PORTS: oracle@main PageList.zig `Node.Data` (421fe8dab).
+///
+/// PORT NOTE (WS7 I2, Stacked Borrows): this is `#[repr(C, u8)]` so that the
+/// `Node` accessors can project the payload with PURE RAW POINTER ARITHMETIC.
+/// `match &mut *data { Resident(p) => p as *mut Page }` would return a pointer
+/// carrying a fresh `Unique` tag derived from a `&mut NodeData`; a later
+/// `Node::page`/`metadata`/`rows` on the SAME node retags `data` again and
+/// invalidates the earlier pointer, so dereferencing it afterwards is UB
+/// (`grow.rs::split` genuinely holds a page pointer across such a call).
+/// Under `repr(C, u8)` — RFC 2195 — the layout is exactly
+/// `union { R: #[repr(C)] struct { tag: u8, Page }, C: #[repr(C)] struct { tag: u8, CompressedPage } }`,
+/// so the discriminant is a plain byte read and the payload address is a
+/// constant `offset_of!` away, both derived from the caller's own raw `node`
+/// pointer with no intervening reference.
+///
+/// The cost is that the Zig-side niche packing is lost (the tag gets its own
+/// aligned slot). A `Node` is a handful of words next to a multi-KiB page
+/// mapping, so this is not measurable.
+#[repr(C, u8)]
+pub enum NodeData {
+    Resident(Page) = NodeData::TAG_RESIDENT,
+    Compressed(crate::compress::CompressedPage) = NodeData::TAG_COMPRESSED,
+}
+
+/// The `Resident` variant's guaranteed `repr(C, u8)` layout (RFC 2195).
+#[repr(C)]
+struct ResidentVariant {
+    tag: u8,
+    page: Page,
+}
+
+/// The `Compressed` variant's guaranteed `repr(C, u8)` layout (RFC 2195).
+#[repr(C)]
+struct CompressedVariant {
+    tag: u8,
+    compressed: crate::compress::CompressedPage,
+}
+
+impl NodeData {
+    const TAG_RESIDENT: u8 = 0;
+    const TAG_COMPRESSED: u8 = 1;
+
+    /// Read the discriminant byte through a raw pointer.
+    ///
+    /// # Safety
+    /// `data` must point at a live, initialized `NodeData`.
+    #[inline]
+    unsafe fn tag(data: *const NodeData) -> u8 {
+        // SAFETY: `repr(C, u8)` puts the discriminant in the first byte of
+        // every variant, and a `u8` read has no alignment requirement. This is
+        // a raw read — it forms no reference and therefore retags nothing.
+        unsafe { core::ptr::read(data as *const u8) }
+    }
+
+    /// Project the `Resident` payload address. Does NOT check the tag.
+    ///
+    /// # Safety
+    /// `data` must point at a live `NodeData`.
+    #[inline]
+    unsafe fn resident_payload(data: *const NodeData) -> *const Page {
+        // SAFETY: RFC 2195 guarantees the payload sits at
+        // `offset_of!(ResidentVariant, page)` within the enum. Raw-derived from
+        // `data`, so it inherits `data`'s provenance and tag unchanged.
+        unsafe {
+            (data as *const u8).add(core::mem::offset_of!(ResidentVariant, page)) as *const Page
+        }
+    }
+
+    /// Project the `Compressed` payload address. Does NOT check the tag.
+    ///
+    /// # Safety
+    /// `data` must point at a live `NodeData`.
+    #[inline]
+    unsafe fn compressed_payload(data: *const NodeData) -> *const crate::compress::CompressedPage {
+        // SAFETY: as `resident_payload`.
+        unsafe {
+            (data as *const u8).add(core::mem::offset_of!(CompressedVariant, compressed))
+                as *const crate::compress::CompressedPage
+        }
+    }
+}
+
+/// The backing-memory representation currently stored by a node.
+///
+/// PORTS: oracle@main PageList.zig `Node.Storage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Storage {
+    Resident,
+    Compressed,
+}
+
+/// Read-only page with full memory access that doesn't change a node's storage
+/// state: if a node is compressed it remains compressed.
+///
+/// Resident pages are borrowed directly, so they're basically free. Compressed
+/// pages are decoded into an independently owned Page so callers can inspect
+/// their contents. Because resident pages are still borrowed, you have to
+/// continue to have exclusive access to the PageList during this operation.
+///
+/// PORTS: oracle@main PageList.zig `Node.PreservedPage`.
+///
+/// PORT NOTE (WS7 B6): the oracle's `owned` arm carries the `Allocator` that
+/// produced the decode buffer. rustty allocates it from the global allocator,
+/// so the arm carries the raw pointer/length needed to release it instead —
+/// forming a `&mut [u8]` over a decoded page would alias the `Page` value that
+/// names the same bytes.
+///
+/// PORT NOTE (WS7 M2): `#[must_use]` rather than a `Drop` impl. The oracle's
+/// `PreservedPage` is released by an explicit `deinit()` (its `owned` arm holds
+/// the allocator that made the buffer), and a `Drop` would diverge from that
+/// contract — it would silently free on every early exit, including paths the
+/// oracle deliberately leaves to the caller. `#[must_use]` keeps the explicit
+/// `deinit()` discipline while making a dropped-on-the-floor value a warning.
+/// Today only tests and the inspector construct one; Phase C5 adds real callers.
+#[must_use = "a PreservedPage owns a decoded page buffer; call `deinit()`"]
+pub enum PreservedPage {
+    Borrowed(*const Page),
+    Owned {
+        page: Page,
+        ptr: *mut u8,
+        len: usize,
+    },
+}
+
+impl PreservedPage {
+    /// Return the read-only page represented by this value.
+    #[inline]
+    pub fn page(&self) -> *const Page {
+        match self {
+            PreservedPage::Borrowed(p) => *p,
+            PreservedPage::Owned { page, .. } => page as *const Page,
+        }
+    }
+
+    /// Release storage owned by this preserved page.
+    pub fn deinit(&mut self) {
+        if let PreservedPage::Owned { ptr, len, .. } = *self {
+            // The clone buffer came from the global allocator rather than the
+            // page allocator, so it must not use `Page::deinit`.
+            let layout = Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
+            // SAFETY: `ptr`/`layout` are the pair `page_preserving_state`
+            // allocated below, and the decoded `Page` is dropped with `self`.
+            unsafe { std::alloc::dealloc(ptr, layout) };
+        }
+        // self.* = undefined;
+        *self = PreservedPage::Borrowed(core::ptr::null());
+    }
+}
+
+/// How `Node::restore` should treat the compressed representation.
+///
+/// PORTS: oracle@main PageList.zig `Node.RestoreMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RestoreMode {
+    /// Decode the compressed representation back into the raw mapping.
+    Preserve,
+
+    /// Discard the compressed representation without decoding it. The caller
+    /// must not read the page contents before overwriting them.
+    Discard,
+}
+
+/// Options for [`PageList::create_page`] / `create_page_ext`.
+///
+/// PORTS: oracle@main PageList.zig `CreatePage` (16e4b5e98).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CreatePage {
+    /// The capacity to allocate the page with.
+    pub cap: Capacity,
+
+    /// Force the page backing memory to be an exact-size heap allocation even
+    /// if it would fit within a standard-size pool item. This is used when
+    /// compacting pages to their minimum size, since a pool item always retains
+    /// a full `std_size` buffer regardless of the page layout.
+    pub exact_size: bool,
+}
+
+impl CreatePage {
+    /// `.{ .cap = cap }` — the oracle's default (`exact_size = false`).
+    #[inline]
+    pub(crate) fn new(cap: Capacity) -> CreatePage {
+        CreatePage {
+            cap,
+            exact_size: false,
+        }
+    }
+
+    /// `.{ .cap = cap, .exact_size = true }`.
+    #[inline]
+    pub(crate) fn exact(cap: Capacity) -> CreatePage {
+        CreatePage {
+            cap,
+            exact_size: true,
+        }
+    }
+}
+
+
+impl Node {
+    /// Return the terminal page stored in this node.
+    ///
+    /// WARNING: this will DECOMPRESS compressed pages! Only use it if you need
+    /// access to the underlying memory. If you only need metadata (row/column
+    /// counts etc.) use `metadata`/`rows`/`cols`/`capacity`.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.page`.
+    ///
+    /// PORT NOTE (WS7 B5): every accessor below takes a RAW `Node` pointer, per
+    /// this port's raw-pointer discipline — a `&mut Node` would be a live
+    /// exclusive alias of memory that `*mut Page` also names. The bodies return
+    /// the resident page directly while `data` is still a plain `Page`; WS7 B6
+    /// changes ONLY these bodies.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn page(node: *mut Node) -> *mut Page {
+        let data = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => unsafe { NodeData::resident_payload(data) as *mut Page },
+            _ => unsafe { Node::restore(node, RestoreMode::Preserve) },
+        }
+    }
+
+    /// Return the terminal page only when its raw memory is resident, else
+    /// null.
+    ///
+    /// Unlike `page`, this never restores a compressed node. This is useful for
+    /// diagnostics which can display node metadata without touching the
+    /// discarded mapping, but may inspect page contents when they are already
+    /// available.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.pageIfResident`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn page_if_resident(node: *mut Node) -> *mut Page {
+        let data = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => unsafe { NodeData::resident_payload(data) as *mut Page },
+            _ => core::ptr::null_mut(),
+        }
+    }
+
+    /// Return a page which the caller KNOWS is already resident.
+    ///
+    /// This avoids the representation check in hot paths which already hold
+    /// live pointers into the page mapping. Such pointers are only valid while
+    /// the page is resident. Prefer `page` unless the caller can establish that
+    /// invariant independently.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.pageAssumeResident`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node` whose page is resident.
+    #[inline]
+    pub unsafe fn page_assume_resident(node: *mut Node) -> *mut Page {
+        let data = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => unsafe { NodeData::resident_payload(data) as *mut Page },
+            // PORT NOTE (WS7 M3): a hard `unreachable!` rather than
+            // `unreachable_unchecked`. There are exactly two call sites, both
+            // immediately after a `NodeData::Resident` write, so the branch is
+            // trivially predicted and the check costs nothing measurable — but
+            // getting it wrong would hand callers a garbage `*mut Page`
+            // instead of a panic.
+            _ => unreachable!("page_assume_resident on a compressed node"),
+        }
+    }
+
+    /// Return the embedded Page metadata without restoring its memory.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.metadata`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn metadata(node: *const Node) -> *const Page {
+        let data = unsafe { core::ptr::addr_of!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => unsafe { NodeData::resident_payload(data) },
+            _ => {
+                let c = unsafe { NodeData::compressed_payload(data) };
+                // Raw place projection — forms no `&CompressedPage`.
+                unsafe { core::ptr::addr_of!((*c).page) }
+            }
+        }
+    }
+
+    /// Return the node's backing-memory representation without restoring it.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.storage`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn storage(node: *const Node) -> Storage {
+        let data = unsafe { core::ptr::addr_of!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => Storage::Resident,
+            _ => Storage::Compressed,
+        }
+    }
+
+    /// PORTS: oracle@main PageList.zig `Node.isCompressed`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn is_compressed(node: *const Node) -> bool {
+        matches!(unsafe { Node::storage(node) }, Storage::Compressed)
+    }
+
+    /// Return read-only page contents without changing this node's storage.
+    ///
+    /// A compressed node decodes into an exact-sized, page-aligned buffer owned
+    /// by the returned value. The caller must call `PreservedPage::deinit`.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.pagePreservingState`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node` and the caller must retain exclusive
+    /// access to the owning PageList for the lifetime of the result.
+    pub unsafe fn page_preserving_state(node: *const Node) -> PreservedPage {
+        let data = unsafe { core::ptr::addr_of!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => {
+                PreservedPage::Borrowed(unsafe { NodeData::resident_payload(data) })
+            }
+            _ => {
+                // SAFETY: the tag says `Compressed`. The `&CompressedPage` is
+                // confined to this arm, which forms no other pointer into the
+                // node, and the node's storage is unchanged throughout.
+                let compressed = unsafe { &*NodeData::compressed_payload(data) };
+                let len = compressed.page.memory_len();
+                let layout = Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
+                // SAFETY: `len > 0` and the layout is valid.
+                let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+                assert!(!ptr.is_null(), "OOM allocating a preserved page buffer");
+
+                // SAFETY: `ptr` is a live, page-aligned, unaliased buffer of
+                // exactly `len` bytes.
+                match unsafe { compressed.clone_buf(ptr, len) } {
+                    Ok(page) => PreservedPage::Owned { page, ptr, len },
+                    Err(_err) => {
+                        // The encoded data was produced by our codec and remains
+                        // immutable while compressed. Failure is internal
+                        // corruption, matching the normal restoration boundary.
+                        // SAFETY: `ptr`/`layout` are the pair allocated above.
+                        unsafe { std::alloc::dealloc(ptr, layout) };
+                        // log.err("failed to clone compressed page err={}", .{err});
+                        panic!("failed to clone compressed terminal page");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Restore this node to the resident representation.
+    ///
+    /// Preserve mode reconstructs the page contents and is used by `page`.
+    /// Discard mode skips decoding for callers which will overwrite or destroy
+    /// the page. Both modes recommit the retained mapping, free the encoded
+    /// allocation, and leave the node in a valid resident state.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.restore` (`noinline`).
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`; in `Discard` mode the caller must
+    /// not read the page contents before overwriting them.
+    #[inline(never)]
+    pub(crate) unsafe fn restore(node: *mut Node, mode: RestoreMode) -> *mut Page {
+        let data = unsafe { core::ptr::addr_of_mut!((*node).data) };
+
+        // Read what we need out of the compressed value and drop the borrow
+        // before overwriting `data`: keeping a reference into the union live
+        // across the write would be Stacked-Borrows UB.
+        if unsafe { NodeData::tag(data) } == NodeData::TAG_RESIDENT {
+            return unsafe { Node::page_assume_resident(node) };
+        }
+        let (mem_ptr, mem_len) = {
+            // SAFETY: the tag says `Compressed`. This borrow is confined to the
+            // two field reads below and ends before anything else touches the
+            // node.
+            let c = unsafe { &*NodeData::compressed_payload(data) };
+            (c.page.memory_ptr() as *mut u8, c.page.memory_len())
+        };
+
+        // Decommit only discarded the physical pages. Recommit prepares the
+        // still-reserved mapping for decoding or reuse by the caller.
+        // SAFETY: the retained mapping is live, page-aligned and unaliased.
+        unsafe { crate::mem::recommit(mem_ptr, mem_len) };
+
+        let restored: Page = match mode {
+            RestoreMode::Preserve => {
+                // SAFETY: the mapping was just recommitted and is unaliased.
+                match unsafe { (*NodeData::compressed_payload(data)).restore() } {
+                    Ok(p) => p,
+                    Err(_err) => {
+                        // Compressed nodes retain the immutable encoding and
+                        // exact output mapping used to create them. Any decode
+                        // error is an internal codec bug or memory corruption.
+                        // log.err("failed to restore compressed page err={}", .{err});
+                        panic!("failed to restore compressed terminal page");
+                    }
+                }
+            }
+
+            RestoreMode::Discard => unsafe { (*NodeData::compressed_payload(data)).page.shallow_copy() },
+        };
+
+        // Replacing `data` drops the CompressedPage, freeing its encoding
+        // (the oracle's explicit `compressed.deinit()`).
+        // SAFETY: `data` points at a live, initialized `NodeData`.
+        unsafe { *data = NodeData::Resident(restored) };
+        unsafe { Node::page_assume_resident(node) }
+    }
+
+    /// Return the number of populated rows without accessing page memory.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.rows`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn rows(node: *const Node) -> size::CellCountInt {
+        unsafe { (*Node::metadata(node)).size.rows }
+    }
+
+    /// Return the current column count without accessing page memory.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.cols`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn cols(node: *const Node) -> size::CellCountInt {
+        unsafe { (*Node::metadata(node)).size.cols }
+    }
+
+    /// Return the page capacity without accessing page memory.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.capacity`.
+    ///
+    /// # Safety
+    /// `node` must point at a live `Node`.
+    #[inline]
+    pub unsafe fn capacity(node: *const Node) -> Capacity {
+        unsafe { (*Node::metadata(node)).capacity }
+    }
 }
 
 impl rustty_datastruct::intrusive_linked_list::Node for Node {
@@ -551,6 +1041,11 @@ pub struct PageList {
     /// for quick comparisons to find invalid pages in references.
     pub page_serial_min: u64,
 
+    /// Continuation state for incremental page compression. This allows
+    /// `compress(CompressionMode::Incremental)` to work. More details on all
+    /// that there and on `IncrementalCompressionState`.
+    pub page_compression: compress::IncrementalCompressionState,
+
     /// Byte size of the total amount of allocated pages. Note this does
     /// not include the total allocated amount in the pool which may be more
     /// than this due to preheating.
@@ -930,6 +1425,7 @@ impl PageList {
             pages: page_list,
             page_serial,
             page_serial_min: 0,
+            page_compression: compress::IncrementalCompressionState::default(),
             page_size,
             explicit_max_size: max_size.unwrap_or(usize::MAX),
             min_max_size,
@@ -1065,8 +1561,9 @@ impl PageList {
                 node.as_ptr().write(Node {
                     prev: core::ptr::null_mut(),
                     next: core::ptr::null_mut(),
-                    data,
+                    data: NodeData::Resident(data),
                     serial: *serial,
+                    owned: if pooled { Owned::Pool } else { Owned::Heap },
                 });
             }
 
@@ -1134,7 +1631,7 @@ impl PageList {
             let mut node_ = self.pages.first;
             while !node_.is_null() {
                 let node = node_;
-                actual_total += unsafe { (*node).data.size.rows as usize };
+                actual_total += unsafe { Node::rows(node) as usize };
                 node_ = unsafe { (*node).next };
 
                 // While doing this traversal, verify no node has a serial
@@ -1172,7 +1669,7 @@ impl PageList {
                 let mut node = self.pages.last;
                 while !node.is_null() {
                     let n = node;
-                    offset += unsafe { (*n).data.size.rows as usize };
+                    offset += unsafe { Node::rows(n) as usize };
                     if core::ptr::eq(n, unsafe { (*self.viewport_pin).node }) {
                         offset -= unsafe { (*self.viewport_pin).y as usize };
                         break 'offset self.total_rows - offset;
@@ -1225,12 +1722,19 @@ impl PageList {
         self.tracked_pins = PinSet::new();
 
         // Go through our linked list and deallocate all pages that are
-        // not standard size.
+        // heap-owned (not in the pool).
+        //
+        // PORT NOTE (WS7 B6): every node is discard-restored first, pool-owned
+        // ones included — that is what frees a compressed node's encoded
+        // allocation. Node storage lives in a raw memory pool that never runs
+        // `Drop`, so skipping this would leak the encoding.
         let mut it = self.pages.first;
         while !it.is_null() {
             let node = it;
-            if Self::page_memory_len(node) > std_size() {
-                Self::free_non_standard_page(node);
+            // SAFETY: `node` is a live node of this list.
+            let page = unsafe { Node::restore(node, RestoreMode::Discard) };
+            if matches!(unsafe { (*node).owned }, Owned::Heap) {
+                Self::free_page_memory(page);
             }
             it = unsafe { (*node).next };
         }
@@ -1255,6 +1759,9 @@ impl PageList {
     pub fn reset(&mut self) {
         // defer self.assertIntegrity();
 
+        // Reset discards all scrollback, so there is nothing left to compress.
+        self.page_compression.reset();
+
         // Invalidate all external page refs to the previous list. The reset below
         // rebuilds the page list from the pools, so old untracked refs must be
         // rejected before any validation attempts to inspect their node pointers.
@@ -1271,14 +1778,18 @@ impl PageList {
         let page_count: usize = (self.rows as usize).div_ceil(cap.rows as usize);
 
         // Before resetting our pools we need to free any pages that
-        // are non-standard size since those were allocated outside
-        // the pool.
+        // are heap-owned since those were allocated outside the pool.
+        //
+        // PORT NOTE (WS7 B6): as in `deinit`, every node is discard-restored so
+        // a compressed node's encoded allocation is released.
         {
             let mut it = self.pages.first;
             while !it.is_null() {
                 let node = it;
-                if Self::page_memory_len(node) > std_size() {
-                    Self::free_non_standard_page(node);
+                // SAFETY: `node` is a live node of this list.
+                let page = unsafe { Node::restore(node, RestoreMode::Discard) };
+                if matches!(unsafe { (*node).owned }, Owned::Heap) {
+                    Self::free_page_memory(page);
                 }
                 it = unsafe { (*node).next };
             }
@@ -1365,11 +1876,11 @@ impl PageList {
     /// does not do any memory size accounting with max_size/page_size.
     #[inline]
     #[allow(dead_code)]
-    fn create_page(&mut self, cap: Capacity) -> Result<*mut Node, OutOfMemory> {
-        // log.debug("create page cap={}", .{cap});
+    fn create_page(&mut self, opts: CreatePage) -> Result<*mut Node, OutOfMemory> {
+        // log.debug("create page cap={}", .{opts.cap});
         Self::create_page_ext(
             &mut self.pool,
-            cap,
+            opts,
             &mut self.page_serial,
             Some(&mut self.page_size),
         )
@@ -1379,15 +1890,16 @@ impl PageList {
     #[allow(dead_code)]
     fn create_page_ext(
         pool: &mut MemoryPool,
-        cap: Capacity,
+        opts: CreatePage,
         serial: &mut u64,
         total_size: Option<&mut usize>,
     ) -> Result<*mut Node, OutOfMemory> {
         let page = pool.nodes.create().map_err(|_| OutOfMemory)?;
         // errdefer pool.nodes.destroy(page);
 
+        let cap = opts.cap;
         let layout = Page::layout(cap);
-        let pooled = layout.total_size <= std_size();
+        let pooled = !opts.exact_size && layout.total_size <= std_size();
 
         // It would be better to encode this into the Zig error handling
         // system but that is a big undertaking and we only have a few
@@ -1454,8 +1966,9 @@ impl PageList {
             page.as_ptr().write(Node {
                 prev: core::ptr::null_mut(),
                 next: core::ptr::null_mut(),
-                data,
+                data: NodeData::Resident(data),
                 serial: *serial,
+                owned: if pooled { Owned::Pool } else { Owned::Heap },
             });
         }
         *serial += 1;
@@ -1490,32 +2003,50 @@ impl PageList {
 
     #[allow(dead_code)]
     fn destroy_node_ext(pool: &mut MemoryPool, node: *mut Node, total_size: Option<&mut usize>) {
-        let page: *mut Page = unsafe { &mut (*node).data };
+        // Restore in discard mode: the contents are about to be destroyed or
+        // handed back to the pool, so decoding them would be wasted work. This
+        // also frees any encoded allocation the node still owns.
+        //
+        // SAFETY: `node` is live and already removed from the linked list.
+        let page: *mut Page = unsafe { Node::restore(node, RestoreMode::Discard) };
+        let owned = unsafe { (*node).owned };
+        let (ptr, len) = Self::page_memory(page);
 
-        // Update our accounting for page size
+        // Update our accounting for page size. This must mirror what was added
+        // at creation time: a pool-owned page always accounts for a full pool
+        // item even if its layout is smaller, while a heap-owned page accounts
+        // for its exact memory length.
+        //
+        // PORT NOTE (WS7 B4): this used to subtract `page_memory_len(node)`
+        // unconditionally, which under-counted the release of a pool-owned page
+        // whose layout is smaller than a full pool item.
         if let Some(v) = total_size {
-            *v -= Self::page_memory_len(node);
+            *v -= match owned {
+                Owned::Pool => std_size(),
+                Owned::Heap => len,
+            };
         }
 
-        if Self::page_memory_len(node) <= std_size() {
-            // Reset the memory to zero (and decommit it, where supported) so it
-            // can be reused.
-            //
-            // PORT NOTE (audit #4): this is the REUSED-buffer zeroing. A pooled
-            // buffer returning to the free-list MUST read back as zero here (the
-            // reference `decommitPoolItem(item, page.memory.len)`) so the next
-            // `create()` reusing it hands back observably-zero memory — fresh
-            // slots are lazily OS-zeroed, but a reused slot is not re-`mmap`ed.
-            // `decommit_pool_item` upholds that on every platform (Linux via
-            // MADV_DONTNEED's zero-fill guarantee, everywhere else via the
-            // memset).
-            let (ptr, len) = Self::page_memory(page);
-            decommit_pool_item(ptr, std_size(), len);
-            // SAFETY: `ptr` was handed out by `pool.pages.create()` (a standard
-            // pooled buffer) and has not been destroyed.
-            unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
-        } else {
-            Self::free_non_standard_page(node);
+        match owned {
+            Owned::Pool => {
+                debug_assert!(len <= std_size());
+
+                // Reset the memory to zero (and decommit it, where supported) so
+                // it can be reused.
+                //
+                // PORT NOTE (audit #4): this is the REUSED-buffer zeroing. A
+                // pooled buffer returning to the free-list MUST read back as
+                // zero here (the reference `terminal_mem.decommit(.zero, item,
+                // page.memory.len)`) so the next `create()` reusing it hands
+                // back observably-zero memory — fresh slots are lazily
+                // OS-zeroed, but a reused slot is not re-`mmap`ed.
+                decommit_pool_item(ptr, std_size(), len);
+                // SAFETY: `ptr` was handed out by `pool.pages.create()` (a
+                // standard pooled buffer) and has not been destroyed.
+                unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
+            }
+
+            Owned::Heap => Self::free_non_standard_page(node),
         }
 
         unsafe { pool.nodes.destroy(NonNull::new(node).unwrap()) };
@@ -1562,8 +2093,17 @@ impl PageList {
     /// Free a NON-STANDARD page's backing buffer DIRECTLY via the page allocator
     /// (the reference `page_alloc.free(node.data.memory)`).
     fn free_non_standard_page(node: *mut Node) {
-        let page: *const Page = unsafe { &(*node).data };
-        let (ptr, len) = Self::page_memory(page as *mut Page);
+        // SAFETY: `node` is live; the metadata carries the mapping to free and
+        // never touches the (possibly discarded) page contents.
+        let page = unsafe { Node::metadata(node) };
+        Self::free_page_memory(page as *mut Page);
+    }
+
+    /// Free a heap-owned page's backing mapping, given the `Page` that names
+    /// it. Split out of `free_non_standard_page` so `deinit`/`reset` can free
+    /// the mapping of a page they have already discard-restored.
+    fn free_page_memory(page: *mut Page) {
+        let (ptr, len) = Self::page_memory(page);
         let layout = Self::non_standard_layout(len);
         let alloc = page_backing_alloc();
         // SAFETY: `ptr`/`len` describe a buffer previously returned by
@@ -1577,7 +2117,7 @@ impl PageList {
         let mut it = list.first;
         while !it.is_null() {
             let node = it;
-            if Self::page_memory_len(node) > std_size() {
+            if matches!(unsafe { (*node).owned }, Owned::Heap) {
                 Self::free_non_standard_page(node);
             }
             it = unsafe { (*node).next };
@@ -1587,7 +2127,9 @@ impl PageList {
     /// `node.data.memory.len`.
     #[inline]
     fn page_memory_len(node: *mut Node) -> usize {
-        unsafe { (*node).data.memory_len }
+        // Metadata only: the mapping length is identical in both storage
+        // states, so this must never restore a compressed node.
+        unsafe { (*Node::metadata(node)).memory_len }
     }
 
     /// `(node.data.memory.ptr, node.data.memory.len)` via field projection on a
@@ -1655,8 +2197,8 @@ impl PageList {
                 it = unsafe { (*node).next };
                 continue;
             }
-            return p.y < unsafe { (*node).data.size.rows }
-                && p.x < unsafe { (*node).data.size.cols };
+            return p.y < unsafe { Node::rows(node) }
+                && p.x < unsafe { Node::cols(node) };
         }
 
         false
@@ -1698,7 +2240,7 @@ impl PageList {
                 let mut it = self.pages.last;
                 while !it.is_null() {
                     let node = it;
-                    let node_rows = unsafe { (*node).data.size.rows };
+                    let node_rows = unsafe { Node::rows(node) };
                     if rem <= node_rows {
                         return Pin {
                             node,
@@ -1728,7 +2270,7 @@ impl PageList {
         let mut node_ = self.pages.first;
         while !node_.is_null() {
             let node = node_;
-            rows += unsafe { (*node).data.size.rows as usize };
+            rows += unsafe { Node::rows(node) as usize };
             node_ = unsafe { (*node).next };
         }
 
@@ -1763,78 +2305,23 @@ impl PageList {
 /// node into the first pointer-size bytes afterwards, which is safe because
 /// page initialization always overwrites them.
 ///
-/// PORT NOTE (platform primitive): this crate hand-rolls its syscall bindings
-/// rather than depending on the `libc` crate — see `page.rs`'s
-/// `Backing::alloc`/`Backing::free` (`mmap`/`munmap`) and its per-OS const
-/// blocks. `madvise` follows the same pattern below.
+/// PORT NOTE (WS7 B1): this was a hand-rolled `madvise` block in BL-2, written
+/// before the oracle factored the same logic into `src/terminal/mem.zig`.
+/// Upstream now calls `terminal_mem.decommit(.zero, item, page.memory.len)`
+/// here (`oracle@main:src/terminal/PageList.zig:4379`), so this is a thin
+/// wrapper over [`crate::mem::decommit`] in zero mode. Behavior is unchanged:
+/// zero mode guarantees the dirty prefix reads back as zero on every target
+/// (Linux via MADV_DONTNEED's zero-fill guarantee, Darwin via the memset it
+/// performs before MADV_FREE_REUSABLE, everywhere else via the memset
+/// fallback).
+#[inline]
 fn decommit_pool_item(item: *mut u8, item_size: usize, dirty_len: usize) {
-    // In test builds the buffer may come from a plain heap allocation rather
-    // than a bare OS mapping, so madvise is neither safe nor meaningful.
-    // (Zig: `if (comptime builtin.is_test)`.)
-    #[cfg(test)]
-    {
-        let _ = item_size;
-        // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
-        unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
-    }
-
-    // MADV_DONTNEED on a private anonymous mapping immediately reclaims the
-    // pages and guarantees they read back zero-filled on the next access, so
-    // we can skip the memset entirely.
-    //
-    // We use MADV_DONTNEED rather than MADV_FREE deliberately: MADV_FREE
-    // doesn't reduce RSS until memory pressure (invisible to users watching
-    // memory usage) and doesn't guarantee zeroes on the next read.
-    // MADV_DONTNEED's synchronous TLB-shootdown cost only matters at
-    // allocator-level call frequency; page destroys here are rare (clears,
-    // reflow, capacity changes), and the hottest reuse path (grow's
-    // prune-reuse) doesn't go through this function at all.
-    #[cfg(all(not(test), target_os = "linux"))]
-    {
-        // SAFETY: `item` is page-aligned and `item_size` bytes long (the pool
-        // dispenses page-aligned, page-multiple items).
-        if unsafe { madvise(item as *mut core::ffi::c_void, item_size, MADV_DONTNEED) } == 0 {
-            return;
-        }
-        // Fall through to the plain memset if madvise failed.
-        // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
-        unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
-    }
-
-    // On Darwin we zero in place and then mark the memory as reusable, which
-    // removes it from the process footprint until it is touched again.
-    // Contents of reusable memory are either preserved (our zeroes) or
-    // reclaimed and zero-filled on the next access, so the invariant holds
-    // either way. The reuse side calls MADV_FREE_REUSE to fix up footprint
-    // accounting (see `recommit_pool_item`).
-    #[cfg(all(not(test), target_os = "macos"))]
-    {
-        // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
-        unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
-        // SAFETY: `item` is page-aligned and `item_size` bytes long.
-        if unsafe {
-            madvise(
-                item as *mut core::ffi::c_void,
-                item_size,
-                MADV_FREE_REUSABLE,
-            )
-        } != 0
-        {
-            // Best-effort: plain MADV_FREE reclaims under memory pressure only
-            // and needs no reuse pairing.
-            // SAFETY: as above.
-            unsafe { madvise(item as *mut core::ffi::c_void, item_size, MADV_FREE) };
-        }
-    }
-
-    // Every other platform (incl. wasm32, which has no madvise) keeps the
-    // existing memset behavior.
-    #[cfg(all(not(test), not(target_os = "linux"), not(target_os = "macos")))]
-    {
-        let _ = item_size;
-        // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
-        unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
-    }
+    // SAFETY: `item` is a live pool item of `item_size` page-aligned,
+    // page-multiple bytes with `dirty_len <= item_size`, and nothing aliases it
+    // (it has already been removed from the page list).
+    let _ = unsafe {
+        crate::mem::decommit(crate::mem::DecommitMode::Zero, item, item_size, dirty_len)
+    };
 }
 
 /// The counterpart to [`decommit_pool_item`] for buffers handed back out by the
@@ -1843,44 +2330,15 @@ fn decommit_pool_item(item: *mut u8, item_size: usize, dirty_len: usize) {
 /// (touching reusable pages revives them) but footprint reporting can
 /// undercount. Harmless on buffers that were never marked reusable (fresh or
 /// preheated items).
+///
+/// PORT NOTE (WS7 B1): as with `decommit_pool_item`, upstream now spells this
+/// `terminal_mem.recommit(buf)` (`oracle@main:src/terminal/PageList.zig:690`
+/// and `:3897`).
 #[inline]
 fn recommit_pool_item(item: *mut u8, item_size: usize) {
-    #[cfg(all(not(test), target_os = "macos"))]
-    {
-        // SAFETY: `item` is page-aligned and `item_size` bytes long.
-        unsafe { madvise(item as *mut core::ffi::c_void, item_size, MADV_FREE_REUSE) };
-    }
-    #[cfg(not(all(not(test), target_os = "macos")))]
-    {
-        let _ = item;
-        let _ = item_size;
-    }
+    // SAFETY: as above; `item` is a live, page-aligned pool item.
+    unsafe { crate::mem::recommit(item, item_size) };
 }
-
-// Minimal libc binding for `madvise`. `libc` is already a dependency of this
-// crate (used elsewhere, e.g. `rustty-os`'s page allocator), but we hand-roll
-// this binding to match the existing `mmap`/`munmap` bindings in `page.rs`'s
-// `Backing::alloc`/`Backing::free` convention rather than mixing binding
-// styles within the same crate.
-#[cfg(all(not(test), any(target_os = "linux", target_os = "macos")))]
-extern "C" {
-    #[link_name = "madvise"]
-    fn madvise(addr: *mut core::ffi::c_void, len: usize, advice: i32) -> i32;
-}
-
-// <asm-generic/mman-common.h>: `#define MADV_DONTNEED 4` on the Linux
-// architectures this crate targets (x86_64, aarch64); other architectures
-// (e.g. alpha, where it is 6) are not part of the build matrix.
-#[cfg(all(not(test), target_os = "linux"))]
-const MADV_DONTNEED: i32 = 4;
-
-// <sys/mman.h> (macOS SDK): MADV_FREE 5, MADV_FREE_REUSABLE 7, MADV_FREE_REUSE 8.
-#[cfg(all(not(test), target_os = "macos"))]
-const MADV_FREE: i32 = 5;
-#[cfg(all(not(test), target_os = "macos"))]
-const MADV_FREE_REUSABLE: i32 = 7;
-#[cfg(all(not(test), target_os = "macos"))]
-const MADV_FREE_REUSE: i32 = 8;
 
 impl Pin {
     /// Returns a bitwise copy of this pin. The reference passes `Pin` by value

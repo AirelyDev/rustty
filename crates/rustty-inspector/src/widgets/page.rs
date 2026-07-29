@@ -127,8 +127,9 @@ pub fn inspector(page: &Page) {
 /// TreePop.
 //
 // pub fn treeNode(state: struct {
-//     /// The page
-//     page: *const terminal.Page,
+//     /// Page dimensions available without reading its backing memory.
+//     cols: terminal.size.CellCountInt,
+//     rows: terminal.size.CellCountInt,
 //     /// The index of the page in a page list, used for headers.
 //     index: usize,
 //     /// The range of rows this page covers, inclusive.
@@ -136,14 +137,24 @@ pub fn inspector(page: &Page) {
 //     /// Whether this page is the active or viewport node.
 //     active: bool,
 //     viewport: bool,
+//     /// Whether the page backing memory is currently compressed.
+//     compressed: bool,
+//     /// Dirty state is unavailable without restoring a compressed page.
+//     dirty: ?bool,
 // }) bool {
 //
 // PORT NOTE (screen.rs `DrawData` precedent): the anonymous `state` params
-// struct becomes a named `TreeNodeState`. `page: *const terminal.Page` is a
-// call-scoped borrow under the surface mutex (INV-1) → `&'a Page`.
-pub struct TreeNodeState<'a> {
-    /// The page
-    pub page: &'a Page,
+// struct becomes a named `TreeNodeState`.
+//
+// PORT NOTE (WS7): the state no longer carries the `Page` itself. Every field
+// here is metadata a node can supply while its backing memory is COMPRESSED
+// (`Node::cols`/`rows`/`storage`), so the header can be drawn without
+// restoring the page. `dirty` is `Option` precisely because it is the one
+// datum that needs the mapping.
+pub struct TreeNodeState {
+    /// Page dimensions available without reading its backing memory.
+    pub cols: rustty_vt::size::CellCountInt,
+    pub rows: rustty_vt::size::CellCountInt,
     /// The index of the page in a page list, used for headers.
     pub index: usize,
     /// The range of rows this page covers, inclusive.
@@ -151,10 +162,14 @@ pub struct TreeNodeState<'a> {
     /// Whether this page is the active or viewport node.
     pub active: bool,
     pub viewport: bool,
+    /// Whether the page backing memory is currently compressed.
+    pub compressed: bool,
+    /// Dirty state is unavailable without restoring a compressed page.
+    pub dirty: Option<bool>,
 }
 
 #[allow(non_snake_case)] // faithful Zig name (R1)
-pub fn treeNode(state: TreeNodeState<'_>) -> bool {
+pub fn treeNode(state: TreeNodeState) -> bool {
     // Setup our node.
     // const open = open: {
     //     var label_buf: [160]u8 = undefined;
@@ -204,14 +219,14 @@ pub fn treeNode(state: TreeNodeState<'_>) -> bool {
     // Metadata
     // cimgui.c.ImGui_TextDisabled(
     //     "%dc x %dr",
-    //     state.page.size.cols,
-    //     state.page.size.rows,
+    //     state.cols,
+    //     state.rows,
     // );
     unsafe {
         dcimgui_sys::ImGui_TextDisabled(
             c"%dc x %dr".as_ptr(),
-            state.page.size.cols as c_int,
-            state.page.size.rows as c_int,
+            state.cols as c_int,
+            state.rows as c_int,
         )
     };
     // cimgui.c.ImGui_SameLine();
@@ -260,11 +275,30 @@ pub fn treeNode(state: TreeNodeState<'_>) -> bool {
             )
         };
     }
-    // if (state.page.isDirty()) {
+    // if (state.compressed) {
+    if state.compressed {
+        // cimgui.c.ImGui_SameLine();
+        unsafe { dcimgui_sys::ImGui_SameLine() };
+        // cimgui.c.ImGui_TextColored(.{ .x = 0.8, .y = 0.6, .z = 1.0, .w = 1.0 }, "compressed");
+        unsafe {
+            dcimgui_sys::ImGui_TextColored(
+                dcimgui_sys::ImVec4 {
+                    x: 0.8,
+                    y: 0.6,
+                    z: 1.0,
+                    w: 1.0,
+                },
+                c"compressed".as_ptr(),
+            )
+        };
+    }
+    // if (state.dirty orelse false) {
     //
-    // PORT NOTE (INV-2): `page.isDirty()` is a pure observation of the page's
-    // dirty state — read to render the "dirty" label, NEVER cleared here.
-    if state.page.is_dirty() {
+    // PORT NOTE (INV-2): the caller's `page.isDirty()` is a pure observation of
+    // the page's dirty state — read to render the "dirty" label, NEVER cleared.
+    // It is `None` when the page is compressed, since observing it would mean
+    // restoring the mapping.
+    if state.dirty.unwrap_or(false) {
         // cimgui.c.ImGui_SameLine();
         unsafe { dcimgui_sys::ImGui_SameLine() };
         // cimgui.c.ImGui_TextColored(.{ .x = 1.0, .y = 0.4, .z = 0.4, .w = 1.0 }, "dirty");

@@ -882,8 +882,7 @@ fn shape_emoji_width_long() {
         0xFE0F,  // Emoji presentation selector
     ];
     unsafe {
-        (*lc.node)
-            .data
+        (*rustty_vt::pagelist::Node::page(lc.node))
             .set_graphemes(lc.row, lc.cell, &graphemes)
             .unwrap();
     }

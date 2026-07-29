@@ -76,6 +76,24 @@ pub mod hyperlink;
 pub mod kitty;
 // pub const modes = @import("modes.zig");
 pub mod modes;
+// pub const mem = @import("mem.zig");
+pub mod mem;
+
+/// Whether this target supports terminal page compression.
+///
+/// PORTS: oracle@main src/terminal/main.zig
+/// `pub const compression_enabled = @import("mem.zig").canReclaim(.strict);`
+///
+/// PORT NOTE (WS7): `can_reclaim` is a `cfg!`-chain shaped like a `const fn`,
+/// but Rust cannot evaluate it in a `const` initializer while it reads
+/// `cfg!(test)`, so this is a function. Call sites use
+/// `if rustty_vt::compression_enabled()` exactly where the oracle writes
+/// `if (comptime terminalpkg.compression_enabled)`.
+#[inline]
+pub fn compression_enabled() -> bool {
+    mem::can_reclaim(mem::DecommitMode::Strict)
+}
+
 // pub const page = @import("page.zig");
 pub mod page;
 // pub const parse_table = @import("parse_table.zig");

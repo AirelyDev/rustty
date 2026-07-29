@@ -1,0 +1,25 @@
+[package]
+name = "mirihar-pagelist-compress"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-pagelist-compress"
+path = "src/main.rs"
+
+# The REAL crate by path — this harness is not a copy. `rustty-vt` resolves its
+# own `workspace = true` inheritance against the rustty root workspace.
+[dependencies]
+rustty-vt = { path = "../../../crates/rustty-vt" }
+rustty-datastruct = { path = "../../../crates/rustty-datastruct" }
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]
+
+# Miri is ~100-400x native. `Page::assert_integrity` is O(page) and runs on
+# nearly every PageList mutation under `debug_assertions`, which dominates the
+# interpreted workload without adding SB/TB or leak coverage. Turning it off
+# here keeps the harness minutes rather than hours; the native debug suite is
+# where assert_integrity earns its keep.
+[profile.dev]
+debug-assertions = false

@@ -62,6 +62,31 @@ impl PageList {
         // public `scroll`, preserving the reference's assert-on-every-exit
         // (including post-recursion) `defer` semantics.
         self.scroll_impl(behavior);
+
+        // Moving the viewport changes which historical pages are visible.
+        // Restart traversal so pages which leave the viewport are reconsidered
+        // after the renderer's idle delay. False positives from clamped
+        // scrolling are cheap.
+        //
+        // PORT NOTE (WS7 M1 — corrects the B8 note, which claimed the oracle
+        // spells this `defer` at the TOP of `scroll`; it does not).
+        // `oracle@main:PageList.zig:2823-2834` registers the defer AFTER the
+        // `limits.bytes.explicit == 0` early return, so in no-scrollback mode it
+        // never runs and the activity token is never bumped. The rustty split
+        // into `scroll`/`scroll_impl` moves the defer body after the inner call,
+        // which is the same every-exit-path guarantee — but it must reproduce
+        // the early-return exclusion explicitly, which is what this guard is.
+        // (`scroll_impl`'s own early return is on the same condition.)
+        //
+        // The `.row -> .delta_row` recursion routes back through this public
+        // `scroll` and therefore marks activity twice. That is FAITHFUL: the
+        // oracle's inner `scroll` call runs its own defer before the outer one
+        // runs its own.
+        if self.explicit_max_size != 0 {
+            self.page_compression.reset();
+            self.page_compression.mark_activity();
+        }
+
         self.assert_integrity();
     }
 
@@ -139,7 +164,7 @@ impl PageList {
                     let mut rem: usize = n;
                     while !node_it.is_null() {
                         let node = node_it;
-                        if rem < unsafe { (*node).data.size.rows } as usize {
+                        if rem < unsafe { super::Node::rows(node) } as usize {
                             unsafe {
                                 *self.viewport_pin = Pin {
                                     node,
@@ -157,7 +182,7 @@ impl PageList {
                             break 'row;
                         }
 
-                        rem -= unsafe { (*node).data.size.rows } as usize;
+                        rem -= unsafe { super::Node::rows(node) } as usize;
                         node_it = unsafe { (*node).next };
                     }
                 } else {
@@ -169,12 +194,12 @@ impl PageList {
                     let mut rem: usize = self.total_rows - n;
                     while !node_it.is_null() {
                         let node = node_it;
-                        if rem <= unsafe { (*node).data.size.rows } as usize {
+                        if rem <= unsafe { super::Node::rows(node) } as usize {
                             unsafe {
                                 *self.viewport_pin = Pin {
                                     node,
                                     y: match size::CellCountInt::try_from(
-                                        (*node).data.size.rows as usize - rem,
+                                        super::Node::rows(node) as usize - rem,
                                     ) {
                                         Ok(v) => v,
                                         Err(_) => {
@@ -189,7 +214,7 @@ impl PageList {
                             break 'row;
                         }
 
-                        rem -= unsafe { (*node).data.size.rows } as usize;
+                        rem -= unsafe { super::Node::rows(node) } as usize;
                         node_it = unsafe { (*node).prev };
                     }
                 }
@@ -402,9 +427,9 @@ impl PageList {
             let mut page = self.pages.last;
             let mut n: usize = 0;
             loop {
-                let base = unsafe { (*page).data.memory_ptr() };
-                let rows: *const Row = unsafe { (*page).data.rows.ptr(base) };
-                let page_rows = unsafe { (*page).data.size.rows };
+                let base = unsafe { (*super::Node::page(page)).memory_ptr() };
+                let rows: *const Row = unsafe { (*super::Node::page(page)).rows.ptr(base) };
+                let page_rows = unsafe { super::Node::rows(page) };
                 for i in 0..page_rows {
                     let rev_i = page_rows - i - 1;
                     let row = unsafe { &*rows.add(rev_i as usize) };

@@ -38,8 +38,7 @@ impl PageList {
     pub fn get_cell(&self, pt: point::Point) -> Option<Cell> {
         let pt_pin = self.pin(pt)?;
         let rac = unsafe {
-            (*pt_pin.node)
-                .data
+            (*super::Node::page(pt_pin.node))
                 .get_row_and_cell(pt_pin.x as usize, pt_pin.y as usize)
         };
         Some(Cell {
@@ -98,13 +97,13 @@ impl PageList {
             None,
         );
         while let Some(chunk) = it.next() {
-            cols = unsafe { (*chunk.node).data.size.cols } as usize;
+            cols = unsafe { super::Node::cols(chunk.node) } as usize;
 
             // Whether we've just skipped some number of rows and drawn
             // an ellipsis row (this is reset when a row is not skipped).
             let mut skipped = false;
 
-            for y in 0..(unsafe { (*chunk.node).data.size.rows } as usize) {
+            for y in 0..(unsafe { super::Node::rows(chunk.node) } as usize) {
                 // Active header
                 if !active
                     && core::ptr::eq(chunk.node, active_pin.node)
@@ -131,8 +130,8 @@ impl PageList {
 
                 // Row contents
                 {
-                    let row = unsafe { (*chunk.node).data.get_row(y) };
-                    let cells_ptr = unsafe { (*chunk.node).data.get_cells(row) };
+                    let row = unsafe { (*super::Node::page(chunk.node)).get_row(y) };
+                    let cells_ptr = unsafe { (*super::Node::page(chunk.node)).get_cells(row) };
                     let cells: &[pagepkg::Cell] = unsafe {
                         core::slice::from_raw_parts(cells_ptr as *const pagepkg::Cell, cols)
                     };
@@ -201,7 +200,7 @@ impl PageList {
                             write!(writer, "{}", char::from_u32(cell.codepoint()).unwrap())?;
                             if cell.has_grapheme() {
                                 let grapheme =
-                                    unsafe { (*chunk.node).data.lookup_grapheme(cell) }.unwrap();
+                                    unsafe { (*super::Node::page(chunk.node)).lookup_grapheme(cell) }.unwrap();
                                 for cp in grapheme {
                                     write!(writer, "{}", char::from_u32(*cp).unwrap())?;
                                 }
@@ -352,7 +351,7 @@ impl PageList {
                             Some(p) => p,
                             None => break 'next,
                         };
-                        prev.x = unsafe { (*prev.node).data.size.cols } - 1;
+                        prev.x = unsafe { super::Node::cols(prev.node) } - 1;
                         break 'end prev;
                     }
                 }
@@ -507,8 +506,8 @@ impl PageList {
                 let node = self.pages.last;
                 Some(Pin {
                     node,
-                    y: unsafe { (*node).data.size.rows } - 1,
-                    x: unsafe { (*node).data.size.cols } - 1,
+                    y: unsafe { super::Node::rows(node) } - 1,
+                    x: unsafe { super::Node::cols(node) } - 1,
                     garbage: false,
                 })
             }
@@ -516,14 +515,14 @@ impl PageList {
             point::Tag::Viewport => {
                 let mut br = self.get_top_left(point::Tag::Viewport);
                 br = br.down(self.rows as usize - 1).unwrap();
-                br.x = unsafe { (*br.node).data.size.cols } - 1;
+                br.x = unsafe { super::Node::cols(br.node) } - 1;
                 Some(br)
             }
 
             point::Tag::History => {
                 let mut br = self.get_top_left(point::Tag::Active);
                 br = br.up(1)?;
-                br.x = unsafe { (*br.node).data.size.cols } - 1;
+                br.x = unsafe { super::Node::cols(br.node) } - 1;
                 Some(br)
             }
         }
@@ -536,10 +535,10 @@ impl PageList {
         while !page.is_null() {
             let p = page;
             unsafe {
-                (*p).data.dirty = false;
-                let base = (*p).data.memory_ptr();
-                let rows_ptr = (*p).data.rows.ptr(base);
-                let rows = (*p).data.size.rows as usize;
+                (*super::Node::page(p)).dirty = false;
+                let base = (*super::Node::page(p)).memory_ptr();
+                let rows_ptr = (*super::Node::page(p)).rows.ptr(base);
+                let rows = super::Node::rows(p) as usize;
                 for i in 0..rows {
                     (*rows_ptr.add(i)).set_dirty(false);
                 }
@@ -870,7 +869,7 @@ impl PageList {
             // we don't know if the source page has a standard size.
             let node = match Self::create_page_ext(
                 &mut pool,
-                unsafe { (*chunk.node).data.capacity },
+                super::CreatePage::new(unsafe { super::Node::capacity(chunk.node) }),
                 &mut page_serial,
                 Some(&mut page_size),
             ) {
@@ -878,38 +877,38 @@ impl PageList {
                 Err(e) => clone_err!(e.into()),
             };
             assert!(
-                unsafe { (*node).data.capacity.rows } as usize
+                unsafe { super::Node::capacity(node).rows } as usize
                     >= chunk.end as usize - chunk.start as usize
             );
             // defer node.data.assertIntegrity();
             unsafe {
-                (*node).data.size.rows = chunk.end - chunk.start;
-                (*node).data.size.cols = (*chunk.node).data.size.cols;
+                (*super::Node::page(node)).size.rows = chunk.end - chunk.start;
+                (*super::Node::page(node)).size.cols = super::Node::cols(chunk.node);
             }
             let clone_res = unsafe {
-                (*node).data.clone_from(
-                    &(*chunk.node).data as *const Page,
+                (*super::Node::page(node)).clone_from(
+                    &(*super::Node::page(chunk.node)) as *const Page,
                     chunk.start as usize,
                     chunk.end as usize,
                 )
             };
             if let Err(e) = clone_res {
                 unsafe {
-                    (*node).data.assert_integrity();
+                    (*super::Node::page(node)).assert_integrity();
                 }
                 clone_err!(e.into());
             }
             unsafe {
-                (*node).data.assert_integrity();
+                (*super::Node::page(node)).assert_integrity();
             }
 
             unsafe {
-                (*node).data.dirty = (*chunk.node).data.dirty;
+                (*super::Node::page(node)).dirty = (*super::Node::page(chunk.node)).dirty;
             }
 
             unsafe { page_list.append(node) };
 
-            total_rows += unsafe { (*node).data.size.rows } as usize;
+            total_rows += unsafe { super::Node::rows(node) } as usize;
 
             // Remap our tracked pins by changing the page and
             // offsetting the Y position based on the chunk start.
@@ -965,6 +964,7 @@ impl PageList {
             pages: page_list,
             page_serial,
             page_serial_min: 0,
+            page_compression: super::compress::IncrementalCompressionState::default(),
             page_size,
             explicit_max_size: self.explicit_max_size,
             min_max_size: self.min_max_size,
@@ -990,11 +990,11 @@ impl PageList {
                 // the area is by definition very small.
                 let last = result.pages.last;
                 unsafe {
-                    let base = (*last).data.memory_ptr();
-                    let rows_ptr = (*last).data.rows.ptr(base);
-                    let row = rows_ptr.add((*last).data.size.rows as usize - 1);
+                    let base = (*super::Node::page(last)).memory_ptr();
+                    let rows_ptr = (*super::Node::page(last)).rows.ptr(base);
+                    let row = rows_ptr.add(super::Node::rows(last) as usize - 1);
                     let cols = result.cols as usize;
-                    (*last).data.clear_cells(row, 0, cols);
+                    (*super::Node::page(last)).clear_cells(row, 0, cols);
                 }
             }
 
@@ -1067,7 +1067,7 @@ impl Cell {
     /// This is not very performant this is primarily used for assertions
     /// and testing.
     pub fn is_dirty(&self) -> bool {
-        unsafe { (*self.node).data.dirty || (*self.row).dirty() }
+        unsafe { (*super::Node::page(self.node)).dirty || (*self.row).dirty() }
     }
 
     /// Get the cell style.
@@ -1078,10 +1078,10 @@ impl Cell {
             return stylepkg::Style::default();
         }
         unsafe {
-            *(*self.node)
-                .data
-                .styles
-                .get((*self.node).data.memory_ptr(), (*self.cell).style_id())
+            *(*super::Node::page(self.node)).styles.get(
+                (*super::Node::page(self.node)).memory_ptr(),
+                (*self.cell).style_id(),
+            )
         }
     }
 
@@ -1096,7 +1096,7 @@ impl Cell {
         let mut node_ = self.node;
         while !unsafe { (*node_).prev }.is_null() {
             let node = unsafe { (*node_).prev };
-            y += unsafe { (*node).data.size.rows };
+            y += unsafe { super::Node::rows(node) };
             node_ = node;
         }
 
