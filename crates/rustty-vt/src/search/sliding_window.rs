@@ -145,7 +145,26 @@ pub enum Direction {
 struct Meta {
     node: *mut Node,
     serial: u64,
+    /// A COPY of the page's row count, taken while the preserved page is alive,
+    /// so `flatten` never dereferences a node after the terminal lock is
+    /// released (and never restores a compressed page to read it).
+    ///
+    /// PORTS: oracle@main search/sliding_window.zig `Meta.rows` (0d015b2fc).
+    rows: size::CellCountInt,
     cell_map: Vec<point::Coordinate>,
+}
+
+/// Information copied from a page while appending it to the window.
+///
+/// Both values remain safe after the node's preserved page is released. In
+/// particular, callers use `last_row_wrapped` to decide whether an adjacent
+/// page can contribute to a cross-page match without reading the node again.
+///
+/// PORTS: oracle@main search/sliding_window.zig `SlidingWindow.AppendResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppendResult {
+    pub content_len: usize,
+    pub last_row_wrapped: bool,
 }
 
 impl Meta {
@@ -500,6 +519,12 @@ impl SlidingWindow {
         // Clear our previous chunk buffer to store this result
         // self.chunk_buf.clearRetainingCapacity();
         self.chunk_buf.clear();
+
+        // A reverse cross-page match needs the row count of the last meta in
+        // search order after the chunks themselves are reversed. Snapshot it
+        // while traversing Meta rather than dereferencing a PageList node after
+        // the terminal lock has been released.
+        let mut cross_page_end_rows: Option<size::CellCountInt> = None;
         // var result: terminal.highlight.Flattened = .empty;
         let mut result: FlattenedHighlight = FlattenedHighlight::empty();
 
@@ -595,9 +620,11 @@ impl SlidingWindow {
                     //     .node = meta.node,
                     //     .serial = meta.serial,
                     //     .start = @intCast(map.y),
-                    //     .end = meta.node.data.size.rows,
+                    //     .end = meta.rows,
                     // });
-                    let node_rows = unsafe { crate::pagelist::Node::rows(meta.node) };
+                    // INSPECT, NOT RESTORE: the row count is the COPY taken in
+                    // append_page, not a live node read (oracle 0d015b2fc).
+                    let node_rows = meta.rows;
                     self.chunk_buf.push(crate::highlight::Chunk {
                         node: meta.node,
                         serial: meta.serial,
@@ -655,9 +682,11 @@ impl SlidingWindow {
                     //     .node = meta.node,
                     //     .serial = meta.serial,
                     //     .start = 0,
-                    //     .end = meta.node.data.size.rows,
+                    //     .end = meta.rows,
                     // });
-                    let node_rows = unsafe { crate::pagelist::Node::rows(meta.node) };
+                    // INSPECT, NOT RESTORE: the row count is the COPY taken in
+                    // append_page, not a live node read (oracle 0d015b2fc).
+                    let node_rows = meta.rows;
                     self.chunk_buf.push(crate::highlight::Chunk {
                         node: meta.node,
                         serial: meta.serial,
@@ -676,6 +705,8 @@ impl SlidingWindow {
                 let map = meta.cell_map[meta_i];
                 // result.bot_x = map.x;
                 result.bot_x = map.x;
+                // cross_page_end_rows = meta.rows;
+                cross_page_end_rows = Some(meta.rows);
                 // self.chunk_buf.appendAssumeCapacity(.{
                 //     .node = meta.node,
                 //     .serial = meta.serial,
@@ -781,8 +812,8 @@ impl SlidingWindow {
                     assert!(chunks_len >= 2);
                     // starts[0] = ends[0] - 1;
                     self.chunk_buf[0].start = self.chunk_buf[0].end - 1;
-                    // ends[0] = nodes[0].data.size.rows;
-                    self.chunk_buf[0].end = unsafe { crate::pagelist::Node::rows(self.chunk_buf[0].node) };
+                    // ends[0] = cross_page_end_rows.?;
+                    self.chunk_buf[0].end = cross_page_end_rows.unwrap();
                     // ends[nodes.len - 1] = starts[nodes.len - 1] + 1;
                     self.chunk_buf[chunks_len - 1].end = self.chunk_buf[chunks_len - 1].start + 1;
                     // starts[nodes.len - 1] = 0;
@@ -850,9 +881,66 @@ impl SlidingWindow {
     // pub fn append(
     //     self: *SlidingWindow,
     //     node: *PageList.List.Node,
-    // ) Allocator.Error!usize {
+    // ) Allocator.Error!AppendResult {
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `node: *PageList.List.Node`
-    pub fn append(&mut self, node: *mut Node) -> Result<usize, OutOfMemory> {
+    pub fn append(&mut self, node: *mut Node) -> Result<AppendResult, OutOfMemory> {
+        // var preserved = try node.pagePreservingState(self.alloc);
+        // defer preserved.deinit();
+        //
+        // INSPECT, NOT RESTORE: search must never decompress history it is only
+        // reading (oracle 0d015b2fc). `page_preserving_state` decodes into a
+        // temporary buffer and leaves the node compressed.
+        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) };
+        let page = preserved.page();
+        let last_row_wrapped = unsafe {
+            (*(*page).get_row((*page).size.rows as usize - 1)).wrap()
+        };
+        let result = self.append_page(node, page, last_row_wrapped);
+        preserved.deinit();
+        result
+    }
+
+    /// Append a node only when its last row is soft wrapped.
+    ///
+    /// This acquires one preserved page for both the wrap check and formatting
+    /// so a compressed node is decoded at most once. It is used when loading
+    /// the overlap around an otherwise complete search region.
+    ///
+    /// PORTS: oracle@main search/sliding_window.zig `appendIfWrapped`
+    /// (0d015b2fc).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `node: *PageList.List.Node`
+    pub fn append_if_wrapped(
+        &mut self,
+        node: *mut Node,
+    ) -> Result<Option<AppendResult>, OutOfMemory> {
+        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) };
+        let page = preserved.page();
+        let last_row_wrapped = unsafe {
+            (*(*page).get_row((*page).size.rows as usize - 1)).wrap()
+        };
+        if !last_row_wrapped {
+            preserved.deinit();
+            return Ok(None);
+        }
+        let result = self.append_page(node, page, last_row_wrapped);
+        preserved.deinit();
+        result.map(Some)
+    }
+
+    /// Copy one preserved page into the window's owned search buffers.
+    ///
+    /// No pointer into `page` may escape this function: compressed preserved
+    /// pages own temporary decode storage, while resident values borrow node
+    /// memory.
+    ///
+    /// PORTS: oracle@main search/sliding_window.zig `appendPage` (0d015b2fc).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes raw `*PageList.List.Node`/`*const Page`
+    fn append_page(
+        &mut self,
+        node: *mut Node,
+        page: *const crate::page::Page,
+        last_row_wrapped: bool,
+    ) -> Result<AppendResult, OutOfMemory> {
         // Initialize our metadata for the node.
         // var meta: Meta = .{
         //     .node = node,
@@ -863,6 +951,7 @@ impl SlidingWindow {
         let mut meta: Meta = Meta {
             node,
             serial: unsafe { (*node).serial },
+            rows: unsafe { (*page).size.rows },
             cell_map: Vec::new(),
         };
 
@@ -892,8 +981,6 @@ impl SlidingWindow {
         //     return error.OutOfMemory;
         // };
         {
-            let page: *const crate::page::Page =
-                unsafe { &(*crate::pagelist::Node::page(meta.node)) };
             let mut formatter: PageFormatter = PageFormatter::init(
                 page,
                 Options {
@@ -924,11 +1011,7 @@ impl SlidingWindow {
         //         },
         //     );
         // }
-        let row = unsafe {
-            (*crate::pagelist::Node::page(node))
-                .get_row(crate::pagelist::Node::rows(node) as usize - 1)
-        };
-        if !unsafe { (*row).wrap() } {
+        if !last_row_wrapped {
             encoded.push(b'\n');
             let last = meta
                 .cell_map
@@ -950,7 +1033,10 @@ impl SlidingWindow {
             // reference `errdefer meta.deinit`/scope-end behavior for the unused
             // metadata.
             self.assert_integrity();
-            return Ok(0);
+            return Ok(AppendResult {
+                content_len: 0,
+                last_row_wrapped,
+            });
         }
 
         // Get our written data. If we're doing a reverse search then we
@@ -993,8 +1079,11 @@ impl SlidingWindow {
 
         // self.assertIntegrity();
         self.assert_integrity();
-        // return written.len;
-        Ok(written_len)
+        // return .{ .content_len = written.len, .last_row_wrapped = last_row_wrapped };
+        Ok(AppendResult {
+            content_len: written_len,
+            last_row_wrapped,
+        })
     }
 
     /// Only for tests!
@@ -2262,6 +2351,13 @@ mod tests {
         // Search should find a match
         {
             let h = w.next().unwrap();
+            // PORTS: oracle 83aada205 — every chunk must pair its own node with
+            // its OWN generation after the reverse fixup.
+            assert_eq!(2, h.chunks.len());
+            assert!(core::ptr::eq(h.chunks[0].node, node));
+            assert_eq!(h.chunks[0].serial, unsafe { (*node).serial });
+            assert!(core::ptr::eq(h.chunks[1].node, unsafe { (*node).next }));
+            assert_eq!(h.chunks[1].serial, unsafe { (*(*node).next).serial });
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 76, y: 22 })),

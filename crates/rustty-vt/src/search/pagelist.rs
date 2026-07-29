@@ -189,8 +189,8 @@ impl PageListSearch {
         let mut node_: *mut Node = unsafe { (*(*self.pin).node).prev };
         while !node_.is_null() {
             let node = node_;
-            // rem -|= try self.window.append(node);
-            rem = rem.saturating_sub(self.window.append(node)?);
+            // rem -|= (try self.window.append(node)).content_len;
+            rem = rem.saturating_sub(self.window.append(node)?.content_len);
 
             // Move our tracked pin to the new node.
             // self.pin.node = node;
@@ -579,6 +579,99 @@ mod tests {
 
         search.deinit();
         s.deinit();
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle 0d015b2fc
+    /// `test "compressed history match spanning page boundary remains compressed"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn compressed_history_match_spanning_page_boundary_remains_compressed() {
+        use crate::pagelist::compress::CompressionMode;
+        use crate::pagelist::{Node as PlNode, Storage};
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(
+            alloc,
+            TerminalOptions {
+                max_scrollback: 10 * 1024 * 1024,
+                ..terminal_opts(80, 24)
+            },
+        )
+        .unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let pages: *mut crate::pagelist::PageList = unsafe { &mut (*active_ptr).pages };
+
+        let mut stream = t.vt_stream();
+
+        let first = unsafe { (*pages).pages.first };
+        let first_page_rows = unsafe { PlNode::capacity(first) }.rows;
+
+        // Put half the needle on either side of a soft-wrapped page boundary.
+        for _ in 0..first_page_rows - 1 {
+            stream.next_slice(b"\r\n");
+        }
+        for _ in 0..unsafe { (*pages).cols } - 2 {
+            stream.next_slice(b"x");
+        }
+        stream.next_slice(b"Test");
+        let second = unsafe { (*first).next };
+        assert!(core::ptr::eq(second, unsafe { (*pages).pages.last }));
+
+        // Move both matching pages completely into history. The third page holds
+        // the active area, making the first two eligible for compression.
+        while core::ptr::eq(unsafe { (*pages).pages.last }, second) {
+            stream.next_slice(b"\r\n");
+        }
+        for _ in 0..unsafe { (*pages).rows } {
+            stream.next_slice(b"\r\n");
+        }
+        assert!(!core::ptr::eq(
+            unsafe { (*pages).get_top_left(point::Tag::Active) }.node,
+            second
+        ));
+
+        let _ = unsafe { (*pages).compress(CompressionMode::Full) };
+        assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
+        assert_eq!(unsafe { PlNode::storage(second) }, Storage::Compressed);
+        let compressed = unsafe { (*pages).memory_stats() };
+        assert!(compressed.compressed_pages >= 2);
+
+        let mut search: PageListSearch =
+            PageListSearch::init(alloc, b"Test", pages, unsafe { (*pages).pages.last }).unwrap();
+
+        // Drain and feed incrementally until the boundary match is available. The
+        // exact number of feeds depends on how much blank-page text the formatter
+        // trims, so bound progress by the number of pages rather than encoding
+        // that implementation detail in the test.
+        let mut found: Option<FlattenedHighlight> = None;
+        for _ in 0..unsafe { (*pages).total_pages() } + 1 {
+            if let Some(m) = search.next() {
+                found = Some(m);
+                break;
+            }
+            if !search.feed().unwrap() {
+                break;
+            }
+        }
+        let found = found.expect("cross-page match in compressed history");
+
+        let m = found.untracked();
+        assert!(core::ptr::eq(m.start.node, first));
+        assert!(core::ptr::eq(m.end.node, second));
+        assert_eq!(m.start.x, unsafe { (*pages).cols } - 2);
+        assert_eq!(m.end.x, 1);
+
+        // Search owns formatted text and coordinate maps, not page snapshots. The
+        // original raw mappings therefore remain discarded after matching.
+        assert_eq!(unsafe { (*pages).memory_stats() }, compressed);
+        assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
+        assert_eq!(unsafe { PlNode::storage(second) }, Storage::Compressed);
+
+        search.deinit();
+        stream.deinit();
         t.deinit(alloc);
     }
 

@@ -237,23 +237,21 @@ impl ViewportSearch {
         // while (node_) |node| : (node_ = node.prev) {
         while !node_.is_null() {
             let node = node_;
-            // If the last row of this node isn't wrapped we can't overlap.
-            // const row = node.data.getRow(node.data.size.rows - 1);
-            // if (!row.wrap) break;
-            let row = unsafe { (*crate::pagelist::Node::page(node)).get_row(crate::pagelist::Node::rows(node) as usize - 1) };
-            if !unsafe { (*row).wrap() } {
-                break;
-            }
-
             // We could be more accurate here and count bytes since the
             // last wrap but its complicated and unlikely multiple pages
             // wrap so this should be fine.
-            // added += try self.window.append(node);
+            //
+            // INSPECT, NOT RESTORE: one preserved page covers both the wrap
+            // check and the formatting (oracle 0d015b2fc).
+            // const appended = try self.window.appendIfWrapped(node) orelse break;
+            // added += appended.content_len;
             // if (added >= self.window.needle.len - 1) break;
-            added += match self.window.append(node) {
-                Ok(n) => n,
+            let appended = match self.window.append_if_wrapped(node) {
+                Ok(Some(v)) => v,
+                Ok(None) => break,
                 Err(e) => fail!(e),
             };
+            added += appended.content_len;
             if added >= self.window.needle.len() - 1 {
                 break;
             }
@@ -266,11 +264,16 @@ impl ViewportSearch {
         // for (fingerprint.nodes) |node| {
         //     _ = try self.window.append(node);
         // }
+        // var end_append: SlidingWindow.AppendResult = undefined;
+        let mut end_append = crate::search::sliding_window::AppendResult {
+            content_len: 0,
+            last_row_wrapped: false,
+        };
         for node in fp_nodes.iter().copied() {
-            match self.window.append(node) {
-                Ok(_) => {}
+            end_append = match self.window.append(node) {
+                Ok(v) => v,
                 Err(e) => fail!(e),
-            }
+            };
         }
 
         // Add any trailing overlap as well.
@@ -278,12 +281,11 @@ impl ViewportSearch {
         'trailing: {
             // const end: *PageList.List.Node = fingerprint.nodes[fingerprint.nodes.len - 1];
             let end: *mut Node = fp_nodes[fp_nodes.len() - 1];
-            // if (!end.data.getRow(end.data.size.rows - 1).wrap) break :trailing;
-            let end_row = unsafe {
-                (*crate::pagelist::Node::page(end))
-                    .get_row(crate::pagelist::Node::rows(end) as usize - 1)
-            };
-            if !unsafe { (*end_row).wrap() } {
+            // if (!end_append.last_row_wrapped) break :trailing;
+            //
+            // INSPECT, NOT RESTORE: the wrap flag is the COPY taken during the
+            // append above, so the tail page is never re-read (oracle 0d015b2fc).
+            if !end_append.last_row_wrapped {
                 break 'trailing;
             }
 
@@ -294,21 +296,21 @@ impl ViewportSearch {
             // while (node_) |node| : (node_ = node.next) {
             while !node_.is_null() {
                 let node = node_;
-                // added += try self.window.append(node);
+                // const appended = try self.window.append(node);
+                // added += appended.content_len;
                 // if (added >= self.window.needle.len - 1) break;
-                added += match self.window.append(node) {
-                    Ok(n) => n,
+                let appended = match self.window.append(node) {
+                    Ok(v) => v,
                     Err(e) => fail!(e),
                 };
+                added += appended.content_len;
                 if added >= self.window.needle.len() - 1 {
                     break;
                 }
 
                 // If this row doesn't wrap, then we can quit
-                // const row = node.data.getRow(node.data.size.rows - 1);
-                // if (!row.wrap) break;
-                let row = unsafe { (*crate::pagelist::Node::page(node)).get_row(crate::pagelist::Node::rows(node) as usize - 1) };
-                if !unsafe { (*row).wrap() } {
+                // if (!appended.last_row_wrapped) break;
+                if !appended.last_row_wrapped {
                     break;
                 }
 

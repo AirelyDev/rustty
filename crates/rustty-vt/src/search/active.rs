@@ -115,21 +115,21 @@ impl ActiveSearch {
         // while (node_) |node| : (node_ = node.prev) {
         while !node_.is_null() {
             let node = node_;
-            // If the last row of this node isn't wrapped we can't overlap.
-            // const row = node.data.getRow(node.data.size.rows - 1);
-            // if (!row.wrap) break;
-            let row = unsafe { (*crate::pagelist::Node::page(node)).get_row(crate::pagelist::Node::rows(node) as usize - 1) };
-            if !unsafe { (*row).wrap() } {
-                break;
-            }
-
             // We could be more accurate here and count bytes since the
             // last wrap but its complicated and unlikely multiple pages
             // wrap so this should be fine.
-            // const added = try self.window.append(node);
-            // if (added >= self.window.needle.len - 1) break;
-            let added = self.window.append(node)?;
-            if added >= self.window.needle.len() - 1 {
+            //
+            // INSPECT, NOT RESTORE: `append_if_wrapped` takes ONE preserved
+            // page for both the wrap check and the formatting, so a compressed
+            // overlap page is decoded at most once and stays compressed
+            // (oracle 0d015b2fc).
+            // const appended = try self.window.appendIfWrapped(node) orelse break;
+            // if (appended.content_len >= self.window.needle.len - 1) break;
+            let appended = match self.window.append_if_wrapped(node)? {
+                Some(v) => v,
+                None => break,
+            };
+            if appended.content_len >= self.window.needle.len() - 1 {
                 break;
             }
 
