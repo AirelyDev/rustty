@@ -23,7 +23,6 @@
 //! metal-leaf smoke-test precedent.
 
 use std::collections::HashMap;
-use std::time::Instant;
 
 use core::alloc::Layout;
 use core::ptr::NonNull;
@@ -284,12 +283,9 @@ impl State {
             }
         };
 
-        // For transmit time we always just use the current time
-        // and overwrite the overlay.
-        //
-        // PORT NOTE: `try std.time.Instant.now()` is fallible in Zig but
-        // `Instant::now()` is infallible in Rust → the `?`/`try` is dropped.
-        let transmit_time = Instant::now();
+        // Overlays are always considered new content, so we take a fresh
+        // generation stamp to force replacing any existing one.
+        let generation = rustty_vt::kitty::graphics::next_generation();
 
         // Ensure we have space for our overlay placement. Do this before
         // we upload our image so we don't have to deal with cleaning
@@ -299,7 +295,7 @@ impl State {
 
         // Setup our image.
         let pending = overlay.pending_image();
-        self.prep_image(alloc, Id::Overlay, transmit_time, pending)?;
+        self.prep_image(alloc, Id::Overlay, generation, pending)?;
         // errdefer comptime unreachable;  → the tail below is infallible.
 
         // Setup our placement
@@ -927,19 +923,19 @@ impl State {
         &mut self,
         alloc: A,
         id: Id,
-        transmit_time: Instant,
+        generation: u64,
         pending: Pending,
     ) -> Result<(), PrepImageError> {
-        // If this image exists and its transmit time is the same we assume
-        // it is the identical image so we don't need to send it to the GPU.
+        // If this image exists and its generation is the same it is the
+        // identical image so we don't need to send it to the GPU.
         //
         // PORT NOTE: Zig's `getOrPut` pre-inserts an (undefined) slot before the
         // dupe; we defer the insert instead. On dupe failure with `!found_existing`
         // Zig removes that slot — here there is no slot to remove (harmless no-op),
-        // so `self.images.remove(id)` is elided. `Instant.order(..) == .eq` → `==`.
+        // so `self.images.remove(id)` is elided.
         let found_existing = match self.images.get(&id) {
             Some(entry) => {
-                if entry.transmit_time == transmit_time {
+                if entry.generation == generation {
                     return Ok(());
                 }
                 true
@@ -980,9 +976,8 @@ impl State {
                 id,
                 ImageEntry {
                     image: new_image,
-                    // Zig `transmit_time = undefined`; overwritten below before any
-                    // read. Rust has no `undefined`, so seed with `Instant::now()`.
-                    transmit_time: Instant::now(),
+                    // Zig `.generation = 0`; overwritten below before any read.
+                    generation: 0,
                 },
             );
         } else {
@@ -1001,7 +996,7 @@ impl State {
             entry.image.mark_for_unload();
             return Err(PrepImageError::ImageConversionError);
         }
-        entry.transmit_time = transmit_time;
+        entry.generation = generation;
         Ok(())
     }
 
@@ -1019,7 +1014,7 @@ impl State {
     //     try self.prepImage(
     //         alloc,
     //         .{ .kitty = image.id },
-    //         image.transmit_time,
+    //         image.generation,
     //         .{
     //             .width = image.width,
     //             .height = image.height,
@@ -1042,15 +1037,11 @@ impl State {
         alloc: A,
         image: &KittyImage,
     ) -> Result<(), PrepImageError> {
-        // try self.prepImage(alloc, .{ .kitty = image.id }, image.transmit_time, .{ ... });
-        //
-        // PORT NOTE: `image.transmit_time` is `Option<Instant>` in the port
-        // (Zig: non-optional `Instant`). A transmitted+placed image always has a
-        // time set, so we `expect` (open risk R-2, low).
+        // try self.prepImage(alloc, .{ .kitty = image.id }, image.generation, .{ ... });
         self.prep_image(
             alloc,
             Id::Kitty(image.id),
-            image.transmit_time.expect("transmitted image has a time"),
+            image.generation,
             Pending {
                 width: image.width,
                 height: image.height,
@@ -1164,13 +1155,19 @@ impl Id {
 }
 
 /// The map used for storing images.
-// pub const ImageMap = std.AutoHashMapUnmanaged(Id, struct { image, transmit_time });
+// pub const ImageMap = std.AutoHashMapUnmanaged(Id, struct { image, generation });
 pub type ImageMap = HashMap<Id, ImageEntry>;
 
-/// The `ImageMap` value: the image plus the time it was transmitted.
+/// The `ImageMap` value: the image plus its terminal-image generation stamp.
 pub struct ImageEntry {
     pub image: Image,
-    pub transmit_time: Instant,
+
+    /// The generation of the terminal image this was created from (see
+    /// `rustty_vt::kitty::graphics_image::Image::generation`). Used to detect
+    /// staleness: a differing generation for the same ID means the contents
+    /// changed and the texture must be replaced. Zero is never a valid stored
+    /// generation so it marks "not yet uploaded".
+    pub generation: u64,
 }
 
 /// The state for a single image that is to be rendered.
