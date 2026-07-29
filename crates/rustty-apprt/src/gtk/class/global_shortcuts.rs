@@ -24,22 +24,36 @@
 //!   `config`, and connects `trigger`. That wiring lives in
 //!   [`super::application`]'s `startup_global_shortcuts`.
 //!
-//! # DEFERRAL — the XDG portal round-trip is L6 (portals)
+//! # The XDG portal round-trip
 //!
-//! The heart of the reference — [`refresh`](global_shortcuts.zig:159-236) building
-//! the trigger→action map from the config keybind set and driving the portal
-//! `CreateSession`/`BindShortcuts` D-Bus round-trip (`request`, `Method`,
-//! `getRequestPath`, `generateToken`, the `responded`/`gotResponseHandle`
-//! callbacks, `shortcutActivated`, `onResponse`; `global_shortcuts.zig:238-560`) —
-//! is an **inhabited placeholder**. Desktop portals are an L6 milestone (see
-//! `.port/phase-2/DEFERRALS.md`), so [`GlobalShortcuts::refresh`] performs the
-//! *real* head (close prior state, require a config) and then **no-ops** rather
-//! than panicking: `notify::config` and `set_dbus_connection` drive `refresh` on
-//! the hot path at startup, so an `unimplemented!()` here would be a latent abort
-//! the moment a user has a single `global:` keybind. When the portal tier lands,
-//! the map-build + round-trip + the `handle`/subscription session state + the
-//! `close` teardown of those subscriptions all attach to `refresh`/`close`, and
-//! `shortcutActivated` becomes the sole emitter of [`trigger`].
+//! [`GlobalShortcuts::refresh`] rebuilds the trigger→action map from the config's
+//! `global:` keybinds and, when the map is non-empty, drives the portal
+//! handshake: `CreateSession` → (on `Response` code 0) subscribe to `Activated`
+//! and issue `BindShortcuts`. Each request pre-computes its own `Request` object
+//! path from the connection's unique name plus the `handle_token` it is about to
+//! send, and subscribes to `Response` on that path BEFORE issuing the call,
+//! because a portal may emit `Response` before a naive client has subscribed and
+//! the signal is delivered exactly once (`global_shortcuts.zig:340-360`).
+//!
+//! [`GlobalShortcuts::close`] is the exact inverse: unsubscribe both signals, ask
+//! the portal to `Session.Close` the handle, and drop the map. It runs at the head
+//! of every `refresh`, on a `dbus-connection` swap, and in `dispose`.
+//!
+//! An `Activated` signal carries the shortcut id; it is looked up in the map and
+//! the bound action is re-emitted on the [`trigger`] signal, which
+//! [`super::application`] connects to `core.performAllAction`.
+//!
+//! # Environment requirements (empirically established, WS15 T1)
+//!
+//! The portal refuses `CreateSession` with
+//! `org.freedesktop.portal.Error.NotAllowed: "An app id is required"` unless
+//! `xdg-desktop-portal` can determine the caller's app id. For a non-sandboxed
+//! host process that means being launched inside an `app.slice` systemd unit
+//! named after the application id (`app-<appid>-<tag>.scope|.service`) with a
+//! matching `<appid>.desktop` present. A desktop-session launch satisfies this;
+//! a bare shell launch does not. On GNOME 50 `BindShortcuts` additionally blocks
+//! on a one-time user confirmation dialog, after which the grant is remembered in
+//! the `org.gnome.settings-daemon.global-shortcuts` `applications` list.
 //!
 //! [`Application`]: super::application::Application
 //! [`binding::Action`]: rustty_input::binding::Action
@@ -66,11 +80,11 @@ mod imp {
 
     /// PORTS: `global_shortcuts.zig:54-83` `GlobalShortcuts.Private`.
     ///
-    /// Only the two SHARED refcounted fields that the REAL code paths touch are
-    /// modeled here: `config` (`:56`) and `dbus_connection` (`:59`). The portal
-    /// session state — `arena` (`:62`), `map` (`:68`), `handle` (`:72`),
-    /// `response_subscription` (`:76`), `activate_subscription` (`:80`) — is part
-    /// of the deferred XDG round-trip (module doc) and lands with the portal tier.
+    /// The two SHARED refcounted fields — `config` (`:56`) and `dbus_connection`
+    /// (`:59`) — plus the portal session state: `map` (`:68`), `handle` (`:72`),
+    /// `response_subscription` (`:76`), `activate_subscription` (`:80`). The
+    /// reference's `arena` (`:62`) has no counterpart: it exists only to own the
+    /// map's key strings, which Rust owns in the `Vec` itself.
     #[derive(Default, Properties)]
     #[properties(wrapper_type = super::GlobalShortcuts)]
     pub struct GlobalShortcuts {
@@ -107,13 +121,15 @@ mod imp {
 
         /// PORTS: `global_shortcuts.zig:74-76` `response_subscription` — the
         /// subscription to the in-flight request's `Response` signal. The
-        /// reference uses `0` as the null id; gio's `SignalSubscriptionId` is a
-        /// non-zero newtype, so `Option` is the faithful spelling.
-        pub response_subscription: RefCell<Option<gio::SignalSubscriptionId>>,
+        /// reference uses `0` as the null id; gio's `SignalSubscription` is an
+        /// RAII guard (dropping it is the `signalUnsubscribe` call), so `Option`
+        /// is the faithful spelling and `close`'s explicit unsubscribe is a
+        /// `.take()`.
+        pub response_subscription: RefCell<Option<gio::SignalSubscription>>,
 
         /// PORTS: `global_shortcuts.zig:78-80` `activate_subscription` — the
         /// subscription to the session's `Activated` signal.
-        pub activate_subscription: RefCell<Option<gio::SignalSubscriptionId>>,
+        pub activate_subscription: RefCell<Option<gio::SignalSubscription>>,
     }
 
     #[glib::object_subclass]
@@ -248,13 +264,9 @@ impl GlobalShortcuts {
             return;
         };
 
-        // `:113-121`
-        if let Some(id) = imp.response_subscription.borrow_mut().take() {
-            dbus.signal_unsubscribe(id);
-        }
-        if let Some(id) = imp.activate_subscription.borrow_mut().take() {
-            dbus.signal_unsubscribe(id);
-        }
+        // `:113-121` — dropping a `SignalSubscription` unsubscribes it.
+        drop(imp.response_subscription.borrow_mut().take());
+        drop(imp.activate_subscription.borrow_mut().take());
 
         // Close the existing session (`:123-139`).
         let handle = imp.handle.borrow_mut().take();
@@ -298,13 +310,207 @@ impl GlobalShortcuts {
     }
 
     /// The current portal shortcut map (id → action), in registration order.
-    /// rustty-only accessor: the reference reads `priv.map` directly in-file.
+    /// rustty-only accessor: the reference reads `priv.map` directly in-file, so
+    /// this exists only for the headless KATs.
+    #[cfg(test)]
     pub(crate) fn shortcut_map(&self) -> Vec<(String, Action)> {
         self.imp().map.borrow().clone()
     }
 
-    /// PORTS: `global_shortcuts.zig:329-460` `request`. Filled in WS15 T6.
-    fn request(&self, _method: Method) {}
+    /// PORTS: `global_shortcuts.zig:329-460` `request`. Submit one request to the
+    /// GlobalShortcuts portal.
+    ///
+    /// PROTOCOL NOTE (`:340-360`, editorializing stripped): the documented flow is
+    /// "call the method, it returns a `Request` object path, then listen for that
+    /// object's `Response` signal". That flow is racy — a portal implementation may
+    /// emit `Response` before the caller has subscribed, and the signal is
+    /// delivered exactly once, so the response would be lost. The portal
+    /// documentation's own remedy (under the `Request` interface) is for the client
+    /// to CONSTRUCT the expected request object path from its own unique bus name
+    /// plus the `handle_token` it is about to send, subscribe to `Response` on that
+    /// path FIRST, and only then issue the method call — which is what this does,
+    /// making the method's return value informational.
+    fn request(&self, method: Method) {
+        let imp = self.imp();
+
+        let dbus = { imp.dbus_connection.borrow().clone() };
+        let Some(dbus) = dbus else {
+            // The reference reaches `priv.dbus_connection.?` here; `refresh` is
+            // driven by `notify::config` too, which can fire before the connection
+            // is set. Returning is the LATENT-CRASH-safe equivalent of a
+            // round-trip that cannot be started.
+            return;
+        };
+
+        let request_token = generate_token();
+
+        // `method.makePayload(self, request_token) orelse return` (`:428`).
+        let payload = match method {
+            Method::CreateSession => create_session_payload(&request_token, &generate_token()),
+            Method::BindShortcuts => {
+                let handle = { imp.handle.borrow().clone() };
+                let Some(handle) = handle else {
+                    return;
+                };
+                let map = imp.map.borrow();
+                let Some(payload) = bind_shortcuts_payload(&handle, map.as_slice(), &request_token)
+                else {
+                    return;
+                };
+                payload
+            }
+        };
+
+        // `getRequestPath` (`:429`). `getUniqueName` never returns null on an
+        // ordinary message-bus connection (`:476-478`).
+        let Some(unique_name) = dbus.unique_name() else {
+            eprintln!("warn(gtk): global shortcuts: dbus connection has no unique name");
+            return;
+        };
+        let request_path = request_object_path(unique_name.as_str(), &request_token);
+
+        // `assert(priv.response_subscription == 0)` (`:434`).
+        debug_assert!(
+            imp.response_subscription.borrow().is_none(),
+            "a global shortcuts request is already in flight"
+        );
+
+        // `dbus.signalSubscribe(.., Request, Response, request_path, ..)`
+        // (`:435-445`) → `callbacks.responded` (`:390-422`).
+        let weak = self.downgrade();
+        let subscription = dbus.subscribe_to_signal(
+            None,
+            Some(REQUEST_IFACE),
+            Some("Response"),
+            Some(&request_path),
+            None,
+            gio::DBusSignalFlags::NONE,
+            move |signal| {
+                let Some(this) = weak.upgrade() else {
+                    return;
+                };
+
+                // Unsubscribe from the response signal (`:402-406`).
+                drop(this.imp().response_subscription.borrow_mut().take());
+
+                // `params.get("(u@a{sv})", &response, &vardict)` (`:411`).
+                let params = signal.parameters;
+                let response: u32 = params.child_value(0).get().unwrap_or(2);
+                let results = params.child_value(1);
+
+                match response {
+                    // `.{0 => method.onResponse(..)}` (`:414-417`)
+                    0 => {
+                        eprintln!(
+                            "debug(gtk): global shortcuts request successful method={}",
+                            method.name()
+                        );
+                        this.on_response(method, &results);
+                    }
+                    1 => eprintln!("debug(gtk): global shortcuts request was cancelled by user"),
+                    2 => eprintln!("warn(gtk): global shortcuts request ended unexpectedly"),
+                    other => {
+                        eprintln!("warn(gtk): global shortcuts unrecognized response code={other}")
+                    }
+                }
+            },
+        );
+        imp.response_subscription.replace(Some(subscription));
+
+        // The method call itself (`:447-459`). Its reply is informational (see the
+        // PROTOCOL NOTE); we only log a failure, as `gotResponseHandle` does
+        // (`:363-387`).
+        let method_name = method.name();
+        dbus.call(
+            Some(PORTAL_BUS_NAME),
+            PORTAL_OBJECT_PATH,
+            GLOBAL_SHORTCUTS_IFACE,
+            method_name,
+            Some(&payload),
+            None,
+            gio::DBusCallFlags::NONE,
+            -1,
+            gio::Cancellable::NONE,
+            move |res| {
+                // `callbacks.gotResponseHandle` (`:363-387`): the reply carries
+                // the portal's ACTUAL request object path. The reference carries a
+                // TODO to re-point the subscription when it differs from the
+                // computed one (for older portals) and does not implement it —
+                // neither do we, for the same reason: doing so reintroduces the
+                // very race the pre-subscription avoids.
+                if let Err(err) = res {
+                    eprintln!("warn(gtk): global shortcuts {method_name} request failed={err}");
+                }
+            },
+        );
+    }
+
+    /// PORTS: `global_shortcuts.zig:283-325` `Method.onResponse` — what to do once
+    /// a request's `Response` arrives with code 0.
+    fn on_response(&self, method: Method, results: &glib::Variant) {
+        match method {
+            Method::CreateSession => {
+                // `vardict.lookup("session_handle", "&s", &handle)` (`:287-293`).
+                let Some(handle) = session_handle_from_results(results) else {
+                    eprintln!(
+                        "warn(gtk): global shortcuts session handle not found in response={}",
+                        results.print(true)
+                    );
+                    return;
+                };
+                eprintln!("debug(gtk): global shortcuts session_handle={handle}");
+                self.imp().handle.replace(Some(handle.clone()));
+
+                let dbus = { self.imp().dbus_connection.borrow().clone() };
+                let Some(dbus) = dbus else {
+                    return;
+                };
+
+                // Subscribe to keybind activations (`:304-316`). `arg0` is the
+                // session handle, matched as an object path.
+                debug_assert!(self.imp().activate_subscription.borrow().is_none());
+                let weak = self.downgrade();
+                let subscription = dbus.subscribe_to_signal(
+                    None,
+                    Some(GLOBAL_SHORTCUTS_IFACE),
+                    Some("Activated"),
+                    Some(PORTAL_OBJECT_PATH),
+                    Some(&handle),
+                    gio::DBusSignalFlags::MATCH_ARG0_PATH,
+                    move |signal| {
+                        let Some(this) = weak.upgrade() else {
+                            return;
+                        };
+                        // 2nd value in the tuple is the activated shortcut id
+                        // (`:552-555`).
+                        let Some(id) = signal.parameters.child_value(1).str().map(str::to_owned)
+                        else {
+                            return;
+                        };
+                        eprintln!("debug(gtk): global shortcut activated={id}");
+                        this.dispatch_activation(&id);
+                    },
+                );
+                self.imp().activate_subscription.replace(Some(subscription));
+
+                // `shortcuts.request(.bind_shortcuts)` (`:318-321`).
+                self.request(Method::BindShortcuts);
+            }
+
+            // `.bind_shortcuts => {}` (`:323`).
+            //
+            // PORT NOTE (rustty-only instrumentation): the reference's arm is
+            // empty. We log the accepted binding set, because this is the single
+            // observable that proves the compositor took the shortcuts — it is
+            // what `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh` asserts.
+            Method::BindShortcuts => {
+                eprintln!(
+                    "debug(gtk): global shortcuts bound results={}",
+                    results.print(true)
+                );
+            }
+        }
+    }
 }
 
 impl Default for GlobalShortcuts {
