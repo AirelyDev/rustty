@@ -68,11 +68,24 @@ impl PageList {
         // after the renderer's idle delay. False positives from clamped
         // scrolling are cheap.
         //
-        // PORT NOTE (WS7 B8): the oracle spells this `defer { ... }` at the top
-        // of `scroll`; the rustty split into `scroll`/`scroll_impl` puts it
-        // after the inner call, which is the same every-exit-path guarantee.
-        self.page_compression.reset();
-        self.page_compression.mark_activity();
+        // PORT NOTE (WS7 M1 — corrects the B8 note, which claimed the oracle
+        // spells this `defer` at the TOP of `scroll`; it does not).
+        // `oracle@main:PageList.zig:2823-2834` registers the defer AFTER the
+        // `limits.bytes.explicit == 0` early return, so in no-scrollback mode it
+        // never runs and the activity token is never bumped. The rustty split
+        // into `scroll`/`scroll_impl` moves the defer body after the inner call,
+        // which is the same every-exit-path guarantee — but it must reproduce
+        // the early-return exclusion explicitly, which is what this guard is.
+        // (`scroll_impl`'s own early return is on the same condition.)
+        //
+        // The `.row -> .delta_row` recursion routes back through this public
+        // `scroll` and therefore marks activity twice. That is FAITHFUL: the
+        // oracle's inner `scroll` call runs its own defer before the outer one
+        // runs its own.
+        if self.explicit_max_size != 0 {
+            self.page_compression.reset();
+            self.page_compression.mark_activity();
+        }
 
         self.assert_integrity();
     }

@@ -281,6 +281,15 @@ pub enum Storage {
 /// so the arm carries the raw pointer/length needed to release it instead —
 /// forming a `&mut [u8]` over a decoded page would alias the `Page` value that
 /// names the same bytes.
+///
+/// PORT NOTE (WS7 M2): `#[must_use]` rather than a `Drop` impl. The oracle's
+/// `PreservedPage` is released by an explicit `deinit()` (its `owned` arm holds
+/// the allocator that made the buffer), and a `Drop` would diverge from that
+/// contract — it would silently free on every early exit, including paths the
+/// oracle deliberately leaves to the caller. `#[must_use]` keeps the explicit
+/// `deinit()` discipline while making a dropped-on-the-floor value a warning.
+/// Today only tests and the inspector construct one; Phase C5 adds real callers.
+#[must_use = "a PreservedPage owns a decoded page buffer; call `deinit()`"]
 pub enum PreservedPage {
     Borrowed(*const Page),
     Owned {

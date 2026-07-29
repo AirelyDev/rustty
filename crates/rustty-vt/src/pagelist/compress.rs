@@ -164,6 +164,16 @@ const ACTIVITY_SERIAL_MASK: u64 = 0xFFFF_FFFF_FFFF;
 
 impl IncrementalCompressionState {
     /// Record activity without disturbing valid traversal progress.
+    ///
+    /// PORT NOTE (WS7 I4 — a KNOWN gap, tracked in
+    /// `.port/phase-2/DEFERRALS.md`): the oracle has ELEVEN `markActivity` call
+    /// sites; rustty has ten. The missing one is
+    /// `oracle@main:PageList.zig:6312`, inside `Limits.enforce` — and rustty has
+    /// no `PageList::Limits` struct at all (the byte limit is a plain field), so
+    /// there is no counterpart function to port it onto. If a `Limits` struct is
+    /// ever introduced, `enforce` must `mark_activity` on entry: trimming
+    /// scrollback to a limit changes the node set under an in-flight incremental
+    /// traversal, which is exactly what the activity token exists to detect.
     #[inline]
     pub fn mark_activity(&mut self) {
         // Zig: `self.activity_serial +%= 1;` on a u48.
