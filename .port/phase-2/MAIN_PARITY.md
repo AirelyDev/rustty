@@ -121,7 +121,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `7e02af879` | scrollback page compression (#13264) | n/a-merge | constituents = BL-1 |
 | `4f53b846b` | renderer: move State declaration to top of file | n/a | pure Zig decl reordering, no semantic content; Rust module layout differs |
 | `9a4bd2120` | terminal: optimize LZ4 decoding + differential tests | missing BL-1 | compress/lz4 does not exist |
-| `d34b54e9b` | renderer: hand off state mutex to avoid starving frames | missing BL-1 | renderer/state.rs + termio exec; compression-driven |
+| `d34b54e9b` | renderer: hand off state mutex to avoid starving frames | **PORTED** (WS7 D4) | renderer/state.rs `lock_demand`/`unlock_demand`/`yield_to_demand` + `HandoffPark` (futex substitute) + 4 tests; generic.rs AND generic/linux_impl.rs `update_frame` critical sections; termio/exec.rs `threadMainPosix` batch boundary. No compression dependency. |
 | `25e624569` | renderer: avoid starving scrollback compression | missing BL-1 | — |
 | `172f15da3` | terminal: expose compression through libghostty-vt | missing BL-1 | — |
 | `6d5dda40d` | inspector: clarify page compression memory | missing BL-1 | — |

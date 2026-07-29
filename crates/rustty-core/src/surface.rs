@@ -1997,6 +1997,10 @@ where
                     inspector_ptr: None,
                     preedit: None,
                     mouse: rendererpkg::state::Mouse::default(),
+                    // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                    demand: Default::default(),
+                    handoff_gen: Default::default(),
+                    handoff_park: Default::default(),
                 },
             );
             // .renderer_thr = undefined,

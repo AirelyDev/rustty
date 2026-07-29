@@ -48,7 +48,7 @@ Five phases in a single file. **Execution order is A → B → C → D → E.**
 | **A** | LZ4 block codec + differential suite (`compress/lz4.rs`) | A1–A6 | **YES** — pure leaf module, zero callers, lands and merges on its own. |
 | **B** | Retained-mapping reclamation (`mem.rs`), compressed `Page` repr, `Node` ownership + storage enum, PageList compression policy | B1–B10 | **NO** — requires Phase A. Internally B1–B4 (mem + repr + accessor retarget) can land as one commit series before B5–B10 (policy). |
 | **C** | Generation stamps (`renew_generation`, `page_serial_epoch`, `node_is_valid`) + search integrity | C1–C8 | **NO** — requires Phase B's `serial`/`Storage` surface. |
-| **D** | Consumer surface: `Terminal` API, config option, renderer-thread scheduling + state handoff, lib-vt C API, inspector, bench actions | D1–D8 | **PARTIALLY** — requires Phase B. D5 (renderer state handoff) and D8 (bench actions) are independent of the rest of D and may be executed out of order. |
+| **D** | Consumer surface: `Terminal` API, config option, renderer-thread scheduling + state handoff, lib-vt C API, inspector, bench actions | D1–D8 | **PARTIALLY** — requires Phase B. D4 (renderer state handoff) and D8 (bench actions) are independent of the rest of D and may be executed out of order. |
 | **E** | Gates: both-platform build, Miri lanes, perf non-regression, ledgers, merge | E1–E6 | **NO** — terminal phase. |
 
 Each phase ends with `cargo test -p rustty-vt --lib` green and a commit. Phases B–E additionally end with `cargo check --workspace --all-targets` AND `cargo build --workspace` green on **both** macOS and `rvm`. The `--all-targets` check is the load-bearing half: `cargo build --workspace` compiles neither examples nor test targets.
@@ -4332,7 +4332,7 @@ git commit --allow-empty -m "vt: phase C gate — generation stamps + search int
 
 **Requires Phase B.** (Phase C is not a hard prerequisite for D, but the merge order is A→B→C→D→E.)
 
-**D5 and D8 are independently executable** once Phase B is in: D5 (renderer state mutex handoff) touches only `rustty-renderer`/`rustty-termio` and D8 (bench actions) touches only `rustty-bench`.
+**D4 and D8 are independently executable** once Phase B is in: D4 (renderer state mutex handoff) touches only `rustty-renderer`/`rustty-termio` and D8 (bench actions) touches only `rustty-bench`. (D5, the lib-vt C API, is NOT independent: it wraps D1's `Terminal` API.)
 
 ---
 
@@ -5357,7 +5357,7 @@ Run after the plan is written; findings below are already fixed inline.
 | Miri harnesses planned | E2 (`.port/phase-2/mirihar-compress`) + lanes in A6, B10, C8, E2 |
 | Perf non-regression check | E3 (`run_benchmarks.py`, 14 configs, 3% band) + D8 (compression benches) |
 | Phases with explicit boundaries + order | "Phase Structure & Execution Order" table |
-| Which phases are separately executable | Same table: A yes; D5/D8 yes; B/C/E no |
+| Which phases are separately executable | Same table: A yes; D4/D8 yes; B/C/E no |
 | Both-platform build gate | A6 S3, B10 S2, C8 S2, D4 S4, E1 |
 | Branch/merge flow per roadmap | Branch created before A1; E6 |
 

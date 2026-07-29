@@ -3480,6 +3480,29 @@ impl ReadThread {
                 unsafe {
                     crate::Termio::processOutput(io, &buf[..n]);
                 }
+
+                // Batch boundary: hand the renderer state mutex off if the
+                // renderer is waiting. See renderer::State::lock_demand.
+                //
+                // PORT NOTE (D4, oracle d34b54e9b): the oracle inserts this at the
+                // end of the parse-stage loop of its gather/parse PIPELINE
+                // `threadMainPosix` (`io.renderer_state.yieldToDemand()` after the
+                // batch's slot is returned) — a later upstream rewrite that rustty
+                // has NOT ported yet. rustty's read thread is still the older
+                // single-loop shape (`read` -> `processOutput` in a tight loop), for
+                // which the equivalent batch boundary is right here, after
+                // `processOutput` returns — which is exactly where the oracle's
+                // OTHER hunk (`threadMainWindows`, whose loop has this same older
+                // shape) puts it. `processOutput` locks AND unlocks
+                // `renderer_state.mutex` internally, so the mutex is NOT held here,
+                // as `yield_to_demand` requires.
+                //
+                // SAFETY: `io` and its `renderer_state` are live for the read
+                // thread's whole lifetime (the `ReadThreadArgs` contract, as for the
+                // `processOutput` call above).
+                unsafe {
+                    (*(*io).renderer_state).yield_to_demand();
+                }
             }
 
             // Wait for data.
@@ -3547,6 +3570,11 @@ impl ReadThread {
     //             }
     //
     //             @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+    //
+    //             // See threadMainPosix: hand the renderer state mutex
+    //             // off if the renderer is waiting, since this loop
+    //             // would otherwise starve it under heavy output.
+    //             io.renderer_state.yieldToDemand();
     //         }
     //
     //         var quit_bytes: windows.DWORD = 0;
@@ -4568,6 +4596,10 @@ mod tests {
                     inspector_ptr: None,
                     preedit: None,
                     mouse: rustty_renderer::state::Mouse::default(),
+                    // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+                    demand: Default::default(),
+                    handoff_gen: Default::default(),
+                    handoff_park: Default::default(),
                 }));
 
             // A throwaway renderer mailbox (pushes queue; notify fails-safe) and a
