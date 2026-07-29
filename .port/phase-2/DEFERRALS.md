@@ -4879,3 +4879,29 @@ emits the `share/ghostty/` parity dir. Residual: live `+list-themes` CLI
 count + in-window OSC7 observation re-queued to WS4 (blocked on
 `rustty_cli_try_action`'s non-null arm). Ledger: INTEGRATION_PARITY.md
 §2.1/§2.2 struck RESOLVED same-commit.
+
+## Deferred to WS7 D6 (inspector compression memory view)
+
+From **WS7 Phase B review (I1)** — these need the final
+`oracle@main:src/inspector/widgets/pagelist.zig` (`70e788f06` + `6d5dda40d`):
+
+1. **`crates/rustty-inspector/src/widgets/pagelist.rs` cell-detail path still
+   restores.** The page-TREE loop was fixed in the Phase B review (it now uses
+   `Node::rows`/`page_if_resident`/`storage`/`page_preserving_state`, guarded by
+   `ws7_tests::pagelist_widget_page_tree_never_restores`). The CELL-detail path
+   (`Node::page(cell.node)` at the style / hyperlink / grapheme tables) still
+   restores the ONE page holding the inspected cell. Fixing it faithfully is the
+   D6 restructure, not a local edit: the oracle replaced `pages.getCell(pt)` with
+   `pages.pin(pt)` + `pin.node.pagePreservingState(...)` + an `InspectedCell`
+   struct, and threads the resulting `page: *const Page` through
+   `cell_info.draw`, `hyperlinkTable` and `graphemeTable`. D6 must port that end
+   state and then tighten the guard test to the plan's stricter form
+   (`!src.contains("Node::page(")` over the WHOLE file).
+
+2. **`PageList::Limits` / `Limits::enforce` has no rustty counterpart.** The
+   oracle's 11th `markActivity` call site (`oracle@main:PageList.zig:6312`, inside
+   `Limits.enforce`) therefore has nothing to port onto. rustty's PageList carries
+   its byte limit as a plain field with no `Limits` struct, so there are 10
+   `mark_activity` sites, not 11. See the PORT NOTE next to `mark_activity` in
+   `crates/rustty-vt/src/pagelist/compress.rs`. If a `Limits` struct is ever
+   introduced, `enforce` must `mark_activity` on entry.
