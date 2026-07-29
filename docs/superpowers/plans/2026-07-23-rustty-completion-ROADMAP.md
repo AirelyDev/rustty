@@ -113,4 +113,15 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 - [x] WS3 small parity fills (research note: host_view iOS arm + deployment target already implemented; PNG hook + version stubs are the real work)
 - [x] WS4 app bootstrap (research note: detectArgs/Action::run already ported; GlobalState<Action> binds in rustty-apprt-c to avoid a cli→core cycle)
 - [x] WS5 lib-vt C-API (research note: BL-5 commits live on oracle origin/main, not the 4749c4e pin; ghostty_* alias layer deleted upstream at e4cc852 — new exports rustty_* only)
-- [ ] WS6–WS17: authored at wave start
+- [x] WS6 macOS inspector — AUTHORED + EXECUTED + MERGED (both platforms green)
+- [x] WS7 scrollback compression — AUTHORED; **Phase A EXECUTED + MERGED** (LZ4 codec); Phases B-E = Round 2
+- [x] WS8 upstream small-sweep — AUTHORED + EXECUTED + MERGED (both platforms green)
+- [x] WS9 packaging — AUTHORED + EXECUTED + MERGED (self-contained xcframework proven)
+- [ ] WS10–WS17: authored at wave start
+
+## Wave status
+- **Wave 0 COMPLETE** (WS1/WS2/WS3) — both platforms green.
+- **Wave 1 COMPLETE** (WS4/WS5) — both platforms green.
+- **Wave 2 COMPLETE** (WS6/WS7-A/WS8/WS9) — main 53f1387; macOS + Linux both `cargo build --workspace`
+  exit 0 and rustty-vt 2111 passed/0 failed; BL-2 rss_probe PASS (9.0 MiB returned) on Linux.
+- **Round 2 next**: WS7 Phases B-E (unblocked — BL-2 has landed).
