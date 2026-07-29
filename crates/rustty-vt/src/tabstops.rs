@@ -327,15 +327,22 @@ impl<A: Allocator> Tabstops<A> {
 // PORT NOTE: tripwire fail-point enum + thread-local module for `resize`,
 // mirroring the reference `resize_tw = tripwire.module(enum { dynamic_alloc },
 // resize)`. Only compiled in test builds; see the PORT NOTE on `resize`.
+//
+// `pub(crate)` (not file-private) so `terminal.rs`'s
+// `terminal_resize_preserves_tabstops_on_allocation_failure` test can arm this
+// fail point: `Terminal::resize` -> `Tabstops::init` -> `Tabstops::resize`
+// reaches it, which is exactly the path upstream 91f0cf67d's FailingAllocator
+// test exercises.
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum ResizeFp {
+pub(crate) enum ResizeFp {
     DynamicAlloc,
 }
 
 #[cfg(test)]
 thread_local! {
-    static RESIZE_TW: core::cell::RefCell<rustty_util::tripwire::Module<ResizeFp, OutOfMemory>> =
+    pub(crate) static RESIZE_TW:
+        core::cell::RefCell<rustty_util::tripwire::Module<ResizeFp, OutOfMemory>> =
         core::cell::RefCell::new(rustty_util::tripwire::module());
 }
 
@@ -344,6 +351,21 @@ thread_local! {
 #[inline]
 fn resize_tw_check(point: ResizeFp) -> Result<(), OutOfMemory> {
     RESIZE_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+/// `resize_tw.errorAlways(point, error.OutOfMemory)` — cross-module accessor so
+/// `terminal.rs`'s tests can arm this module's fail points.
+#[cfg(test)]
+pub(crate) fn resize_tw_error_always(point: ResizeFp) {
+    RESIZE_TW.with(|tw| tw.borrow_mut().errorAlways(point, OutOfMemory));
+}
+
+/// `resize_tw.end(mode)` — cross-module accessor (see above).
+#[cfg(test)]
+pub(crate) fn resize_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    RESIZE_TW.with(|tw| tw.borrow_mut().end(mode))
 }
 
 #[cfg(test)]
@@ -516,16 +538,13 @@ mod tests {
 
         // Trigger allocation failure when resizing beyond prealloc
         // resize_tw.errorAlways(.dynamic_alloc, error.OutOfMemory);
-        RESIZE_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(ResizeFp::DynamicAlloc, OutOfMemory)
-        });
+        resize_tw_error_always(ResizeFp::DynamicAlloc);
         // const result = t.resize(testing.allocator, prealloc_columns * 2);
         let result = t.resize(Global, PREALLOC_COLUMNS * 2);
         // try testing.expectError(error.OutOfMemory, result);
         assert_eq!(Err(OutOfMemory), result);
         // try resize_tw.end(.reset);
-        RESIZE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+        resize_tw_end(ResetMode::Reset).unwrap();
 
         // cols should be unchanged after failed resize
         // try testing.expectEqual(original_cols, t.cols);

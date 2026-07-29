@@ -4436,9 +4436,10 @@ impl Terminal {
         // PORT NOTE (parity 91f0cf67d): allocate and initialize the replacement
         // FIRST, release the old tab stops only after allocation succeeds. A
         // failed resize retains the original tab stops and remains safe to
-        // destroy. (The upstream FailingAllocator test hunk is not portable:
-        // this port's `Allocator` is the infallible `Global` handle with no
-        // failure-injection seam on `Tabstops::init` — see MAIN_PARITY.md.)
+        // destroy. The upstream FailingAllocator test hunk is ported as
+        // `terminal_resize_preserves_tabstops_on_allocation_failure`, arming the
+        // `Tabstops::resize` tripwire fail point that this path reaches through
+        // `Tabstops::init` (WS8 T17 — the MAIN_PARITY PARTIAL row is now closed).
         if self.cols != cols {
             // PORT NOTE: `Tabstops::init`'s allocation-failure type is its own
             // `OutOfMemory`; both map to the reference `Allocator.Error`. We
@@ -15247,6 +15248,29 @@ mod tests {
         t.resize(alloc, 2, 3).unwrap();
         t.set_cursor_pos(1, 2);
         t.print('😀' as u32).unwrap(); // 0x1F600
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize preserves tabstops on allocation failure"
+    #[test]
+    fn terminal_resize_preserves_tabstops_on_allocation_failure() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 1)).unwrap();
+
+        // PORT NOTE: the reference swaps in a `testing.FailingAllocator`. This
+        // port's seam is the `Tabstops::resize` tripwire, whose only fail point
+        // (`DynamicAlloc`) sits exactly at the dynamic-stops allocation that
+        // `Tabstops::init` reaches from `Terminal::resize`. 513 columns is past
+        // `PREALLOC_COLUMNS`, so the allocation IS attempted.
+        crate::tabstops::resize_tw_error_always(crate::tabstops::ResizeFp::DynamicAlloc);
+        assert_eq!(Err(OutOfMemory), t.resize(alloc, 513, 1));
+        crate::tabstops::resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+        // The original Tabstops was never replaced: cols is unchanged and the
+        // original interval-8 stop is still present.
+        assert_eq!(10 as size::CellCountInt, t.cols);
+        assert!(t.tabstops.get(8));
 
         t.deinit(alloc);
     }
