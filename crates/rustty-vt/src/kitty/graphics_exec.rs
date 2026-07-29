@@ -632,8 +632,6 @@ fn encode_error(r: &mut Response, err: image::Error) {
     match err {
         // error.OutOfMemory => r.message = "ENOMEM: out of memory",
         image::Error::OutOfMemory => r.message = b"ENOMEM: out of memory".to_vec(),
-        // error.InternalError => r.message = "EINVAL: internal error",
-        image::Error::InternalError => r.message = b"EINVAL: internal error".to_vec(),
         // error.InvalidData => r.message = "EINVAL: invalid data",
         image::Error::InvalidData => r.message = b"EINVAL: invalid data".to_vec(),
         // error.DecompressionFailed => r.message = "EINVAL: decompression failed",
@@ -850,6 +848,87 @@ mod tests {
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx retransmit same id gets fresh image generation"
+    #[test]
+    fn kittygfx_retransmit_same_id_gets_fresh_image_generation() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // Transmit a 1x2 RGB image with id=1.
+        {
+            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2;////////").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let gen1 = storage.image_by_id(1).unwrap().generation;
+        assert!(gen1 > 0);
+        assert_eq!(gen1, storage.generation);
+
+        // Retransmit the same id with identical dimensions/length. The
+        // (width, height, format, len) tuple is identical, so only the
+        // generation can reveal that the contents were replaced.
+        {
+            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2;AAAAAAAA").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let gen2 = storage.image_by_id(1).unwrap().generation;
+        assert!(gen2 > gen1);
+        assert_eq!(gen2, storage.generation);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx delete then retransmit same id gets fresh generation"
+    #[test]
+    fn kittygfx_delete_then_retransmit_same_id_gets_fresh_generation() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // Transmit and display, then delete everything (including image
+        // data), then retransmit the same ID.
+        {
+            let cmd =
+                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,c=1,r=1;////////").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        let gen1 = unsafe { &(*t.screens.active).kitty_images }
+            .image_by_id(1)
+            .unwrap()
+            .generation;
+
+        {
+            let cmd = command::Parser::parse_string(b"a=d,d=A").unwrap();
+            let resp = execute(alloc, &mut t, &cmd);
+            assert!(resp.is_none());
+        }
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            assert!(storage.image_by_id(1).is_none());
+        }
+        let gen_delete = unsafe { &(*t.screens.active).kitty_images }.generation;
+        assert!(gen_delete > gen1);
+
+        {
+            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2;////////").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        let gen2 = unsafe { &(*t.screens.active).kitty_images }
+            .image_by_id(1)
+            .unwrap()
+            .generation;
+        assert!(gen2 > gen1);
+        assert!(gen2 > gen_delete);
 
         t.deinit(alloc);
     }

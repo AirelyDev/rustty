@@ -45,6 +45,9 @@ pub use image::Image;
 pub use image::LoadingImage;
 // pub const ImageStorage = storage.ImageStorage;
 pub use storage::ImageStorage;
+
+// pub const nextGeneration = storage.nextGeneration;
+pub use storage::next_generation;
 // pub const RenderPlacement = render.Placement;
 pub use render::Placement as RenderPlacement;
 // pub const Response = command.Response;

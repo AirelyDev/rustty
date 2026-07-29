@@ -78,7 +78,6 @@ const MAX_SIZE: usize = 400 * 1024 * 1024; // 400MB
 /// `OutOfMemory` variant carries the implicit `Allocator.Error`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
-    InternalError,
     InvalidData,
     DecompressionFailed,
     DimensionsRequired,
@@ -623,10 +622,9 @@ impl LoadingImage {
             return Err(Error::InvalidData);
         }
 
-        // Set our time
-        // PORT NOTE: `std.time.Instant.now() catch ...`. `std::time::Instant::now`
-        // does not fail on supported platforms; we store `Some(now)`.
-        self.image.transmit_time = Some(std::time::Instant::now());
+        // (deleted — bdc0b6c19: `self.image.transmit_time = Instant::now()` and
+        // its `InternalError` failure path are gone; the stamp is now assigned
+        // by `ImageStorage::add_image`.)
 
         // Everything looks good, copy the image data over.
         // PORT NOTE: `result.data = try self.data.toOwnedSlice(alloc);` then
@@ -750,6 +748,12 @@ impl LoadingImage {
 }
 
 /// Image represents a single fully loaded image.
+///
+/// The image data is always fully decoded raw pixels: loading inflates any
+/// zlib-compressed payload and decodes PNG into RGBA before an image is
+/// completed, so `compression` is always `None` and `format` is never `Png` for
+/// a stored image, and `data.len()` always equals
+/// `width * height * bytes-per-pixel`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     pub id: u32,
@@ -759,10 +763,14 @@ pub struct Image {
     pub format: command::Format,
     pub compression: command::Compression,
     pub data: Vec<u8>,
-    // PORT NOTE: `transmit_time: std.time.Instant = undefined`. Rust's `Instant`
-    // has no "undefined"; we model the field as `Option<Instant>` defaulting to
-    // `None`, set to `Some(now)` in `complete`.
-    pub transmit_time: Option<std::time::Instant>,
+    /// Unique, monotonically increasing stamp assigned each time an image is
+    /// added to (or replaced in) an `ImageStorage`. A changed generation for a
+    /// given image ID means the image contents may have changed, even if the
+    /// dimensions and byte length are the same (e.g. a retransmission of the
+    /// same ID). Stamps order by transmission time. Zero means "never stored".
+    //
+    // PORT NOTE: replaces the pre-`bdc0b6c19` `transmit_time: std.time.Instant`.
+    pub generation: u64,
 
     /// Set this to true if this image was loaded by a command that
     /// doesn't specify an ID or number, since such commands should
@@ -781,7 +789,7 @@ impl Default for Image {
             format: command::Format::Rgb,
             compression: command::Compression::None,
             data: Vec::new(),
-            transmit_time: None,
+            generation: 0,
             implicit_id: false,
         }
     }

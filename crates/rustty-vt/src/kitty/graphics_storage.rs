@@ -37,6 +37,36 @@ use std::collections::HashMap;
 
 // const log = std.log.scoped(.kitty_gfx);
 
+/// Process-global counter backing all generation stamps (see
+/// [`ImageStorage::generation`] and [`Image::generation`]). This is global
+/// rather than per-storage so that stamps are unique across every storage in
+/// the process: two mutation events never produce the same value, even across
+/// separate screens (main vs. alt), storage resets, or separate terminals. This
+/// lets consumers use a generation value alone as a cache key without any
+/// ambiguity.
+///
+/// Atomic because separate terminals may mutate their storages from different
+/// threads.
+//
+// PORT NOTE (8fe5913f7): upstream's comptime-selected mutex fallback for
+// targets without 64-bit atomics is not needed — every target in rustty's
+// matrix (`aarch64-apple-darwin`, `x86_64-apple-darwin`,
+// `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+// `wasm32-unknown-unknown`) reports `target_has_atomic = "64"`, verified WS8
+// T14 with `rustc --target <t> --print cfg | grep target_has_atomic=\"64\"`.
+// `8fe5913f7` is therefore ported as this note (N/A), not as code. Rust would
+// not even compile a fallback-free `AtomicU64` on such a target, so a
+// regression here is a build error, not a silent miscompile.
+static GENERATION_COUNTER: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Returns the next generation stamp. Stamps are unique and strictly
+/// monotonically increasing process-wide, starting at 1 (0 is reserved to mean
+/// "never stamped").
+pub fn next_generation() -> u64 {
+    GENERATION_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1
+}
+
 /// An image storage is associated with a terminal screen (i.e. main
 /// screen, alt screen) and contains all the transmitted images and
 /// placements.
@@ -56,7 +86,30 @@ pub struct ImageStorage {
     /// purely informational for the renderer and doesn't affect the
     /// correctness of the program. The renderer must set this to false
     /// if it cares about this value.
+    ///
+    /// Note that dirty is also set by scrolling and resizing (outside of this
+    /// struct) because those move placement pins, even though the set of
+    /// images/placements itself is unchanged. See [`Self::generation`] for a
+    /// signal that only tracks content mutations.
+    ///
+    /// Invariant: dirty is always set when generation changes (`mark_mutated`
+    /// sets both); dirty set without a generation change means a geometry-only
+    /// event.
     pub dirty: bool,
+
+    /// Generation stamp of the last content mutation to this storage: any image
+    /// transmit/replace, placement add, or delete of either. Zero means the
+    /// storage has never been mutated (and is therefore empty).
+    ///
+    /// Unlike `dirty`, this is NOT updated by scrolling/resizing, so an
+    /// unchanged generation means the placement set and all image data are
+    /// identical; only placement geometry (pins) may have moved. Values come
+    /// from a process-global monotonic counter, so a value observed from any
+    /// storage never recurs for different content, even across screen switches
+    /// or storage resets.
+    ///
+    /// This field must only be written via `mark_mutated`.
+    pub generation: u64,
 
     /// This is the next automatically assigned image ID. We start mid-way
     /// through the u32 range to avoid collisions with buggy programs.
@@ -104,6 +157,7 @@ impl Default for ImageStorage {
     fn default() -> Self {
         ImageStorage {
             dirty: false,
+            generation: 0,
             next_image_id: 2147483647,
             next_internal_placement_id: 0,
             images: ImageMap::new(),
@@ -141,6 +195,19 @@ impl ImageStorage {
         self.total_limit != 0
     }
 
+    /// Record a content mutation: marks the storage dirty and assigns a fresh
+    /// generation stamp. Must be called by anything that changes the set of
+    /// images or placements (or image contents).
+    ///
+    /// Do NOT call this for geometry-only events (scrolling, resizing, screen
+    /// switches); those must set only the dirty flag directly. Bumping the
+    /// generation for geometry changes would break the contract that an
+    /// unchanged generation means unchanged contents.
+    fn mark_mutated(&mut self) {
+        self.dirty = true;
+        self.generation = next_generation();
+    }
+
     /// Sets the limit in bytes for the total amount of image data that
     /// can be loaded. If this limit is lower, this will do an eviction
     /// if necessary. If the value is zero, then Kitty image protocol will
@@ -159,6 +226,7 @@ impl ImageStorage {
                 image_limits,
                 ..ImageStorage::default()
             };
+            self.mark_mutated();
         }
 
         // If we re lowering our limit, check if we need to evict.
@@ -224,7 +292,13 @@ impl ImageStorage {
         // self.total_bytes += img.data.len;
         self.total_bytes += data_len;
 
-        self.dirty = true;
+        // Stamp the stored image with a fresh generation. This gives every
+        // add/replace a unique stamp even when the same image ID is
+        // retransmitted with identical dimensions, so consumers (e.g. renderer
+        // texture caches) can detect content changes.
+        self.mark_mutated();
+        let generation = self.generation;
+        self.images.get_mut(&id).unwrap().generation = generation;
         Ok(())
     }
 
@@ -276,7 +350,7 @@ impl ImageStorage {
         // gop.value_ptr.* = p;
         self.placements.insert(key, p);
 
-        self.dirty = true;
+        self.mark_mutated();
         Ok(())
     }
 
@@ -306,10 +380,7 @@ impl ImageStorage {
         #[allow(clippy::collapsible_if)]
         for kv in self.images.values() {
             if kv.number == image_number {
-                if newest.is_none()
-                    || instant_order(kv.transmit_time, newest.as_ref().unwrap().transmit_time)
-                        == std::cmp::Ordering::Greater
-                {
+                if newest.is_none() || kv.generation > newest.as_ref().unwrap().generation {
                     newest = Some(kv.clone());
                 }
             }
@@ -320,6 +391,20 @@ impl ImageStorage {
 
     /// Delete placements, images.
     pub fn delete(&mut self, alloc: Allocator, t: &mut Terminal, cmd: command::Delete) {
+        // Deletes only ever remove placements/images, so comparing counts
+        // before and after tells us whether anything actually changed. Only
+        // then do we mark a mutation. This matters because a delete-all runs on
+        // every screen clear (e.g. `ESC [ 2 J`), and we don't want empty clears
+        // to dirty the image state or bump the generation.
+        //
+        // PORT NOTE: Zig's `defer` runs on every return path; Rust has no
+        // `defer`, so the check runs once after the `match`. `delete` returns
+        // `()` and has no early `return`s, so a trailing check is exactly
+        // equivalent — if any arm gains an early `return`, convert it to a
+        // labeled-block `break` instead.
+        let placements_before = self.placements.len();
+        let images_before = self.images.len();
+
         match cmd {
             command::Delete::All(delete_images) => {
                 // var it = self.placements.iterator();
@@ -350,8 +435,6 @@ impl ImageStorage {
                         self.delete_if_unused(alloc, k);
                     }
                 }
-
-                self.dirty = true;
             }
 
             command::Delete::Id {
@@ -474,9 +557,6 @@ impl ImageStorage {
                         }
                     }
                 }
-
-                // Mark dirty to force redraw
-                self.dirty = true;
             }
 
             #[allow(clippy::absurd_extreme_comparisons)]
@@ -525,9 +605,6 @@ impl ImageStorage {
                         }
                     }
                 }
-
-                // Mark dirty to force redraw
-                self.dirty = true;
             }
 
             command::Delete::Z { delete, z } => {
@@ -553,9 +630,6 @@ impl ImageStorage {
                         }
                     }
                 }
-
-                // Mark dirty to force redraw
-                self.dirty = true;
             }
 
             #[allow(clippy::absurd_extreme_comparisons)]
@@ -587,14 +661,15 @@ impl ImageStorage {
                         }
                     }
                 }
-
-                // Mark dirty to force redraw
-                self.dirty = true;
             }
 
             // We don't support animation frames yet so they are successfully
             // deleted!
             command::Delete::AnimationFrames(_) => {}
+        }
+
+        if self.placements.len() != placements_before || self.images.len() != images_before {
+            self.mark_mutated();
         }
     }
 
@@ -636,9 +711,6 @@ impl ImageStorage {
         if delete_unused {
             self.delete_if_unused(alloc, image_id);
         }
-
-        // Mark dirty to force redraw
-        self.dirty = true;
     }
 
     /// Delete an image if it is unused.
@@ -707,9 +779,6 @@ impl ImageStorage {
                 }
             }
         }
-
-        // Mark dirty to force redraw
-        self.dirty = true;
     }
 
     /// Evict image to make space. This will evict the oldest image,
@@ -752,7 +821,7 @@ impl ImageStorage {
             // try candidates.append(alloc, .{ ... });
             candidates.push(Candidate {
                 id: img.id,
-                time: img.transmit_time,
+                generation: img.generation,
                 used,
             });
         }
@@ -763,12 +832,14 @@ impl ImageStorage {
             // PORT NOTE: the reference `lessThan` returns `bool`; we port it to a
             // total `Ordering` comparator. `lessThan(lhs, rhs)` true ⇒ `Less`.
 
-            // If they're usage matches, then its based on time.
+            // If their usage matches, then it's based on the generation stamp,
+            // which orders by transmit time. (Stamps are unique but tie-break by
+            // ID anyway to stay deterministic for hand-built test images.)
             if lhs.used == rhs.used {
-                return match instant_order(lhs.time, rhs.time) {
-                    std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-                    std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
-                    std::cmp::Ordering::Equal => lhs.id.cmp(&rhs.id),
+                return if lhs.generation == rhs.generation {
+                    lhs.id.cmp(&rhs.id)
+                } else {
+                    lhs.generation.cmp(&rhs.generation)
                 };
             }
 
@@ -781,6 +852,14 @@ impl ImageStorage {
             }
         });
 
+        // Evicting anything is a content mutation. This matters for the
+        // `set_limit` path in particular, which doesn't otherwise mark it.
+        //
+        // PORT NOTE: Zig `defer if (any_evicted) self.markMutated();`. Rust has
+        // no `defer`, so the flag is checked at BOTH success paths: the
+        // `return Ok(true)` inside the loop and the trailing `Ok(false)`.
+        let mut any_evicted = false;
+
         // They're in order of best to evict.
         let mut evicted: usize = 0;
         for c in &candidates {
@@ -789,6 +868,7 @@ impl ImageStorage {
             for key in keys {
                 if key.image_id == c.id {
                     self.placements.remove(&key);
+                    any_evicted = true;
                 }
             }
 
@@ -801,13 +881,20 @@ impl ImageStorage {
 
                 // entry.value_ptr.deinit(alloc); — dropping the removed Image frees data.
                 self.images.remove(&c.id);
+                any_evicted = true;
 
                 if evicted > req {
+                    if any_evicted {
+                        self.mark_mutated();
+                    }
                     return Ok(true);
                 }
             }
         }
 
+        if any_evicted {
+            self.mark_mutated();
+        }
         Ok(false)
     }
 }
@@ -828,21 +915,8 @@ pub struct OutOfMemory;
 // so it is hoisted to a private module-level struct with identical fields.
 struct Candidate {
     id: u32,
-    // PORT NOTE: `time: std.time.Instant`. `Image.transmit_time` is modeled as
-    // `Option<Instant>` (see graphics_image), so we carry the same `Option`.
-    time: Option<std::time::Instant>,
+    generation: u64,
     used: bool,
-}
-
-/// `std.time.Instant.order(self, other)` over the `Option<Instant>` modeling of
-/// `transmit_time`. Mirrors the reference comparison where `transmit_time` is a
-/// monotonic `Instant`; `None` (the "not yet completed", reference `undefined`)
-/// orders consistently and deterministically below any `Some`.
-fn instant_order(
-    a: Option<std::time::Instant>,
-    b: Option<std::time::Instant>,
-) -> std::cmp::Ordering {
-    a.cmp(&b)
 }
 
 /// Every placement is uniquely identified by the image ID and the
@@ -2558,6 +2632,260 @@ mod tests {
             assert_eq!(100u32, calc_size.height);
         }
 
+        t.deinit(alloc);
+    }
+
+    // test "storage: generation stamps on image add and replace"
+    #[test]
+    fn storage_generation_stamps_on_image_add_and_replace() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // Fresh storage has generation zero (never mutated).
+        assert_eq!(0u64, s.generation);
+
+        s.add_image(
+            alloc,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let gen1 = s.generation;
+        assert!(gen1 > 0);
+
+        let img1 = s.image_by_id(1).unwrap();
+        assert_eq!(gen1, img1.generation);
+
+        // A second image gets a strictly greater stamp.
+        s.add_image(
+            alloc,
+            Image {
+                id: 2,
+                width: 1,
+                height: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let gen2 = s.generation;
+        assert!(gen2 > gen1);
+        assert_eq!(gen2, s.image_by_id(2).unwrap().generation);
+
+        // Retransmitting the same image ID (identical dimensions) gets a
+        // fresh stamp: this is what makes same-sized retransmissions
+        // detectable by renderers.
+        s.add_image(
+            alloc,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let gen3 = s.generation;
+        assert!(gen3 > gen2);
+        assert_eq!(gen3, s.image_by_id(1).unwrap().generation);
+
+        // Image 2 kept its stamp.
+        assert_eq!(gen2, s.image_by_id(2).unwrap().generation);
+
+        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        t.deinit(alloc);
+    }
+
+    // test "storage: generation bumps on placement and delete"
+    #[test]
+    fn storage_generation_bumps_on_placement_and_delete() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let gen_add = s.generation;
+
+        let pin = track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap();
+        s.add_placement(alloc, 1, 1, Placement::with_location(Location::Pin(pin)))
+            .unwrap();
+        let gen_place = s.generation;
+        assert!(gen_place > gen_add);
+
+        // Reads don't change the generation.
+        let _ = s.image_by_id(1);
+        let _ = s.image_by_number(1);
+        assert_eq!(gen_place, s.generation);
+
+        s.delete(alloc, &mut t, command::Delete::All(true));
+        assert!(s.generation > gen_place);
+
+        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        t.deinit(alloc);
+    }
+
+    // test "storage: generation bumps when setLimit evicts or disables"
+    #[test]
+    fn storage_generation_bumps_when_set_limit_evicts_or_disables() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        s.add_image(
+            alloc,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                data: b"1234".to_vec(),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let gen_add = s.generation;
+
+        // Lowering the limit evicts the image and must mark a mutation.
+        s.dirty = false;
+        s.set_limit(alloc, unsafe { &mut *t.screens.active }, 1)
+            .unwrap();
+        assert!(s.dirty);
+        assert!(s.generation > gen_add);
+        assert_eq!(0usize, s.images.len());
+        let gen_evict = s.generation;
+
+        // Disabling (limit=0) resets the storage and must mark a mutation.
+        s.dirty = false;
+        s.set_limit(alloc, unsafe { &mut *t.screens.active }, 0)
+            .unwrap();
+        assert!(s.dirty);
+        assert!(s.generation > gen_evict);
+
+        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        t.deinit(alloc);
+    }
+
+    // test "storage: imageByNumber returns most recently transmitted"
+    #[test]
+    fn storage_image_by_number_returns_most_recently_transmitted() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // Two images sharing a number: the newest transmission wins,
+        // regardless of insertion order or clock resolution.
+        s.add_image(
+            alloc,
+            Image {
+                id: 1,
+                number: 7,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            Image {
+                id: 2,
+                number: 7,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(2u32, s.image_by_number(7).unwrap().id);
+
+        // Retransmit the first: it becomes the newest.
+        s.add_image(
+            alloc,
+            Image {
+                id: 1,
+                number: 7,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(1u32, s.image_by_number(7).unwrap().id);
+
+        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        t.deinit(alloc);
+    }
+
+    // test "storage: nextGeneration is unique and monotonic"
+    #[test]
+    fn storage_next_generation_is_unique_and_monotonic() {
+        let a = next_generation();
+        let b = next_generation();
+        assert!(b > a);
+        assert!(a > 0);
+    }
+
+    // test "storage: no-op delete does not mark a mutation"
+    #[test]
+    fn storage_no_op_delete_does_not_mark_a_mutation() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // A delete-all on an empty storage (this runs on every screen
+        // clear) must not dirty the state or bump the generation.
+        s.delete(alloc, &mut t, command::Delete::All(true));
+        assert!(!s.dirty);
+        assert_eq!(0u64, s.generation);
+
+        // Same for a delete that matches nothing.
+        s.add_image(
+            alloc,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let pin = track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap();
+        s.add_placement(alloc, 1, 1, Placement::with_location(Location::Pin(pin)))
+            .unwrap();
+        let gen = s.generation;
+        s.dirty = false;
+        s.delete(
+            alloc,
+            &mut t,
+            command::Delete::Id {
+                delete: false,
+                image_id: 42,
+                placement_id: 0,
+            },
+        );
+        assert!(!s.dirty);
+        assert_eq!(gen, s.generation);
+
+        // But a delete that removes something does mark a mutation.
+        s.delete(
+            alloc,
+            &mut t,
+            command::Delete::Id {
+                delete: false,
+                image_id: 1,
+                placement_id: 0,
+            },
+        );
+        assert!(s.dirty);
+        assert!(s.generation > gen);
+
+        s.deinit(alloc, unsafe { &mut *t.screens.active });
         t.deinit(alloc);
     }
 }
