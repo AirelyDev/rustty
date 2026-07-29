@@ -8,3 +8,7 @@
 
 /// The raw LZ4 block codec used for terminal page memory.
 pub mod lz4;
+
+// test { _ = @import("lz4_differential.zig"); } (lz4.zig's trailing test block)
+#[cfg(test)]
+mod lz4_differential;
