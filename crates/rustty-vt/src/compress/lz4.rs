@@ -115,6 +115,265 @@ pub fn compress_bound(input_len: usize) -> Result<usize, CompressError> {
     Ok(input_len + input_len / 255 + 16)
 }
 
+/// Decompress a raw LZ4 block into an exact-size output buffer.
+///
+/// Returns `output.len()` on success. Both consuming all input and filling all
+/// output are required. Raw LZ4 blocks do not carry their decoded size, so this
+/// exact-size contract validates the size metadata maintained by the caller.
+/// The input and output buffers must not overlap (guaranteed by `&[u8]` +
+/// `&mut [u8]` in Rust).
+pub fn decompress(input: &[u8], output: &mut [u8]) -> Result<usize, DecompressError> {
+    // `ip` and `op` always identify the next unread input byte and the next
+    // unwritten output byte respectively.
+    //
+    // The decoder is written around one observation: almost every sequence
+    // in real blocks has a short literal run and a short match. Both fast
+    // paths below copy a fixed number of bytes blindly and let the length
+    // arithmetic sort out how many of them were meaningful. Writing past a
+    // run's logical end is safe within the output buffer because decoding
+    // is strictly in order: every byte past `op` is either rewritten by a
+    // later copy before anything can read it, or lies beyond the block's
+    // final length and is never part of the result. The margin conditions
+    // on the fast paths also subsume the exact bounds checks they replace,
+    // which keeps decoding of malformed blocks memory-safe.
+    let mut ip: usize = 0;
+    let mut op: usize = 0;
+
+    loop {
+        // A normal block ends after the literal bytes of its final sequence.
+        // This also accepts the empty block produced by our compressor, which
+        // consists of a zero token and no literals.
+        if ip == input.len() {
+            if op != output.len() {
+                return Err(DecompressError::OutputSizeMismatch);
+            }
+            return Ok(op);
+        }
+
+        let token = input[ip];
+        ip += 1;
+
+        // The high nibble and any extension bytes describe the literal run.
+        // The literals are copied as a side effect of computing the length.
+        let literal_len: usize = {
+            let nibble = (token >> 4) as usize;
+            if nibble != 15 && core::cmp::min(input.len() - ip, output.len() - op) >= 16 {
+                // A run below the extension threshold is at most 14 bytes,
+                // so with a 16-byte margin on both buffers one wide copy
+                // covers it.
+                output[op..op + 16].copy_from_slice(&input[ip..ip + 16]);
+                nibble
+            } else {
+                // Extended or margin-poor runs take the checked path. Bounds are
+                // verified before copying so malformed blocks never cause a
+                // partial read or write.
+                let len = decode_length(input, &mut ip, nibble)?;
+                if len > input.len() - ip {
+                    return Err(DecompressError::TruncatedInput);
+                }
+                if len > output.len() - op {
+                    return Err(DecompressError::OutputTooSmall);
+                }
+                output[op..op + len].copy_from_slice(&input[ip..ip + len]);
+                len
+            }
+        };
+        ip += literal_len;
+        op += literal_len;
+
+        // Ending immediately after the literals marks the final sequence. Any
+        // non-final sequence must continue with an offset and match length.
+        if ip == input.len() {
+            if op != output.len() {
+                return Err(DecompressError::OutputSizeMismatch);
+            }
+            return Ok(op);
+        }
+
+        if input.len() - ip < 2 {
+            return Err(DecompressError::TruncatedInput);
+        }
+        let offset = read_u16(input, ip) as usize;
+        ip += 2;
+        if offset == 0 || offset > op {
+            return Err(DecompressError::InvalidOffset);
+        }
+
+        // The token stores the match length minus the four-byte minimum. As
+        // with literals, a low nibble of 15 is extended by following bytes.
+        let match_nibble = (token & 0x0F) as usize;
+
+        // A match whose length fits its nibble spans at most 18 bytes, so
+        // three blind copies always cover it. They are overlap-safe when the
+        // offset is at least a word: each load lies a full word behind the
+        // store which could observe it, so repeating patterns propagate
+        // correctly.
+        if match_nibble != 15 && offset >= 8 && output.len() - op >= 18 {
+            let m = op - offset;
+            copy_u64_within(output, op, m);
+            copy_u64_within(output, op + 8, m + 8);
+            copy_u16_within(output, op + 16, m + 16);
+            op += match_nibble + MIN_MATCH;
+            continue;
+        }
+
+        let encoded_match_len = decode_length(input, &mut ip, match_nibble)?;
+        let match_len = encoded_match_len
+            .checked_add(MIN_MATCH)
+            .ok_or(DecompressError::OutputTooSmall)?;
+        if match_len > output.len() - op {
+            return Err(DecompressError::OutputTooSmall);
+        }
+
+        // Match copies may overlap, so this cannot always be one copy.
+        // `copy_match` expands the common small repeating periods into wide
+        // stores and uses word copies for larger offsets.
+        copy_match(output, op, offset, match_len);
+        op += match_len;
+    }
+}
+
+/// Decode a length from its token nibble and any following extension bytes.
+/// `ip` is advanced past every consumed extension byte.
+fn decode_length(input: &[u8], ip: &mut usize, nibble: usize) -> Result<usize, DecompressError> {
+    let mut length: usize = nibble;
+    if nibble != 15 {
+        return Ok(length);
+    }
+
+    loop {
+        if *ip >= input.len() {
+            return Err(DecompressError::TruncatedInput);
+        }
+        let value = input[*ip];
+        *ip += 1;
+        length = length
+            .checked_add(value as usize)
+            .ok_or(DecompressError::TruncatedInput)?;
+        if value != 255 {
+            return Ok(length);
+        }
+    }
+}
+
+/// Copy one decoded match from `offset` bytes behind `op`.
+///
+/// The caller has validated that the match fits: `op + match_len` never
+/// exceeds `output.len()`. Wide copies may write a few scratch bytes past the
+/// match's logical end; as described in `decompress`, that is safe anywhere
+/// the write stays inside the output buffer. Every path therefore bounds its
+/// wide stores by both the match end and the buffer end, and the bytewise
+/// loop at the bottom finishes whatever remains.
+fn copy_match(output: &mut [u8], op_: usize, offset: usize, match_len: usize) {
+    let mut op = op_;
+    let end = op_ + match_len;
+
+    // A source which ends behind the copy can never overlap it. Long
+    // distant matches are common in structured pages (repeated rows and
+    // whole blank regions), and one exact copy moves them in cache-line
+    // units. Shorter matches are not worth the call overhead.
+    if offset >= match_len && match_len >= 64 {
+        output.copy_within(op - offset..op - offset + match_len, op);
+        return;
+    }
+
+    match offset {
+        // A period which divides the word size expands into one repeated
+        // pattern word. Long runs (blank lines, repeated cells) then become
+        // independent stores, with no load waiting on a preceding store.
+        // Stores advance by whole words from `op`, which preserves the
+        // pattern's phase.
+        1 | 2 | 4 | 8 => {
+            let pattern: u64 = match offset {
+                // PORT NOTE: none of these products can overflow `u64` —
+                // the maximum factor of each pattern width times its
+                // repetition constant is exactly `u64::MAX`
+                // (0xFF * 0x0101…01, 0xFFFF * 0x0001…01, 0xFFFF_FFFF *
+                // 0x0000_0001_0000_0001). Plain `*` therefore matches the
+                // oracle under rustty's `overflow-checks = true` profiles.
+                1 => (output[op - 1] as u64) * 0x0101_0101_0101_0101,
+                2 => (read_u16(output, op - 2) as u64) * 0x0001_0001_0001_0001,
+                4 => (read_u32(output, op - 4) as u64) * 0x0000_0001_0000_0001,
+                8 => read_u64(output, op - 8),
+                _ => unreachable!(),
+            };
+
+            let limit = core::cmp::min(end, output.len().saturating_sub(7));
+            while op < limit {
+                output[op..op + 8].copy_from_slice(&pattern.to_le_bytes());
+                op += 8;
+            }
+        }
+
+        // Wide copies are overlap-safe for the remaining offsets of at
+        // least a copy unit: each load lies a full unit behind the store
+        // which could observe it. Offsets 3, 5, 6, and 7 fall through to
+        // the bytewise loop; they are rare in real data and word tricks
+        // for them cost more in complexity than they return.
+        _ => {
+            if offset >= 16 {
+                let limit = core::cmp::min(end, output.len().saturating_sub(15));
+                while op < limit {
+                    copy_u128_within(output, op, op - offset);
+                    op += 16;
+                }
+            } else if offset >= 8 {
+                let limit = core::cmp::min(end, output.len().saturating_sub(7));
+                while op < limit {
+                    copy_u64_within(output, op, op - offset);
+                    op += 8;
+                }
+            }
+        }
+    }
+
+    while op < end {
+        output[op] = output[op - offset];
+        op += 1;
+    }
+}
+
+// -- Unaligned little-endian reads / intra-buffer wide copies --------------
+//
+// PORT NOTE: the oracle uses `std.mem.readInt(..., .little)` on a fixed-size
+// slice plus `copyIntAt` to move one integer between byte ranges. The Rust
+// equivalents below are pure safe slice operations. `try_into().unwrap()` on a
+// fixed-length subslice is a compile-time-sized conversion that LLVM lowers to
+// an unaligned load; the `unwrap` is provably infallible.
+
+#[inline(always)]
+fn read_u16(buf: &[u8], pos: usize) -> u16 {
+    u16::from_le_bytes(buf[pos..pos + 2].try_into().unwrap())
+}
+
+#[inline(always)]
+fn read_u32(buf: &[u8], pos: usize) -> u32 {
+    u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap())
+}
+
+#[inline(always)]
+fn read_u64(buf: &[u8], pos: usize) -> u64 {
+    u64::from_le_bytes(buf[pos..pos + 8].try_into().unwrap())
+}
+
+#[inline(always)]
+fn copy_u16_within(buf: &mut [u8], dst: usize, src: usize) {
+    let v = read_u16(buf, src);
+    buf[dst..dst + 2].copy_from_slice(&v.to_le_bytes());
+}
+
+#[inline(always)]
+fn copy_u64_within(buf: &mut [u8], dst: usize, src: usize) {
+    let v = read_u64(buf, src);
+    buf[dst..dst + 8].copy_from_slice(&v.to_le_bytes());
+}
+
+#[inline(always)]
+fn copy_u128_within(buf: &mut [u8], dst: usize, src: usize) {
+    let v = u128::from_le_bytes(buf[src..src + 16].try_into().unwrap());
+    buf[dst..dst + 16].copy_from_slice(&v.to_le_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +386,130 @@ mod tests {
         assert_eq!(
             compress_bound(MAX_INPUT_SIZE + 1),
             Err(CompressError::InputTooLarge)
+        );
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "literal-only compatibility vectors"`
+    #[test]
+    fn lz4_literal_only_compatibility_vectors() {
+        let mut empty: [u8; 0] = [];
+        assert_eq!(decompress(&[0], &mut empty), Ok(0));
+
+        let mut hello = [0u8; 5];
+        assert_eq!(
+            decompress(&[0x50, b'h', b'e', b'l', b'l', b'o'], &mut hello),
+            Ok(5)
+        );
+        assert_eq!(&hello, b"hello");
+
+        let mut fifteen = [0u8; 15];
+        let mut encoded = [b'x'; 17];
+        encoded[0] = 0xF0;
+        encoded[1] = 0;
+        decompress(&encoded, &mut fifteen).unwrap();
+        assert!(fifteen.iter().all(|&b| b == b'x'));
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "overlapping match compatibility vector"`
+    ///
+    /// One literal 'a', followed by a four-byte match at distance one.
+    #[test]
+    fn lz4_overlapping_match_compatibility_vector() {
+        let mut output = [0u8; 5];
+        assert_eq!(decompress(&[0x10, b'a', 0x01, 0x00], &mut output), Ok(5));
+        assert_eq!(&output, b"aaaaa");
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "extended overlapping match compatibility vector"`
+    ///
+    /// One literal followed by a 274-byte match. The match extension is
+    /// encoded as 255 + 0 after the low token nibble's initial 15 bytes.
+    #[test]
+    fn lz4_extended_overlapping_match_compatibility_vector() {
+        let mut output = [0u8; 275];
+        assert_eq!(
+            decompress(&[0x1F, b'a', 0x01, 0x00, 0xFF, 0x00], &mut output),
+            Ok(275)
+        );
+        assert!(output.iter().all(|&b| b == b'a'));
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "short offset compatibility vectors"`
+    ///
+    /// These blocks end immediately after their match. Besides covering the
+    /// repeating-pattern paths, they verify that the decoder uses exact copies
+    /// when the block does not provide the standard trailing-literal margin.
+    #[test]
+    fn lz4_short_offset_compatibility_vectors() {
+        let mut offset_two = [0u8; 6];
+        decompress(&[0x20, b'a', b'b', 0x02, 0x00], &mut offset_two).unwrap();
+        assert_eq!(&offset_two, b"ababab");
+
+        let mut offset_three = [0u8; 9];
+        decompress(&[0x32, b'a', b'b', b'c', 0x03, 0x00], &mut offset_three).unwrap();
+        assert_eq!(&offset_three, b"abcabcabc");
+
+        let mut offset_four = [0u8; 8];
+        decompress(&[0x40, b'a', b'b', b'c', b'd', 0x04, 0x00], &mut offset_four).unwrap();
+        assert_eq!(&offset_four, b"abcdabcd");
+    }
+
+    /// PORTS: oracle@main lz4.zig
+    /// `test "bounded wild copies are overwritten by final literals"`
+    #[test]
+    fn lz4_bounded_wild_copies_are_overwritten_by_final_literals() {
+        // The first sequence's nine-byte match leaves the five final literals
+        // required by the LZ4 block format. Its logical one-byte tail is copied
+        // as a word and the following literal sequence overwrites the extra
+        // bytes.
+        let mut repeated_byte = [0u8; 15];
+        decompress(
+            &[0x15, b'a', 0x01, 0x00, 0x50, b'1', b'2', b'3', b'4', b'5'],
+            &mut repeated_byte,
+        )
+        .unwrap();
+        assert_eq!(&repeated_byte, b"aaaaaaaaaa12345");
+
+        // Exercise the same bounded tail copy with a non-overlapping offset.
+        let mut word_offset = [0u8; 22];
+        decompress(
+            &[
+                0x85, b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', 0x08, 0x00, 0x50, b'1',
+                b'2', b'3', b'4', b'5',
+            ],
+            &mut word_offset,
+        )
+        .unwrap();
+        assert_eq!(&word_offset, b"abcdefghabcdefgha12345");
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "decompress rejects malformed blocks"`
+    #[test]
+    fn lz4_decompress_rejects_malformed_blocks() {
+        let mut output = [0u8; 32];
+        assert_eq!(
+            decompress(&[0xF0], &mut output),
+            Err(DecompressError::TruncatedInput)
+        );
+        assert_eq!(
+            decompress(&[0x10, b'a', 1], &mut output[0..5]),
+            Err(DecompressError::TruncatedInput)
+        );
+        assert_eq!(
+            decompress(&[0x10, b'a', 0, 0], &mut output[0..5]),
+            Err(DecompressError::InvalidOffset)
+        );
+        assert_eq!(
+            decompress(&[0x10, b'a', 2, 0], &mut output[0..5]),
+            Err(DecompressError::InvalidOffset)
+        );
+        assert_eq!(
+            decompress(&[0x10, b'a', 1, 0], &mut output[0..4]),
+            Err(DecompressError::OutputTooSmall)
+        );
+        assert_eq!(
+            decompress(&[0], &mut output[0..1]),
+            Err(DecompressError::OutputSizeMismatch)
         );
     }
 }
