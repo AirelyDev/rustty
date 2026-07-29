@@ -82,11 +82,18 @@ real-`MTLDevice` readback KAT
 `update_content_scale_rescales_active_imgui_style` /
 `update_content_scale_is_idempotent_not_compounding`.
 
-**Residual (minor):** a genuine cross-DPI monitor drag was not performed — the
-rescale is proven by the A/B plus the KATs, and the host wiring
-(`InspectorView.swift:173` `updateSize()` → `setContentScale`, computed from
-`convertToBacking`) was read and confirmed. Re-verify opportunistically on a
-multi-display machine.
+**Residual (minor):** a genuine cross-DPI drag-between-monitors was not possible
+on this host (only one built-in Retina display was available). The WS6 plan's
+T5 Step 6 offered a single-display fallback — System Settings → Displays →
+toggle the built-in display between a HiDPI and a non-HiDPI (1x) resolution —
+and that fallback was **not attempted**. The A/B rebuild (above) proves T3
+*changes rendering* (unscaled vs. Retina-scaled style), but nothing exercised
+the *runtime* re-stamp path on a live density change: `updateSize()` calling
+`convertToBacking` is the resize path, while the density-change path is
+`viewDidChangeBackingProperties` → `setContentScale` → `updateContentScale`,
+which was read and confirmed present but never triggered end-to-end.
+Re-verify opportunistically on a multi-display machine, or by exercising the
+1x/HiDPI resolution-toggle fallback on a single-display machine.
 
 ## V2. Bare-metal GPU rendering/perf sign-off (blocked: VM is llvmpipe-only)
 

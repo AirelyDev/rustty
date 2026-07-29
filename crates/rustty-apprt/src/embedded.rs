@@ -3140,6 +3140,13 @@ mod inspector_style_tests {
             let ig_ctx = dcimgui_sys::ImGui_CreateContext(core::ptr::null_mut());
             assert!(!ig_ctx.is_null(), "ImGui_CreateContext(NULL) returned null");
 
+            // Dear ImGui persists window geometry to `io.IniFilename` (default
+            // `"imgui.ini"`) on the next frame/shutdown; null it out so this
+            // test never writes a stray file into the crate root (same
+            // discipline as `dcimgui-sys`'s `metal_offscreen` KAT).
+            let io = dcimgui_sys::ImGui_GetIO();
+            (*io).IniFilename = core::ptr::null();
+
             let mut inspector = Inspector {
                 surface: core::ptr::null_mut(),
                 ig_ctx,
@@ -3184,6 +3191,11 @@ mod inspector_style_tests {
         unsafe {
             let ig_ctx = dcimgui_sys::ImGui_CreateContext(core::ptr::null_mut());
             assert!(!ig_ctx.is_null(), "ImGui_CreateContext(NULL) returned null");
+
+            // See the sibling test above: null `IniFilename` so this test
+            // never writes a stray `imgui.ini` into the crate root.
+            let io = dcimgui_sys::ImGui_GetIO();
+            (*io).IniFilename = core::ptr::null();
 
             let mut inspector = Inspector {
                 surface: core::ptr::null_mut(),

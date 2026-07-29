@@ -955,7 +955,7 @@ NO new verbatim-body deferrals; it RESOLVES/OWNS the following:
 
 **RESOLVED (WS6, 2026-07-28).** `rustty_inspector::Inspector` is no longer an
 uninhabited enum: the crate is a fully inhabited 13-module port of oracle
-`src/inspector/**` (11 625 Rust LOC vs 4 873 Zig LOC), landed by the 2026-07-14
+`src/inspector/**` (~11.6k Rust LOC vs 4 873 Zig LOC), landed by the 2026-07-14
 inspector series (`b344e09`…`d6be9b2`). The widget-render residual is proven
 ZERO by `python3 .port/tools/gates/check_comment_coverage.py --crate
 rustty-inspector --strict` (WS6 T2), which reports `distinctive ref

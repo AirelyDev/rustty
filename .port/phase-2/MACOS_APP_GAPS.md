@@ -72,7 +72,7 @@ On-device visible-window KAT: remains #[ignore] (needs the process main thread);
 
 ### LOW — polish / correctly-dead / off-platform
 - **drainMailbox autoreleasepool** ported as no-op scope (`renderer_seam.rs:949`) — slow ObjC leak under sustained mailbox traffic, no correctness/blank impact. Fix via a `rustty_os` autoreleasepool shim. — RESOLVED (WS2-C, 2026-07-23) via rustty_os::autorelease::autoreleasepool wired at renderer_seam.rs drainMailbox.
-- **renderer inspector `overlayFeatures`** — RESOLVED. The uninhabited-enum claim is obsolete: `overlay_features()` is a live trait method (`rustty-renderer/src/state.rs:48`) implemented by `rustty-inspector`'s `renderer::Info` (`widgets/renderer.rs:290`), and `rebuild_overlay` (`generic.rs:4322`) is a real implementation, not a placeholder.
+- **renderer inspector `overlayFeatures`** — RESOLVED. The uninhabited-enum claim is obsolete: `overlay_features()` is a live trait method (`rustty-renderer/src/state.rs:48`) implemented by `rustty-inspector`'s `renderer::Info` (`widgets/renderer.rs:295`), and `rebuild_overlay` (`generic.rs:4322`) is a real implementation, not a placeholder.
 - **Backend::childExitedAbnormally** (`termio/backend.rs:180`) — no callers; real path is `Surface::childExitedAbnormally` (`surface.rs:3601`, implemented).
 - **xev ThreadPool** (`thread_pool.rs:77`) — type-surface only; PTY uses `EVFILT_READ`, never the pool.
 - **xev non_macos_seam** (`lib.rs:344`, ~15 sites) — `#[cfg(not(macos))]`, compiled out.
