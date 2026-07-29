@@ -4905,3 +4905,16 @@ From **WS7 Phase B review (I1)** — these need the final
    `mark_activity` sites, not 11. See the PORT NOTE next to `mark_activity` in
    `crates/rustty-vt/src/pagelist/compress.rs`. If a `Limits` struct is ever
    introduced, `enforce` must `mark_activity` on entry.
+
+## Deferred to WS7 Phase E (Miri / gates)
+
+From **WS7 Phase B review (I2 harness run)**:
+
+1. **`compress_page` feeds uninitialized bytes to LZ4 (Miri SB, OPEN).**
+   `.port/phase-2/mirihar-pagelist-compress`'s `roundtrip`/`leak` scenarios abort with
+   "constructing invalid value of type `[u8; 8]`: encountered uninitialized memory" inside
+   `lz4::compress` reading the page mapping (`compress/page.rs:137` ->
+   `pagelist/compress.rs:406`). Pre-existing to the review round — it is a property of
+   B7's design, not of any review fix. Full write-up, backtrace and candidate resolutions
+   in `.port/phase-2/MIRI_EXCEPTIONS.md` ("WS7 Phase B"). Phase E must either fix it or
+   record a formal 4-criterion exception; it must NOT be left silently red.

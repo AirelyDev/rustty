@@ -953,3 +953,75 @@ here with cause, and the harness is committed so it is re-runnable in seconds.
 
 Phase B's `.port/phase-2/mirihar-compress/` (the compress/restore *seam*, which has real
 raw-pointer aliasing) is separate and still owed.
+
+## WS7 Phase B — compressed scrollback pages: isolated harness + one OPEN finding (2026-07-29)
+
+Harness: `.port/phase-2/mirihar-pagelist-compress/` — a binary crate that depends on the
+REAL `rustty-vt` by path (only the library is built under Miri, not the 2136-test test
+binary, which has never completed on this host — see the Phase A entry above). Scenarios
+are selectable: `split`, `siblings`, `roundtrip`, `leak`, `leakcheck`.
+
+Accommodations (all `cfg(miri)`, none affecting production behaviour):
+`rustty-os`'s page allocator already served page memory from the std heap under
+`cfg(miri)`; `crates/rustty-vt/src/mem.rs`'s `can_reclaim`/`decommit`/`recommit` now take
+their simulated arm under `cfg!(miri)` as well as `cfg!(test)` (Miri has no FFI, so
+`madvise` is uncallable, and the std heap is not an OS mapping); the harness sets
+`[profile.dev] debug-assertions = false` because `Page::assert_integrity` is O(page), runs
+on nearly every PageList mutation, and adds no SB/TB or leak coverage.
+
+| scenario | model | result | time |
+|---|---|---|---|
+| `split` + `siblings` (the I2 aliasing proof) | Stacked Borrows | **CLEAN** — no UB, no leak | ~4 min |
+| `split` with the PRE-FIX reference-derived `Node::page` | Stacked Borrows | **UB reproduced as predicted** (see below) | ~3 min |
+| `roundtrip` + `leak` | Stacked Borrows | **OPEN FINDING** — see below | ~45 min |
+
+### The I2 negative control (this is the proof the fix is load-bearing)
+
+Restoring B6's `match &mut *addr_of_mut!((*node).data) { Resident(p) => p as *mut Page }`
+body and running `split` gives, at `pagelist/grow.rs:128` (inside `split`'s clear-rows
+block, after the tracked-pin loop):
+
+```
+error: Undefined Behavior: trying to retag from <364963> for SharedReadOnly permission
+       at alloc1161[0x1e8], but that tag does not exist in the borrow stack for this location
+help: <364963> was created by a SharedReadWrite retag at offsets [0x1e8..0x378]
+help: <364963> was later invalidated at offsets [0x1e0..0x390] by a Unique retag
+```
+
+Exactly the predicted failure: the `&mut NodeData` in the second accessor call is the
+`Unique` retag that invalidates the first call's result. With the `#[repr(C, u8)]` +
+`offset_of!` accessors it is clean.
+
+### OPEN FINDING — uninit bytes in the page mapping fed to LZ4
+
+`roundtrip`/`leak` abort in `compress_page`:
+
+```
+error: Undefined Behavior: constructing invalid value of type [u8; 8]: at [2],
+       encountered uninitialized memory, but expected an integer
+  3: rustty_vt::compress::lz4::read_u64            compress/lz4.rs:720
+  4: rustty_vt::compress::lz4::match_end_position  compress/lz4.rs:355
+  5: rustty_vt::compress::lz4::compress            compress/lz4.rs:214
+  6: rustty_vt::compress::CompressedPage::init     compress/page.rs:137
+  7: PageList::compress_page                       pagelist/compress.rs:406
+```
+
+This is **not** in anything the Phase B review round touched — it is a property of B7's
+`compress_page` design: LZ4 reads the WHOLE page mapping as `[u8]`, and under Miri's model
+some bytes of that mapping are uninitialized even though the mapping was handed out
+zeroed. (Leading hypothesis: typed writes of padded Rust structs into the mapping —
+`Cell`/`Row` are `repr(transparent) u64` with no padding, so the candidates are the
+style/hyperlink/string/grapheme table entries and the alignment gaps between sub-tables.
+NOT yet confirmed; confirming it needs `-Zmiri-backtrace=full` plus the allocation offset,
+another ~45 min run.)
+
+Native impact is nil — on a real mmap the bytes are OS-zeroed and Miri's uninit tracking
+does not apply to FFI-obtained memory — but it IS UB in the Rust abstract machine and must
+be resolved or formally excepted.
+
+**Status: OPEN, scheduled to WS7 Phase E** (see `.port/phase-2/DEFERRALS.md`). Candidate
+resolutions: zero the padding on write, read the mapping through a `freeze`/volatile
+path before compressing, or a documented per-path exception. It does NOT affect the I2 or
+I3 evidence: `split`/`siblings` are SB-clean with the negative control reproducing the
+exact predicted UB, and the I3 leak check is proven failing-then-passing natively through
+the harness's counting `#[global_allocator]`.
