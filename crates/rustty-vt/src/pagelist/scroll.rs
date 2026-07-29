@@ -62,6 +62,18 @@ impl PageList {
         // public `scroll`, preserving the reference's assert-on-every-exit
         // (including post-recursion) `defer` semantics.
         self.scroll_impl(behavior);
+
+        // Moving the viewport changes which historical pages are visible.
+        // Restart traversal so pages which leave the viewport are reconsidered
+        // after the renderer's idle delay. False positives from clamped
+        // scrolling are cheap.
+        //
+        // PORT NOTE (WS7 B8): the oracle spells this `defer { ... }` at the top
+        // of `scroll`; the rustty split into `scroll`/`scroll_impl` puts it
+        // after the inner call, which is the same every-exit-path guarantee.
+        self.page_compression.reset();
+        self.page_compression.mark_activity();
+
         self.assert_integrity();
     }
 

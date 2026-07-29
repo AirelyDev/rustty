@@ -964,6 +964,7 @@ impl PageList {
             pages: page_list,
             page_serial,
             page_serial_min: 0,
+            page_compression: super::compress::IncrementalCompressionState::default(),
             page_size,
             explicit_max_size: self.explicit_max_size,
             min_max_size: self.min_max_size,

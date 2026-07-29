@@ -25,6 +25,7 @@
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
+use super::compress::{CompressionMode, IncrementalCompressionResult};
 use super::{std_capacity, std_size, NodeData, Owned, PageList, Pin, Storage, Viewport};
 use crate::page::{Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
@@ -1967,6 +1968,108 @@ fn fill_compressible_history(s: &mut PageList, pages: usize) {
         iterations += 1;
         assert!(iterations < 100_000, "history did not grow to {pages} pages");
     }
+}
+
+/// Incremental compression converges: repeated steps eventually report
+/// `Complete`, having compressed the cold history.
+#[test]
+fn pagelist_compress_incremental_converges_to_complete() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 6);
+
+    let mut steps = 0usize;
+    loop {
+        match s.compress(CompressionMode::Incremental) {
+            IncrementalCompressionResult::Pending => {
+                steps += 1;
+                assert!(steps < 10_000, "incremental compression did not converge");
+            }
+            IncrementalCompressionResult::Complete => break,
+            IncrementalCompressionResult::Unsupported => {
+                panic!("test builds always support strict reclamation")
+            }
+        }
+    }
+    assert_eq!(
+        unsafe { super::Node::storage(s.pages.first) },
+        Storage::Compressed
+    );
+    s.deinit();
+}
+
+/// `Drain` performs incremental steps until the pass and its verification pass
+/// finish, in one call.
+#[test]
+fn pagelist_compress_drain_finishes_in_one_call() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 6);
+    assert_eq!(
+        s.compress(CompressionMode::Drain),
+        IncrementalCompressionResult::Complete
+    );
+    assert_eq!(
+        unsafe { super::Node::storage(s.pages.first) },
+        Storage::Compressed
+    );
+    s.deinit();
+}
+
+/// PageList mutations bump the activity token so schedulers know to recompress.
+#[test]
+fn pagelist_mutations_mark_compression_activity() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let before = s.page_compression.activity_serial;
+    fill_compressible_history(&mut s, 2);
+    assert_ne!(s.page_compression.activity_serial, before);
+
+    // Compression itself changes representation, not the activity token.
+    let after_growth = s.page_compression.activity_serial;
+    let _ = s.compress(CompressionMode::Drain);
+    assert_eq!(s.page_compression.activity_serial, after_growth);
+    s.deinit();
+}
+
+/// A node destroyed between steps must not strand the traversal cursor: the
+/// next step restarts safely rather than skipping newly allocated pages.
+#[test]
+fn pagelist_compress_incremental_restarts_after_list_mutation() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 6);
+    assert_eq!(
+        s.compress(CompressionMode::Incremental),
+        IncrementalCompressionResult::Pending
+    );
+
+    // Erase the history the cursor is standing on, then keep stepping.
+    s.erase_history(None);
+    fill_compressible_history(&mut s, 4);
+
+    let mut steps = 0usize;
+    while s.compress(CompressionMode::Incremental) == IncrementalCompressionResult::Pending {
+        steps += 1;
+        assert!(steps < 10_000);
+    }
+    s.deinit();
+}
+
+/// Full mode compresses everything eligible and leaves no continuation state.
+#[test]
+fn pagelist_compress_full_mode_leaves_no_continuation() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    fill_compressible_history(&mut s, 4);
+
+    assert_eq!(
+        s.compress(CompressionMode::Full),
+        IncrementalCompressionResult::Complete
+    );
+    assert_eq!(
+        unsafe { super::Node::storage(s.pages.first) },
+        Storage::Compressed
+    );
+    assert_eq!(s.page_compression.last_serial, None);
+    assert!(!s.page_compression.flags.verifying);
+    assert!(!s.page_compression.flags.did_compress);
+    s.deinit();
 }
 
 /// A cold history page compresses, its mapping is discarded, and reading it

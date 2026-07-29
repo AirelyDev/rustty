@@ -25,8 +25,6 @@ use core::ptr::NonNull;
 /// from the page allocator and release it immediately after compression.
 ///
 /// PORTS: oracle@main PageList.zig `CompressionScratch`.
-// The non-test consumer is `PageList::compress` (WS7 B8).
-#[allow(dead_code)]
 pub(crate) enum CompressionScratch {
     /// A borrowed pool item. Always exactly `std_size()` bytes.
     Pooled(*mut u8),
@@ -34,7 +32,6 @@ pub(crate) enum CompressionScratch {
     Allocated { ptr: *mut u8, len: usize },
 }
 
-#[allow(dead_code)]
 impl CompressionScratch {
     pub(crate) fn init(
         pool: &mut MemoryPool,
@@ -103,14 +100,123 @@ impl CompressionScratch {
     }
 }
 
+/// PageList-owned state for incremental compression.
+///
+/// The position is stored as a page serial rather than a node pointer so it
+/// remains safe when PageList operations destroy, replace, or reuse nodes
+/// between steps. It also records the first serial which was unallocated at the
+/// prior step so new nodes before a valid marker restart safely. If the exact
+/// serial no longer exists in the cold prefix, the next step also restarts at
+/// the first page.
+///
+/// A completed pass is followed by another pass from the oldest cold page.
+/// Compression becomes idle only when that verification pass compresses no
+/// pages. This converges after pages are restored between incremental steps
+/// without requiring consumers to maintain a separate attempt cursor.
+///
+/// PORTS: oracle@main PageList.zig `IncrementalCompressionState`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IncrementalCompressionState {
+    pub flags: IncrementalCompressionFlags,
+
+    /// Changes whenever PageList activity may affect compression work. Callers
+    /// use this value (via `Terminal::compression_activity`) to determine
+    /// whether to recompress.
+    ///
+    /// The directionality of this doesn't matter. We overflow and wrap when
+    /// maxxed. The comparison of this value to your saved value is all that
+    /// matters. There is a possible edge case where you don't compress, a full
+    /// wraparound happens, and you get the same value, but it's so unlikely.
+    ///
+    /// PORT NOTE (WS7 B8): the oracle's field is a `u48` so that 16 bits are
+    /// reserved for `Terminal` to add extra state. Rust has no `u48`, so this
+    /// is a `u64` masked to 48 bits by `mark_activity`; `Terminal` composes its
+    /// extra 16 bits in the high bits exactly as the oracle does.
+    pub activity_serial: u64,
+
+    /// Serial of the last page inspected by the traversal. This is
+    /// intentionally an implementation detail and is reset by PageList
+    /// operations which restart traversal progress.
+    pub last_serial: Option<u64>,
+
+    /// First node serial which had not been allocated at the prior step. A node
+    /// at or above this value before the saved marker requires a restart.
+    pub next_serial: u64,
+}
+
+/// `IncrementalCompressionState.flags`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IncrementalCompressionFlags {
+    /// Set after any page is compressed during the current traversal. We always
+    /// run incremental compression until we get a fully no-compression pass
+    /// (the verification pass). This lets us recompress decompressed pages due
+    /// to search, scrolling, etc.
+    pub did_compress: bool,
+
+    /// Set after a traversal first reaches the active boundary. When this
+    /// verification traversal reaches the boundary, `did_compress` determines
+    /// whether to restart once more or finish the pass.
+    pub verifying: bool,
+}
+
+/// The mask applied to `activity_serial` to model the oracle's `u48`.
+const ACTIVITY_SERIAL_MASK: u64 = 0xFFFF_FFFF_FFFF;
+
+impl IncrementalCompressionState {
+    /// Record activity without disturbing valid traversal progress.
+    #[inline]
+    pub fn mark_activity(&mut self) {
+        // Zig: `self.activity_serial +%= 1;` on a u48.
+        self.activity_serial = self.activity_serial.wrapping_add(1) & ACTIVITY_SERIAL_MASK;
+    }
+
+    /// Discard traversal progress without changing the activity token.
+    #[inline]
+    pub fn reset(&mut self) {
+        let activity_serial = self.activity_serial;
+        *self = IncrementalCompressionState {
+            activity_serial,
+            ..Default::default()
+        };
+    }
+}
+
+/// Result of one incremental compression step.
+///
+/// PORTS: oracle@main PageList.zig `IncrementalCompressionResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncrementalCompressionResult {
+    /// Strict retained-mapping reclamation is unavailable on this target.
+    Unsupported,
+
+    /// More cold pages or a verification pass remain after this invocation's
+    /// candidate-bounded work.
+    Pending,
+
+    /// A complete verification pass compressed zero pages.
+    Complete,
+}
+
+/// The mode argument of [`PageList::compress`].
+///
+/// PORTS: the oracle's inline `enum { incremental, drain, full }`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionMode {
+    Incremental,
+    Drain,
+    Full,
+}
+
+/// Bound candidate inspection independently from compression work. Skipping an
+/// already-compressed page is cheap, but still counts toward this limit.
+const INCREMENTAL_COMPRESSION_MAX_INSPECTED: usize = 8;
+
 /// Iterate complete historical pages which do not intersect the viewport.
 ///
 /// All boundaries come from PageList pins and Page metadata. Advancing this
 /// iterator never restores a compressed page or reads its backing memory.
 ///
 /// PORTS: oracle@main PageList.zig `CompressionIterator`.
-// The non-test consumer is `PageList::compress` (WS7 B8).
-#[allow(dead_code)]
 pub(crate) struct CompressionIterator {
     current: *mut Node,
     active: *mut Node,
@@ -118,7 +224,6 @@ pub(crate) struct CompressionIterator {
     viewport_last: *mut Node,
 }
 
-#[allow(dead_code)]
 impl CompressionIterator {
     pub(crate) fn init(list: &PageList) -> CompressionIterator {
         CompressionIterator {
@@ -190,7 +295,6 @@ fn compress_page_tw_check(point: CompressPageFp) -> Result<(), DecommitFailed> {
     COMPRESS_PAGE_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
-#[allow(dead_code)]
 impl PageList {
     /// Attempt to compress one resident page while retaining its raw mapping.
     ///
@@ -294,6 +398,161 @@ impl PageList {
         // SAFETY: `node` is live and nothing borrows its storage here.
         unsafe { *core::ptr::addr_of_mut!((*node).data) = NodeData::Compressed(compressed) };
         true
+    }
+
+    /// Compress eligible nodes, saving a significant amount of memory.
+    ///
+    /// Eligible nodes are complete pages before the active boundary which do
+    /// not intersect the viewport. The boundary page is excluded because it may
+    /// contain both scrollback and active rows; visible pages remain resident
+    /// for immediate redraw and scrolling.
+    ///
+    /// Compression requires a system that supports reclaiming physical memory
+    /// for virtual allocations while retaining their address ranges.
+    ///
+    /// Compression is SLOW (relatively), so incremental compression during idle
+    /// periods is recommended. Incremental mode performs one bounded step and
+    /// its result specifies whether to continue immediately. Drain mode
+    /// performs incremental steps until the pass and its verification pass
+    /// finish. Full mode visits every currently eligible node once without
+    /// using incremental state.
+    ///
+    /// PageList tracks mutations which require a later incremental pass in its
+    /// compression state. On supported targets, full compression returns
+    /// `Complete`, indicating that it has no continuation to schedule rather
+    /// than that every page was compressed.
+    ///
+    /// PORTS: oracle@main PageList.zig `compress`.
+    pub fn compress(&mut self, mode: CompressionMode) -> IncrementalCompressionResult {
+        match mode {
+            CompressionMode::Incremental => self.compress_incremental(),
+
+            CompressionMode::Drain => loop {
+                match self.compress_incremental() {
+                    IncrementalCompressionResult::Pending => continue,
+                    IncrementalCompressionResult::Complete => {
+                        break IncrementalCompressionResult::Complete
+                    }
+                    IncrementalCompressionResult::Unsupported => {
+                        break IncrementalCompressionResult::Unsupported
+                    }
+                }
+            },
+
+            CompressionMode::Full => {
+                // Match incremental mode's unsupported result. Full compression
+                // has no useful work to perform without strict reclamation.
+                if !mem::can_reclaim(mem::DecommitMode::Strict) {
+                    self.page_compression.reset();
+                    return IncrementalCompressionResult::Unsupported;
+                }
+
+                self.compress_full();
+
+                // Full compression has no continuation. Discard any partial
+                // incremental cursor so later activity starts at the oldest
+                // page.
+                self.page_compression.reset();
+
+                IncrementalCompressionResult::Complete
+            }
+        }
+    }
+
+    /// Perform one candidate-bounded incremental cold-history compression step.
+    ///
+    /// PORTS: oracle@main PageList.zig `compressIncremental`.
+    fn compress_incremental(&mut self) -> IncrementalCompressionResult {
+        // If we can't reclaim virtual memory, compression is unsupported.
+        if !mem::can_reclaim(mem::DecommitMode::Strict) {
+            self.page_compression.reset();
+            return IncrementalCompressionResult::Unsupported;
+        }
+
+        // Find the node following the exact continuation marker within the cold
+        // prefix. A missing marker means the list changed between steps, so
+        // begin again at the current first page. This lookup does not touch
+        // page memory.
+        let mut it = CompressionIterator::init(self);
+        if let Some(last_serial) = self.page_compression.last_serial {
+            let mut found = false;
+            while let Some(node) = it.next() {
+                let serial = unsafe { (*node).serial };
+
+                // A newly allocated or replacement node appeared before the
+                // marker. Restart immediately so that node cannot be skipped.
+                if serial >= self.page_compression.next_serial {
+                    break;
+                }
+
+                // Not a match? Keep looking
+                if serial != last_serial {
+                    continue;
+                }
+
+                // Match! The iterator already points to the next offscreen
+                // node.
+                found = true;
+                break;
+            }
+
+            if !found {
+                // Not found or otherwise invalid. Reset
+                self.page_compression.last_serial = None;
+                it = CompressionIterator::init(self);
+            }
+        }
+
+        // Keep track of our next_serial
+        self.page_compression.next_serial = self.page_serial;
+
+        // We cap the number of pages we look at to do our best to time-bound
+        // the incremental compression.
+        let mut inspected_pages: usize = 0;
+        while inspected_pages < INCREMENTAL_COMPRESSION_MAX_INSPECTED {
+            let Some(node) = it.next() else { break };
+
+            self.page_compression.last_serial = Some(unsafe { (*node).serial });
+            inspected_pages += 1;
+
+            // If this page is already compressed, ignore it.
+            if unsafe { Node::is_compressed(node) } {
+                continue;
+            }
+
+            // Compression is substantially more expensive even if it fails. So
+            // we just try it.
+            if self.compress_page(node) {
+                self.page_compression.flags.did_compress = true;
+            }
+            break;
+        }
+
+        // If we didn't reach our active node, then we still have work to do.
+        if !it.done() {
+            return IncrementalCompressionResult::Pending;
+        }
+
+        // We reached our active node. So we're done, except that we always do
+        // one pass after the first success so we can recompress nodes that were
+        // possibly decompressed (e.g. by search, inspector, whatever).
+        if !self.page_compression.flags.verifying || self.page_compression.flags.did_compress {
+            let activity_serial = self.page_compression.activity_serial;
+            self.page_compression = IncrementalCompressionState {
+                flags: IncrementalCompressionFlags {
+                    did_compress: false,
+                    verifying: true,
+                },
+                activity_serial,
+                ..Default::default()
+            };
+            return IncrementalCompressionResult::Pending;
+        }
+
+        // Leave the state fresh while idle so later activity naturally begins at
+        // the oldest cold page, including pages restored after this pass.
+        self.page_compression.reset();
+        IncrementalCompressionResult::Complete
     }
 
     /// Compress every fully historical resident page which is currently cold.

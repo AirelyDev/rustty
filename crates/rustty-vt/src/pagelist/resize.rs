@@ -144,6 +144,12 @@ impl PageList {
     // Rust has no `defer`, so the body is factored into `resize_inner` and the
     // public `resize` wraps it to run `assert_integrity()` on every exit path.
     fn resize_inner(&mut self, opts: Resize) -> Result<(), super::OutOfMemory> {
+        // Resizing forces all nodes to be decompressed today so we need to
+        // reschedule compression.
+        // TODO(mitchellh): Deferred reflow on non-viewport/non-active pages.
+        self.page_compression.reset();
+        self.page_compression.mark_activity();
+
         if cfg!(debug_assertions) {
             // Resize does not work with 0 values, this should be protected
             // upstream

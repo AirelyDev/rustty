@@ -35,6 +35,11 @@ impl PageList {
     /// The body of `erase_row` (the reference fn minus its `defer`); see the
     /// PORT NOTE above.
     fn erase_row_inner(&mut self, pt: point::Point) -> Result<(), super::OutOfMemory> {
+        // Erasing history may restore compressed pages. Mark unconditionally
+        // because incrementing the activity token is cheaper than locating the
+        // active boundary.
+        self.page_compression.mark_activity();
+
         let pn = self.pin(pt).unwrap();
 
         let mut node = pn.node;
@@ -168,6 +173,11 @@ impl PageList {
         pt: point::Point,
         limit: usize,
     ) -> Result<(), super::OutOfMemory> {
+        // Erasing history may restore compressed pages. Mark unconditionally
+        // because incrementing the activity token is cheaper than locating the
+        // active boundary.
+        self.page_compression.mark_activity();
+
         // This function has a lot of repeated code in it because it is a hot path.
         //
         // To get a better idea of what's happening, read eraseRow first for more
@@ -453,6 +463,8 @@ impl PageList {
     /// The body of `erase_rows` (the reference fn minus its `defer`); see the
     /// PORT NOTE above.
     fn erase_rows_inner(&mut self, tl_pt: point::Point, bl_pt: Option<point::Point>) {
+        self.page_compression.mark_activity();
+
         // The count of rows that was erased.
         let mut erased: usize = 0;
 

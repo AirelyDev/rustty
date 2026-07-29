@@ -940,6 +940,11 @@ pub struct PageList {
     /// for quick comparisons to find invalid pages in references.
     pub page_serial_min: u64,
 
+    /// Continuation state for incremental page compression. This allows
+    /// `compress(CompressionMode::Incremental)` to work. More details on all
+    /// that there and on `IncrementalCompressionState`.
+    pub page_compression: compress::IncrementalCompressionState,
+
     /// Byte size of the total amount of allocated pages. Note this does
     /// not include the total allocated amount in the pool which may be more
     /// than this due to preheating.
@@ -1319,6 +1324,7 @@ impl PageList {
             pages: page_list,
             page_serial,
             page_serial_min: 0,
+            page_compression: compress::IncrementalCompressionState::default(),
             page_size,
             explicit_max_size: max_size.unwrap_or(usize::MAX),
             min_max_size,
@@ -1651,6 +1657,9 @@ impl PageList {
     /// memory to fit the active area.
     pub fn reset(&mut self) {
         // defer self.assertIntegrity();
+
+        // Reset discards all scrollback, so there is nothing left to compress.
+        self.page_compression.reset();
 
         // Invalidate all external page refs to the previous list. The reset below
         // rebuilds the page list from the pools, so old untracked refs must be

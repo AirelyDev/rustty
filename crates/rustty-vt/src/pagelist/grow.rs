@@ -92,6 +92,10 @@ impl PageList {
         // error handling. It is possible but we haven't written it.
         // errdefer comptime unreachable;
 
+        // Failable split work is complete; shortening the source changes its
+        // row range.
+        self.page_compression.mark_activity();
+
         // Move any tracked pins from the copied rows
         for tracked in self.tracked_pins.keys() {
             let tracked: *mut super::Pin = *tracked;
@@ -272,6 +276,9 @@ impl PageList {
     pub fn grow(&mut self) -> Result<Option<*mut Node>, super::OutOfMemory> {
         // PORT NOTE: `defer self.assertIntegrity()` — reproduced by calling
         // `assert_integrity` before every exit point below.
+
+        // Growing can move a complete page behind the active boundary.
+        self.page_compression.mark_activity();
 
         let last = self.pages.last;
         if unsafe { super::Node::capacity(last).rows > super::Node::rows(last) } {
@@ -555,6 +562,7 @@ impl PageList {
         unsafe { self.pages.insert_before(node, new_node) };
         unsafe { self.pages.remove(node) };
         self.destroy_node(node);
+        self.page_compression.mark_activity();
 
         // PORT NOTE: the linked-list splice above takes `&mut Node` through
         // `new_node`, which under Stacked Borrows invalidates the earlier
@@ -644,6 +652,7 @@ impl PageList {
         unsafe { self.pages.insert_before(node, new_node) };
         unsafe { self.pages.remove(node) };
         self.destroy_node(node);
+        self.page_compression.mark_activity();
 
         // PORT NOTE: re-derive `new_page` via raw projection after the
         // linked-list splice (see the matching note in `increase_capacity`):
