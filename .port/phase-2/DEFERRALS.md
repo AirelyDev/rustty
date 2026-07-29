@@ -4539,7 +4539,7 @@ field. `rustty_cli_try_action`'s `Some` arm now runs
 `std::process::exit(match action.run() { Ok(code) => i32::from(code), Err(err) => {
 log(...); std::process::exit(1) } })`, faithful to the reference.
 
-## gettext-sys — self-contained libintl (`dgettext`/`bindtextdomain`/`textdomain`) deferred [added 2026-07-12, xtask P3 self-contained-lib]
+## ✅ RESOLVED 2026-07-28 (WS9) — gettext-sys self-contained libintl (`dgettext`/`bindtextdomain`/`textdomain`)
 
 **Context (P3 self-contained-lib pass):** the macOS Swift-app link
 (`macos/build-rustty.sh` `OTHER_LDFLAGS`) still passes
@@ -4574,9 +4574,13 @@ flags (`-DHAVE_CONFIG_H -DIN_LIBINTL -DLOCALEDIR="" -DLOCALE_ALIAS_PATH=""` etc.
 and any `config.h` additions, expand the `gettext-sys` FFI surface
 (`bindgen`/hand-written) to the catalog API, then drop
 `-L/opt/homebrew/opt/gettext/lib -lintl` from `macos/build-rustty.sh` (the folded
-`libGhosttyKit.a` will then resolve those symbols). **Until then `-lintl`
-stays** — the working build is NOT broken (P3 rule: keep the system/Homebrew link
-when the self-contained swap is a large change).
+`libRusttyKit.a` will then resolve those symbols). **RESOLVED by WS9**: all 30
+translation units (the reference's full `srcs`) are vendored under
+`crates-sys/gettext-sys/vendor/intl/`, `build.rs` compiles them with the
+reference's exact flags into `librustty_intl.a`, and BOTH `-lintl` link sites
+are gone (`macos/build-rustty.sh` and `crates/rustty-os/build.rs`). `plural.c`
+needed no Bison — it ships pre-generated in the gettext 0.24 tarball. Proven by
+`.port/tools/gates/no_homebrew_gettext_gate.sh`.
 
 ## P2 crash-guard: on-feature quicklook/inspector leaves [added 2026-07-12, panic=abort abort-policy pass]
 
