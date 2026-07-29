@@ -15,7 +15,11 @@
 #   timeout_min  HARD per-test kill budget in minutes (0 = unlimited)
 set -u
 CRATE="${1:?crate}"; FILTER="${2:-}"; NCHUNKS="${3:-6}"; CEIL_MIN="${4:-45}"; TMO_MIN="${5:-0}"
-ROOT="/Users/gael/projects/rustty"; cd "$ROOT" || exit 2
+# Derive ROOT from git rather than hardcoding the main checkout: a hardcoded
+# path silently tests the wrong tree when this script is invoked from a
+# worktree, which can report a green Miri lane for code that was never tested.
+ROOT="$(git rev-parse --show-toplevel)" || exit 2
+cd "$ROOT" || exit 2
 WORK="/tmp/mirirun.$CRATE"; rm -rf "$WORK"; mkdir -p "$WORK/out"
 PROG="$WORK/progress.log"; : > "$PROG"
 now() { date +%s; }

@@ -210,6 +210,9 @@ pub fn compress(
                 match_end_limit,
             );
 
+            // Restores the oracle's `@intCast` trap semantics under R1: the
+            // offset must fit in u16, so assert rather than silently truncate.
+            debug_assert!(ip - match_pos <= u16::MAX as usize);
             emit_sequence(
                 output,
                 &mut op,
@@ -332,6 +335,11 @@ fn match_begin(
 fn match_end_position(input: &[u8], position_: usize, candidate_: usize, limit: usize) -> usize {
     let mut position = position_;
     let mut candidate = candidate_;
+
+    // The oracle relies on `position <= limit` and computes `limit - position`
+    // directly, trapping on underflow; assert the invariant here since the
+    // saturating form below would otherwise absorb a would-be invariant break.
+    debug_assert!(position <= limit);
 
     // Reading as little endian makes the least-significant differing bit map
     // to the earliest byte in memory on every target.
