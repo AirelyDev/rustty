@@ -3198,7 +3198,8 @@ mod inspector_style_tests {
 
             let style = dcimgui_sys::ImGui_GetStyle();
             assert_eq!(
-                (*style).WindowPadding.x, 16.0,
+                (*style).WindowPadding.x,
+                16.0,
                 "WindowPadding.x must stay 16 (not compound to 32)"
             );
 

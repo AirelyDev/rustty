@@ -101,6 +101,11 @@ fn metal_offscreen_render_writes_pixels() {
 
         let io = ImGui_GetIO();
         assert!(!io.is_null(), "ImGui_GetIO() returned null");
+        // Dear ImGui persists window geometry to `io.IniFilename` (default
+        // `"imgui.ini"`, relative to the CWD — the crate root under `cargo test`)
+        // when the context is destroyed. A KAT must leave no artifact in the
+        // working tree, so opt out of .ini persistence entirely.
+        (*io).IniFilename = std::ptr::null();
         (*io).DisplaySize = ImVec2 {
             x: DIM as f32,
             y: DIM as f32,
