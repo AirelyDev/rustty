@@ -4914,7 +4914,21 @@ From **WS7 Phase B review (I2 harness run)**:
    `.port/phase-2/mirihar-pagelist-compress`'s `roundtrip`/`leak` scenarios abort with
    "constructing invalid value of type `[u8; 8]`: encountered uninitialized memory" inside
    `lz4::compress` reading the page mapping (`compress/page.rs:137` ->
-   `pagelist/compress.rs:406`). Pre-existing to the review round — it is a property of
-   B7's design, not of any review fix. Full write-up, backtrace and candidate resolutions
-   in `.port/phase-2/MIRI_EXCEPTIONS.md` ("WS7 Phase B"). Phase E must either fix it or
-   record a formal 4-criterion exception; it must NOT be left silently red.
+   `pagelist/compress.rs:406`). **Not pre-existing — introduced by B7; the Phase A codec
+   is not implicated and `main` is unaffected** (nothing merged today feeds a page mapping
+   to LZ4). `rustty-os`'s `cfg(miri)` page allocator hands out zeroed memory, so the uninit
+   bytes are real de-initialization from typed writes of padded structs into the mapping,
+   not an FFI/Miri artifact; impact is bounded by blast radius (padding/inter-table gaps
+   only — worst case a spurious verify failure or differing padding after restore, never
+   cell corruption). Full write-up, backtrace and candidate resolutions in
+   `.port/phase-2/MIRI_EXCEPTIONS.md` ("WS7 Phase B"), including a cheaper fourth
+   resolution (zero the sub-table gaps / write through a pre-zeroed `MaybeUninit` at
+   construction, removing the uninit at the source instead of the read). Phase E must
+   either fix it or record a formal 4-criterion exception; it must NOT be left silently
+   red.
+2. **I3 leak check is a manual proof artifact, not a gate.** Nothing in `.port/tools/` or
+   `ci.sh` runs any `mirihar-*` crate, so `.port/phase-2/mirihar-pagelist-compress`'s
+   `leakcheck` scenario (native, milliseconds, no Miri needed) demonstrates leak-freedom
+   but does not automatically catch a future regression. This matches existing repo
+   precedent (`mirihar-compress-lz4`, `mirihar-chunk3b`), so it is not being wired now —
+   but at minimum the native `leakcheck` scenario should be wired into a gate in Phase E.

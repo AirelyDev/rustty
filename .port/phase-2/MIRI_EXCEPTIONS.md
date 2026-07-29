@@ -1006,22 +1006,32 @@ error: Undefined Behavior: constructing invalid value of type [u8; 8]: at [2],
   7: PageList::compress_page                       pagelist/compress.rs:406
 ```
 
-This is **not** in anything the Phase B review round touched — it is a property of B7's
-`compress_page` design: LZ4 reads the WHOLE page mapping as `[u8]`, and under Miri's model
-some bytes of that mapping are uninitialized even though the mapping was handed out
-zeroed. (Leading hypothesis: typed writes of padded Rust structs into the mapping —
-`Cell`/`Row` are `repr(transparent) u64` with no padding, so the candidates are the
-style/hyperlink/string/grapheme table entries and the alignment gaps between sub-tables.
-NOT yet confirmed; confirming it needs `-Zmiri-backtrace=full` plus the allocation offset,
-another ~45 min run.)
+This is **not pre-existing** — it is **introduced by B7; the Phase A codec is not
+implicated and `main` is unaffected**. `rustty-os/src/page_allocator.rs`'s `cfg(miri)` arm
+(`miri_alloc::allocate`) serves page memory via `Global.allocate_zeroed`, so under Miri the
+mapping IS fully initialized on handout — identical to the mmap contract. The uninit bytes
+Miri reports are therefore real de-initialization: typed writes of padded Rust structs into
+the mapping (`Cell`/`Row` are `repr(transparent) u64` with no padding, so the candidates are
+the style/hyperlink/string/grapheme table entries and the alignment gaps between
+sub-tables), not a Miri-vs-FFI artifact. The defect is entirely at the B7 call site —
+`CompressedPage::init`'s `slice::from_raw_parts(raw_ptr, raw_len)` reads the WHOLE mapping
+including those never-written gaps. Phase A's LZ4 codec faithfully reads whatever slice
+it is given (every Phase A test feeds it a fully-initialized `Vec`), and nothing merged to
+`main` today feeds a page mapping to LZ4 — merging Phase B is what introduces the exposure.
 
-Native impact is nil — on a real mmap the bytes are OS-zeroed and Miri's uninit tracking
-does not apply to FFI-obtained memory — but it IS UB in the Rust abstract machine and must
-be resolved or formally excepted.
+The correct impact justification is blast radius, not FFI: the poisoned bytes are padding /
+inter-table gaps only, never live cell data. Under the Rust abstract machine, LLVM would
+have to materialize genuinely inconsistent values across two reads of the *same* padding
+byte for this to do anything at all; the worst realistic outcome is a spurious B7 verify
+failure (the page simply stays resident — a SAFE failure) or differing padding bytes after
+a decompress/restore round-trip — never cell corruption. A future, more aggressive compiler
+could in principle exploit the formal UB, but not into anything worse than that.
 
 **Status: OPEN, scheduled to WS7 Phase E** (see `.port/phase-2/DEFERRALS.md`). Candidate
 resolutions: zero the padding on write, read the mapping through a `freeze`/volatile
-path before compressing, or a documented per-path exception. It does NOT affect the I2 or
-I3 evidence: `split`/`siblings` are SB-clean with the negative control reproducing the
-exact predicted UB, and the I3 leak check is proven failing-then-passing natively through
-the harness's counting `#[global_allocator]`.
+path before compressing, or a documented per-path exception. A cheaper fourth option:
+zero the sub-table gaps / write padded entries through a pre-zeroed `MaybeUninit` at the
+point they are constructed, which removes the uninit at the source instead of papering
+over the read. It does NOT affect the I2 or I3 evidence: `split`/`siblings` are SB-clean
+with the negative control reproducing the exact predicted UB, and the I3 leak check is
+proven failing-then-passing natively through the harness's counting `#[global_allocator]`.

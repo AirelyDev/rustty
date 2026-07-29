@@ -635,14 +635,26 @@ impl PageList {
             debug_assert!(backing_len >= raw_len);
             result.raw_bytes += raw_len;
 
-            match unsafe { &*core::ptr::addr_of!((*node).data) } {
-                NodeData::Resident(_) => {
+            // PORT NOTE (WS7 I2 discipline, Stacked Borrows): raw-derived like
+            // every other `NodeData` access in this module — `NodeData::tag`
+            // reads the discriminant byte and `NodeData::compressed_payload`
+            // projects the payload via a constant `offset_of!`, both taking
+            // `data` by raw pointer so neither forms a `&NodeData` that could
+            // be invalidated by a later retag on this same node. (The prior
+            // `&*addr_of!(...)` match was sound as written here — a read-only
+            // walk with no raw alias held across it — but this keeps the
+            // whole module on one discipline instead of being the one holdout.)
+            let data = unsafe { core::ptr::addr_of!((*node).data) };
+            match unsafe { NodeData::tag(data) } {
+                NodeData::TAG_RESIDENT => {
                     result.resident_pages += 1;
                     result.resident_raw_bytes += raw_len;
                     result.resident_backing_bytes += backing_len;
                 }
 
-                NodeData::Compressed(compressed) => {
+                _ => {
+                    // TAG_COMPRESSED (the enum has exactly two variants).
+                    let compressed = unsafe { &*NodeData::compressed_payload(data) };
                     result.compressed_pages += 1;
                     result.decommitted_raw_bytes += raw_len;
                     // Strict reclamation covers only Page.memory. A standard
