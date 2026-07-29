@@ -159,11 +159,11 @@ impl ViewportSearch {
                         // If our viewport contains the start or end of the active area,
                         // we are in the active area. We purposely do this first
                         // because our viewport is always larger than the active area.
-                        // for (old.nodes) |node| {
-                        //     if (node == active_tl.node) break :match;
-                        //     if (node == active_br.node) break :match;
+                        // for (old.entries) |entry| {
+                        //     if (entry.node == active_tl.node) break :match;
+                        //     if (entry.node == active_br.node) break :match;
                         // }
-                        for node in old.nodes.iter().copied() {
+                        for node in old.entries.iter().map(|e| e.node) {
                             if core::ptr::eq(node, active_tl.node) {
                                 break 'match_blk;
                             }
@@ -222,15 +222,22 @@ impl ViewportSearch {
         // self.window.clearAndRetainCapacity();
         self.window.clear_and_retain_capacity();
 
-        // PORT NOTE: re-borrow the stored fingerprint's nodes. We snapshot the
+        // PORT NOTE: re-borrow the stored fingerprint's entries. We snapshot the
         // node pointers into a local so we can mutate `self.window` (also a field
         // of `self`) without aliasing the borrow of `self.fingerprint`.
-        let fp_nodes: Vec<*mut Node> = self.fingerprint.as_ref().unwrap().nodes.clone();
+        let fp_nodes: Vec<*mut Node> = self
+            .fingerprint
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.node)
+            .collect();
 
         // Add enough overlap to cover needle.len - 1 bytes (if it
         // exists) so we can cover the overlap. We only do this for the
         // soft-wrapped prior pages.
-        // var node_ = fingerprint.nodes[0].prev;
+        // var node_ = fingerprint.entries[0].node.prev;
         // var added: usize = 0;
         let mut node_: *mut Node = unsafe { (*fp_nodes[0]).prev };
         let mut added: usize = 0;
@@ -261,8 +268,8 @@ impl ViewportSearch {
 
         // We can use our fingerprint nodes to initialize our sliding
         // window, since we already traversed the viewport once.
-        // for (fingerprint.nodes) |node| {
-        //     _ = try self.window.append(node);
+        // for (fingerprint.entries) |entry| {
+        //     end_append = try self.window.append(entry.node);
         // }
         // var end_append: SlidingWindow.AppendResult = undefined;
         let mut end_append = crate::search::sliding_window::AppendResult {
@@ -279,7 +286,8 @@ impl ViewportSearch {
         // Add any trailing overlap as well.
         // trailing: {
         'trailing: {
-            // const end: *PageList.List.Node = fingerprint.nodes[fingerprint.nodes.len - 1];
+            // const end: *PageList.List.Node =
+            //     fingerprint.entries[fingerprint.entries.len - 1].node;
             let end: *mut Node = fp_nodes[fp_nodes.len() - 1];
             // if (!end_append.last_row_wrapped) break :trailing;
             //
@@ -334,20 +342,29 @@ impl ViewportSearch {
 
 /// Viewport fingerprint so we can detect when the viewport moves.
 pub struct Fingerprint {
-    /// The nodes that make up the viewport. We need to flatten this
-    /// to a single list because we can't safely traverse the cached values
-    /// because the page nodes may be invalid. All that is safe is comparing
-    /// the actual pointer values.
-    // nodes: []const *PageList.List.Node,
-    pub nodes: Vec<*mut Node>,
+    /// The node addresses and generations that make up the viewport. We
+    /// can't safely dereference cached node pointers because the nodes may
+    /// be invalid, so equality only compares these captured values.
+    // entries: []const Entry,
+    pub entries: Vec<Entry>,
+}
+
+// const Entry = struct {
+//     node: *PageList.List.Node,
+//     serial: u64,
+// };
+#[derive(Clone, Copy)]
+pub struct Entry {
+    pub node: *mut Node,
+    pub serial: u64,
 }
 
 impl Fingerprint {
     // pub fn init(alloc: Allocator, pages: *PageList) Allocator.Error!Fingerprint {
     pub fn init(_alloc: Allocator, pages: &PageList) -> Result<Fingerprint, OutOfMemory> {
-        // var list: std.ArrayList(*PageList.List.Node) = .empty;
+        // var list: std.ArrayList(Entry) = .empty;
         // defer list.deinit(alloc);
-        let mut list: Vec<*mut Node> = Vec::new();
+        let mut list: Vec<Entry> = Vec::new();
 
         // Get our viewport area. Bottom right of a viewport can never
         // fail.
@@ -357,37 +374,51 @@ impl Fingerprint {
         let br = pages.get_bottom_right(point::Tag::Viewport).unwrap();
 
         // var it = tl.pageIterator(.right_down, br);
-        // while (it.next()) |chunk| try list.append(alloc, chunk.node);
+        // while (it.next()) |chunk| try list.append(alloc, .{
+        //     .node = chunk.node,
+        //     .serial = chunk.node.serial,
+        // });
+        //
+        // INSPECT, NOT RESTORE: only the node's generation stamp is read, which
+        // lives in the pagelist Node itself (never in the page mapping), so a
+        // compressed page must NOT be restored to fingerprint the viewport.
         let mut it = tl.page_iterator(IterDirection::RightDown, Some(br));
         while let Some(chunk) = it.next() {
-            list.push(chunk.node);
+            list.push(Entry {
+                node: chunk.node,
+                serial: unsafe { (*chunk.node).serial },
+            });
         }
-        // return .{ .nodes = try list.toOwnedSlice(alloc) };
-        Ok(Fingerprint { nodes: list })
+        // return .{ .entries = try list.toOwnedSlice(alloc) };
+        Ok(Fingerprint { entries: list })
     }
 
     // pub fn deinit(self: *Fingerprint, alloc: Allocator) void {
     //     alloc.free(self.nodes);
     // }
     //
-    // PORT NOTE: the reference frees the owned `nodes` slice; the Rust `Vec`
+    // PORT NOTE: the reference frees the owned `entries` slice; the Rust `Vec`
     // frees on drop, so this clears it (kept for API parity with the explicit
     // `deinit` callers above).
     pub fn deinit(&mut self, _alloc: Allocator) {
-        self.nodes = Vec::new();
+        self.entries = Vec::new();
     }
 
     // pub fn eql(self: Fingerprint, other: Fingerprint) bool {
     pub fn eql(&self, other: &Fingerprint) -> bool {
-        // if (self.nodes.len != other.nodes.len) return false;
-        if self.nodes.len() != other.nodes.len() {
+        // if (self.entries.len != other.entries.len) return false;
+        if self.entries.len() != other.entries.len() {
             return false;
         }
-        // for (self.nodes, other.nodes) |a, b| {
-        //     if (a != b) return false;
+        // for (self.entries, other.entries) |a, b| {
+        //     if (a.node != b.node) return false;
+        //     if (a.serial != b.serial) return false;
         // }
-        for (a, b) in self.nodes.iter().copied().zip(other.nodes.iter().copied()) {
-            if !core::ptr::eq(a, b) {
+        for (a, b) in self.entries.iter().zip(other.entries.iter()) {
+            if !core::ptr::eq(a.node, b.node) {
+                return false;
+            }
+            if a.serial != b.serial {
                 return false;
             }
         }
@@ -490,6 +521,59 @@ mod tests {
 
         search.deinit();
         s.deinit();
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle c243d89bd
+    /// `test "fingerprint detects node generation changes"`
+    #[test]
+    fn fingerprint_detects_node_generation_changes() {
+        // const alloc = testing.allocator;
+        let alloc = Allocator;
+        // var t: Terminal = try .init(alloc, .{ .cols = 10, .rows = 10 });
+        // defer t.deinit(alloc);
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 10)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+
+        // var search: ViewportSearch = try .init(alloc, "needle");
+        // defer search.deinit();
+        let mut search: ViewportSearch = ViewportSearch::init(alloc, b"needle").unwrap();
+        // search.active_dirty = false;
+        search.active_dirty = Some(false);
+
+        // try testing.expect(try search.update(&t.screens.active.pages));
+        // try testing.expect(!try search.update(&t.screens.active.pages));
+        assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
+        assert!(!search.update(unsafe { &(*active_ptr).pages }).unwrap());
+
+        // const old_entry = search.fingerprint.?.entries[0];
+        let old_entry = search.fingerprint.as_ref().unwrap().entries[0];
+        // const node = t.screens.active.pages.pages.first.?;
+        let node: *mut Node = unsafe { (*active_ptr).pages.pages.first };
+        // try testing.expectEqual(node, old_entry.node);
+        assert!(core::ptr::eq(node, old_entry.node));
+        // const original_serial = node.serial;
+        // defer node.serial = original_serial;
+        // node.serial += 1;
+        let original_serial = unsafe { (*node).serial };
+        unsafe { (*node).serial += 1 };
+
+        // The viewport still contains the same pointer, but its generation has
+        // changed, so the cached window must be rebuilt.
+        // try testing.expect(try search.update(&t.screens.active.pages));
+        assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
+        // const new_entry = search.fingerprint.?.entries[0];
+        let new_entry = search.fingerprint.as_ref().unwrap().entries[0];
+        // try testing.expectEqual(old_entry.node, new_entry.node);
+        assert!(core::ptr::eq(old_entry.node, new_entry.node));
+        // try testing.expect(old_entry.serial != new_entry.serial);
+        assert_ne!(old_entry.serial, new_entry.serial);
+
+        // defer node.serial = original_serial; (restore before the PageList's
+        // debug integrity assertions run in `deinit`)
+        unsafe { (*node).serial = original_serial };
+
+        search.deinit();
         t.deinit(alloc);
     }
 

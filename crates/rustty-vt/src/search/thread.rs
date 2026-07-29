@@ -255,11 +255,11 @@ impl Thread {
         //
         // Cleanup must hold the terminal lock: `Search::deinit` reads the live
         // ScreenSet to decide which searchers may still untrack their pins.
-        if self.search.is_some() {
-            let mutex = self.opts.mutex;
-            let terminal = self.opts.terminal;
+        let mutex = self.opts.mutex;
+        let terminal = self.opts.terminal;
+        if let Some(s) = self.search.as_mut() {
             let _guard = lock_deferred(mutex);
-            self.search.as_mut().unwrap().deinit(terminal);
+            s.deinit(terminal);
         }
     }
 

@@ -582,6 +582,62 @@ impl ScreenSearch {
     }
 
     // fn pruneHistory(self: *ScreenSearch) void {
+    // fn historyResultIsValid(
+    //     self: *const ScreenSearch,
+    //     hl: *const FlattenedHighlight,
+    // ) bool {
+    //
+    // INSPECT, NOT RESTORE: `node_is_valid` only walks the live node list and
+    // compares each node's `serial` stamp (a pagelist Node field, never in the
+    // page mapping), so validating cached history must not decompress anything.
+    fn history_result_is_valid(&self, hl: &FlattenedHighlight) -> bool {
+        // const chunks = hl.chunks.slice();
+        // const nodes = chunks.items(.node);
+        // const serials = chunks.items(.serial);
+        // for (nodes, serials) |node, serial| {
+        //     if (!self.screen.pages.nodeIsValid(node, serial)) return false;
+        // }
+        // return true;
+        hl.chunks
+            .iter()
+            .all(|c| unsafe { (*self.screen).pages.node_is_valid(c.node, c.serial) })
+    }
+
+    /// Clear a selected history match if its flattened page coordinates are
+    /// stale. reloadActive only inspects the selected history result, so this
+    /// avoids validating every cached result on each active-area refresh.
+    // fn validateSelectedHistory(self: *ScreenSearch) void {
+    fn validate_selected_history(&mut self) {
+        // const m = if (self.selected) |*m| m else return;
+        let m = match self.selected.as_ref() {
+            Some(m) => m,
+            None => return,
+        };
+        // const active_len = self.active_results.items.len;
+        let active_len = self.active_results.len();
+        // if (m.idx < active_len) return;
+        if m.idx < active_len {
+            return;
+        }
+
+        // const history_idx = m.idx - active_len;
+        let history_idx = m.idx - active_len;
+        // if (history_idx < self.history_results.items.len and
+        //     self.historyResultIsValid(&self.history_results.items[history_idx]))
+        // {
+        //     return;
+        // }
+        if history_idx < self.history_results.len()
+            && self.history_result_is_valid(&self.history_results[history_idx])
+        {
+            return;
+        }
+
+        // m.deinit(self.screen);
+        // self.selected = null;
+        self.selected.take().unwrap().deinit(self.screen);
+    }
+
     fn prune_history(&mut self) {
         // Go through our history results in order (newest to oldest) to find
         // any result that contains an invalid serial.
@@ -636,18 +692,12 @@ impl ScreenSearch {
                 return;
             }
 
-            // A page can also be replaced in place, such as by compaction.
-            // In that case its old serial remains above page_serial_epoch, so
-            // validate the captured pointer and serial against the live list.
+            // Ordinary pruning, layout changes, and replacements do not
+            // advance the epoch. Validate their pointer-plus-generation pairs
+            // against the live list.
             //
-            // const nodes = chunks.items(.node);
-            // for (nodes, serials) |node, serial| {
-            //     if (!self.screen.pages.nodeIsValid(node, serial)) break;
-            // } else { i += 1; continue; }
-            let all_valid = hl.chunks.iter().all(|c| unsafe {
-                (*self.screen).pages.node_is_valid(c.node, c.serial)
-            });
-            if all_valid {
+            // if (self.historyResultIsValid(hl)) { i += 1; continue; }
+            if self.history_result_is_valid(hl) {
                 i += 1;
                 continue;
             }
@@ -750,6 +800,16 @@ impl ScreenSearch {
     /// The caller must hold the necessary locks to access the screen state.
     // pub fn reloadActive(self: *ScreenSearch) Allocator.Error!void {
     pub fn reload_active(&mut self) -> Result<(), OutOfMemory> {
+        // reloadActive only inspects the selected history result, so validate
+        // that result without scanning every cached match on this hot path.
+        // self.validateSelectedHistory();
+        //
+        // PORT NOTE: upstream this sits immediately after
+        // `resetIfDimensionsChanged()`, which rustty's `ScreenSearch` does not
+        // have yet (it is a pre-WS7-C upstream commit that is not part of this
+        // workstream); here it is therefore the first statement.
+        self.validate_selected_history();
+
         // const tw = reloadActive_tw;
 
         // If our selection pin became garbage it means we scrolled off
@@ -1327,9 +1387,9 @@ impl ScreenSearch {
     /// ensure our selection sticks with contents changing.
     // pub fn select(self: *ScreenSearch, to: Select) Allocator.Error!bool {
     pub fn select(&mut self, to: Select) -> Result<bool, OutOfMemory> {
-        // All selection requires valid pins so we prune history and
-        // reload our active area immediately. This ensures all search
-        // results point to valid nodes.
+        // Reload validates the selected history result before inspecting its
+        // cached coordinates. Prune the remaining results afterward so every
+        // candidate is valid before selection tracks it.
         // try self.reloadActive();
         self.reload_active()?;
         // self.pruneHistory();
@@ -2739,6 +2799,136 @@ mod tests {
         assert!(!core::ptr::eq(replacement, first));
 
         assert!(!search.select(Select::Next).unwrap());
+        assert!(search.selected.is_none());
+
+        search.deinit();
+        stream.deinit();
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle 89eca063e
+    /// `test "reload defers pruning unselected history results"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn reload_defers_pruning_unselected_history_results() {
+        let alloc = Allocator;
+        // PORT NOTE: 80 cols instead of the reference's 10. Nothing in this
+        // test depends on the column count, and 10 cols yields ~35k-row pages
+        // whose row-by-row fill costs ~30s in a debug Rust build.
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+
+        let mut stream = t.vt_stream();
+        // const first = list.pages.first.?;
+        // while (first.rows() < first.capacity().rows) stream.nextSlice("\r\n");
+        // stream.nextSlice("error");
+        // for (0..list.rows + 1) |_| stream.nextSlice("\r\n");
+        let first = unsafe { (*list).pages.first };
+        while unsafe { crate::pagelist::Node::rows(first) }
+            < unsafe { crate::pagelist::Node::capacity(first) }.rows
+        {
+            stream.next_slice(b"\r\n");
+        }
+        stream.next_slice(b"error");
+        for _ in 0..unsafe { (*list).rows } + 1 {
+            stream.next_slice(b"\r\n");
+        }
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"error").unwrap();
+        search.search_all().unwrap();
+        // try testing.expectEqual(1, search.history_results.items.len);
+        assert_eq!(search.history_results.len(), 1);
+
+        // list.eraseHistory(.{ .history = .{ .y = 0 } });
+        unsafe {
+            (*list).erase_history(Some(point::Point::History(point::Coordinate {
+                x: 0,
+                y: 0,
+            })))
+        };
+
+        // Routine active refreshes don't inspect unselected history results.
+        // try search.reloadActive();
+        // try testing.expectEqual(1, search.history_results.items.len);
+        search.reload_active().unwrap();
+        assert_eq!(search.history_results.len(), 1);
+
+        // Selection prunes every candidate before attempting to track it.
+        // try testing.expect(!try search.select(.next));
+        // try testing.expectEqual(0, search.history_results.items.len);
+        assert!(!search.select(Select::Next).unwrap());
+        assert_eq!(search.history_results.len(), 0);
+
+        search.deinit();
+        stream.deinit();
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle a89c6133c
+    /// `test "reload after partial history page erase drops shifted selection first"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn reload_after_partial_history_page_erase_drops_shifted_selection_first() {
+        let alloc = Allocator;
+        // PORT NOTE: 80 cols instead of the reference's 10. Nothing in this
+        // test depends on the column count, and 10 cols yields ~35k-row pages
+        // whose row-by-row fill costs ~30s in a debug Rust build.
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+
+        let mut stream = t.vt_stream();
+        let first = unsafe { (*list).pages.first };
+        while unsafe { crate::pagelist::Node::rows(first) }
+            < unsafe { crate::pagelist::Node::capacity(first) }.rows
+        {
+            stream.next_slice(b"\r\n");
+        }
+        stream.next_slice(b"error");
+        for _ in 0..unsafe { (*list).rows } + 1 {
+            stream.next_slice(b"\r\n");
+        }
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"error").unwrap();
+        search.search_all().unwrap();
+        // try testing.expect(try search.select(.next));
+        // try testing.expect(search.selected != null);
+        assert!(search.select(Select::Next).unwrap());
+        assert!(search.selected.is_some());
+
+        // list.eraseHistory(.{ .history = .{ .y = 0 } });
+        unsafe {
+            (*list).erase_history(Some(point::Point::History(point::Coordinate {
+                x: 0,
+                y: 0,
+            })))
+        };
+
+        // Advance the active boundary into another node and add matches so
+        // reloadActive updates the history result offsets. It must discard the
+        // stale selected result before comparing any of its captured coordinates.
+        // const active_node = list.getTopLeft(.active).node;
+        // while (list.getTopLeft(.active).node == active_node) {
+        //     stream.nextSlice("error\r\n");
+        // }
+        let active_node = unsafe { (*list).get_top_left(point::Tag::Active) }.node;
+        while core::ptr::eq(
+            unsafe { (*list).get_top_left(point::Tag::Active) }.node,
+            active_node,
+        ) {
+            stream.next_slice(b"error\r\n");
+        }
+
+        // try search.reloadActive();
+        // try testing.expect(search.selected == null);
+        search.reload_active().unwrap();
         assert!(search.selected.is_none());
 
         search.deinit();
