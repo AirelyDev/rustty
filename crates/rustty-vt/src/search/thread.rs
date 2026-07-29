@@ -1165,7 +1165,12 @@ impl Search {
         //         entry.value.deinitScreenInvalid();
         //     }
         // }
-        let screens: *const crate::screen_set::ScreenSet = unsafe { &(*t).screens };
+        // SB: raw `addr_of!` (reference `&t.screens`), NOT `&(*t).screens` — the
+        // searchers hold live raw aliases into these screens' PageLists, so no
+        // reference into the Terminal is formed here
+        // (rust-mut-args-strongly-protected).
+        let screens: *const crate::screen_set::ScreenSet =
+            unsafe { core::ptr::addr_of!((*t).screens) };
         for key_i in 0..Key::COUNT {
             let entry_key = Self::key_from_index(key_i);
             // The reference's `screenIsValid` takes `*const ScreenSearch` only
@@ -1354,8 +1359,9 @@ impl Search {
                 //     entry.key,
                 //     entry.value,
                 // );
+                // SB: raw `addr_of!`, NOT `&(*t).screens` — see `Search::deinit`.
                 let remove: bool = !self.screen_is_valid(
-                    unsafe { &(*t).screens },
+                    unsafe { core::ptr::addr_of!((*t).screens) },
                     entry_key,
                     entry_screen,
                 );
