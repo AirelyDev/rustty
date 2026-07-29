@@ -1,14 +1,16 @@
 //! Build script for gettext-sys (GNU gettext gnulib `localename` family).
 //!
-//! PORT STATUS: vendor slice (macOS `_libintl_locale_name_canonicalize`)
+//! PORT STATUS: complete (full macOS libintl — catalog API + localename)
 //!
 //! R3 — self-contained, no ghostty dependency:
-//!   1. The upstream C sources for `intl` are vendored in-tree under `vendor/`
-//!      (copied; this build NEVER references /Users/gael/projects/ghostty). The
-//!      gnulib-lib `.c`/`.h` come from the gettext upstream
-//!      (gettext-runtime/intl/gnulib-lib); the build template (config.h,
-//!      libgnuintl.h, libintl.h) is copied from ghostty/pkg/libintl, which is
-//!      the reference's macOS libintl build.
+//!   1. The upstream C sources for `intl` are vendored in-tree under
+//!      `vendor/intl/` (copied verbatim from gettext 0.24; this build NEVER
+//!      references /Users/gael/projects/ghostty). The layout mirrors upstream:
+//!      `vendor/intl/*.c` is the gettext-runtime `intl/` core and
+//!      `vendor/intl/gnulib-lib/*.c` the gnulib support units. The build
+//!      template (config.h, libgnuintl.h, libintl.h) stays at `vendor/` and is
+//!      copied from ghostty/pkg/libintl, which is the reference's macOS libintl
+//!      build.
 //!   2. They are compiled with the `cc` crate using the reference's portable
 //!      flags (`-DHAVE_CONFIG_H -DLOCALEDIR=""`; see pkg/libintl/build.zig), and
 //!      link Apple CoreFoundation (the macOS `gl_locale_name_canonicalize`
@@ -24,20 +26,48 @@
 use std::env;
 use std::path::PathBuf;
 
-/// Vendored gnulib `localename` translation units compiled into this crate.
+/// Vendored gettext translation units compiled into this crate.
 ///
-/// This is the macOS subset from `ghostty/pkg/libintl/build.zig`'s `srcs` that
-/// is required to define and link `gl_locale_name_canonicalize`
-/// (`_libintl_locale_name_canonicalize`). The threaded `localename.c` is not
-/// included: it pulls in gnulib's `glthread/` locking layer and is unnecessary
-/// for the canonicalize symbol (defined in the `-unsafe` unit).
+/// This is the FULL macOS libintl the reference builds — the exact `srcs` list
+/// of `ghostty/pkg/libintl/build.zig`, in the same order: the 23
+/// `gettext-runtime/intl/` core units (message catalogs, domain bindings, the
+/// plural-form parser) plus the 7 `gnulib-lib/` units macOS needs. The
+/// reference's commented-out `osdep.c`/`printf.c` are deliberately NOT here —
+/// they are for platforms the reference does not build libintl for.
+///
+/// `plural.c` is the checked-in Bison-generated parser that ships pre-generated
+/// in the upstream tarball; no yacc/bison runs at build time.
 const SOURCES: &[&str] = &[
-    "vendor/localename-unsafe.c",
-    "vendor/getlocalename_l-unsafe.c",
-    "vendor/localename-environ.c",
-    "vendor/setlocale_null.c",
-    "vendor/setlocale_null-unlocked.c",
-    "vendor/setlocale-lock.c",
+    "vendor/intl/bindtextdom.c",
+    "vendor/intl/dcgettext.c",
+    "vendor/intl/dcigettext.c",
+    "vendor/intl/dcngettext.c",
+    "vendor/intl/dgettext.c",
+    "vendor/intl/dngettext.c",
+    "vendor/intl/explodename.c",
+    "vendor/intl/finddomain.c",
+    "vendor/intl/gettext.c",
+    "vendor/intl/hash-string.c",
+    "vendor/intl/intl-compat.c",
+    "vendor/intl/l10nflist.c",
+    "vendor/intl/langprefs.c",
+    "vendor/intl/loadmsgcat.c",
+    "vendor/intl/localealias.c",
+    "vendor/intl/log.c",
+    "vendor/intl/ngettext.c",
+    "vendor/intl/plural-exp.c",
+    "vendor/intl/plural.c",
+    "vendor/intl/setlocale.c",
+    "vendor/intl/textdomain.c",
+    "vendor/intl/version.c",
+    "vendor/intl/compat.c",
+    "vendor/intl/gnulib-lib/getlocalename_l-unsafe.c",
+    "vendor/intl/gnulib-lib/localename.c",
+    "vendor/intl/gnulib-lib/localename-environ.c",
+    "vendor/intl/gnulib-lib/localename-unsafe.c",
+    "vendor/intl/gnulib-lib/setlocale-lock.c",
+    "vendor/intl/gnulib-lib/setlocale_null.c",
+    "vendor/intl/gnulib-lib/setlocale_null-unlocked.c",
 ];
 
 fn main() {
@@ -55,9 +85,16 @@ fn main() {
 
     let mut build = cc::Build::new();
     build
+        // Include-path layering mirrors the reference exactly
+        // (pkg/libintl/build.zig): first the checked-in build template
+        // (config.h, libintl.h, libgnuintl.h), then the upstream `intl/`
+        // sources, then `intl/gnulib-lib/`.
         .include(&vendor)
+        .include(vendor.join("intl"))
+        .include(vendor.join("intl/gnulib-lib"))
         // Match the reference's flags (pkg/libintl/build.zig): config.h-driven
-        // build with an empty LOCALEDIR.
+        // build with an empty LOCALEDIR. No other -D is passed there and none
+        // is needed here — the full 30-TU set compiles clean with just these.
         .define("HAVE_CONFIG_H", None)
         .define("LOCALEDIR", Some("\"\""))
         // Vendored upstream code: do not let its warnings fail the host build.
@@ -71,17 +108,15 @@ fn main() {
     // `cargo:rustc-link-lib=static=...` + search-path directives. Because the
     // crate declares `links = "intl"`, Cargo enforces a single linkage.
     //
-    // WS4 NOTE: the archive is named `rustty_gettext_localename`, NOT `intl` —
-    // this is a DELIBERATE divergence from the `links` key (which stays
-    // "intl" as the pkg-config-style uniqueness tag for the underlying C
-    // library concept). A `-lintl` name-based link (added by rustty-os/build.rs
-    // WS4 to reach Homebrew's FULL libintl for `bindtextdomain`/`dgettext`) would
-    // otherwise resolve to THIS crate's own vendored archive first (whichever
-    // `-L` search path lands earlier), which provides only the localename
-    // canonicalizer slice — silently shadowing the real symbols and producing
-    // a link-time "undefined symbol: _bindtextdomain" instead. A unique
-    // archive name sidesteps the collision entirely.
-    build.compile("rustty_gettext_localename");
+    // The archive is named `rustty_intl`, NOT `intl`. That is deliberate: the
+    // `links` key stays "intl" (the pkg-config-style uniqueness tag for the
+    // underlying C library concept), while the ARCHIVE name is namespaced so it
+    // can never be confused with — or silently shadowed by — a system/Homebrew
+    // `libintl`. As of WS9 nothing in the workspace passes `-lintl` any more:
+    // this archive is the full libintl (catalog API included), so
+    // `rustty-os/build.rs`'s Homebrew link-search and `macos/build-rustty.sh`'s
+    // `OTHER_LDFLAGS -lintl` were both removed.
+    build.compile("rustty_intl");
 
     // The macOS `gl_locale_name_canonicalize` consults CFPreferences for legacy
     // (NeXTstep-inherited) locale names, so the static archive references Apple
@@ -104,4 +139,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/wrapper.h");
     println!("cargo:rerun-if-changed=vendor/config.h");
+    println!("cargo:rerun-if-changed=vendor/libintl.h");
+    println!("cargo:rerun-if-changed=vendor/libgnuintl.h");
+    println!("cargo:rerun-if-changed=vendor/intl");
 }
