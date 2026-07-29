@@ -4979,3 +4979,64 @@ From **WS7 Phase B review (I2 harness run)**:
    but does not automatically catch a future regression. This matches existing repo
    precedent (`mirihar-compress-lz4`, `mirihar-chunk3b`), so it is not being wired now —
    but at minimum the native `leakcheck` scenario should be wired into a gate in Phase E.
+
+---
+
+# Justified R1 Divergences (NOT deferrals — deliberate, permanent)
+
+Divergences from the oracle that are intentional and will NOT be "completed"
+later. Each records what diverges, why fidelity was overruled, and how the
+divergence is bounded. Anything here must be a conscious decision with a
+rationale — never an accident.
+
+## `killPid` bounded wait (`crates/rustty-termio/src/exec.rs`) — WS-hang
+
+**Oracle:** `ghostty/src/termio/Exec.zig`'s `killPid` loops FOREVER — `killpg(pgid,
+SIGHUP)`, then `waitpid(pid, WNOHANG)`, sleep 10ms, repeat — until the child is
+reaped. There is no deadline and no escalation.
+
+**Divergence:** rustty's `killPid` bounds that loop:
+- `0 .. KILL_ESCALATE` (5s) — byte-for-byte the reference behavior (SIGHUP only).
+- past `KILL_ESCALATE` — escalate the process-group signal to `SIGKILL`.
+- at `KILL_ABANDON` (10s) — stop waiting; return `KillError::Abandoned`.
+
+**Why fidelity is overruled (liveness > R1):** on macOS a child can become
+permanently unreapable. A `login(1)` — a session leader — that is SIGHUP'd while
+it still has output queued on its pty *slave* wedges UNINTERRUPTIBLY in the
+kernel exit path (state `?Es`). It is immune to `SIGKILL` and `waitpid` will
+never return it, so the reference loop spins forever. Because this loop runs on
+the teardown path, the consequence is that the terminal can never finish
+closing.
+
+**Production reachability (this is not merely a test artifact):** the *normal*
+surface-close path is safe — `Exec::threadExit` calls `stop()` while the
+io-reader thread is still draining the pty master, and upstream orders it that
+way deliberately ("Quit our read thread after exiting the subprocess so that we
+don't get stuck waiting for data to stop flowing"). Draining the master is
+exactly what un-wedges the child. **But `threadEnter`'s error arms also call
+`stop()`, and they run before the io-reader thread exists** — the `pipe()`,
+`xev::Timer::init`, `xev::Process::init` and read-thread `spawn` failure arms
+(fd/thread exhaustion). On those arms the child is a freshly-forked `login` with
+pending output and no reader: precisely the wedging condition. That is a
+genuine, if narrow, unrecoverable-hang bug. Upstream Ghostty has the same
+ordering and therefore the same latent defect.
+
+**How the divergence is bounded:** it is confined to the pathological case. A
+child that exits normally is reaped on the first or second iteration, far inside
+the 5s grace period, so every healthy teardown is observationally identical to
+the oracle. The `SIGKILL` escalation is arguably *closer* to the reference's own
+stated intent ("we will not rest until the entire family tree is obliterated"),
+since it also kills descendants that survived the setsid/execve race and ignore
+SIGHUP. Abandoning a child we provably cannot reap is strictly better than
+wedging the application forever.
+
+**Guard:** `exec::tests::kill_pid_bounded_when_child_is_unreapable` (a
+bound-regression guard — it can only fail by hanging, which is how removing the
+bound would fail it). Whether the child wedges on any given run is
+timing-dependent; the deterministic evidence is
+`.port/tools/repro_subprocess_hang.sh` (pre-fix: 12/12 hangs).
+
+**Related, NOT diverged:** `getpgid`'s retry loop is also unbounded in both the
+oracle and the port. It is left verbatim — it terminates as soon as the child
+`setsid`s or dies, and a wedged `?Es` child still reports a valid pgid, so it is
+not a hang site (confirmed by `sample`: the hang is inside `killPid`).
