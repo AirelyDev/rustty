@@ -115,6 +115,238 @@ pub fn compress_bound(input_len: usize) -> Result<usize, CompressError> {
     Ok(input_len + input_len / 255 + 16)
 }
 
+/// Compress `input` into a raw LZ4 block in `output`.
+///
+/// Returns the initialized length of `output`. The input and output buffers
+/// must not overlap. `table` is scratch space and does not need to be
+/// initialized by the caller; it is reset before use.
+pub fn compress(
+    input: &[u8],
+    output: &mut [u8],
+    table: &mut HashTable,
+) -> Result<usize, CompressError> {
+    if input.len() > MAX_INPUT_SIZE {
+        return Err(CompressError::InputTooLarge);
+    }
+
+    // All-ones in either packed half means "no previous position".
+    table.fill(u32::MAX);
+
+    // `ip` is the current input position, `anchor` is the first literal not yet
+    // emitted, and `op` is the next output position. A successful match emits
+    // input[anchor..ip] as literals followed by the match, then moves both input
+    // positions to the end of that match.
+    let mut op: usize = 0;
+    let mut anchor: usize = 0;
+
+    // LZ4's format leaves the final five input bytes as literals and starts
+    // the final match at least twelve bytes before the end. This is not
+    // required by our safe decoder, but makes blocks compatible with fast
+    // decoders that rely on the standard format restrictions. Inputs too
+    // short for any match are emitted below as one literal-only sequence.
+    if input.len() >= MATCH_FIND_LIMIT {
+        let search_end = input.len() - MATCH_FIND_LIMIT;
+        let match_end_limit = input.len() - LAST_LITERALS;
+        let mut ip: usize = 0;
+        let mut search_attempts: usize = 0;
+
+        while ip <= search_end {
+            // Hash the next four bytes and replace the table entry
+            // immediately. Hash collisions are expected, so equality is
+            // checked below before accepting a saved position as a match.
+            let sequence = read_u32(input, ip);
+            let hash = hash_sequence(sequence);
+            let candidates = table[hash];
+            remember_position(table, hash, ip);
+
+            let mut match_pos = match candidate_position(ip, candidates as u16)
+                .or_else(|| candidate_position(ip, (candidates >> 16) as u16))
+            {
+                Some(p) => p,
+                None => {
+                    advance_search(&mut ip, anchor, &mut search_attempts);
+                    continue;
+                }
+            };
+
+            if read_u32(input, match_pos) != sequence {
+                // The nearest candidate collided. Fall back to the older
+                // one, which must additionally match one byte beyond the
+                // minimum so collision-prone minimum-length matches from
+                // the stale half are not emitted.
+                match candidate_position(ip, (candidates >> 16) as u16).filter(|&older| {
+                    read_u32(input, older) == sequence
+                        && input[older + MIN_MATCH] == input[ip + MIN_MATCH]
+                }) {
+                    Some(older) => match_pos = older,
+                    None => {
+                        advance_search(&mut ip, anchor, &mut search_attempts);
+                        continue;
+                    }
+                }
+            }
+
+            // Pull the match backwards into the current literal run. This is
+            // particularly helpful around aligned cell records. As with
+            // forward extension, compare words before locating the first
+            // differing byte.
+            let (begin_position, begin_candidate) = match_begin(input, ip, match_pos, anchor);
+            ip = begin_position;
+            match_pos = begin_candidate;
+
+            // We already compared the first four bytes. Continue up to the
+            // point where the required last five literals begin. `match_end_position`
+            // compares a machine word at a time before locating the first
+            // differing byte.
+            let match_end = match_end_position(
+                input,
+                ip + MIN_MATCH,
+                match_pos + MIN_MATCH,
+                match_end_limit,
+            );
+
+            emit_sequence(
+                output,
+                &mut op,
+                &input[anchor..ip],
+                (ip - match_pos) as u16,
+                match_end - ip,
+            )?;
+
+            // The main loop jumps over the matched bytes rather than hashing
+            // every position within them. Seed one position near the end so
+            // an adjacent repeated record can still refer back into this
+            // match. The next loop iteration will then seed `match_end`
+            // normally.
+            if match_end >= 2 && match_end - 2 + MIN_MATCH <= input.len() {
+                let seed = match_end - 2;
+                remember_position(table, hash_sequence(read_u32(input, seed)), seed);
+            }
+
+            ip = match_end;
+            anchor = ip;
+            search_attempts = 0;
+        }
+    }
+
+    // Whatever remains after the last match is the terminal literal-only
+    // sequence. For short inputs this is also the only sequence in the block.
+    emit_last_literals(output, &mut op, &input[anchor..])?;
+    Ok(op)
+}
+
+/// Map a four-byte input sequence to its scratch-table slot.
+#[inline(always)]
+fn hash_sequence(sequence: u32) -> usize {
+    (sequence.wrapping_mul(HASH_MULTIPLIER) >> (32 - HASH_LOG as u32)) as usize
+}
+
+/// Add a position to one hash slot and shift the previous newest position into
+/// the fallback half. A position whose low bits are 0xFFFF conflicts with the
+/// sentinel and is simply not stored.
+#[inline(always)]
+fn remember_position(table: &mut HashTable, hash: usize, position: usize) {
+    let low = position as u16;
+    if low == u16::MAX {
+        return;
+    }
+    table[hash] = (table[hash] << 16) | (low as u32);
+}
+
+/// Recover the nearest preceding position from a stored low half. Modular
+/// subtraction directly produces the LZ4 offset within the current window.
+#[inline(always)]
+fn candidate_position(ip: usize, stored: u16) -> Option<usize> {
+    if stored == u16::MAX {
+        return None;
+    }
+    let distance = (ip as u16).wrapping_sub(stored);
+    if distance == 0 {
+        return None;
+    }
+    Some(ip - distance as usize)
+}
+
+/// Advance through a literal run. The first KiB inspects every byte without
+/// maintaining a counter, which keeps ordinary terminal-page searches cheap.
+/// Longer runs enable gradually increasing steps for incompressible data.
+#[inline(always)]
+fn advance_search(ip: &mut usize, anchor: usize, attempts: &mut usize) {
+    if *attempts == 0 {
+        *ip += 1;
+        if *ip - anchor == 1024 {
+            *attempts = 1;
+        }
+        return;
+    }
+
+    *attempts += 1;
+    *ip += 1 + *attempts / 64;
+}
+
+/// Extend a match backwards without crossing the current literal anchor or the
+/// beginning of the candidate. The returned positions preserve their offset.
+fn match_begin(
+    input: &[u8],
+    position_: usize,
+    candidate_: usize,
+    anchor: usize,
+) -> (usize, usize) {
+    let mut position = position_;
+    let mut candidate = candidate_;
+
+    while core::cmp::min(position - anchor, candidate) >= 8 {
+        let position_word = position - 8;
+        let candidate_word = candidate - 8;
+        let difference = read_u64(input, position_word) ^ read_u64(input, candidate_word);
+        if difference != 0 {
+            // Little-endian reads make the MOST-significant differing bit map
+            // to the LAST byte in memory, so leading zeros count equal trailing
+            // bytes of the two words.
+            let equal_bytes = (difference.leading_zeros() / 8) as usize;
+            return (position - equal_bytes, candidate - equal_bytes);
+        }
+
+        position = position_word;
+        candidate = candidate_word;
+    }
+
+    while position > anchor && candidate > 0 && input[position - 1] == input[candidate - 1] {
+        position -= 1;
+        candidate -= 1;
+    }
+    (position, candidate)
+}
+
+/// Return the first input position where two matching runs differ, or `limit`
+/// when they remain equal. Both positions are known to have matched through
+/// `MIN_MATCH` before this is called.
+///
+/// PORT NOTE: named `match_end_position` because `match_end` shadows a local in
+/// `compress`; the oracle's function is `matchEnd`.
+fn match_end_position(input: &[u8], position_: usize, candidate_: usize, limit: usize) -> usize {
+    let mut position = position_;
+    let mut candidate = candidate_;
+
+    // Reading as little endian makes the least-significant differing bit map
+    // to the earliest byte in memory on every target.
+    while limit.saturating_sub(position) >= 8 {
+        let difference = read_u64(input, position) ^ read_u64(input, candidate);
+        if difference != 0 {
+            return position + (difference.trailing_zeros() / 8) as usize;
+        }
+
+        position += 8;
+        candidate += 8;
+    }
+
+    while position < limit && input[position] == input[candidate] {
+        position += 1;
+        candidate += 1;
+    }
+    position
+}
+
 /// Decompress a raw LZ4 block into an exact-size output buffer.
 ///
 /// Returns `output.len()` on success. Both consuming all input and filling all
@@ -664,5 +896,83 @@ mod tests {
         assert_eq!(encoded_length_bytes(15), 1);
         assert_eq!(encoded_length_bytes(15 + 254), 1);
         assert_eq!(encoded_length_bytes(15 + 255), 2);
+    }
+
+    /// Shared round-trip assertion used by the corpus-style tests below.
+    /// PORTS: oracle@main lz4.zig `fn expectRoundTrip`
+    fn expect_round_trip(input: &[u8]) {
+        let bound = compress_bound(input.len()).unwrap();
+        let mut encoded = vec![0u8; bound];
+        let mut decoded = vec![0u8; input.len()];
+
+        let mut table: HashTable = [0; 1 << HASH_LOG];
+        let encoded_len = compress(input, &mut encoded, &mut table).unwrap();
+        assert_eq!(
+            decompress(&encoded[..encoded_len], &mut decoded),
+            Ok(input.len())
+        );
+        assert_eq!(&decoded[..], input);
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "round trips boundary-sized inputs"`
+    #[test]
+    fn lz4_round_trips_boundary_sized_inputs() {
+        const LENGTHS: [usize; 22] = [
+            0, 1, 3, 4, 5, 12, 15, 16, 19, 20, 254, 255, 256, 269, 270, 271, 510, 511, 512,
+            65_535, 65_536, 65_537,
+        ];
+        for len in LENGTHS {
+            let buf: Vec<u8> = (0..len).map(|i| (i.wrapping_mul(31)) as u8).collect();
+            expect_round_trip(&buf);
+        }
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "round trips compressible page-sized inputs"`
+    #[test]
+    fn lz4_round_trips_compressible_page_sized_inputs() {
+        const PAGE_LEN: usize = 400 * 1024;
+
+        let zeros = vec![0u8; PAGE_LEN];
+        expect_round_trip(&zeros);
+
+        let mut structured = vec![0u8; PAGE_LEN];
+        for i in 0..PAGE_LEN / 8 {
+            structured[i * 8] = (b' ' as usize + i % 95) as u8;
+            structured[i * 8 + 4] = ((i / 80) % 16) as u8;
+        }
+        expect_round_trip(&structured);
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "round trips deterministic random inputs"`
+    ///
+    /// PORT NOTE: the oracle uses `std.Random.DefaultPrng` (xoshiro256++). The
+    /// exact stream does not matter — the property is round-trip identity over
+    /// incompressible data — so this uses a small deterministic xorshift64*.
+    #[test]
+    fn lz4_round_trips_deterministic_random_inputs() {
+        let mut state: u64 = 0x4C5A_3401;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..256 {
+            let len = (next() % (32 * 1024)) as usize;
+            let input: Vec<u8> = (0..len).map(|_| next() as u8).collect();
+            expect_round_trip(&input);
+        }
+    }
+
+    /// PORTS: oracle@main lz4.zig `test "compress reports short output"`
+    #[test]
+    fn lz4_compress_reports_short_output() {
+        let input = b"a terminal page needs enough output space";
+        let mut table: HashTable = [0; 1 << HASH_LOG];
+        let mut output = [0u8; 4];
+        assert_eq!(
+            compress(input, &mut output, &mut table),
+            Err(CompressError::OutputTooSmall)
+        );
     }
 }
