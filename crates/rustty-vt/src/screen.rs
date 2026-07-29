@@ -993,10 +993,15 @@ impl Screen {
                         }
 
                         // We move the top pin back in bounds to the top row.
+                        // const node = pages.pages.first.?;
+                        let node = pages.pages.first;
                         break 'start pages.track_pin(Pin {
-                            node: pages.pages.first,
+                            node,
+                            // .x = if (sel.rectangle) @min(ordered.tl.x, node.cols() - 1)
+                            //      else 0
                             x: if sel.rectangle {
-                                unsafe { (*ordered.tl).x }
+                                let cols = unsafe { (*node).data.size.cols };
+                                core::cmp::min(unsafe { (*ordered.tl).x }, cols - 1)
                             } else {
                                 0
                             },
@@ -1011,16 +1016,23 @@ impl Screen {
                 // in bounds if it isn't already.
                 let end_pin: *mut Pin = match pin_remap.get(&ordered.br) {
                     Some(&p) => p,
-                    None => pages.track_pin(Pin {
-                        node: pages.pages.last,
-                        x: if sel.rectangle {
-                            unsafe { (*ordered.br).x }
-                        } else {
-                            pages.cols - 1
-                        },
-                        y: unsafe { (*pages.pages.last).data.size.rows } - 1,
-                        garbage: false,
-                    })?,
+                    None => {
+                        // const node = pages.pages.last.?;
+                        let node = pages.pages.last;
+                        let cols = unsafe { (*node).data.size.cols };
+                        pages.track_pin(Pin {
+                            node,
+                            // .x = if (sel.rectangle) @min(ordered.br.x, node.cols() - 1)
+                            //      else node.cols() - 1
+                            x: if sel.rectangle {
+                                core::cmp::min(unsafe { (*ordered.br).x }, cols - 1)
+                            } else {
+                                cols - 1
+                            },
+                            y: unsafe { (*node).data.size.rows } - 1,
+                            garbage: false,
+                        })?
+                    }
                 };
 
                 Some(Selection {
@@ -3583,7 +3595,8 @@ impl Screen {
                     // so we scan forward to find where our content ends.
                     if start_offset == 0 && cells[0].semantic_content() != v {
                         let mut prev = p.up(1).unwrap();
-                        prev.x = unsafe { (*p.node).data.size.cols } - 1;
+                        // prev.x = prev.node.cols() - 1;
+                        prev.x = unsafe { (*prev.node).data.size.cols } - 1;
                         break 'end_pin prev;
                     }
 
@@ -8286,6 +8299,70 @@ mod tests {
         s.deinit();
     }
 
+    // test "Screen: selectLine semantic boundary across mixed-width pages"
+    #[test]
+    fn screen_select_line_semantic_boundary_across_mixed_width_pages() {
+        let mut s = mkscreen(4, 2, 0);
+
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"ABCD").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"E").unwrap();
+
+        let first = s.pages.pages.first;
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 1,
+                garbage: false,
+            })
+            .unwrap();
+        let second = unsafe { (*first).next };
+        // PORT NOTE: `first.page().size.cols = 2` — a deliberate mid-reflow
+        // narrow page, written directly through the node pointer.
+        unsafe { (*first).data.size.cols = 2 };
+        s.pages.pause_integrity_checks(true);
+
+        assert_eq!(2 as size::CellCountInt, unsafe { (*first).data.size.cols });
+        assert_eq!(4 as size::CellCountInt, unsafe {
+            (*second).data.size.cols
+        });
+
+        let sel = s
+            .select_line(SelectLine {
+                pin: Pin {
+                    node: first,
+                    x: 1,
+                    y: 0,
+                    garbage: false,
+                },
+                whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                semantic_prompt_boundary: true,
+            })
+            .unwrap();
+        assert!(Pin {
+            node: first,
+            x: 0,
+            y: 0,
+            garbage: false
+        }
+        .eql(sel.start()));
+        assert!(Pin {
+            node: first,
+            x: 1,
+            y: 0,
+            garbage: false
+        }
+        .eql(sel.end()));
+        sel.deinit(&mut s);
+
+        s.pages.pause_integrity_checks(false);
+        s.deinit();
+    }
+
     // test "Screen: selectLine semantic all same content"
     #[test]
     fn screen_select_line_semantic_all_same_content() {
@@ -9477,6 +9554,93 @@ mod tests {
         }
 
         s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone clamps clipped selections to mixed-width pages"
+    #[test]
+    fn screen_clone_clamps_clipped_selections_to_mixed_width_pages() {
+        let mut s = mkscreen(4, 3, 0);
+
+        let first = s.pages.pages.first;
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 2,
+                garbage: false,
+            })
+            .unwrap();
+        s.pages
+            .split(Pin {
+                node: first,
+                x: 0,
+                y: 1,
+                garbage: false,
+            })
+            .unwrap();
+        let middle = unsafe { (*first).next };
+        let last = unsafe { (*middle).next };
+        // PORT NOTE: `middle.page().size.cols = 2` — a deliberate mid-reflow
+        // narrow page, written directly through the node pointer.
+        unsafe { (*middle).data.size.cols = 2 };
+
+        s.select(Some(Selection::init(
+            Pin {
+                node: first,
+                x: 0,
+                y: 0,
+                garbage: false,
+            },
+            Pin {
+                node: last,
+                x: 3,
+                y: 0,
+                garbage: false,
+            },
+            false,
+        )))
+        .unwrap();
+        let mut linear = s
+            .clone(
+                Allocator,
+                point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+                Some(point::Point::Screen(point::Coordinate { x: 0, y: 1 })),
+            )
+            .unwrap();
+        let linear_end = linear.selection.unwrap().end();
+        let _ = linear_end.row_and_cell();
+        assert_eq!(1 as size::CellCountInt, linear_end.x);
+        linear.deinit();
+
+        s.select(Some(Selection::init(
+            Pin {
+                node: first,
+                x: 3,
+                y: 0,
+                garbage: false,
+            },
+            Pin {
+                node: last,
+                x: 3,
+                y: 0,
+                garbage: false,
+            },
+            true,
+        )))
+        .unwrap();
+        let mut rectangle = s
+            .clone(
+                Allocator,
+                point::Point::Screen(point::Coordinate { x: 0, y: 1 }),
+                None,
+            )
+            .unwrap();
+        let rectangle_start = rectangle.selection.unwrap().start();
+        let _ = rectangle_start.row_and_cell();
+        assert_eq!(1 as size::CellCountInt, rectangle_start.x);
+        rectangle.deinit();
+
         s.deinit();
     }
 
