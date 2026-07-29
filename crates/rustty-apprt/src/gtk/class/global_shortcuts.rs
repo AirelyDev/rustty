@@ -88,6 +88,32 @@ mod imp {
         /// and the property stays writable (as the reference's field accessor is).
         #[property(name = "dbus-connection", get, set = Self::set_dbus_connection, nullable)]
         pub dbus_connection: RefCell<Option<gio::DBusConnection>>,
+
+        /// PORTS: `global_shortcuts.zig:64-68` `map`. A mapping from the portal
+        /// shortcut id to the action it performs. The id is the serialized XDG
+        /// spelling of the trigger, which is unique in the keymap. Insertion
+        /// order is preserved (the reference uses a `StringArrayHashMapUnmanaged`),
+        /// because that is the order the shortcuts are presented to the portal.
+        ///
+        /// PORT NOTE: the reference allocates the keys in a per-refresh arena
+        /// (`:61-62`) and drops the whole arena in `close`; Rust owns the strings
+        /// in the `Vec`, so `close` just clears it and the arena field has no
+        /// counterpart.
+        pub map: RefCell<Vec<(String, rustty_input::binding::Action)>>,
+
+        /// PORTS: `global_shortcuts.zig:70-72` `handle` — the current portal
+        /// session's D-Bus object path, or `None` when no session exists.
+        pub handle: RefCell<Option<String>>,
+
+        /// PORTS: `global_shortcuts.zig:74-76` `response_subscription` — the
+        /// subscription to the in-flight request's `Response` signal. The
+        /// reference uses `0` as the null id; gio's `SignalSubscriptionId` is a
+        /// non-zero newtype, so `Option` is the faithful spelling.
+        pub response_subscription: RefCell<Option<gio::SignalSubscriptionId>>,
+
+        /// PORTS: `global_shortcuts.zig:78-80` `activate_subscription` — the
+        /// subscription to the session's `Activated` signal.
+        pub activate_subscription: RefCell<Option<gio::SignalSubscriptionId>>,
     }
 
     #[glib::object_subclass]
@@ -178,41 +204,107 @@ impl GlobalShortcuts {
         glib::Object::new()
     }
 
-    /// PORTS: `global_shortcuts.zig:159-236` `refresh`. Re-derive the global
-    /// shortcut registration from the current config.
-    ///
-    /// DEFERRAL (portals, L6 — see module doc): the *real* head runs (close prior
-    /// state; a config is required to proceed), but building the trigger→action map
-    /// from `config.keybind.set` and the XDG `CreateSession`/`BindShortcuts`
-    /// round-trip (`:170-236`) is an **inhabited no-op** here — deliberately NOT an
-    /// `unimplemented!()`, because `notify::config` / [`Self::set_dbus_connection`]
-    /// drive this on the startup hot path and a panic would abort the app the
-    /// moment a user has a `global:` keybind.
+    /// PORTS: `global_shortcuts.zig:148-213` `refresh`. Re-derive the global
+    /// shortcut registration from the current config: close the previous session,
+    /// rebuild the trigger→action map, and — if anything is registered — start the
+    /// portal round-trip with `CreateSession`.
     fn refresh(&self) {
-        // Always close our previous state first (`:161`).
+        // Always close our previous state first (`:150`).
         self.close();
 
-        // We need configuration to proceed (`:166`).
-        if self.imp().config.borrow().is_none() {
+        let imp = self.imp();
+
+        // We need configuration to proceed (`:155`).
+        let map = {
+            let config = imp.config.borrow();
+            let Some(config) = config.as_ref() else {
+                return;
+            };
+            build_shortcut_map(config.get())
+        };
+
+        let count = map.len();
+        imp.map.replace(map);
+
+        // Create our session if we have global shortcuts (`:212`).
+        if count > 0 {
+            self.request(Method::CreateSession);
+        }
+    }
+
+    /// PORTS: `global_shortcuts.zig:109-146` `close`. Tear down the current portal
+    /// session: drop both signal subscriptions, ask the portal to close the
+    /// session, and clear the map.
+    fn close(&self) {
+        let imp = self.imp();
+
+        // `const dbus = priv.dbus_connection orelse return;` (`:111`)
+        let dbus = { imp.dbus_connection.borrow().clone() };
+        let Some(dbus) = dbus else {
+            // Without a connection there are no subscriptions and no session, but
+            // the map may still hold state from a headless refresh.
+            imp.map.replace(Vec::new());
+            imp.handle.replace(None);
             return;
+        };
+
+        // `:113-121`
+        if let Some(id) = imp.response_subscription.borrow_mut().take() {
+            dbus.signal_unsubscribe(id);
+        }
+        if let Some(id) = imp.activate_subscription.borrow_mut().take() {
+            dbus.signal_unsubscribe(id);
         }
 
-        // DEFERRAL: map-build + portal round-trip (`:168-236`) lands with L6.
+        // Close the existing session (`:123-139`).
+        let handle = imp.handle.borrow_mut().take();
+        if let Some(handle) = handle {
+            dbus.call(
+                Some(PORTAL_BUS_NAME),
+                &handle,
+                SESSION_IFACE,
+                "Close",
+                None,
+                None,
+                gio::DBusCallFlags::NONE,
+                -1,
+                gio::Cancellable::NONE,
+                |_res| {},
+            );
+        }
+
+        // `arena.deinit(); priv.map = .{}` (`:141-145`) — Rust owns the map's
+        // strings, so clearing the vec is the whole teardown.
+        imp.map.replace(Vec::new());
     }
 
-    /// PORTS: `global_shortcuts.zig:128-157` `close`. Tear down the current portal
-    /// session (unsubscribe the response/activate signals, close the session
-    /// handle, clear the refresh arena).
+    /// PORTS: `global_shortcuts.zig:558-564` — the display-free half of
+    /// `shortcutActivated`: look the portal's shortcut id up in the map and
+    /// re-emit the bound action on the `trigger` signal. Unknown ids are ignored.
     ///
-    /// DEFERRAL (portals, L6 — see module doc): the session `handle`, the two D-Bus
-    /// signal subscriptions, and the per-refresh arena are all portal-round-trip
-    /// state that this tier never creates, so `close` is an inhabited no-op until
-    /// that state exists. It is called on every `refresh` and in `dispose` so its
-    /// call sites stay faithful.
-    fn close(&self) {
-        // DEFERRAL: unsubscribe(response/activate), Session.Close(handle), arena
-        // deinit (`:131-156`) land with L6.
+    /// Split out from the D-Bus callback so it can be exercised without a bus.
+    pub(crate) fn dispatch_activation(&self, shortcut_id: &str) {
+        let action = {
+            let map = self.imp().map.borrow();
+            map.iter()
+                .find(|(k, _)| k == shortcut_id)
+                .map(|(_, a)| a.clone())
+        };
+        let Some(action) = action else {
+            return;
+        };
+
+        self.emit_by_name::<()>("trigger", &[&ActionBoxed(action)]);
     }
+
+    /// The current portal shortcut map (id → action), in registration order.
+    /// rustty-only accessor: the reference reads `priv.map` directly in-file.
+    pub(crate) fn shortcut_map(&self) -> Vec<(String, Action)> {
+        self.imp().map.borrow().clone()
+    }
+
+    /// PORTS: `global_shortcuts.zig:329-460` `request`. Filled in WS15 T6.
+    fn request(&self, _method: Method) {}
 }
 
 impl Default for GlobalShortcuts {
@@ -225,6 +317,26 @@ impl Default for GlobalShortcuts {
 // Portal protocol helpers (free functions so they are unit-testable with no
 // display and no bus — the oracle keeps them as private methods/`Method` arms
 // on the class, which Zig can test in-file and Rust cannot).
+
+/// PORTS: `global_shortcuts.zig:215-326` `Method` — the two portal methods this
+/// class drives, in the order it drives them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Method {
+    /// `CreateSession`
+    CreateSession,
+    /// `BindShortcuts`
+    BindShortcuts,
+}
+
+impl Method {
+    /// PORTS: `global_shortcuts.zig:219-224` `Method.name`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Method::CreateSession => "CreateSession",
+            Method::BindShortcuts => "BindShortcuts",
+        }
+    }
+}
 
 /// The XDG desktop portal's well-known bus name.
 pub(crate) const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
@@ -624,5 +736,70 @@ mod tests {
 
         let empty = gtk4::glib::VariantDict::new(None);
         assert_eq!(session_handle_from_results(&empty.end()), None);
+    }
+
+    /// `refresh` rebuilds the shortcut map from the bound config. With no D-Bus
+    /// connection there is no portal session to create, so the map is built and
+    /// the round-trip is simply not attempted (this is the headless path).
+    #[test]
+    fn global_shortcuts_refresh_builds_map_without_dbus() {
+        let core = config_with(&["global:super+q=new_window"]);
+        let cfg = Config::new(&core);
+        let gs = GlobalShortcuts::new();
+        gs.set_config(Some(&cfg));
+
+        assert_eq!(
+            gs.shortcut_map(),
+            vec![("LOGO+q".to_owned(), Action::NewWindow)],
+            "notify::config must drive refresh and populate the map"
+        );
+    }
+
+    /// `close` (which `refresh` always runs first, and `dispose` runs) clears the
+    /// portal session state. Re-setting a config with no global binds empties it.
+    #[test]
+    fn global_shortcuts_refresh_clears_prior_map() {
+        let with_global = Config::new(&config_with(&["global:super+q=new_window"]));
+        let without_global = Config::new(&config_with(&["ctrl+shift+t=new_tab"]));
+
+        let gs = GlobalShortcuts::new();
+        gs.set_config(Some(&with_global));
+        assert_eq!(gs.shortcut_map().len(), 1);
+
+        gs.set_config(Some(&without_global));
+        assert!(
+            gs.shortcut_map().is_empty(),
+            "a config with no global binds leaves an empty map"
+        );
+    }
+
+    /// PORTS: `global_shortcuts.zig:541-565` `shortcutActivated` — the portal's
+    /// shortcut id is looked up in the map and the matching action is re-emitted
+    /// on the `trigger` signal. This is the whole point of the class.
+    #[test]
+    fn global_shortcuts_activation_emits_trigger() {
+        use std::cell::RefCell as StdRefCell;
+        use std::rc::Rc;
+
+        let cfg = Config::new(&config_with(&["global:super+q=new_window"]));
+        let gs = GlobalShortcuts::new();
+        gs.set_config(Some(&cfg));
+
+        let seen: Rc<StdRefCell<Vec<Action>>> = Rc::new(StdRefCell::new(Vec::new()));
+        let seen_cb = seen.clone();
+        gs.connect_local("trigger", false, move |args| {
+            let boxed: ActionBoxed = args[1].get().expect("trigger carries an ActionBoxed");
+            seen_cb.borrow_mut().push(boxed.0);
+            None
+        });
+
+        gs.dispatch_activation("LOGO+q");
+        gs.dispatch_activation("LOGO+never-bound");
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![Action::NewWindow],
+            "only a mapped shortcut id emits trigger"
+        );
     }
 }
