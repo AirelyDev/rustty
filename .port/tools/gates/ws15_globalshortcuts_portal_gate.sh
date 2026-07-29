@@ -10,7 +10,8 @@
 #   4. the shortcut id RESOLVED in the map (`dispatch map-hit`);
 #   5. `performAllAction` was reached and returned Ok (`action performed ok`) —
 #      which requires the `trigger` emission and an installed dispatch thunk;
-#   6. a new toplevel window actually appeared (AT-SPI), the bound action being
+#   6. a new toplevel window actually appeared — counted out-of-process from
+#      GtkApplication's own D-Bus window export — the bound action being
 #      `new_window`.
 # Assertions 4-6 are what make this more than a signal-delivery test: the older
 # "global shortcut activated=" line is logged BEFORE dispatch and so passes even
@@ -90,9 +91,9 @@ NoDisplay=true
 DESKTOP
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null
 
-# --- (2) the AT-SPI grant clicker + window counter ---------------------------
+# --- (2) the AT-SPI grant clicker ---------------------------------------------
 GRANT_PY="$WORK/grant.py"
-WINCOUNT_PY="$WORK/wincount.py"
+
 
 # --- isolated config with one global keybind ---------------------------------
 rm -rf "$WORK"; mkdir -p "$WORK/cfg/rustty"
@@ -151,45 +152,25 @@ print(f"clicked {WANT!r} x{clicked}")
 sys.exit(0 if clicked else 1)
 PYEOF
 
-# Count the rustty application's toplevel windows via AT-SPI. This is the
-# external, out-of-process observable for `new_window` — the gate uses it to
-# prove the dispatched action actually did something, not merely that the code
-# path ran. Prints the count on stdout; exits 2 if the app is not on the
-# accessibility bus at all (so "app missing" can never masquerade as "0 windows").
-cat > "$WINCOUNT_PY" <<'PYEOF'
-import sys
-import gi
-gi.require_version("Atspi", "2.0")
-from gi.repository import Atspi
-
-Atspi.init()
-found_app = False
-count = 0
-desktop = Atspi.get_desktop(0)
-for i in range(desktop.get_child_count()):
-    app = desktop.get_child_at_index(i)
-    if not app:
-        continue
-    try:
-        name = (app.get_name() or "").lower()
-    except Exception:
-        continue
-    if "rustty" not in name:
-        continue
-    found_app = True
-    try:
-        for j in range(app.get_child_count()):
-            w = app.get_child_at_index(j)
-            if w and w.get_role_name() in ("frame", "window", "dialog"):
-                count += 1
-    except Exception:
-        pass
-
-if not found_app:
-    print("rustty not present on the a11y bus", file=sys.stderr)
-    sys.exit(2)
-print(count)
-PYEOF
+# Count the rustty application's toplevel windows. This is the external,
+# out-of-process observable for `new_window` — the gate uses it to prove the
+# dispatched action actually did something, not merely that the code path ran.
+#
+# The source is `GtkApplication`'s own D-Bus export: a registered GTK app owns
+# its app id on the session bus and exports one object per toplevel at
+# `<app-path>/window/N`. That is authoritative and needs no accessibility stack
+# (AT-SPI was tried first and reports rustty as an 'Unnamed' application, so it
+# cannot be matched reliably). Prints the count on stdout; exits 2 if the app is
+# not on the bus at all, so "app missing" can never masquerade as "0 windows".
+APP_OBJ_PATH="/$(echo "$APP_ID" | sed 's/\./\//g; s/-/_/g')"
+wincount() {
+  local out
+  out="$(gdbus introspect --session --dest "$APP_ID" \
+        --object-path "$APP_OBJ_PATH/window" --recurse 2>/dev/null)" || return 2
+  [ -n "$out" ] || return 2
+  printf '%s\n' "$out" | grep -cE "^ *node $APP_OBJ_PATH/window/[0-9]+ \{"
+  return 0
+}
 
 # Is the AT-SPI clicker itself usable? Distinguished up-front so that "no dialog
 # appeared" can never be confused with "python3/gi/Atspi is missing", which would
@@ -276,15 +257,11 @@ echo "BindShortcuts accepted $SHORTCUT"
 # --- activation dispatch -----------------------------------------------------
 # Baseline window count BEFORE the activation, so the post-activation count is a
 # delta rather than an absolute (the app may legitimately start with one window).
-if [ "$ATSPI_OK" -eq 1 ]; then
-  windows_before="$(python3 "$WINCOUNT_PY" 2>"$WORK/wincount.err")"
-  rc=$?
-else
-  rc=3
-fi
-[ "${rc:-3}" -eq 0 ] || {
-  echo "--- wincount stderr ---"; cat "$WORK/wincount.err" 2>/dev/null
-  fail "cannot observe rustty's windows over AT-SPI (rc=$rc); the new-window side-effect assertion below would be vacuous"
+windows_before="$(wincount)"
+rc=$?
+[ "$rc" -eq 0 ] && [ -n "$windows_before" ] || {
+  echo "--- app log ---"; cat "$APP_LOG"
+  fail "cannot enumerate rustty's windows on the session bus at $APP_ID$APP_OBJ_PATH/window (rc=$rc); the new-window side-effect assertion below would be vacuous"
 }
 echo "windows before activation: $windows_before"
 
@@ -336,7 +313,7 @@ echo "performAllAction completed Ok"
 # The bound action is `new_window`, so a window must actually have appeared.
 windows_after="$windows_before"
 for _ in $(seq 1 20); do
-  windows_after="$(python3 "$WINCOUNT_PY" 2>/dev/null)" || windows_after="$windows_before"
+  windows_after="$(wincount)" || windows_after="$windows_before"
   [ "${windows_after:-0}" -gt "${windows_before:-0}" ] && break
   sleep 0.5
 done
@@ -344,6 +321,6 @@ done
   echo "--- app log ---"; cat "$APP_LOG"
   fail "no new window appeared (before=$windows_before after=$windows_after): the action was reported performed but had no effect"
 }
-echo "new window observed over AT-SPI: $windows_before -> $windows_after"
+echo "new window observed on the session bus: $windows_before -> $windows_after"
 
 echo "GATE PASS: portal round-trip + dispatch through performAllAction + new window confirmed"
