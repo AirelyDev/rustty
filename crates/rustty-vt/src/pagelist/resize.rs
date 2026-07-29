@@ -1065,8 +1065,16 @@ impl PageList {
     /// IMPORTANT: This function does NOT update `total_rows`. It returns the
     /// number of rows trimmed, and the caller is responsible for decrementing
     /// `total_rows` by this amount.
-    fn trim_trailing_blank_rows(&mut self, max: size::CellCountInt) -> size::CellCountInt {
+    //
+    // PORT NOTE: `pub(super)` (private in the reference) so the pagelist test
+    // module can exercise `dd956f37c`'s trailing-row generation renewal
+    // directly, matching the `erase_page` precedent for this file split.
+    pub(super) fn trim_trailing_blank_rows(
+        &mut self,
+        max: size::CellCountInt,
+    ) -> size::CellCountInt {
         let mut trimmed: size::CellCountInt = 0;
+        let mut invalidated_node: *mut super::Node = core::ptr::null_mut();
         let bl_pin = self.get_bottom_right(point::Tag::Screen).unwrap();
         let mut it = bl_pin.row_iterator(Direction::LeftUp, None);
         while let Some(row_pin) = it.next() {
@@ -1093,6 +1101,13 @@ impl PageList {
             // No text, we can trim this row. Because it has
             // no text we can also be sure it has no styling
             // so we don't need to worry about memory.
+            if unsafe { super::Node::rows(row_pin.node) } > 1
+                && !core::ptr::eq(invalidated_node, row_pin.node)
+            {
+                // Shrinking a retained page changes its valid row-coordinate range.
+                self.invalidate_node_layout(row_pin.node);
+                invalidated_node = row_pin.node;
+            }
             unsafe {
                 (*super::Node::page(row_pin.node)).size.rows -= 1;
             }

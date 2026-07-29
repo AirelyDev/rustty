@@ -4953,6 +4953,41 @@ From **WS7 Phase B review (I1)** — these need the final
    `crates/rustty-vt/src/pagelist/compress.rs`. If a `Limits` struct is ever
    introduced, `enforce` must `mark_activity` on entry.
 
+## Deferred to WS8 upstream sweep — WS7 Phase C divergence #11 (`Screen::cursor_scroll_region_up` unported)
+
+From **WS7 Phase C review (I2)**. The Phase C plan
+(`docs/superpowers/plans/2026-07-23-ws7-scrollback-compression.md:3790,3830`)
+prescribes porting `renew_generation`/`invalidate_node_layout` to
+`Screen::cursor_scroll_region_up` "and its siblings" and mandates the test
+`screen_cursor_scroll_region_up_renews_page_generation` (from oracle
+`0bad91adb`). **Neither exists in rustty** — zero hits repo-wide for
+`cursor_scroll_region_up` or that test name.
+
+**Root cause:** `cursor_scroll_region_up` is defined by unported upstream
+commit `77190bd02` ("stream/terminal/termio: a handful of scroll region
+optimizations"), which is `MAIN_PARITY.md` §3's row for `77190bd02` — filed
+under **BL-4** ("stream/terminal/termio performance series
+… scroll-region opts", §2), not yet ported. `0bad91adb`'s 4th
+`invalidateNodeLayout` call site lives inside that function; you cannot
+invalidate a node-layout call site in a function the port doesn't have. The
+omission is therefore **legitimate and unavoidable, not silent** — recorded
+here as divergence #11 in the same class as the earlier recorded WS7
+divergences.
+
+**What IS ported, verbatim, from `0bad91adb`:** the other 3 Screen call sites
+of `invalidate_node_layout` (`crates/rustty-vt/src/screen.rs:1536` inside the
+fast-path rotate of `cursor_scroll_above`'s single-page branch, `:1618` inside
+`cursor_scroll_above_rotate`'s per-page rotation loop, `:1651` on the final
+cursor-page rotation) and all 3 Screen tests the oracle commit added (grep
+`0bad91adb` in `crates/rustty-vt/src/screen.rs`, at the `test_write_string` /
+`cursor_scroll_above` / `cursor_scroll_above_rotate` regression tests around
+lines 11634, 11731, 11946).
+
+**Disposition:** belongs to the **WS8 upstream-sweep backlog** (BL-4). When
+`77190bd02` is ported, its `invalidateNodeLayout` site and
+`screen_cursor_scroll_region_up_renews_page_generation` test should be added
+alongside it — not retrofitted into WS7.
+
 ## Deferred to WS7 Phase E (Miri / gates)
 
 From **WS7 Phase B review (I2 harness run)**:
@@ -5174,3 +5209,32 @@ child. The deterministic evidence lives out-of-suite in
 oracle and the port. It is left verbatim — it terminates as soon as the child
 `setsid`s or dies, and a wedged `?Es` child still reports a valid pgid, so it is
 not a hang site (confirmed by `sample`: the hang is inside `killPid`).
+3. **`pagelist_decommit_pool_item_zeroes_the_dirty_region` has a real Stacked-Borrows
+   violation under Miri (OPEN, discovered while proving WS7 Phase C's I1).** Confirmed
+   deterministic in isolation — full backtrace and root cause in
+   `.port/phase-2/MIRI_EXCEPTIONS.md`'s Category 2 correction note. **Pre-existing (WS7
+   B1, commit `39cd6b8`; last touched at `0413d2b`), NOT introduced by Phase C** — no
+   Phase C commit touches `mem.rs` or this test. It is a test-code bug (holds a `&mut
+   [u8]` across a call that mutates the same bytes through a separate raw pointer, then
+   reads through the stale reference), not a production-code bug; native `cargo test`
+   and ASan both stay green. The claim in `MIRI_EXCEPTIONS.md`'s Category 2 table that
+   this test "IS Miri-provable" was asserted without having actually been run under Miri
+   — now corrected in-place. Phase E must either fix the test (re-derive the slice fresh
+   after each `decommit_pool_item` call) or record a formal exception; it must NOT be
+   left silently claimed-clean.
+4. **Several WS7 Phase B compression tests are ALSO Miri-intractable and undocumented
+   (OPEN, discovered the same pass).** Attempting a bounded full-module pagelist Miri
+   sweep (beyond I1's specific ask) found `pagelist_compress_incremental_converges_to_complete`,
+   `pagelist_compress_full_leaves_viewport_and_active_resident`,
+   `pagelist_compress_drain_finishes_in_one_call`, and
+   `pagelist_compress_full_mode_leaves_no_continuation` all TIMEOUT at a 2–3 min bound —
+   confirmed in single-worker isolation (not a parallel-contention artifact), and
+   `…_leaves_no_continuation` reproduces identically on **pre-Phase-C** commit `098fc63`,
+   proving this is a **pre-existing WS7 Phase B gap** (these tests were apparently never
+   run under a bounded Miri harness before), not a Phase C regression. `MIRI_EXCEPTIONS.md`
+   had cited two of these as "lighter, passing" coverage for a Phase C exception row; that
+   citation is now corrected (see the row's inline correction). Out of scope for the Phase
+   C review response — Phase E should measure the rest of the `compress`/`pagelist_compress`
+   family the same way (`bash .port/tools/miri-run.sh rustty-vt pagelist_compress 8 3 5`)
+   and either annotate the genuinely-intractable ones or investigate why compression state
+   machines are this expensive under Miri interpretation.

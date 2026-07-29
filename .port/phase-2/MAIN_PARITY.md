@@ -114,7 +114,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `6236d3859` | Misc runtime safety fixes (#13275) | n/a-merge | constituents above/below |
 | `0aaedf436` | terminal: saturate origin cursor offsets | **PORTED** | terminal.rs:2495 + test (§1) |
 | `0ff4e41b2` | terminal: fix pin wrapping at row boundaries | pending-small BL-3 | pagelist/pin.rs wrapping (58/6) |
-| `5bc6588e4` | terminal/search: ignore empty search needles | pending-small BL-3 | search/{active,sliding_window,viewport}.rs (31/2; pin-era search) |
+| `5bc6588e4` | terminal/search: ignore empty search needles | pending-small BL-3 | search/{active,sliding_window,viewport}.rs (31/2; pin-era search) — WS7 Phase C review (M2): confirmed pre-existing (not introduced by WS7), `needle.len() - 1` in `search/viewport.rs:262,315` and `search/active.rs:132` should become the oracle's saturating `overlap_len = needle.len -\| 1`; fix belongs to this row, not WS7 |
 | `a23d90c89` | search: reset cached results after resize (#13274) | n/a-merge | constituent below |
 | `627518447` | terminal/search: reset cached results after resize | pending-small BL-3 | search/screen.rs (73/22 — medium; pin-era search) |
 | `f6f79acce` | terminal: dispatch APC string bytes in bulk slices | missing BL-4 | stream/apc/kitty + bench/synthetic surface (12 files) |
@@ -152,7 +152,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `20a1bfa5f` | fix: pass RGB color inputs by pointer | **PORTED** | rustty_color_rgb_get by-pointer ABI (WS5 T2) |
 | `bb0ac4c72` | termio: don't bridge pty reads while the parser is idle | missing BL-4 | rustty-termio exec |
 | `bed47168c` | termio: bound POSIX read-ahead on non-Darwin | n/a | reverted upstream by `60121a039` |
-| `77190bd02` | terminal: handful of scroll region optimizations | missing BL-4 | screen.rs/terminal.rs scroll paths (496/38, has tests) |
+| `77190bd02` | terminal: handful of scroll region optimizations | missing BL-4 | screen.rs/terminal.rs scroll paths (496/38, has tests); WS7 Phase C divergence #11 — blocks porting `0bad91adb`'s 4th `invalidateNodeLayout` site (`Screen::cursor_scroll_region_up`), see DEFERRALS.md |
 | `cabbdee32` | Fix adjust-cursor-height regression (#13225) | n/a-merge | constituents `dac341cad`+`e8f3f6c43` — PORTED |
 | `446f80f4e` | terminal: render state update optimizations | missing BL-4 | render.rs + c/render + lib_vt (1348/209) |
 | `b5053153f` | terminal: log unsupported-input messages once per distinct value | missing BL-4 | stream.rs logging dedup (85/10) |

@@ -1471,13 +1471,41 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
     s.deinit();
 }
 
+/// PORTS: oracle f6d9a582e — only `reset` begins a new whole-list validity
+/// epoch. Growth, replacement and splitting must NOT advance it, because
+/// generations are not monotonic in list order.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
+#[test]
+fn pagelist_only_reset_advances_the_serial_epoch() {
+    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let epoch0 = s.page_serial_epoch;
+    fill_compressible_history(&mut s, 4);
+    assert_eq!(
+        s.page_serial_epoch, epoch0,
+        "growth must not advance the epoch"
+    );
+
+    s.reset();
+    assert!(s.page_serial_epoch > epoch0, "reset begins a new epoch");
+    // Every live node belongs to the current epoch.
+    let mut it = s.pages.first;
+    while !it.is_null() {
+        assert!(unsafe { (*it).serial } >= s.page_serial_epoch);
+        it = unsafe { (*it).next };
+    }
+    s.deinit();
+}
+
 // ref: test "PageList reset invalidates stale untracked refs even if node memory is reused"
 #[test]
 fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused() {
     let mut s = PageList::init(80, 24, None).unwrap();
 
     let old_serial = unsafe { (*s.pages.first).serial };
-    assert!(old_serial >= s.page_serial_min);
+    assert!(old_serial >= s.page_serial_epoch);
     assert!(old_serial < s.page_serial);
 
     s.reset();
@@ -1486,10 +1514,10 @@ fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused
     // the node pointer is inspected. Reset rebuilds the page list from the
     // pools, so old untracked refs may contain node pointers that are no
     // longer safe to dereference.
-    assert!(old_serial < s.page_serial_min);
+    assert!(old_serial < s.page_serial_epoch);
 
     let new_serial = unsafe { (*s.pages.first).serial };
-    assert!(new_serial >= s.page_serial_min);
+    assert!(new_serial >= s.page_serial_epoch);
     assert!(new_serial < s.page_serial);
 
     s.deinit();
@@ -1991,6 +2019,91 @@ fn fill_compressible_history(s: &mut PageList, pages: usize) {
     }
 }
 
+/// Fill the current tail page to capacity without allocating a successor.
+/// Capturing the tail before the loop makes this stop at the allocation
+/// boundary needed by bounded-pruning tests.
+///
+/// PORTS: oracle@main PageList.zig `fillLastPageForTest` (f1a5fab45).
+fn fill_last_page_for_test(s: &mut PageList) {
+    let last = s.pages.last;
+    while unsafe { super::Node::rows(last) } < unsafe { super::Node::capacity(last) }.rows {
+        let _ = s.grow().unwrap();
+    }
+}
+
+/// Verify every live page belongs to the current validity epoch, has an
+/// allocated generation below the next serial, and validates through the same
+/// pointer-plus-generation lookup used by external references.
+///
+/// PORTS: oracle@main PageList.zig `expectLivePageSerialsValidForTest`
+/// (f1a5fab45 / f6d9a582e).
+fn expect_live_page_serials_valid_for_test(s: &PageList) {
+    let mut node = s.pages.first;
+    while !node.is_null() {
+        let serial = unsafe { (*node).serial };
+        assert!(serial >= s.page_serial_epoch);
+        assert!(serial < s.page_serial);
+        assert!(s.node_is_valid(node, serial));
+        node = unsafe { (*node).next };
+    }
+}
+
+/// PORTS: oracle dd956f37c `test "PageList row erasure renews affected page generations"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
+#[test]
+fn pagelist_row_erasure_renews_affected_page_generations() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    while s.total_pages() < 2 {
+        let _ = s.grow().unwrap();
+    }
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let mut first_serial = unsafe { (*first).serial };
+    let mut second_serial = unsafe { (*second).serial };
+    let mut activity = s.page_compression.activity_serial;
+
+    s.erase_row(point::Point::History(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+    assert!(!s.node_is_valid(first, first_serial));
+    assert!(!s.node_is_valid(second, second_serial));
+    assert_ne!(activity, s.page_compression.activity_serial);
+
+    first_serial = unsafe { (*first).serial };
+    second_serial = unsafe { (*second).serial };
+    activity = s.page_compression.activity_serial;
+    s.erase_row_bounded(
+        point::Point::History(point::Coordinate { x: 0, y: 0 }),
+        unsafe { super::Node::rows(first) } as usize + 1,
+    )
+    .unwrap();
+    assert!(!s.node_is_valid(first, first_serial));
+    assert!(!s.node_is_valid(second, second_serial));
+    assert_ne!(activity, s.page_compression.activity_serial);
+
+    s.deinit();
+}
+
+/// PORTS: oracle dd956f37c `test "PageList trailing row truncation renews page generation"`
+#[test]
+fn pagelist_trailing_row_truncation_renews_page_generation() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    let node = s.pages.last;
+    let old_serial = unsafe { (*node).serial };
+    let trimmed = s.trim_trailing_blank_rows(1);
+    s.total_rows -= trimmed as usize;
+    assert_eq!(trimmed, 1);
+    assert!(!s.node_is_valid(node, old_serial));
+
+    let _ = s.grow().unwrap();
+    expect_live_page_serials_valid_for_test(&s);
+    s.deinit();
+}
+
 /// PORTS: the memoryStats assertions in oracle 0d015b2fc / 6d5dda40d.
 #[test]
 fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
@@ -2238,6 +2351,249 @@ fn pagelist_compress_full_leaves_viewport_and_active_resident() {
         unsafe { super::Node::storage(s.pages.first) },
         Storage::Compressed
     );
+    s.deinit();
+}
+
+/// PORTS: oracle d0a26d146
+/// `test "PageList replacements preserve compression continuation and mark activity"`
+///
+/// NOTE: contrary to the WS7 plan's prose, the oracle does NOT reset the
+/// continuation here. `increase_capacity` / `compact` only bump the activity
+/// token; `last_serial` and `next_serial` are preserved so a still-valid
+/// traversal keeps its progress.
+#[test]
+fn pagelist_replacements_preserve_compression_continuation_and_mark_activity() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    let state = super::compress::IncrementalCompressionState {
+        flags: super::compress::IncrementalCompressionFlags {
+            did_compress: false,
+            verifying: true,
+        },
+        activity_serial: 42,
+        last_serial: Some(7),
+        next_serial: 8,
+    };
+    let expected = super::compress::IncrementalCompressionState {
+        activity_serial: 43,
+        ..state
+    };
+
+    s.page_compression = state;
+    let replacement = s.increase_capacity(s.pages.first, None).unwrap();
+    assert_eq!(s.page_compression, expected);
+
+    s.page_compression = state;
+    let _ = s.compact(replacement).unwrap().unwrap();
+    assert_eq!(s.page_compression, expected);
+    s.deinit();
+}
+
+/// PORTS: oracle 91a63e528
+/// `test "PageList bounded pruning after split invalidation preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
+#[test]
+fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+
+    while s.total_pages() < 2 {
+        let _ = s.grow().unwrap();
+    }
+    let first = s.pages.first;
+    let old_serial = unsafe { (*first).serial };
+    let activity = s.page_compression.activity_serial;
+
+    s.split(Pin {
+        node: first,
+        y: unsafe { super::Node::rows(first) } / 2,
+        x: 0,
+        garbage: false,
+    })
+    .unwrap();
+    assert!(!s.node_is_valid(first, old_serial));
+    assert_ne!(activity, s.page_compression.activity_serial);
+
+    fill_last_page_for_test(&mut s);
+    let _ = s.grow().unwrap();
+    expect_live_page_serials_valid_for_test(&s);
+    s.deinit();
+}
+
+/// PORTS: oracle a804e3ac7
+/// `test "PageList bounded pruning after partial erase preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
+#[test]
+fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+
+    while s.total_pages() < 2 {
+        let _ = s.grow().unwrap();
+    }
+    let first = s.pages.first;
+    let old_serial = unsafe { (*first).serial };
+    let old_rows = unsafe { super::Node::rows(first) };
+
+    s.erase_history(Some(point::Point::History(point::Coordinate {
+        x: 0,
+        y: 0,
+    })));
+    assert!(core::ptr::eq(first, s.pages.first));
+    assert_eq!(old_rows - 1, unsafe { super::Node::rows(first) });
+    assert!(!s.node_is_valid(first, old_serial));
+
+    fill_last_page_for_test(&mut s);
+    let _ = s.grow().unwrap();
+    expect_live_page_serials_valid_for_test(&s);
+    s.deinit();
+}
+
+/// PORTS: oracle a804e3ac7
+/// `test "PageList partial erase restarts compression before continuation"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
+#[test]
+fn pagelist_partial_erase_restarts_compression_before_continuation() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    fill_compressible_history(&mut s, super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED + 2);
+    let _ = s.compress(CompressionMode::Full);
+
+    let first = s.pages.first;
+    assert!(unsafe { super::Node::is_compressed(first) });
+
+    // Park the incremental continuation on a marker page well past `first`.
+    let mut marker = first;
+    for _ in 1..super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED {
+        marker = unsafe { (*marker).next };
+    }
+    s.page_compression = super::compress::IncrementalCompressionState {
+        flags: super::compress::IncrementalCompressionFlags {
+            did_compress: false,
+            verifying: true,
+        },
+        activity_serial: s.page_compression.activity_serial,
+        last_serial: Some(unsafe { (*marker).serial }),
+        next_serial: s.page_serial,
+    };
+
+    let activity = s.page_compression.activity_serial;
+    s.erase_history(Some(point::Point::History(point::Coordinate {
+        x: 0,
+        y: 0,
+    })));
+    assert!(!unsafe { super::Node::is_compressed(first) });
+    assert_ne!(activity, s.page_compression.activity_serial);
+
+    // The changed generation is before the saved marker, so continuation must
+    // restart and recompress it instead of reporting verification complete.
+    assert_eq!(
+        s.compress(CompressionMode::Incremental),
+        IncrementalCompressionResult::Pending
+    );
+    assert!(unsafe { super::Node::is_compressed(first) });
+    s.deinit();
+}
+
+/// PORTS: oracle f1a5fab45 (+ f6d9a582e's epoch assertion)
+/// `test "PageList repeated bounded pruning after split preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
+#[test]
+fn pagelist_repeated_bounded_pruning_after_split_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
+
+    let epoch = s.page_serial_epoch;
+    while s.total_pages() < 3 {
+        let _ = s.grow().unwrap();
+    }
+    let first = s.pages.first;
+    s.split(Pin {
+        node: first,
+        y: unsafe { super::Node::rows(first) } / 2,
+        x: 0,
+        garbage: false,
+    })
+    .unwrap();
+
+    // The split target has a fresh serial but precedes older successor pages.
+    // Prune both the old source and then that target while verifying ordinary
+    // list mutation does not advance the whole-list validity epoch.
+    for _ in 0..2 {
+        while unsafe { super::Node::rows(s.pages.last) }
+            < unsafe { super::Node::capacity(s.pages.last) }.rows
+        {
+            let _ = s.grow().unwrap();
+        }
+        let _ = s.grow().unwrap();
+
+        // Ordinary pruning invalidates one generation at a time through live
+        // list validation; only reset may begin a new whole-list epoch.
+        assert_eq!(epoch, s.page_serial_epoch);
+        expect_live_page_serials_valid_for_test(&s);
+    }
+    s.deinit();
+}
+
+/// PORTS: oracle f1a5fab45
+/// `test "PageList bounded pruning after front replacement preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
+#[test]
+fn pagelist_bounded_pruning_after_front_replacement_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+
+    while s.total_pages() < 2 {
+        let _ = s.grow().unwrap();
+    }
+    let old = s.pages.first;
+    let old_serial = unsafe { (*old).serial };
+    let replacement = s.increase_capacity(old, None).unwrap();
+    assert!(!core::ptr::eq(replacement, old));
+    assert!(!s.node_is_valid(old, old_serial));
+
+    fill_last_page_for_test(&mut s);
+    let _ = s.grow().unwrap();
+
+    expect_live_page_serials_valid_for_test(&s);
+    s.deinit();
+}
+
+/// PORTS: oracle f1a5fab45
+/// `test "PageList bounded pruning after middle replacement preserves live serials"`
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
+#[test]
+fn pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials() {
+    let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
+
+    while s.total_pages() < 3 {
+        let _ = s.grow().unwrap();
+    }
+    let old = unsafe { (*s.pages.first).next };
+    let old_serial = unsafe { (*old).serial };
+    let replacement = s.increase_capacity(old, None).unwrap();
+    assert!(!core::ptr::eq(replacement, old));
+    assert!(!s.node_is_valid(old, old_serial));
+
+    // Prune the original first page and then the fresh middle replacement.
+    for _ in 0..2 {
+        fill_last_page_for_test(&mut s);
+        let _ = s.grow().unwrap();
+        expect_live_page_serials_valid_for_test(&s);
+    }
     s.deinit();
 }
 

@@ -141,6 +141,17 @@ impl PageListSearch {
         unsafe { (*self.list).untrack_pin(self.pin) };
     }
 
+    /// Release owned search buffers after the PageList itself has already
+    /// been destroyed. Its pin belonged to the PageList pool and was freed
+    /// with that list, so it must not be untracked here.
+    ///
+    /// PORTS: oracle@main search/pagelist.zig `deinitListInvalid` (73ac36fa5).
+    // pub fn deinitListInvalid(self: *PageListSearch) void {
+    pub fn deinit_list_invalid(&mut self) {
+        // self.window.deinit();
+        self.window.deinit();
+    }
+
     /// Return the next match in the loaded page nodes. If this returns
     /// null then the PageList search needs to be fed the next node(s).
     /// Call, `feed` to do this.
@@ -189,12 +200,24 @@ impl PageListSearch {
         let mut node_: *mut Node = unsafe { (*(*self.pin).node).prev };
         while !node_.is_null() {
             let node = node_;
-            // rem -|= try self.window.append(node);
-            rem = rem.saturating_sub(self.window.append(node)?);
+            // rem -|= (try self.window.append(node)).content_len;
+            rem = rem.saturating_sub(self.window.append(node)?.content_len);
 
             // Move our tracked pin to the new node.
             // self.pin.node = node;
-            unsafe { (*self.pin).node = node };
+            // self.pin.y = node.rows() - 1;
+            // self.pin.x = node.cols() - 1;
+            // self.pin.garbage = false;
+            //
+            // The preceding page may be SHORTER (e.g. after a split), so the
+            // retained bottom-right coordinates must be reset, not carried over
+            // (oracle 5d8eb78b7).
+            unsafe {
+                (*self.pin).node = node;
+                (*self.pin).y = crate::pagelist::Node::rows(node) - 1;
+                (*self.pin).x = crate::pagelist::Node::cols(node) - 1;
+                (*self.pin).garbage = false;
+            };
 
             // if (rem == 0) break;
             if rem == 0 {
@@ -582,6 +605,99 @@ mod tests {
         t.deinit(alloc);
     }
 
+    /// PORTS: oracle 0d015b2fc
+    /// `test "compressed history match spanning page boundary remains compressed"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    #[test]
+    fn compressed_history_match_spanning_page_boundary_remains_compressed() {
+        use crate::pagelist::compress::CompressionMode;
+        use crate::pagelist::{Node as PlNode, Storage};
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(
+            alloc,
+            TerminalOptions {
+                max_scrollback: 10 * 1024 * 1024,
+                ..terminal_opts(80, 24)
+            },
+        )
+        .unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let pages: *mut crate::pagelist::PageList = unsafe { &mut (*active_ptr).pages };
+
+        let mut stream = t.vt_stream();
+
+        let first = unsafe { (*pages).pages.first };
+        let first_page_rows = unsafe { PlNode::capacity(first) }.rows;
+
+        // Put half the needle on either side of a soft-wrapped page boundary.
+        for _ in 0..first_page_rows - 1 {
+            stream.next_slice(b"\r\n");
+        }
+        for _ in 0..unsafe { (*pages).cols } - 2 {
+            stream.next_slice(b"x");
+        }
+        stream.next_slice(b"Test");
+        let second = unsafe { (*first).next };
+        assert!(core::ptr::eq(second, unsafe { (*pages).pages.last }));
+
+        // Move both matching pages completely into history. The third page holds
+        // the active area, making the first two eligible for compression.
+        while core::ptr::eq(unsafe { (*pages).pages.last }, second) {
+            stream.next_slice(b"\r\n");
+        }
+        for _ in 0..unsafe { (*pages).rows } {
+            stream.next_slice(b"\r\n");
+        }
+        assert!(!core::ptr::eq(
+            unsafe { (*pages).get_top_left(point::Tag::Active) }.node,
+            second
+        ));
+
+        let _ = unsafe { (*pages).compress(CompressionMode::Full) };
+        assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
+        assert_eq!(unsafe { PlNode::storage(second) }, Storage::Compressed);
+        let compressed = unsafe { (*pages).memory_stats() };
+        assert!(compressed.compressed_pages >= 2);
+
+        let mut search: PageListSearch =
+            PageListSearch::init(alloc, b"Test", pages, unsafe { (*pages).pages.last }).unwrap();
+
+        // Drain and feed incrementally until the boundary match is available. The
+        // exact number of feeds depends on how much blank-page text the formatter
+        // trims, so bound progress by the number of pages rather than encoding
+        // that implementation detail in the test.
+        let mut found: Option<FlattenedHighlight> = None;
+        for _ in 0..unsafe { (*pages).total_pages() } + 1 {
+            if let Some(m) = search.next() {
+                found = Some(m);
+                break;
+            }
+            if !search.feed().unwrap() {
+                break;
+            }
+        }
+        let found = found.expect("cross-page match in compressed history");
+
+        let m = found.untracked();
+        assert!(core::ptr::eq(m.start.node, first));
+        assert!(core::ptr::eq(m.end.node, second));
+        assert_eq!(m.start.x, unsafe { (*pages).cols } - 2);
+        assert_eq!(m.end.x, 1);
+
+        // Search owns formatted text and coordinate maps, not page snapshots. The
+        // original raw mappings therefore remain discarded after matching.
+        assert_eq!(unsafe { (*pages).memory_stats() }, compressed);
+        assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
+        assert_eq!(unsafe { PlNode::storage(second) }, Storage::Compressed);
+
+        search.deinit();
+        stream.deinit();
+        t.deinit(alloc);
+    }
+
     // test "feed with match spanning page boundary with newline"
     #[cfg_attr(
         miri,
@@ -713,5 +829,66 @@ mod tests {
 
         search.deinit();
         p.deinit();
+    }
+    /// PORTS: oracle 5d8eb78b7
+    /// `test "feed keeps its tracked pin within a shorter page"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
+    // Release lane: this test drives a slow-runtime-safety mechanism (the
+    // pagelist integrity gate / `pin_is_valid`), which the port compiles out
+    // when `debug_assertions` is off — faithful to the reference's
+    // `build_options.slow_runtime_safety`, under which the oracle's test only
+    // exists. Debug-only; it still runs and passes there. (Same convention as
+    // `terminal_full_reset_tracked_pins`.)
+    #[cfg_attr(not(debug_assertions), ignore)]
+    #[test]
+    fn feed_keeps_its_tracked_pin_within_a_shorter_page() {
+        use crate::pagelist::{Node as PlNode, PageList, Pin};
+        // PORT NOTE: 80 cols instead of the reference's 10. The property under
+        // test is only that the split successor is SHORTER than the second page;
+        // 10 cols yields ~35k rows per page, which makes the row-by-row fill and
+        // the formatter passes take ~1 minute in a debug Rust build.
+        let mut pages: PageList = PageList::init(80, 2, None).unwrap();
+
+        // PORT NOTE: the fill loops are wrapped in `pause_integrity_checks`.
+        // rustty's debug `verify_integrity` walks every tracked pin on every
+        // `grow`, making the reference's row-by-row fill of a ~35k-row page
+        // quadratic (>70s). The checks are re-enabled — and run — before the
+        // assertions this test actually makes.
+        pages.pause_integrity_checks(true);
+        let first = pages.pages.first;
+        while unsafe { PlNode::rows(first) } < unsafe { PlNode::capacity(first) }.rows {
+            let _ = pages.grow().unwrap();
+        }
+
+        let second = pages.grow().unwrap().unwrap();
+        while unsafe { PlNode::rows(second) } < unsafe { PlNode::capacity(second) }.rows {
+            let _ = pages.grow().unwrap();
+        }
+        pages.pause_integrity_checks(false);
+        pages.assert_integrity();
+
+        pages
+            .split(Pin {
+                node: first,
+                y: 1,
+                x: 0,
+                garbage: false,
+            })
+            .unwrap();
+        let shorter = unsafe { (*first).next };
+        assert!(unsafe { PlNode::rows(shorter) } < unsafe { PlNode::rows(second) });
+
+        let mut search: PageListSearch =
+            PageListSearch::init(Allocator, b"x", &mut pages, second).unwrap();
+
+        assert!(search.feed().unwrap());
+        assert!(core::ptr::eq(unsafe { (*search.pin).node }, shorter));
+        assert!(pages.pin_is_valid(unsafe { (*search.pin).pin_copy() }));
+
+        search.deinit();
+        pages.deinit();
     }
 }

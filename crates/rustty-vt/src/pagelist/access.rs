@@ -963,7 +963,7 @@ impl PageList {
             pool,
             pages: page_list,
             page_serial,
-            page_serial_min: 0,
+            page_serial_epoch: 0,
             page_compression: super::compress::IncrementalCompressionState::default(),
             page_size,
             explicit_max_size: self.explicit_max_size,

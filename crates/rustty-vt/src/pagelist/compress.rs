@@ -216,7 +216,7 @@ pub enum CompressionMode {
 
 /// Bound candidate inspection independently from compression work. Skipping an
 /// already-compressed page is cheap, but still counts toward this limit.
-const INCREMENTAL_COMPRESSION_MAX_INSPECTED: usize = 8;
+pub(super) const INCREMENTAL_COMPRESSION_MAX_INSPECTED: usize = 8;
 
 /// Iterate complete historical pages which do not intersect the viewport.
 ///

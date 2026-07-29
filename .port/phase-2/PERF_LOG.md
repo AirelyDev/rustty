@@ -748,3 +748,14 @@ compressed count *is* proof that `madvise(MADV_FREE_REUSABLE)` succeeded — 121
 times. The Linux `MADV_DONTNEED` arm is **not** covered by this run (macOS only,
 per D8's scope here).
 
+## WS7 Phase C review note (M3, not yet the full E3 gate run)
+
+`search::screen::ScreenSearch::prune_history` (called from `select` on every
+navigation) is worst-case O(results × chunks_per_result × live_pages) because
+`node_is_valid` walks the whole live PageList per candidate chunk. Measured:
+not yet benched in isolation (Phase E's E3 perf sweep is the formal gate); this
+is a **documented cost, not a regression** — `oracle@main`'s `nodeIsValid` walks
+the live list the same way, so rustty is parity, not slower-than-oracle. Left
+unchanged per M3 (do not alter the algorithm to chase a synthetic worst case);
+flag for E3 to include a deep-scrollback + many-cached-results config in the
+14-config non-regression sweep if one isn't already representative of this path.

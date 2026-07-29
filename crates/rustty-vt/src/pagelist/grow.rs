@@ -101,6 +101,7 @@ impl PageList {
 
         // Failable split work is complete; shortening the source changes its
         // row range.
+        self.invalidate_node_layout(original_node);
         self.page_compression.mark_activity();
 
         // Move any tracked pins from the copied rows
@@ -409,11 +410,10 @@ impl PageList {
             unsafe { self.pages.insert_after(last, first) };
             self.total_rows += 1;
 
-            // We also need to reset the serial number. Since this is the only
-            // place we ever reuse a serial number, we also can safely set
-            // page_serial_min to be one more than the old serial because we
-            // only ever prune the oldest pages.
-            self.page_serial_min = unsafe { (*first).serial } + 1;
+            // Reusing the node gives it a fresh generation. Do not begin a new
+            // page_serial_epoch here: generations are not monotonic in list order,
+            // so older live successors may have lower generations. The epoch only
+            // advances when reset invalidates the entire list.
             unsafe { (*first).serial = self.page_serial };
             self.page_serial += 1;
 

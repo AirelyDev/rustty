@@ -1023,9 +1023,10 @@ pub struct PageList {
     /// The list of pages in the screen.
     pub pages: List,
 
-    /// A monotonically increasing serial number that is incremented each
-    /// time a page is allocated or reused as new. The serial is assigned to
-    /// the Node.
+    /// The next globally unique reference generation for this PageList. A
+    /// generation is assigned whenever a page is allocated, reused as new, or
+    /// changed in place such that existing page coordinates are no longer
+    /// stable. The serial is assigned to the Node.
     ///
     /// The serial number can be used to detect whether the page is identical
     /// to the page that was originally referenced by a pointer. Since we reuse
@@ -1037,9 +1038,19 @@ pub struct PageList {
     /// going to risk it.
     pub page_serial: u64,
 
-    /// The lowest still valid serial number that could exist. This allows
-    /// for quick comparisons to find invalid pages in references.
-    pub page_serial_min: u64,
+    /// The first serial in the current whole-list validity epoch. Only `reset`
+    /// advances this value, immediately before rebuilding every page. It is not
+    /// the generation of the first page or the exact minimum live generation.
+    /// Page generations are not monotonic in list order: replacement and split
+    /// operations can put a fresh generation before older live pages.
+    ///
+    /// A generation below this epoch is definitely invalid, allowing O(1)
+    /// rejection in `node_is_valid` and bulk removal of pre-reset search
+    /// results. A generation at or above it is only potentially valid and must
+    /// still be checked against the live list before its coordinates are used.
+    ///
+    /// PORTS: oracle@main PageList.zig `page_serial_epoch` (f6d9a582e).
+    pub page_serial_epoch: u64,
 
     /// Continuation state for incremental page compression. This allows
     /// `compress(CompressionMode::Incremental)` to work. More details on all
@@ -1424,7 +1435,7 @@ impl PageList {
             pool,
             pages: page_list,
             page_serial,
-            page_serial_min: 0,
+            page_serial_epoch: 0,
             page_compression: compress::IncrementalCompressionState::default(),
             page_size,
             explicit_max_size: max_size.unwrap_or(usize::MAX),
@@ -1593,7 +1604,7 @@ impl PageList {
 
         if let Err(_err) = self.verify_integrity() {
             // log.err("PageList integrity check failed: {}", .{err});
-            panic!("PageList integrity check failed");
+            panic!("PageList integrity check failed: {_err:?}");
         }
     }
 
@@ -1634,12 +1645,11 @@ impl PageList {
                 actual_total += unsafe { Node::rows(node) as usize };
                 node_ = unsafe { (*node).next };
 
-                // While doing this traversal, verify no node has a serial
-                // number lower than our min.
-                if unsafe { (*node).serial } < self.page_serial_min {
+                // Every live node must belong to the current validity epoch.
+                if unsafe { (*node).serial } < self.page_serial_epoch {
                     // log.warn(
-                    //     "PageList integrity violation: page serial too low serial={} min={}",
-                    //     .{ node.serial, self.page_serial_min },
+                    //     "PageList integrity violation: page serial predates epoch serial={} epoch={}",
+                    //     .{ node.serial, self.page_serial_epoch },
                     // );
                     return Err(IntegrityError::PageSerialInvalid);
                 }
@@ -1762,10 +1772,10 @@ impl PageList {
         // Reset discards all scrollback, so there is nothing left to compress.
         self.page_compression.reset();
 
-        // Invalidate all external page refs to the previous list. The reset below
-        // rebuilds the page list from the pools, so old untracked refs must be
-        // rejected before any validation attempts to inspect their node pointers.
-        self.page_serial_min = self.page_serial;
+        // Begin a new whole-list validity epoch before rebuilding from the pools.
+        // Every old reference now has a serial below the epoch and can be rejected
+        // in O(1), even if the node pool later reuses its pointer address.
+        self.page_serial_epoch = self.page_serial;
 
         // We need enough pages/nodes to keep our active area. This should
         // never fail since we by definition have allocated a page already
@@ -2199,6 +2209,88 @@ impl PageList {
             }
             return p.y < unsafe { Node::rows(node) }
                 && p.x < unsafe { Node::cols(node) };
+        }
+
+        false
+    }
+
+    /// Give a live node a new generation before changing its coordinate layout
+    /// in place.
+    ///
+    /// This must be called when a node remains at the same address and stays in
+    /// the list, but a mutation changes which logical row a `(node, y)`
+    /// coordinate identifies or whether that coordinate is still in range.
+    /// Examples include rotating rows after an erase, truncating a page's row
+    /// range, reinitializing the sole remaining page, or shortening the source
+    /// page of a split. Without a new generation, a cached pointer, serial, and
+    /// coordinate could still pass `node_is_valid` while referring to a
+    /// different row than it originally did. Screen and Terminal fast paths
+    /// which manipulate Page rows directly must use this because they bypass
+    /// PageList's own row-mutation helpers.
+    ///
+    /// The caller must pass a node which is currently live in this PageList.
+    /// Call this at the point the operation commits to changing the layout and
+    /// before the first such change. When an operation is intended to be
+    /// atomic, finish its failable preparation first so a failed operation does
+    /// not needlessly invalidate references. One call per affected node is
+    /// sufficient when an operation performs several layout changes without
+    /// exposing intermediate references.
+    ///
+    /// This helper is only needed for in-place changes. Removing or replacing a
+    /// node already invalidates old references through the live-list check in
+    /// `node_is_valid`, and newly allocated or reused nodes receive a fresh
+    /// serial as part of their initialization. Ordinary cell or style changes
+    /// which preserve the meaning of page coordinates do not require a new
+    /// generation solely for that reason.
+    ///
+    /// The only state changed here is `node.serial` and the next-generation
+    /// counter `page_serial`. Consequently, every previously captured
+    /// pointer-plus-serial pair for this node becomes invalid while new
+    /// references can capture the new generation. This does not advance
+    /// `page_serial_epoch`: only `reset` starts a new whole-list validity epoch.
+    ///
+    /// This also does not mutate the page, update tracked pins or viewport
+    /// state, adjust row or memory accounting, mark cells dirty, or notify
+    /// incremental compression. The surrounding operation remains responsible
+    /// for all such bookkeeping required by its layout change.
+    ///
+    /// PORTS: oracle@main PageList.zig `invalidateNodeLayout`
+    /// (a804e3ac7, 0bad91adb).
+    //
+    // PORT NOTE: raw-pointer argument, never `&mut Node` — callers routinely
+    // hold a live alias into the same node across this call (memory:
+    // `rust-mut-args-strongly-protected`).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn invalidate_node_layout(&mut self, node: *mut Node) {
+        unsafe { (*node).serial = self.page_serial };
+        self.page_serial += 1;
+    }
+
+    /// Returns whether a node pointer and serial still identify the same page in
+    /// this list. The node pointer is only compared and is safe even if the node
+    /// has been destroyed or reused since the serial was captured.
+    ///
+    /// PORTS: oracle@main PageList.zig `nodeIsValid` (86e1f7b8b, f6d9a582e).
+    //
+    // PORT NOTE: `target` is a raw `*const Node` and is NEVER dereferenced —
+    // only compared against live node addresses. This is the whole point of the
+    // helper: callers hold captured pointers that may name destroyed or reused
+    // nodes.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn node_is_valid(&self, target: *const Node, serial: u64) -> bool {
+        // Reset invalidates the whole prior epoch, so reject those generations
+        // without scanning the live list.
+        if serial < self.page_serial_epoch {
+            return false;
+        }
+
+        let mut it = self.pages.first;
+        while !it.is_null() {
+            let node = it;
+            if core::ptr::eq(node as *const Node, target) {
+                return unsafe { (*node).serial } == serial;
+            }
+            it = unsafe { (*node).next };
         }
 
         false

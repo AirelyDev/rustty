@@ -3789,6 +3789,8 @@ impl PageList {
 
 **Where `renew_generation` must be called** (from `dd956f37c` + `0bad91adb`): every place that shifts rows within a live page or truncates trailing rows without replacing the page — `PageList::erase_row`, `PageList::erase_row_bounded`, the trailing-row truncation in `erase_rows`, `Screen::cursor_scroll_region_up` and its siblings, and the `Terminal` scroll-region paths the oracle touches. Diff both commits and port site-for-site.
 
+**DIVERGENCE #11 (recorded, not silent — see `.port/phase-2/DEFERRALS.md` "Deferred to WS8 upstream sweep — WS7 Phase C divergence #11"):** `Screen::cursor_scroll_region_up` does not exist in rustty — it is defined by unported upstream commit `77190bd02` (`MAIN_PARITY.md` BL-4), so `0bad91adb`'s 4th `invalidateNodeLayout` site (inside that function) and the test below have nothing to port onto. The other 3 Screen sites (`cursor_scroll_above`'s fast path + `cursor_scroll_above_rotate`'s two sites) and their 3 tests ARE ported verbatim. This omission belongs to WS8, not WS7.
+
 - [ ] **Step 1: Write the failing test**
 
 Port all three oracle tests:
@@ -4738,6 +4740,17 @@ ssh rvm 'cd ~/projects/rustty && cargo build --workspace'
 git add crates/rustty-renderer/src/{state.rs,generic.rs} crates/rustty-termio/src/exec.rs
 git commit -m "renderer: hand off state mutex to avoid starving frames (WS7 D4, oracle d34b54e9b)"
 ```
+
+**PROSPECTIVE WARNING (WS7 Phase C review, M5) — not a current bug.** A hot
+`lock_demand`/`yield_to_demand` handoff loop that keeps `mutex` demanded could
+in principle interact badly with `Surface::deinit`'s renderer-thread stop/join
+if that join ever came to be attempted while `opts.mutex` were held. This is
+**NOT live today**: `crates/rustty-core/src/surface.rs:2608`'s `Surface::deinit`
+takes and deinits `search` FIRST, before touching `renderer_thread`/joining it,
+so no code path holds `opts.mutex` across the join. If Task D4 or a later
+change reorders teardown (e.g. moves renderer-thread stop/join earlier, or adds
+a new consumer that locks `mutex` around a join), re-check this ordering
+invariant before shipping.
 
 ---
 

@@ -185,9 +185,15 @@ pub struct Viewport {
 //     /// change often.
 //     arena: ArenaAllocator.State,
 pub struct Row {
-    /// The page pin. This is not safe to read unless you can guarantee
-    /// the terminal state hasn't changed since the last `update` call.
+    /// The page pin. Its copied values may be compared, but its node must
+    /// not be dereferenced unless the terminal state is protected from
+    /// changes since the last `update` call.
     pub pin: Pin,
+
+    /// The page node generation captured alongside `pin`. This lets
+    /// consumers validate the pin without dereferencing its node after
+    /// the terminal lock has been released.
+    pub serial: u64,
 
     /// Raw row data.
     pub raw: page::Row,
@@ -628,6 +634,8 @@ impl RenderState {
                             x: 0,
                             garbage: false,
                         },
+                        // .serial = undefined,
+                        serial: 0,
                         raw: page::Row::zeroed(),
                         cells: CellList::empty(),
                         dirty: true,
@@ -681,11 +689,20 @@ impl RenderState {
                 });
             }
 
-            // Store our pin. We have to store these even if we're not dirty
-            // because dirty is only a renderer optimization. It doesn't
-            // apply to memory movement. This will let us remap any cell
-            // pins back to an exact entry in our RenderState.
+            // Store our pin and its node generation. We have to store these
+            // even if we're not dirty because dirty is only a renderer
+            // optimization. It doesn't apply to memory movement. This will let
+            // us remap any cell pins back to an exact entry in our RenderState
+            // and validate them later without dereferencing a potentially
+            // stale node.
+            //
+            // INSPECT, NOT RESTORE: `node.serial` lives in the pagelist Node,
+            // never in the page mapping, so reading it must not restore a
+            // compressed page. (The `Node::page` call below is the RESTORE this
+            // path legitimately needs: `update` copies the row's cells out.)
             self.row_data[y as usize].pin = row_pin;
+            // serial.* = node_serial;
+            self.row_data[y as usize].serial = unsafe { (*row_pin.node).serial };
 
             // Get all our cells in the page.
             let p: *mut page::Page = unsafe { crate::pagelist::Node::page(row_pin.node) };
@@ -1045,13 +1062,17 @@ impl RenderState {
         let cols = self.cols;
         for row in self.row_data.iter_mut() {
             let row_pin = row.pin;
+            let row_serial = row.serial;
             for hl in hls.iter() {
                 let nodes_len = hl.chunks.len();
                 for (i, chunk) in hl.chunks.iter().enumerate() {
                     let node = chunk.node;
-                    // If this node doesn't match or we're not within
-                    // the row range, skip it.
+                    // If this node generation doesn't match or we're not
+                    // within the row range, skip it. Both serials are copied
+                    // values, so this never dereferences a node outside the
+                    // terminal lock.
                     if !core::ptr::eq(node, row_pin.node)
+                        || chunk.serial != row_serial
                         || row_pin.y < chunk.start
                         || row_pin.y >= chunk.end
                     {
@@ -2055,6 +2076,109 @@ mod tests {
             let _ = &mut cells;
         }
 
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle c9ad708ef
+    /// `test "flattened highlights require matching page serial"`
+    #[test]
+    fn flattened_highlights_require_matching_page_serial() {
+        let alloc = Global;
+
+        // var t = try Terminal.init(alloc, .{ .cols = 10, .rows = 3 });
+        // defer t.deinit(alloc);
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        // Capture the live generation while terminal-owned state is in scope so
+        // we can also verify beginUpdate copies it into the render row.
+        // const live_pin = t.screens.active.pages.getTopLeft(.viewport);
+        // const live_serial = live_pin.node.serial;
+        let live_pin = unsafe { (*t.screens.active).pages.get_top_left(point::Tag::Viewport) };
+        let live_serial = unsafe { (*live_pin.node).serial };
+
+        // var state: RenderState = .empty;
+        // defer state.deinit(alloc);
+        // try state.update(alloc, &t);
+        let mut state: RenderState = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+
+        // const pin: PageList.Pin = pin: {
+        //     const row_data = state.row_data.slice();
+        //     @memset(row_data.items(.dirty), false);
+        //     state.dirty = .false;
+        //     break :pin row_data.items(.pin)[0];
+        // };
+        let pin: Pin = {
+            for row in state.row_data.iter_mut() {
+                row.dirty = false;
+            }
+            state.dirty = Dirty::False;
+            state.row_data[0].pin
+        };
+        // const row_serial = state.row_data.items(.serial)[0];
+        let row_serial = state.row_data[0].serial;
+        // try testing.expectEqual(live_pin.node, pin.node);
+        // try testing.expectEqual(live_serial, row_serial);
+        assert!(core::ptr::eq(live_pin.node, pin.node));
+        assert_eq!(live_serial, row_serial);
+
+        // Use the exact node pointer and row captured by the render state, but a
+        // different generation. A reused node address must not make this stale
+        // flattened highlight match.
+        // var hl: highlight.Flattened = .{ .chunks = .empty, .top_x = 2, .bot_x = 4 };
+        // defer hl.deinit(alloc);
+        // try hl.chunks.append(alloc, .{
+        //     .node = pin.node,
+        //     .serial = live_serial ^ 1,
+        //     .start = pin.y,
+        //     .end = pin.y + 1,
+        // });
+        let mut hl = highlight::Flattened {
+            chunks: vec![highlight::Chunk {
+                node: pin.node,
+                serial: live_serial ^ 1,
+                start: pin.y,
+                end: pin.y + 1,
+            }],
+            top_x: 2,
+            bot_x: 4,
+        };
+
+        // try state.updateHighlightsFlattened(alloc, 42, &.{hl});
+        state
+            .update_highlights_flattened(alloc, 42, core::slice::from_ref(&hl))
+            .unwrap();
+        {
+            // try testing.expectEqual(0, row_data.items(.highlights)[0].items.len);
+            // try testing.expect(!row_data.items(.dirty)[0]);
+            // try testing.expectEqual(.false, state.dirty);
+            assert_eq!(0, state.row_data[0].highlights.len());
+            assert!(!state.row_data[0].dirty);
+            assert_eq!(Dirty::False, state.dirty);
+        }
+
+        // The same chunk is accepted once its copied serial also matches.
+        // hl.chunks.items(.serial)[0] = live_serial;
+        hl.chunks[0].serial = live_serial;
+        state
+            .update_highlights_flattened(alloc, 42, core::slice::from_ref(&hl))
+            .unwrap();
+        {
+            // const row_highlights = row_data.items(.highlights)[0].items;
+            // try testing.expectEqual(1, row_highlights.len);
+            // try testing.expectEqual(42, row_highlights[0].tag);
+            // try testing.expectEqual([2]size.CellCountInt{ 2, 4 }, row_highlights[0].range);
+            // try testing.expect(row_data.items(.dirty)[0]);
+            // try testing.expectEqual(.partial, state.dirty);
+            assert_eq!(1, state.row_data[0].highlights.len());
+            assert_eq!(42, state.row_data[0].highlights[0].tag);
+            assert_eq!([2, 4], state.row_data[0].highlights[0].range);
+            assert!(state.row_data[0].dirty);
+            assert_eq!(Dirty::Partial, state.dirty);
+        }
+
+        hl.deinit();
         state.deinit(alloc);
         t.deinit(alloc);
     }
