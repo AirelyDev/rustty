@@ -9,7 +9,12 @@
 //!
 //! A block is a series of sequences. Each non-final sequence has this shape:
 //!
-//!     token | literal length extensions | literals | offset | match length extensions
+//! PORT NOTE (WS7): fenced as `text` so rustdoc renders the oracle's format
+//! diagram verbatim instead of compiling an indented block as a doctest.
+//!
+//! ```text
+//! token | literal length extensions | literals | offset | match length extensions
+//! ```
 //!
 //! The token's high nibble contains the literal length and its low nibble
 //! contains the match length minus four. A nibble value of 15 means that the
