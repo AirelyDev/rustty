@@ -4541,7 +4541,7 @@ mod tests {
             unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
 
         // It should be the last page in the list.
-        assert!(std::ptr::eq(unsafe { &(*crate::pagelist::Node::page(s2.pages.pages.last)) }, page));
+        assert!(std::ptr::eq(unsafe { crate::pagelist::Node::page(s2.pages.pages.last) } as *const _, page as *const _));
         // It should have a previous page.
         assert!(!unsafe { (*(*s2.cursor.page_pin).node).prev }.is_null());
 
@@ -4700,7 +4700,7 @@ mod tests {
             unsafe { crate::pagelist::Node::page((*s2.cursor.page_pin).node) };
 
         // It should be the last page in the list.
-        assert!(std::ptr::eq(unsafe { &(*crate::pagelist::Node::page(s2.pages.pages.last)) }, page));
+        assert!(std::ptr::eq(unsafe { crate::pagelist::Node::page(s2.pages.pages.last) } as *const _, page as *const _));
         // It should have a previous page.
         assert!(!unsafe { (*(*s2.cursor.page_pin).node).prev }.is_null());
 

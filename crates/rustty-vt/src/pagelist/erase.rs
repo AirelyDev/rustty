@@ -483,7 +483,7 @@ impl PageList {
                 if unsafe { (*chunk.node).next }.is_null()
                     && unsafe { (*chunk.node).prev }.is_null()
                 {
-                    let page: *mut crate::page::Page = unsafe { &mut (*super::Node::page(chunk.node)) };
+                    let page: *mut crate::page::Page = unsafe { super::Node::page(chunk.node) };
                     erased += unsafe { (*page).size.rows } as usize;
                     unsafe { (*page).reinit() };
                     unsafe { (*page).size.rows = 0 };

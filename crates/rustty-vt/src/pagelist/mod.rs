@@ -176,9 +176,85 @@ pub enum Owned {
 /// restoration is infallible.
 ///
 /// PORTS: oracle@main PageList.zig `Node.Data` (421fe8dab).
+///
+/// PORT NOTE (WS7 I2, Stacked Borrows): this is `#[repr(C, u8)]` so that the
+/// `Node` accessors can project the payload with PURE RAW POINTER ARITHMETIC.
+/// `match &mut *data { Resident(p) => p as *mut Page }` would return a pointer
+/// carrying a fresh `Unique` tag derived from a `&mut NodeData`; a later
+/// `Node::page`/`metadata`/`rows` on the SAME node retags `data` again and
+/// invalidates the earlier pointer, so dereferencing it afterwards is UB
+/// (`grow.rs::split` genuinely holds a page pointer across such a call).
+/// Under `repr(C, u8)` — RFC 2195 — the layout is exactly
+/// `union { R: #[repr(C)] struct { tag: u8, Page }, C: #[repr(C)] struct { tag: u8, CompressedPage } }`,
+/// so the discriminant is a plain byte read and the payload address is a
+/// constant `offset_of!` away, both derived from the caller's own raw `node`
+/// pointer with no intervening reference.
+///
+/// The cost is that the Zig-side niche packing is lost (the tag gets its own
+/// aligned slot). A `Node` is a handful of words next to a multi-KiB page
+/// mapping, so this is not measurable.
+#[repr(C, u8)]
 pub enum NodeData {
-    Resident(Page),
-    Compressed(crate::compress::CompressedPage),
+    Resident(Page) = NodeData::TAG_RESIDENT,
+    Compressed(crate::compress::CompressedPage) = NodeData::TAG_COMPRESSED,
+}
+
+/// The `Resident` variant's guaranteed `repr(C, u8)` layout (RFC 2195).
+#[repr(C)]
+struct ResidentVariant {
+    tag: u8,
+    page: Page,
+}
+
+/// The `Compressed` variant's guaranteed `repr(C, u8)` layout (RFC 2195).
+#[repr(C)]
+struct CompressedVariant {
+    tag: u8,
+    compressed: crate::compress::CompressedPage,
+}
+
+impl NodeData {
+    const TAG_RESIDENT: u8 = 0;
+    const TAG_COMPRESSED: u8 = 1;
+
+    /// Read the discriminant byte through a raw pointer.
+    ///
+    /// # Safety
+    /// `data` must point at a live, initialized `NodeData`.
+    #[inline]
+    unsafe fn tag(data: *const NodeData) -> u8 {
+        // SAFETY: `repr(C, u8)` puts the discriminant in the first byte of
+        // every variant, and a `u8` read has no alignment requirement. This is
+        // a raw read — it forms no reference and therefore retags nothing.
+        unsafe { core::ptr::read(data as *const u8) }
+    }
+
+    /// Project the `Resident` payload address. Does NOT check the tag.
+    ///
+    /// # Safety
+    /// `data` must point at a live `NodeData`.
+    #[inline]
+    unsafe fn resident_payload(data: *const NodeData) -> *const Page {
+        // SAFETY: RFC 2195 guarantees the payload sits at
+        // `offset_of!(ResidentVariant, page)` within the enum. Raw-derived from
+        // `data`, so it inherits `data`'s provenance and tag unchanged.
+        unsafe {
+            (data as *const u8).add(core::mem::offset_of!(ResidentVariant, page)) as *const Page
+        }
+    }
+
+    /// Project the `Compressed` payload address. Does NOT check the tag.
+    ///
+    /// # Safety
+    /// `data` must point at a live `NodeData`.
+    #[inline]
+    unsafe fn compressed_payload(data: *const NodeData) -> *const crate::compress::CompressedPage {
+        // SAFETY: as `resident_payload`.
+        unsafe {
+            (data as *const u8).add(core::mem::offset_of!(CompressedVariant, compressed))
+                as *const crate::compress::CompressedPage
+        }
+    }
 }
 
 /// The backing-memory representation currently stored by a node.
@@ -307,9 +383,10 @@ impl Node {
     /// `node` must point at a live `Node`.
     #[inline]
     pub unsafe fn page(node: *mut Node) -> *mut Page {
-        match unsafe { &mut *core::ptr::addr_of_mut!((*node).data) } {
-            NodeData::Resident(p) => p as *mut Page,
-            NodeData::Compressed(_) => unsafe { Node::restore(node, RestoreMode::Preserve) },
+        let data = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => unsafe { NodeData::resident_payload(data) as *mut Page },
+            _ => unsafe { Node::restore(node, RestoreMode::Preserve) },
         }
     }
 
@@ -327,9 +404,10 @@ impl Node {
     /// `node` must point at a live `Node`.
     #[inline]
     pub unsafe fn page_if_resident(node: *mut Node) -> *mut Page {
-        match unsafe { &mut *core::ptr::addr_of_mut!((*node).data) } {
-            NodeData::Resident(p) => p as *mut Page,
-            NodeData::Compressed(_) => core::ptr::null_mut(),
+        let data = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => unsafe { NodeData::resident_payload(data) as *mut Page },
+            _ => core::ptr::null_mut(),
         }
     }
 
@@ -346,13 +424,16 @@ impl Node {
     /// `node` must point at a live `Node` whose page is resident.
     #[inline]
     pub unsafe fn page_assume_resident(node: *mut Node) -> *mut Page {
-        match unsafe { &mut *core::ptr::addr_of_mut!((*node).data) } {
-            NodeData::Resident(p) => p as *mut Page,
-            NodeData::Compressed(_) => {
-                debug_assert!(false, "page_assume_resident on a compressed node");
-                // SAFETY: the caller contract is that the node is resident.
-                unsafe { core::hint::unreachable_unchecked() }
-            }
+        let data = unsafe { core::ptr::addr_of_mut!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => unsafe { NodeData::resident_payload(data) as *mut Page },
+            // PORT NOTE (WS7 M3): a hard `unreachable!` rather than
+            // `unreachable_unchecked`. There are exactly two call sites, both
+            // immediately after a `NodeData::Resident` write, so the branch is
+            // trivially predicted and the check costs nothing measurable — but
+            // getting it wrong would hand callers a garbage `*mut Page`
+            // instead of a panic.
+            _ => unreachable!("page_assume_resident on a compressed node"),
         }
     }
 
@@ -364,9 +445,14 @@ impl Node {
     /// `node` must point at a live `Node`.
     #[inline]
     pub unsafe fn metadata(node: *const Node) -> *const Page {
-        match unsafe { &*core::ptr::addr_of!((*node).data) } {
-            NodeData::Resident(p) => p as *const Page,
-            NodeData::Compressed(c) => &c.page as *const Page,
+        let data = unsafe { core::ptr::addr_of!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => unsafe { NodeData::resident_payload(data) },
+            _ => {
+                let c = unsafe { NodeData::compressed_payload(data) };
+                // Raw place projection — forms no `&CompressedPage`.
+                unsafe { core::ptr::addr_of!((*c).page) }
+            }
         }
     }
 
@@ -378,9 +464,10 @@ impl Node {
     /// `node` must point at a live `Node`.
     #[inline]
     pub unsafe fn storage(node: *const Node) -> Storage {
-        match unsafe { &*core::ptr::addr_of!((*node).data) } {
-            NodeData::Resident(_) => Storage::Resident,
-            NodeData::Compressed(_) => Storage::Compressed,
+        let data = unsafe { core::ptr::addr_of!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => Storage::Resident,
+            _ => Storage::Compressed,
         }
     }
 
@@ -404,9 +491,16 @@ impl Node {
     /// `node` must point at a live `Node` and the caller must retain exclusive
     /// access to the owning PageList for the lifetime of the result.
     pub unsafe fn page_preserving_state(node: *const Node) -> PreservedPage {
-        match unsafe { &*core::ptr::addr_of!((*node).data) } {
-            NodeData::Resident(p) => PreservedPage::Borrowed(p as *const Page),
-            NodeData::Compressed(compressed) => {
+        let data = unsafe { core::ptr::addr_of!((*node).data) };
+        match unsafe { NodeData::tag(data) } {
+            NodeData::TAG_RESIDENT => {
+                PreservedPage::Borrowed(unsafe { NodeData::resident_payload(data) })
+            }
+            _ => {
+                // SAFETY: the tag says `Compressed`. The `&CompressedPage` is
+                // confined to this arm, which forms no other pointer into the
+                // node, and the node's storage is unchanged throughout.
+                let compressed = unsafe { &*NodeData::compressed_payload(data) };
                 let len = compressed.page.memory_len();
                 let layout = Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
                 // SAFETY: `len > 0` and the layout is valid.
@@ -450,9 +544,15 @@ impl Node {
         // Read what we need out of the compressed value and drop the borrow
         // before overwriting `data`: keeping a reference into the union live
         // across the write would be Stacked-Borrows UB.
-        let (mem_ptr, mem_len) = match unsafe { &*data } {
-            NodeData::Resident(_) => return unsafe { Node::page_assume_resident(node) },
-            NodeData::Compressed(c) => (c.page.memory_ptr() as *mut u8, c.page.memory_len()),
+        if unsafe { NodeData::tag(data) } == NodeData::TAG_RESIDENT {
+            return unsafe { Node::page_assume_resident(node) };
+        }
+        let (mem_ptr, mem_len) = {
+            // SAFETY: the tag says `Compressed`. This borrow is confined to the
+            // two field reads below and ends before anything else touches the
+            // node.
+            let c = unsafe { &*NodeData::compressed_payload(data) };
+            (c.page.memory_ptr() as *mut u8, c.page.memory_len())
         };
 
         // Decommit only discarded the physical pages. Recommit prepares the
@@ -463,12 +563,7 @@ impl Node {
         let restored: Page = match mode {
             RestoreMode::Preserve => {
                 // SAFETY: the mapping was just recommitted and is unaliased.
-                match unsafe {
-                    match &*data {
-                        NodeData::Resident(_) => unreachable!(),
-                        NodeData::Compressed(c) => c.restore(),
-                    }
-                } {
+                match unsafe { (*NodeData::compressed_payload(data)).restore() } {
                     Ok(p) => p,
                     Err(_err) => {
                         // Compressed nodes retain the immutable encoding and
@@ -480,10 +575,7 @@ impl Node {
                 }
             }
 
-            RestoreMode::Discard => match unsafe { &*data } {
-                NodeData::Resident(_) => unreachable!(),
-                NodeData::Compressed(c) => c.page.shallow_copy(),
-            },
+            RestoreMode::Discard => unsafe { (*NodeData::compressed_payload(data)).page.shallow_copy() },
         };
 
         // Replacing `data` drops the CompressedPage, freeing its encoding

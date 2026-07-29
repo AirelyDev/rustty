@@ -36,7 +36,12 @@ impl PageList {
         // when we modify it later it updates our p here. Copying the node
         // fixes this.
         let original_node = p.node;
-        let page: *mut Page = unsafe { &mut (*super::Node::page(original_node)) };
+        // PORT NOTE (WS7 I2): the accessor's result is used RAW. Writing
+        // `&mut (*Node::page(..))` would retag it as `Unique`, and the
+        // `Node::page` call in the tracked-pin loop below would then invalidate
+        // it under Stacked Borrows — while `page` is still dereferenced
+        // afterwards to clear rows and shorten the source.
+        let page: *mut Page = unsafe { super::Node::page(original_node) };
 
         // A page that is already 1 row can't be split. In the future we can
         // theoretically maybe split by soft-wrapping multiple pages but that
@@ -67,15 +72,16 @@ impl PageList {
         // Determine how many rows we're copying
         let y_start = p.y;
         let y_end = unsafe { (*page).size.rows };
-        unsafe { (*super::Node::page(target)).size.rows = y_end - y_start };
+        // Hoisted: `target` was just created resident, so this is one lookup,
+        // not three (WS7 I2).
+        let target_page: *mut Page = unsafe { super::Node::page(target) };
+        unsafe { (*target_page).size.rows = y_end - y_start };
         assert!(unsafe { super::Node::rows(target) <= super::Node::capacity(target).rows });
 
         // Copy our old data. This should NOT fail because we have the
         // capacity of the old page which already fits the data we requested.
-        if let Err(_err) = unsafe {
-            (*super::Node::page(target))
-                .clone_from(page, y_start as usize, y_end as usize)
-        } {
+        if let Err(_err) = unsafe { (*target_page).clone_from(page, y_start as usize, y_end as usize) }
+        {
             // log.err(
             //     "error cloning rows for split err={}",
             //     .{err},
@@ -99,8 +105,12 @@ impl PageList {
         // Move any tracked pins from the copied rows
         for tracked in self.tracked_pins.keys() {
             let tracked: *mut super::Pin = *tracked;
-            if !core::ptr::eq(unsafe { &(*super::Node::page((*tracked).node)) }, page as *const Page)
-                || unsafe { (*tracked).y } < p.y
+            // Raw comparison — forming a `&Page` here would retag and
+            // invalidate `page` (WS7 I2).
+            if !core::ptr::eq(
+                unsafe { super::Node::page((*tracked).node) } as *const Page,
+                page as *const Page,
+            ) || unsafe { (*tracked).y } < p.y
             {
                 continue;
             }
@@ -464,7 +474,7 @@ impl PageList {
     ) -> Result<*mut Node, IncreaseCapacityError> {
         // PORT NOTE: `defer self.assertIntegrity()` — reproduced by calling
         // `assert_integrity` before every exit point below.
-        let page: *mut Page = unsafe { &mut (*super::Node::page(node)) };
+        let page: *mut Page = unsafe { super::Node::page(node) };
 
         // Apply our adjustment
         let mut cap = unsafe { (*page).capacity };
@@ -528,7 +538,7 @@ impl PageList {
             .create_page(super::CreatePage::new(cap))
             .map_err(|_| IncreaseCapacityError::OutOfMemory)?;
         // errdefer self.destroyNode(new_node);
-        let new_page: *mut Page = unsafe { &mut (*super::Node::page(new_node)) };
+        let new_page: *mut Page = unsafe { super::Node::page(new_node) };
         assert!(unsafe { (*new_page).capacity.rows >= (*page).capacity.rows });
         assert!(unsafe { (*new_page).capacity.cols >= (*page).capacity.cols });
         unsafe { (*new_page).size.rows = (*page).size.rows };
@@ -599,7 +609,7 @@ impl PageList {
     pub fn compact(&mut self, node: *mut Node) -> Result<Option<*mut Node>, super::OutOfMemory> {
         // PORT NOTE: `defer self.assertIntegrity()` — reproduced by calling
         // `assert_integrity` before every exit point below.
-        let page: *mut Page = unsafe { &mut (*super::Node::page(node)) };
+        let page: *mut Page = unsafe { super::Node::page(node) };
 
         // We should never have empty rows in our pagelist anyways...
         assert!(unsafe { (*page).size.rows } > 0);
@@ -622,7 +632,7 @@ impl PageList {
         // Create the new smaller page
         let new_node = self.create_page(super::CreatePage::exact(req_cap))?;
         // errdefer self.destroyNode(new_node);
-        let new_page: *mut Page = unsafe { &mut (*super::Node::page(new_node)) };
+        let new_page: *mut Page = unsafe { super::Node::page(new_node) };
         unsafe { (*new_page).size = (*page).size };
         unsafe { (*new_page).dirty = (*page).dirty };
         if let Err(_err) = unsafe { (*new_page).clone_from(page, 0, (*page).size.rows as usize) } {

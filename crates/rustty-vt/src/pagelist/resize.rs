@@ -338,7 +338,7 @@ impl PageList {
 
         // Create the first node that contains our reflow.
         let first_rewritten_node: *mut Node = {
-            let page: *mut Page = unsafe { &mut (*super::Node::page(self.pages.first)) };
+            let page: *mut Page = unsafe { super::Node::page(self.pages.first) };
             let cap = match unsafe { (*page).capacity }.adjust(Adjustment { cols: Some(cols) }) {
                 Ok(cap) => cap,
                 Err(_err) => {
@@ -565,7 +565,7 @@ impl PageList {
                         None,
                     );
                     while let Some(chunk) = it.next() {
-                        let page: *mut crate::page::Page = unsafe { &mut (*super::Node::page(chunk.node)) };
+                        let page: *mut crate::page::Page = unsafe { super::Node::page(chunk.node) };
                         // defer page.assertIntegrity();
                         let base = unsafe { (*page).memory_ptr() };
                         let rows = unsafe { (*page).rows.ptr(base) };
@@ -847,7 +847,7 @@ impl PageList {
         if !prev.is_null() {
             'prev: {
                 let prev_node = prev;
-                let prev_page: *mut crate::page::Page = unsafe { &mut (*super::Node::page(prev_node)) };
+                let prev_page: *mut crate::page::Page = unsafe { super::Node::page(prev_node) };
 
                 // We only want scenarios where we have excess capacity.
                 if unsafe { (*prev_page).size.rows } >= unsafe { (*prev_page).capacity.rows } {
@@ -952,7 +952,7 @@ impl PageList {
                         self.destroy_node(node);
                     }
                     if prev_copied > 0 {
-                        let prev_page: *mut crate::page::Page = unsafe { &mut (*super::Node::page(prev)) };
+                        let prev_page: *mut crate::page::Page = unsafe { super::Node::page(prev) };
                         let prev_size = unsafe { (*prev_page).size.rows } - prev_copied;
                         let base = unsafe { (*prev_page).memory_ptr() };
                         let prev_rows = unsafe { (*prev_page).rows.ptr(base) };
@@ -1156,7 +1156,7 @@ enum WriteCellResult {
 
 impl ReflowCursor {
     fn init(node: *mut Node) -> ReflowCursor {
-        let page: *mut Page = unsafe { &mut (*super::Node::page(node)) };
+        let page: *mut Page = unsafe { super::Node::page(node) };
         let base = unsafe { (*page).memory_ptr() };
         let rows = unsafe { (*page).rows.ptr(base) };
         ReflowCursor {
@@ -1181,7 +1181,7 @@ impl ReflowCursor {
         row: Pin,
         cursor_pin: Option<*mut Pin>,
     ) -> Result<(), super::OutOfMemory> {
-        let src_page: *mut Page = unsafe { &mut (*super::Node::page(row.node)) };
+        let src_page: *mut Page = unsafe { super::Node::page(row.node) };
         let src_row = row.row_and_cell().row;
         let src_y = row.y;
         let cells = unsafe {
@@ -1215,7 +1215,7 @@ impl ReflowCursor {
         {
             for p in list.tracked_pins.keys() {
                 let p: *mut Pin = *p;
-                if !core::ptr::eq(unsafe { &(*super::Node::page((*p).node)) }, src_page)
+                if !core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, src_page as *const _)
                     || unsafe { (*p).y } != src_y
                 {
                     continue;
@@ -1244,7 +1244,7 @@ impl ReflowCursor {
         // If the cursor is after blanks on the right, those cells are still
         // before the next write and must reflow with it.
         if let Some(p) = cursor_pin {
-            if core::ptr::eq(unsafe { &(*super::Node::page((*p).node)) }, src_page) && unsafe { (*p).y } == src_y
+            if core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, src_page as *const _) && unsafe { (*p).y } == src_y
             {
                 cols_len = core::cmp::max(cols_len, unsafe { (*p).x } + 1);
             }
@@ -1306,7 +1306,7 @@ impl ReflowCursor {
             {
                 for p in list.tracked_pins.keys() {
                     let p: *mut Pin = *p;
-                    if !core::ptr::eq(unsafe { &(*super::Node::page((*p).node)) }, src_page)
+                    if !core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, src_page as *const _)
                         || unsafe { (*p).y } != src_y
                         || unsafe { (*p).x } != x as size::CellCountInt
                     {
@@ -1333,7 +1333,7 @@ impl ReflowCursor {
                         // since we won't process that cell in the loop.
                         for p in list.tracked_pins.keys() {
                             let p: *mut Pin = *p;
-                            if !core::ptr::eq(unsafe { &(*super::Node::page((*p).node)) }, src_page)
+                            if !core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, src_page as *const _)
                                 || unsafe { (*p).y } != src_y
                                 || unsafe { (*p).x } != x as size::CellCountInt + 1
                             {
@@ -1883,7 +1883,7 @@ impl ReflowCursor {
         {
             for p in list.tracked_pins.keys() {
                 let p: *mut Pin = *p;
-                if !core::ptr::eq(unsafe { &(*super::Node::page((*p).node)) }, old_page)
+                if !core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, old_page as *const _)
                     || unsafe { (*p).y } != unsafe { (*old_page).size.rows } - 1
                 {
                     continue;
