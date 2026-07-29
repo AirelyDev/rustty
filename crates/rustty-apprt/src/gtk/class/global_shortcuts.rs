@@ -57,6 +57,10 @@ use gtk4::subclass::prelude::*;
 use super::command_palette::ActionBoxed;
 use super::config::Config;
 
+use rustty_input::binding::{Action, Value};
+
+use crate::gtk::key;
+
 mod imp {
     use super::*;
 
@@ -214,5 +218,148 @@ impl GlobalShortcuts {
 impl Default for GlobalShortcuts {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+//---------------------------------------------------------------
+// Portal protocol helpers (free functions so they are unit-testable with no
+// display and no bus — the oracle keeps them as private methods/`Method` arms
+// on the class, which Zig can test in-file and Rust cannot).
+
+/// PORTS: `global_shortcuts.zig:168-206` — the map-build half of `refresh`.
+///
+/// Walks the config's keybind set and returns the portal shortcut map: an
+/// insertion-ordered list of `(xdg shortcut id, action)`. Only `global:` leaves
+/// that carry exactly one action are registered; leader (sequence) entries and
+/// chained leaves are skipped, matching the reference's `TODO: remove this
+/// restriction`. The key is the trigger's XDG spelling because triggers are
+/// unique in the keymap (`:64-67`).
+///
+/// PORT NOTE: the reference formats the trigger into a 1024-byte stack buffer and
+/// has a `error.WriteFailed` arm that warns and skips; `xdg_shortcut_from_trigger`
+/// returns a growable `String` here so only the `null` arm (an untranslatable
+/// trigger — `catch_all`, or a key with no GDK keysym name) can skip a bind.
+pub(crate) fn build_shortcut_map(config: &rustty_config::Config) -> Vec<(String, Action)> {
+    let mut map: Vec<(String, Action)> = Vec::new();
+
+    for (trigger, value) in config.keybind.set.iter_bindings() {
+        // `.leader => continue`, `inline .leaf, .leaf_chained => |l| l.generic()`.
+        let leaf = match value {
+            Value::Leader(_) => continue,
+            Value::Leaf(l) => l.generic(),
+            Value::LeafChained(l) => l.generic(),
+        };
+
+        // `if (!leaf.flags.global) continue;`
+        if !leaf.flags.global {
+            continue;
+        }
+
+        // "We only allow global keybinds that map to exactly a single action
+        // for now." (`:179-181`)
+        let actions = leaf.actions_slice();
+        if actions.len() != 1 {
+            continue;
+        }
+
+        let Some(shortcut) = key::xdg_shortcut_from_trigger(*trigger) else {
+            continue;
+        };
+
+        // `priv.map.put(alloc, trigger, actions[0])` — last write wins.
+        match map.iter_mut().find(|(k, _)| *k == shortcut) {
+            Some(entry) => entry.1 = actions[0].clone(),
+            None => map.push((shortcut, actions[0].clone())),
+        }
+    }
+
+    map
+}
+
+/// PORTS: `global_shortcuts.zig:259-263` — the `description` field of a
+/// `BindShortcuts` entry: the action in its parse/format spelling (`"{f}"` of
+/// `Binding.Action`), e.g. `new_window`, `goto_tab:3`.
+///
+/// PORT NOTE: the reference formats into a 256-byte stack buffer and `catch
+/// continue`s a binding whose action does not fit. `AllocatingWriter` grows, so
+/// no binding is ever dropped for length here. `Action::format`'s writer error is
+/// `Infallible` for this writer.
+pub(crate) fn action_description(action: &Action) -> String {
+    let mut w = rustty_cfg_fmt::AllocatingWriter::init();
+    let _ = action.format(&mut w);
+    String::from_utf8_lossy(w.written()).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustty_input::binding::Action;
+
+    /// Build a config carrying the given keybind lines.
+    fn config_with(binds: &[&str]) -> rustty_config::Config {
+        let mut config = rustty_config::Config::default_config();
+        for b in binds {
+            config
+                .keybind
+                .set
+                .parse_and_put(b.as_bytes())
+                .expect("keybind parses");
+        }
+        config
+    }
+
+    /// PORTS: `global_shortcuts.zig:168-206` — only `global:` leaves with exactly
+    /// one action reach the portal map, keyed by the XDG shortcut spelling.
+    #[test]
+    fn global_shortcuts_map_only_global_single_action_binds() {
+        let config = config_with(&[
+            "global:super+q=new_window",
+            "ctrl+shift+t=new_tab",
+            "global:ctrl+alt+shift+f12=toggle_quick_terminal",
+        ]);
+
+        let map = build_shortcut_map(&config);
+
+        assert_eq!(
+            map,
+            vec![
+                ("LOGO+q".to_owned(), Action::NewWindow),
+                ("SHIFT+CTRL+ALT+F12".to_owned(), Action::ToggleQuickTerminal),
+            ],
+            "non-global binds are skipped; global binds keep insertion order"
+        );
+    }
+
+    /// PORTS: `global_shortcuts.zig:179-181` — multi-action (chained) leaves are
+    /// skipped for now ("We only allow global keybinds that map to exactly a
+    /// single action"). `chain=<action>` appends to the immediately-preceding
+    /// binding, turning its leaf into a `LeafChained` with two actions.
+    #[test]
+    fn global_shortcuts_map_skips_chained_actions() {
+        let config = config_with(&["global:super+q=new_window", "chain=new_tab"]);
+        let map = build_shortcut_map(&config);
+        assert!(
+            map.is_empty(),
+            "a chained (2-action) global leaf is skipped, got {map:?}"
+        );
+    }
+
+    /// A default config has no `global:` binds at all, so the map is empty and
+    /// (per `refresh`) no portal session is ever created.
+    #[test]
+    fn global_shortcuts_map_empty_by_default() {
+        let config = rustty_config::Config::default_config();
+        assert!(build_shortcut_map(&config).is_empty());
+    }
+
+    /// PORTS: `global_shortcuts.zig:259-263` — the shortcut `description` is the
+    /// action rendered in its parse/format spelling.
+    #[test]
+    fn global_shortcuts_action_description_is_format_spelling() {
+        assert_eq!(action_description(&Action::NewWindow), "new_window");
+        assert_eq!(
+            action_description(&Action::ToggleQuickTerminal),
+            "toggle_quick_terminal"
+        );
     }
 }
