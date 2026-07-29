@@ -86,7 +86,49 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 
 | WS | Plan file | Scope |
 |----|-----------|-------|
-| **WS18 release-lane repair** | `TBD — author at start` | `cargo test --release` has **12 failing tests on main** (independently corroborated during the WS7 Phase B review, and present verbatim at `a21f965` — NOT caused by Phase B). Root cause: `rustty_util::tripwire::enabled()` is deliberately `cfg!(debug_assertions)` (the faithful equivalent of Zig's `builtin.is_test`, per its PORT NOTE), so in `--release` the fail-points never trip and every test that expects an injected failure fails. The design is correct; the *tests* are simply not gated to match. Fix: mark the affected tests `#[cfg_attr(not(debug_assertions), ignore)]` — the precedent WS7 Phase B already established for its own new tripwire test. Then make `cargo test --release` a real, green gate so this cannot regress. Scope check: confirm all 12 are genuinely tripwire/allocation-failure tests before blanket-ignoring anything — do NOT silence a real release-only bug. |
+| **WS18 release-lane repair** | `TBD — author at start` | `cargo test --release` has **12 failing tests on main** (independently corroborated during the WS7 Phase B review, and present verbatim at `a21f965` — NOT caused by Phase B). Root cause: `rustty_util::tripwire::enabled()` is deliberately `cfg!(debug_assertions)` (the faithful equivalent of Zig's `builtin.is_test`, per its PORT NOTE), so in `--release` the fail-points never trip and every test that expects an injected failure fails. The design is correct; the *tests* are simply not gated to match. Fix: mark the affected tests `#[cfg_attr(not(debug_assertions), ignore)]` — the precedent WS7 Phase B already established for its own new tripwire test. Then make `cargo test --release` a real, green gate so this cannot regress. Scope check: confirm all 12 are genuinely tripwire/allocation-failure tests before blanket-ignoring anything — do NOT silence a real release-only bug. **DONE** — see the outcome note below. |
+
+### WS18 outcome (release lane now green + gated)
+
+The "12" was the `-p rustty-vt --lib` slice only. A full `cargo test --release
+--workspace` on a clean tree surfaced **22 failing tests across 7 targets**, and
+the lane did not even reach the tests until a link break was fixed. Per-failure
+triage:
+
+- **1 build break (both profiles):** `libxml2-sys`'s KAT test binary failed to
+  link — the vendored libxml2 is built `LIBXML_ICONV_ENABLED`, and on Apple
+  targets `iconv` lives outside `libSystem`. Fixed by emitting
+  `cargo:rustc-link-lib=iconv`.
+- **19 debug-only-mechanism tests:** 17 tripwire fail-point tests plus
+  `pagelist_erase_row_error_path_runs_integrity_gate` and
+  `terminal_full_reset_tracked_pins`, which drive the slow-runtime-safety
+  integrity gate / `pin_is_valid` (the reference compiles those under
+  `build_options.slow_runtime_safety`). All now
+  `#[cfg_attr(not(debug_assertions), ignore)]`; all still run and pass in debug.
+- **1 flaky test, BOTH profiles (not release-only):** `rustty-bench`'s
+  `Benchmark` test asserts `result.duration > 0` on two back-to-back monotonic
+  reads; Apple Silicon's clock advances in ~41.67ns steps. Measured unmodified:
+  27/200 failures in release, 19/200 in debug. De-flaked by spinning until the
+  clock advances (300/300 green in both profiles afterwards).
+- **1 ordering artifact (both profiles):** `rustty-apprt-c`'s C-ABI smoke needs
+  the cdylib/staticlib uplifted into `target/<profile>/`, which only
+  `cargo build` does. The gate runs the build first.
+- **3 tests in one flaky HANG (both profiles, unresolved — see below).**
+
+**Zero genuine release-ONLY product bugs were found.**
+
+Enforcement: `.port/tools/gates/check_release_lane.sh` (**G-REL**), registered
+HARD in `ci.sh`.
+
+**Open finding — `rustty-termio` `subprocess_drop_repro` intermittent hang.**
+Under full-workspace parallel load its three tests wedged indefinitely. The
+forked children are macOS `login(1)` processes stuck in kernel "exiting" state
+(`ps` STAT `?Es`), so they never reap; `killPid`'s faithful SIGHUP + `waitpid`
+loop then spins forever. Not release-specific (two orphaned debug-build copies
+from another worktree had been stuck for 5 days), and not reproducible when the
+binary is run standalone in either profile. Not fixed here — the product loop is
+faithful to the reference. G-REL wraps the run in a watchdog so a recurrence is a
+loud RED rather than an infinite CI wait.
 
 ## VM track (Linux — addressable NOW via `ssh rvm`, not deferred)
 
