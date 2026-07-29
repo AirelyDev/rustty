@@ -1812,7 +1812,14 @@ fn decommit_pool_item(item: *mut u8, item_size: usize, dirty_len: usize) {
         // SAFETY: `item` is a live pool item of at least `dirty_len` bytes.
         unsafe { core::ptr::write_bytes(item, 0, dirty_len) };
         // SAFETY: `item` is page-aligned and `item_size` bytes long.
-        if unsafe { madvise(item as *mut core::ffi::c_void, item_size, MADV_FREE_REUSABLE) } != 0 {
+        if unsafe {
+            madvise(
+                item as *mut core::ffi::c_void,
+                item_size,
+                MADV_FREE_REUSABLE,
+            )
+        } != 0
+        {
             // Best-effort: plain MADV_FREE reclaims under memory pressure only
             // and needs no reuse pairing.
             // SAFETY: as above.
@@ -1850,17 +1857,20 @@ fn recommit_pool_item(item: *mut u8, item_size: usize) {
     }
 }
 
-// Minimal libc binding for `madvise`. We avoid pulling the `libc` crate as a
-// new dependency; this signature and these constants are stable on the
-// platforms we target. Mirrors the `mmap`/`munmap` bindings in `page.rs`.
+// Minimal libc binding for `madvise`. `libc` is already a dependency of this
+// crate (used elsewhere, e.g. `rustty-os`'s page allocator), but we hand-roll
+// this binding to match the existing `mmap`/`munmap` bindings in `page.rs`'s
+// `Backing::alloc`/`Backing::free` convention rather than mixing binding
+// styles within the same crate.
 #[cfg(all(not(test), any(target_os = "linux", target_os = "macos")))]
 extern "C" {
     #[link_name = "madvise"]
     fn madvise(addr: *mut core::ffi::c_void, len: usize, advice: i32) -> i32;
 }
 
-// <asm-generic/mman-common.h>: `#define MADV_DONTNEED 4` (same on every Linux
-// architecture).
+// <asm-generic/mman-common.h>: `#define MADV_DONTNEED 4` on the Linux
+// architectures this crate targets (x86_64, aarch64); other architectures
+// (e.g. alpha, where it is 6) are not part of the build matrix.
 #[cfg(all(not(test), target_os = "linux"))]
 const MADV_DONTNEED: i32 = 4;
 

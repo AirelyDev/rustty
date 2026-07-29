@@ -1906,12 +1906,10 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
     {
         let page = unsafe { &(*node2).data };
         for i in 0..cells_len {
-            let rac = page.get_row_and_cell(i % page.size.cols as usize, i / page.size.cols as usize);
+            let rac =
+                page.get_row_and_cell(i % page.size.cols as usize, i / page.size.cols as usize);
             let bytes = unsafe {
-                core::slice::from_raw_parts(
-                    rac.cell as *const u8,
-                    core::mem::size_of::<Cell>(),
-                )
+                core::slice::from_raw_parts(rac.cell as *const u8, core::mem::size_of::<Cell>())
             };
             assert!(bytes.iter().all(|&b| b == 0));
         }

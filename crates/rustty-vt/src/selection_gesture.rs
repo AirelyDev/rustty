@@ -841,6 +841,11 @@ fn drag_selection(
     // const max_x = pixel_span - 1;
     // PORT NOTE: `pixel_span` is >= 1 because both factors are non-zero after
     // the early return above, so the `- 1` cannot underflow.
+    // R1: mirrors the oracle's `std.math.mul(u32, ..., ...) catch
+    // std.math.maxInt(u32)` expression shape (checked multiply, clamp to max
+    // on overflow) rather than `saturating_mul`, which is numerically
+    // identical here but not what the oracle expresses.
+    #[allow(clippy::manual_saturating_arithmetic)]
     let pixel_span: u32 = geometry
         .columns
         .checked_mul(geometry.cell_width)

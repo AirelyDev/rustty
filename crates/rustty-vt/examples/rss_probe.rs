@@ -29,9 +29,10 @@ use rustty_vt::PageList;
 // number Activity Monitor shows as "Memory") is therefore the metric that
 // reflects the decommit. It comes from `proc_pid_rusage(RUSAGE_INFO_V0)`.
 //
-// PORT NOTE (platform primitive): hand-rolled `extern "C"` binding in the style
-// of `page.rs`'s `mmap`/`munmap` — the `libc` crate is deliberately not a
-// dependency of this crate.
+// PORT NOTE (platform primitive): hand-rolled `extern "C"` binding matching
+// the existing convention of `page.rs`'s `Backing::alloc`/`Backing::free`
+// `mmap`/`munmap` bindings, even though `libc` is already a dependency of
+// this crate (used elsewhere, e.g. `rustty-os`'s page allocator).
 #[cfg(target_os = "macos")]
 #[repr(C)]
 #[derive(Default)]

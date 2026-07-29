@@ -57,8 +57,7 @@ use std::collections::HashMap;
 // `8fe5913f7` is therefore ported as this note (N/A), not as code. Rust would
 // not even compile a fallback-free `AtomicU64` on such a target, so a
 // regression here is a build error, not a silent miscompile.
-static GENERATION_COUNTER: core::sync::atomic::AtomicU64 =
-    core::sync::atomic::AtomicU64::new(0);
+static GENERATION_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Returns the next generation stamp. Stamps are unique and strictly
 /// monotonically increasing process-wide, starting at 1 (0 is reserved to mean
@@ -398,274 +397,280 @@ impl ImageStorage {
         // to dirty the image state or bump the generation.
         //
         // PORT NOTE: Zig's `defer` runs on every return path; Rust has no
-        // `defer`, so the check runs once after the `match`. `delete` returns
-        // `()` and has no early `return`s, so a trailing check is exactly
-        // equivalent — if any arm gains an early `return`, convert it to a
-        // labeled-block `break` instead.
+        // `defer`. To keep the trailing generation check unconditionally
+        // correct — including if a future arm needs to bail out after
+        // already removing a placement/image — the `match` is wrapped in a
+        // labeled block and every early exit is a `break 'delete` rather
+        // than a bare `return`, so control always reaches the count
+        // comparison below.
         let placements_before = self.placements.len();
         let images_before = self.images.len();
 
-        match cmd {
-            command::Delete::All(delete_images) => {
-                // var it = self.placements.iterator();
-                // while (it.next()) |entry| { ... }
-                let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
-                for key in keys {
-                    // Skip virtual placements
-                    match self.placements.get(&key).unwrap().location {
-                        Location::Pin(_) => {}
-                        Location::Virtual => continue,
+        'delete: {
+            match cmd {
+                command::Delete::All(delete_images) => {
+                    // var it = self.placements.iterator();
+                    // while (it.next()) |entry| { ... }
+                    let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+                    for key in keys {
+                        // Skip virtual placements
+                        match self.placements.get(&key).unwrap().location {
+                            Location::Pin(_) => {}
+                            Location::Virtual => continue,
+                        }
+
+                        // Deinit the placement and remove it
+                        let image_id = key.image_id;
+                        let entry = self.placements.get(&key).unwrap();
+                        entry.deinit(unsafe { &mut *t.screens.active });
+                        self.placements.remove(&key);
+                        if delete_images {
+                            self.delete_if_unused(alloc, image_id);
+                        }
                     }
 
-                    // Deinit the placement and remove it
-                    let image_id = key.image_id;
-                    let entry = self.placements.get(&key).unwrap();
-                    entry.deinit(unsafe { &mut *t.screens.active });
-                    self.placements.remove(&key);
                     if delete_images {
-                        self.delete_if_unused(alloc, image_id);
+                        // var image_it = self.images.iterator();
+                        // while (image_it.next()) |kv| self.deleteIfUnused(alloc, kv.key_ptr.*);
+                        let image_keys: Vec<u32> = self.images.keys().copied().collect();
+                        for k in image_keys {
+                            self.delete_if_unused(alloc, k);
+                        }
                     }
                 }
 
-                if delete_images {
-                    // var image_it = self.images.iterator();
-                    // while (image_it.next()) |kv| self.deleteIfUnused(alloc, kv.key_ptr.*);
-                    let image_keys: Vec<u32> = self.images.keys().copied().collect();
-                    for k in image_keys {
-                        self.delete_if_unused(alloc, k);
-                    }
-                }
-            }
-
-            command::Delete::Id {
-                delete,
-                image_id,
-                placement_id,
-            } => self.delete_by_id(
-                alloc,
-                unsafe { &mut *t.screens.active },
-                image_id,
-                placement_id,
-                delete,
-            ),
-
-            command::Delete::Newest {
-                delete,
-                image_number,
-                placement_id,
-            } => {
-                // const img = self.imageByNumber(v.image_number) orelse break :newest;
-                let img = match self.image_by_number(image_number) {
-                    Some(img) => img,
-                    None => return,
-                };
-                self.delete_by_id(
+                command::Delete::Id {
+                    delete,
+                    image_id,
+                    placement_id,
+                } => self.delete_by_id(
                     alloc,
                     unsafe { &mut *t.screens.active },
-                    img.id,
+                    image_id,
                     placement_id,
                     delete,
-                );
-            }
+                ),
 
-            command::Delete::IntersectCursor(delete_images) => {
-                let cursor = unsafe { &(*t.screens.active).cursor };
-                let p = point::Point::Active(point::Coordinate {
-                    x: cursor.x,
-                    y: cursor.y as u32,
-                });
-                self.delete_intersecting(alloc, t, p, delete_images, |_p| true);
-            }
-
-            // PORT NOTE: the reference guards (`v.x <= 0 or v.y <= 0`, `v.x <= 0`,
-            // `v.first <= 0 or v.last <= 0`) compare an unsigned `u32` against
-            // zero literally; we preserve that exact `<= 0` form (semantically
-            // `== 0`) per R1, which trips clippy's `absurd_extreme_comparisons`
-            // on the redundant `< 0` half — allowed here for fidelity.
-            #[allow(clippy::absurd_extreme_comparisons)]
-            command::Delete::IntersectCell { delete, x, y } => {
-                if x <= 0 || y <= 0 {
-                    // log.warn("delete intersect cell coords must be at least 1", .{});
-                    return;
-                }
-
-                // .x = std.math.cast(size.CellCountInt, v.x - 1) orelse break :intersect_cell,
-                let cx = match size::CellCountInt::try_from(x - 1) {
-                    Ok(v) => v,
-                    Err(_) => return,
-                };
-                // .y = std.math.cast(size.CellCountInt, v.y - 1) orelse break :intersect_cell,
-                // PORT NOTE: the reference casts `v.y - 1` to `size.CellCountInt`
-                // (returning on overflow); `point.Coordinate.y` is `u32` in this
-                // port, so we range-check against `CellCountInt` first, then widen.
-                let cy = match size::CellCountInt::try_from(y - 1) {
-                    Ok(v) => v as u32,
-                    Err(_) => return,
-                };
-                let p = point::Point::Active(point::Coordinate { x: cx, y: cy });
-                self.delete_intersecting(alloc, t, p, delete, |_p| true);
-            }
-
-            #[allow(clippy::absurd_extreme_comparisons)]
-            command::Delete::IntersectCellZ { delete, x, y, z } => {
-                if x <= 0 || y <= 0 {
-                    // log.warn("delete intersect cell coords must be at least 1", .{});
-                    return;
-                }
-
-                // .x = std.math.cast(size.CellCountInt, v.x - 1) orelse break :intersect_cell_z,
-                let cx = match size::CellCountInt::try_from(x - 1) {
-                    Ok(v) => v,
-                    Err(_) => return,
-                };
-                // .y = std.math.cast(size.CellCountInt, v.y - 1) orelse break :intersect_cell_z,
-                let cy = match size::CellCountInt::try_from(y - 1) {
-                    Ok(v) => v as u32,
-                    Err(_) => return,
-                };
-                let p = point::Point::Active(point::Coordinate { x: cx, y: cy });
-                // struct { fn filter(ctx: i32, p: Placement) bool { return p.z == ctx; } }.filter
-                self.delete_intersecting(alloc, t, p, delete, move |placement| placement.z == z);
-            }
-
-            #[allow(clippy::absurd_extreme_comparisons)]
-            command::Delete::Column { delete, x } => {
-                if x <= 0 {
-                    // log.warn("delete column must be greater than zero", .{});
-                    return;
-                }
-
-                let x = x - 1;
-                let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
-                for key in keys {
-                    let img = match self.image_by_id(key.image_id) {
+                command::Delete::Newest {
+                    delete,
+                    image_number,
+                    placement_id,
+                } => {
+                    // const img = self.imageByNumber(v.image_number) orelse break :newest;
+                    let img = match self.image_by_number(image_number) {
                         Some(img) => img,
-                        None => continue,
+                        None => break 'delete,
                     };
-                    let rect = match self.placements.get(&key).unwrap().rect(&img, t) {
-                        Some(r) => r,
-                        None => continue,
+                    self.delete_by_id(
+                        alloc,
+                        unsafe { &mut *t.screens.active },
+                        img.id,
+                        placement_id,
+                        delete,
+                    );
+                }
+
+                command::Delete::IntersectCursor(delete_images) => {
+                    let cursor = unsafe { &(*t.screens.active).cursor };
+                    let p = point::Point::Active(point::Coordinate {
+                        x: cursor.x,
+                        y: cursor.y as u32,
+                    });
+                    self.delete_intersecting(alloc, t, p, delete_images, |_p| true);
+                }
+
+                // PORT NOTE: the reference guards (`v.x <= 0 or v.y <= 0`, `v.x <= 0`,
+                // `v.first <= 0 or v.last <= 0`) compare an unsigned `u32` against
+                // zero literally; we preserve that exact `<= 0` form (semantically
+                // `== 0`) per R1, which trips clippy's `absurd_extreme_comparisons`
+                // on the redundant `< 0` half — allowed here for fidelity.
+                #[allow(clippy::absurd_extreme_comparisons)]
+                command::Delete::IntersectCell { delete, x, y } => {
+                    if x <= 0 || y <= 0 {
+                        // log.warn("delete intersect cell coords must be at least 1", .{});
+                        break 'delete;
+                    }
+
+                    // .x = std.math.cast(size.CellCountInt, v.x - 1) orelse break :intersect_cell,
+                    let cx = match size::CellCountInt::try_from(x - 1) {
+                        Ok(v) => v,
+                        Err(_) => break 'delete,
                     };
-                    if rect.top_left.x as u32 <= x && rect.bottom_right.x as u32 >= x {
-                        self.placements
-                            .get(&key)
-                            .unwrap()
-                            .deinit(unsafe { &mut *t.screens.active });
-                        self.placements.remove(&key);
-                        if delete {
-                            self.delete_if_unused(alloc, img.id);
+                    // .y = std.math.cast(size.CellCountInt, v.y - 1) orelse break :intersect_cell,
+                    // PORT NOTE: the reference casts `v.y - 1` to `size.CellCountInt`
+                    // (returning on overflow); `point.Coordinate.y` is `u32` in this
+                    // port, so we range-check against `CellCountInt` first, then widen.
+                    let cy = match size::CellCountInt::try_from(y - 1) {
+                        Ok(v) => v as u32,
+                        Err(_) => break 'delete,
+                    };
+                    let p = point::Point::Active(point::Coordinate { x: cx, y: cy });
+                    self.delete_intersecting(alloc, t, p, delete, |_p| true);
+                }
+
+                #[allow(clippy::absurd_extreme_comparisons)]
+                command::Delete::IntersectCellZ { delete, x, y, z } => {
+                    if x <= 0 || y <= 0 {
+                        // log.warn("delete intersect cell coords must be at least 1", .{});
+                        break 'delete;
+                    }
+
+                    // .x = std.math.cast(size.CellCountInt, v.x - 1) orelse break :intersect_cell_z,
+                    let cx = match size::CellCountInt::try_from(x - 1) {
+                        Ok(v) => v,
+                        Err(_) => break 'delete,
+                    };
+                    // .y = std.math.cast(size.CellCountInt, v.y - 1) orelse break :intersect_cell_z,
+                    let cy = match size::CellCountInt::try_from(y - 1) {
+                        Ok(v) => v as u32,
+                        Err(_) => break 'delete,
+                    };
+                    let p = point::Point::Active(point::Coordinate { x: cx, y: cy });
+                    // struct { fn filter(ctx: i32, p: Placement) bool { return p.z == ctx; } }.filter
+                    self.delete_intersecting(alloc, t, p, delete, move |placement| {
+                        placement.z == z
+                    });
+                }
+
+                #[allow(clippy::absurd_extreme_comparisons)]
+                command::Delete::Column { delete, x } => {
+                    if x <= 0 {
+                        // log.warn("delete column must be greater than zero", .{});
+                        break 'delete;
+                    }
+
+                    let x = x - 1;
+                    let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+                    for key in keys {
+                        let img = match self.image_by_id(key.image_id) {
+                            Some(img) => img,
+                            None => continue,
+                        };
+                        let rect = match self.placements.get(&key).unwrap().rect(&img, t) {
+                            Some(r) => r,
+                            None => continue,
+                        };
+                        if rect.top_left.x as u32 <= x && rect.bottom_right.x as u32 >= x {
+                            self.placements
+                                .get(&key)
+                                .unwrap()
+                                .deinit(unsafe { &mut *t.screens.active });
+                            self.placements.remove(&key);
+                            if delete {
+                                self.delete_if_unused(alloc, img.id);
+                            }
                         }
                     }
                 }
-            }
 
-            #[allow(clippy::absurd_extreme_comparisons)]
-            command::Delete::Row { delete, y } => {
-                if y <= 0 {
-                    // log.warn("delete row must be greater than zero", .{});
-                    return;
-                }
+                #[allow(clippy::absurd_extreme_comparisons)]
+                command::Delete::Row { delete, y } => {
+                    if y <= 0 {
+                        // log.warn("delete row must be greater than zero", .{});
+                        break 'delete;
+                    }
 
-                // v.y is in active coords so we want to convert it to a pin
-                // so we can compare by page offsets.
-                let ty = match size::CellCountInt::try_from(y - 1) {
-                    Ok(v) => v,
-                    Err(_) => return,
-                };
-                let target_pin = match unsafe { &(*t.screens.active).pages }.pin(
-                    point::Point::Active(point::Coordinate { x: 0, y: ty as u32 }),
-                ) {
-                    Some(p) => p,
-                    None => return,
-                };
-
-                let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
-                for key in keys {
-                    let img = match self.image_by_id(key.image_id) {
-                        Some(img) => img,
-                        None => continue,
+                    // v.y is in active coords so we want to convert it to a pin
+                    // so we can compare by page offsets.
+                    let ty = match size::CellCountInt::try_from(y - 1) {
+                        Ok(v) => v,
+                        Err(_) => break 'delete,
                     };
-                    let rect = match self.placements.get(&key).unwrap().rect(&img, t) {
-                        Some(r) => r,
-                        None => continue,
+                    let target_pin = match unsafe { &(*t.screens.active).pages }.pin(
+                        point::Point::Active(point::Coordinate { x: 0, y: ty as u32 }),
+                    ) {
+                        Some(p) => p,
+                        None => break 'delete,
                     };
 
-                    // We need to copy our pin to ensure we are at least at
-                    // the top-left x.
-                    let mut target_pin_copy = target_pin;
-                    target_pin_copy.x = rect.top_left.x;
-                    if target_pin_copy.is_between(rect.top_left, rect.bottom_right) {
-                        self.placements
-                            .get(&key)
-                            .unwrap()
-                            .deinit(unsafe { &mut *t.screens.active });
-                        self.placements.remove(&key);
-                        if delete {
-                            self.delete_if_unused(alloc, img.id);
+                    let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+                    for key in keys {
+                        let img = match self.image_by_id(key.image_id) {
+                            Some(img) => img,
+                            None => continue,
+                        };
+                        let rect = match self.placements.get(&key).unwrap().rect(&img, t) {
+                            Some(r) => r,
+                            None => continue,
+                        };
+
+                        // We need to copy our pin to ensure we are at least at
+                        // the top-left x.
+                        let mut target_pin_copy = target_pin;
+                        target_pin_copy.x = rect.top_left.x;
+                        if target_pin_copy.is_between(rect.top_left, rect.bottom_right) {
+                            self.placements
+                                .get(&key)
+                                .unwrap()
+                                .deinit(unsafe { &mut *t.screens.active });
+                            self.placements.remove(&key);
+                            if delete {
+                                self.delete_if_unused(alloc, img.id);
+                            }
                         }
                     }
                 }
-            }
 
-            command::Delete::Z { delete, z } => {
-                let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
-                for key in keys {
-                    match self.placements.get(&key).unwrap().location {
-                        Location::Pin(_) => {}
+                command::Delete::Z { delete, z } => {
+                    let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+                    for key in keys {
+                        match self.placements.get(&key).unwrap().location {
+                            Location::Pin(_) => {}
 
-                        // Virtual placeholders cannot delete by z according
-                        // to the spec.
-                        Location::Virtual => continue,
-                    }
+                            // Virtual placeholders cannot delete by z according
+                            // to the spec.
+                            Location::Virtual => continue,
+                        }
 
-                    if self.placements.get(&key).unwrap().z == z {
-                        let image_id = key.image_id;
-                        self.placements
-                            .get(&key)
-                            .unwrap()
-                            .deinit(unsafe { &mut *t.screens.active });
-                        self.placements.remove(&key);
-                        if delete {
-                            self.delete_if_unused(alloc, image_id);
+                        if self.placements.get(&key).unwrap().z == z {
+                            let image_id = key.image_id;
+                            self.placements
+                                .get(&key)
+                                .unwrap()
+                                .deinit(unsafe { &mut *t.screens.active });
+                            self.placements.remove(&key);
+                            if delete {
+                                self.delete_if_unused(alloc, image_id);
+                            }
                         }
                     }
                 }
-            }
 
-            #[allow(clippy::absurd_extreme_comparisons)]
-            command::Delete::Range {
-                delete,
-                first,
-                last,
-            } => {
-                if first <= 0 || last <= 0 {
-                    // log.warn("delete range values must be greater than zero", .{});
-                    return;
-                }
-                if first > last {
-                    // log.warn("delete range 'x' ({}) must be less than or equal to 'y' ({})", .{ v.first, v.last });
-                    return;
-                }
+                #[allow(clippy::absurd_extreme_comparisons)]
+                command::Delete::Range {
+                    delete,
+                    first,
+                    last,
+                } => {
+                    if first <= 0 || last <= 0 {
+                        // log.warn("delete range values must be greater than zero", .{});
+                        break 'delete;
+                    }
+                    if first > last {
+                        // log.warn("delete range 'x' ({}) must be less than or equal to 'y' ({})", .{ v.first, v.last });
+                        break 'delete;
+                    }
 
-                let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
-                for key in keys {
-                    if key.image_id >= first || key.image_id <= last {
-                        let image_id = key.image_id;
-                        self.placements
-                            .get(&key)
-                            .unwrap()
-                            .deinit(unsafe { &mut *t.screens.active });
-                        self.placements.remove(&key);
-                        if delete {
-                            self.delete_if_unused(alloc, image_id);
+                    let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+                    for key in keys {
+                        if key.image_id >= first || key.image_id <= last {
+                            let image_id = key.image_id;
+                            self.placements
+                                .get(&key)
+                                .unwrap()
+                                .deinit(unsafe { &mut *t.screens.active });
+                            self.placements.remove(&key);
+                            if delete {
+                                self.delete_if_unused(alloc, image_id);
+                            }
                         }
                     }
                 }
-            }
 
-            // We don't support animation frames yet so they are successfully
-            // deleted!
-            command::Delete::AnimationFrames(_) => {}
+                // We don't support animation frames yet so they are successfully
+                // deleted!
+                command::Delete::AnimationFrames(_) => {}
+            }
         }
 
         if self.placements.len() != placements_before || self.images.len() != images_before {

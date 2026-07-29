@@ -3379,7 +3379,7 @@ mod tests {
             });
 
             let mut graphics: KittyGraphics = core::ptr::null_mut();
-            let mut refresh = |t: terminal_c::Terminal, graphics: &mut KittyGraphics| {
+            let refresh = |t: terminal_c::Terminal, graphics: &mut KittyGraphics| {
                 assert_eq!(Result::Success, unsafe {
                     terminal_c::get(
                         t,
@@ -3497,7 +3497,11 @@ mod tests {
                 let img = unsafe { image_get_handle(graphics, 1) };
                 assert!(!img.is_null());
                 assert_eq!(Result::Success, unsafe {
-                    image_get(img, ImageData::Generation, &mut gen1 as *mut u64 as *mut c_void)
+                    image_get(
+                        img,
+                        ImageData::Generation,
+                        &mut gen1 as *mut u64 as *mut c_void,
+                    )
                 });
                 assert_eq!(Result::Success, unsafe {
                     image_get(img, ImageData::Width, &mut w1 as *mut u32 as *mut c_void)
@@ -3535,7 +3539,11 @@ mod tests {
                 let mut h2: u32 = 0;
                 let mut len2: usize = 0;
                 assert_eq!(Result::Success, unsafe {
-                    image_get(img, ImageData::Generation, &mut gen2 as *mut u64 as *mut c_void)
+                    image_get(
+                        img,
+                        ImageData::Generation,
+                        &mut gen2 as *mut u64 as *mut c_void,
+                    )
                 });
                 assert_eq!(Result::Success, unsafe {
                     image_get(img, ImageData::Width, &mut w2 as *mut u32 as *mut c_void)
@@ -3606,7 +3614,13 @@ mod tests {
                 &mut generation as *mut u64 as *mut c_void,
             ];
             assert_eq!(Result::Success, unsafe {
-                image_get_multi(img, keys.len(), keys.as_ptr(), values.as_ptr(), &mut written)
+                image_get_multi(
+                    img,
+                    keys.len(),
+                    keys.as_ptr(),
+                    values.as_ptr(),
+                    &mut written,
+                )
             });
             assert_eq!(keys.len(), written);
             assert_eq!(1, id);
