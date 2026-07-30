@@ -115,6 +115,23 @@ else
   fail=1
 fi
 
+# WS20 added a SECOND rustty-os -> rustty-xev edge: `os/flatpak.zig`'s
+# FlatpakHostCommand names `xev.Loop`/`xev.Timer`/`xev.Completion` for `waitXev`.
+# It lives in the top-level [dependencies] (flatpak is a Linux tier, not macOS), so
+# it cannot be macOS-gated — it must instead be OPTIONAL and reachable only via the
+# `flatpak` feature, which is OFF by default. Otherwise every wasm artifact
+# inherits it, exactly as the macOS gate above prevents.
+if grep -q '^rustty-xev = { workspace = true, optional = true }' crates/rustty-os/Cargo.toml; then
+  if grep -q '^flatpak = \["dep:rustty-xev"\]' crates/rustty-os/Cargo.toml; then
+    echo "ok: rustty-os -> rustty-xev (flatpak) is optional + feature-gated, default-off"
+  else
+    echo "FAIL: rustty-os's optional rustty-xev dep is not reached via the flatpak feature."
+    fail=1
+  fi
+else
+  echo "note: rustty-os declares no optional rustty-xev dep (nothing to check)"
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo
   echo ">> xev reachability gate (G-XEVREACH): RED"

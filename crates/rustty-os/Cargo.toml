@@ -25,7 +25,12 @@ workspace = true
 # the block is excluded exactly as the reference excludes it when flatpak support
 # is disabled. It will be wired to the real `pty`/`flatpak` modules when those
 # groups land. No behavior is added or lost.
-flatpak = []
+#
+# WS20: the feature now pulls in `rustty-xev` — `os/flatpak.zig`'s `FlatpakHostCommand`
+# imports `xev = @import("../global.zig").xev` for `waitXev`/`Completion.c_xev`, so the
+# real libxev types must be in scope (the `rustty_global::xev` anchor is `()`). Acyclic:
+# rustty-xev depends only on { rustty-global, libc }, strictly below rustty-os.
+flatpak = ["dep:rustty-xev"]
 # The pre-`9dc2e5978` `os/wasm.zig` host-ownership allocation tracker
 # (malloc/free/toHostOwned/isHostOwned/toModuleOwned). Resurrected reference code,
 # needed by `font/Atlas.zig`'s `Wasm` block; OFF by default so the desktop build is
@@ -54,6 +59,10 @@ allocator-api2 = { workspace = true }
 # retained arena node in place exactly like the reference. Acyclic: rustty-zigstd
 # depends only on rustty-util + allocator-api2 — strictly below rustty-os.
 rustty-zigstd = { workspace = true }
+# The libxev backend for `os/flatpak.zig`'s `FlatpakHostCommand.waitXev` (WS20).
+# Optional + enabled by the `flatpak` feature, exactly as the reference gates the
+# whole GIO host-command path behind `build_config.flatpak`.
+rustty-xev = { workspace = true, optional = true }
 
 # Raw FFI bindings to the platform libc (syscalls/constants used across os/*).
 # R3: `libc` binds the SAME system library the reference's Zig `std.c`/`std.posix`

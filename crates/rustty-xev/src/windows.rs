@@ -386,6 +386,21 @@ pub mod kernel32 {
     extern "system" {
         pub fn GetLastError() -> DWORD;
         pub fn CloseHandle(hObject: HANDLE) -> BOOL;
+        // WS20: named by `watcher/process.zig`'s `ProcessIocp` — `windows.kernel32
+        // .{GetCurrentProcess,DuplicateHandle,GetExitCodeProcess}`. In the
+        // reference these come from `std.os.windows.kernel32`, which the
+        // reference's own `windows.zig` re-exports wholesale.
+        pub fn GetCurrentProcess() -> HANDLE;
+        pub fn DuplicateHandle(
+            hSourceProcessHandle: HANDLE,
+            hSourceHandle: HANDLE,
+            hTargetProcessHandle: HANDLE,
+            lpTargetHandle: *mut HANDLE,
+            dwDesiredAccess: DWORD,
+            bInheritHandle: BOOL,
+            dwOptions: DWORD,
+        ) -> BOOL;
+        pub fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *mut DWORD) -> BOOL;
         pub fn CreateIoCompletionPort(
             FileHandle: HANDLE,
             ExistingCompletionPort: HANDLE,

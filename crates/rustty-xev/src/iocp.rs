@@ -1468,6 +1468,26 @@ impl queue::Node for Completion {
 }
 
 impl Completion {
+    /// PORT NOTE (WS20): the `c.* = .{ .op, .userdata, .callback }` initialization
+    /// the watcher `wait`/`run`/`read`/`write`/`close` methods perform — a FULL
+    /// reset with the internal fields (`next`/`result`/`flags`/`overlapped`/
+    /// `loop_`) taking their `Default` values. Exposed `pub(crate)` so the sibling
+    /// `iocp_watcher` module can build a completion without seeing the
+    /// module-private internal fields (Zig accesses those freely within the
+    /// package). Mirrors `kqueue::Completion::new_op`.
+    pub(crate) fn new_op(
+        op: Operation,
+        userdata: *mut core::ffi::c_void,
+        callback: Callback,
+    ) -> Completion {
+        Completion {
+            op,
+            userdata,
+            callback,
+            ..Completion::default()
+        }
+    }
+
     /// Returns the state of this completion. There are some things to be cautious
     /// about when calling this function.
     ///
@@ -2345,6 +2365,10 @@ mod tests {
         assert!(unsafe { Completion::state(&mut c1) } == CompletionState::Active);
         assert!(unsafe { Completion::state(&mut c2) } == CompletionState::Active);
 
+        // (WS20: `called` IS mutated — by `set_bool_cb` through the raw `*mut bool`
+        // userdata the loop hands back; clippy cannot see across the trampoline.
+        // This is the reference's own `while (!called) try loop.run(.no_wait);`.)
+        #[allow(clippy::while_immutable_condition)]
         while !called {
             l.run(RunMode::NoWait).unwrap();
         }

@@ -569,6 +569,25 @@ recovery + `CancelIoEx` cancellation on Windows. The reference's own tests are
 ported (`xev_wasi_poll` zig=8/rust=9, `xev_iocp` zig=14/rust=14, both gated by
 `check_test_counts.py`) — they compile, they have simply never executed.
 
+**[WS20 UPDATE] the WATCHER layer is now in the same boat, and is the larger
+half.** `iocp_watcher.rs` and `wasi_watcher.rs` (the
+`watcher/{async,timer,process,stream}.zig` monomorphizations — see the struck
+DEFERRALS row) carry the reference's `AsyncTests` (3), `TimerTests` (5),
+`ProcessTests` (2, iocp only) and `GenericStreamTests` (4) as documented
+skip-stub `#[test]`s: **14 on iocp, 12 on wasi_poll**. They compile for their
+targets and hold the count; none has run. The `GenericStreamTests` pty pair/trio
+are skipped by the REFERENCE ITSELF outside `.linux`/`.macos`
+(`else => return error.SkipZigTest`), so only `Stream decls` (a comptime
+assertion, discharged by compiling) is genuinely inert there. Filling the
+remaining stubs is the same Windows/WASI-host job as the loop stubs below —
+do them in one pass on the same runner.
+Additional commands run here and GREEN:
+```
+cargo clippy -p rustty-xev --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+cargo clippy -p rustty-xev --target wasm32-wasip1          --all-targets -- -D warnings
+```
+
+
 **Recipe — wasi_poll (any host with a wasm runtime):**
 ```
 rustup target add wasm32-wasip1
@@ -743,3 +762,44 @@ actually `freetype_windows`, then check the discovered `DeferredFace` loads and 
 **Negative control:** ask for a family that is definitely absent (e.g. `"Nonexistent
 Family QQQ"`) and confirm the iterator yields `None` rather than the first font on disk —
 a passing `Arial` lookup alone does not prove the family filter works.
+## V12. `rustty-termio` + `rustty-os` `flatpak` feature: cross-compile-verified only, never EXECUTED — **OWNER: WS20**
+
+**Filed WS20, 2026-07-30.** The whole flatpak host-command tier is PORTED and now
+WIRED (see the struck "Flatpak comptime-false branches" row in `DEFERRALS.md` —
+treating `build_config.flatpak` as a `const false` dead branch was wrong;
+`-Dflatpak` is a real ghostty build option). This row is the honest remainder.
+
+**What WAS run here, and passed:**
+```
+cargo check  -p rustty-os     --features flatpak
+cargo clippy -p rustty-os     --features flatpak --all-targets -- -D warnings
+cargo check  -p rustty-termio --features flatpak --all-targets
+cargo clippy -p rustty-termio --features flatpak --all-targets -- -D warnings
+```
+
+**What is NOT shown.** Nothing in the path can execute on macOS: it links
+GIO/GLib and talks to `org.freedesktop.Flatpak.Development` over the session bus.
+Unproven: that `HostCommandSpawn` returns a pid, that the `HostCommandExited`
+signal subscription fires `onExit`, that `waitXev`'s 0ms timer delivers the exit
+code into `flatpakExit` -> `processExitCommon` -> the surface mailbox, and that
+`killCommandFlatpak`'s `HostCommandSignal(SIGHUP)` reaches the child.
+
+**Recipe (a Linux host inside a flatpak sandbox, or a container with the
+`Development` portal):**
+```
+# on Linux, with libgio-2.0/libglib-2.0 dev packages present:
+cargo check -p rustty-termio --features flatpak --all-targets
+cargo build -p rustty-termio --features flatpak         # proves the GIO link
+# then, INSIDE a flatpak sandbox (/.flatpak-info present):
+cargo test  -p rustty-termio --features flatpak
+```
+Then drive the end-to-end path: launch a surface inside the sandbox, confirm the
+log line `started subcommand on host via flatpak API path=... pid=...`, confirm
+the shell is reachable, then exit it and confirm the surface receives
+`child_exited` with the right code (that exercises `onExit`'s
+`if (state.completion)` xev wake, which was MISSING before WS20 and is the single
+most likely place for a regression). **Negative control:** make
+`FlatpakHostCommand::signal` return `Ok(())` without the DBus call and confirm
+closing the surface HANGS — a passing run with a no-op signal would prove
+nothing.
+

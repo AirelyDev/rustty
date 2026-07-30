@@ -100,18 +100,29 @@ const TERMIOS_POLL_MS: u64 = 200;
 //     pub const Completion = struct {};
 // } else internal_os.FlatpakHostCommand;
 //
-// PORT NOTE: `build_config.flatpak` is const `false` in this build
-// (rustty-build-config), so the comptime selection resolves to the zero-size
-// fallback here; the real `internal_os.FlatpakHostCommand` (Linux flatpak DBus
-// spawn) re-binds when that tier lands (DEFERRALS.md). The flatpak-gated
-// branches below are `comptime`-false in the reference and preserved verbatim
-// as comments.
+// PORT NOTE (WS20): `build_config.flatpak` is the real `-Dflatpak` ghostty build
+// option, so BOTH arms of this comptime selection are live. The Rust map of the
+// comptime `if` is the crate's `flatpak` CARGO FEATURE (see Cargo.toml): with it
+// ON this binds the fully-ported `internal_os.FlatpakHostCommand`
+// (`rustty-os/src/flatpak.rs` — GIO/DBus host spawn + `waitXev` + `signal`), with
+// it OFF the zero-size fallback, exactly as the reference's `struct { pub const
+// Completion = struct {}; }`.
+#[cfg(feature = "flatpak")]
+pub use rustty_os::flatpak::FlatpakHostCommand;
+#[cfg(not(feature = "flatpak"))]
 pub struct FlatpakHostCommand {}
 
 /// `FlatpakHostCommand.Completion` (nested type, hoisted to module level —
 /// zero-size in the non-flatpak build).
+#[cfg(feature = "flatpak")]
+pub use rustty_os::flatpak::Completion as FlatpakHostCommandCompletion;
+#[cfg(not(feature = "flatpak"))]
 #[derive(Default)]
 pub struct FlatpakHostCommandCompletion {}
+
+/// `FlatpakHostCommand.WaitError` — the `flatpakExit` callback's result error.
+#[cfg(feature = "flatpak")]
+pub use rustty_os::flatpak::WaitError as FlatpakHostCommandWaitError;
 
 /// PORT NOTE (Rust-only glue): the reference `init` error set is inferred
 /// (`!Exec`): shell_integration's error (the bash HISTFILE homedir path) +
@@ -587,9 +598,9 @@ impl Exec {
         //     }
         // }
         //
-        // (PORT NOTE: `build_config.flatpak` is const false — the `else if` flatpak arm
-        // + `flatpakExit` are comptime-elided, exactly as Zig's lazy compilation
-        // leaves them; verbatim in the reference blocks above.)
+        // (PORT NOTE (WS20): filled in. `comptime build_config.flatpak` is the
+        // `flatpak` cargo feature; with it off the `else if` arm is compiled out
+        // exactly as Zig's lazy compilation leaves it.)
         if let Some(p) = process {
             // SAFETY: `td.loop_`/`process_wait_c`/`td_ptr` are all valid, stable
             // pointers held raw by the loop across ticks.
@@ -600,6 +611,24 @@ impl Exec {
                     td_ptr,
                     Self::processExit::<M>,
                 );
+            }
+        } else {
+            #[cfg(feature = "flatpak")]
+            // switch (self.subprocess.process orelse break :flatpak) { ... }
+            if let Some(proc) = self.subprocess.process.as_mut() {
+                match proc {
+                    // If we're in flatpak and we have a flatpak command
+                    // then we can run the special flatpak logic for watching.
+                    Process::Flatpak(c) => unsafe {
+                        c.waitXev(
+                            td.loop_,
+                            std::ptr::addr_of_mut!((*exec_ptr).flatpak_wait_c),
+                            td_ptr.cast::<core::ffi::c_void>(),
+                            Self::flatpakExit::<M>,
+                        );
+                    },
+                    Process::ForkExec(_) => {}
+                }
             }
         }
 
@@ -861,9 +890,11 @@ impl Exec {
         self.subprocess.resize(grid_size, screen_size)
     }
 
-    // DEFERRED (D6 — called only from the xev processExit/flatpakExit
-    // callbacks; pushes to the opaque-Timeout AppMailbox seam). Preserved
-    // verbatim:
+    // [WS20] STALE HEADER STRUCK: this said "DEFERRED (D6 — called only from the
+    // xev processExit/flatpakExit callbacks; ...)", but `processExitCommon`,
+    // `processExit` and (WS20) `flatpakExit` are all LIVE below and are wired
+    // from `threadEnter`. What follows is only the verbatim reference source the
+    // live bodies were ported from:
     //
     // fn processExitCommon(td: *termio.Termio.ThreadData, exit_code: u32) void {
     //     assert(td.backend == .exec);
@@ -999,10 +1030,10 @@ impl Exec {
     //     return .disarm;
     // }
     //
-    // The three exit / termios callbacks below fill the verbatim reference bodies
-    // preserved in the comment block above. `flatpakExit` stays a comment
-    // (uninstantiated — its only caller is the comptime-`false` flatpak arm of
-    // `threadEnter`, matching Zig lazy compilation). Userdata is termio's
+    // The four exit / termios callbacks below fill the verbatim reference bodies
+    // preserved in the comment block above. [WS20] `flatpakExit` is now LIVE too
+    // (gated on the `flatpak` cargo feature = `comptime build_config.flatpak`,
+    // matching Zig lazy compilation). Userdata is termio's
     // `ThreadData<M>` (the reference `termio.Termio.ThreadData`), so these are
     // generic over `M` and reference it via `Self::processExit::<M>` etc.
 
@@ -1074,6 +1105,34 @@ impl Exec {
         Self::processExitCommon::<M>(td_, exit_code);
         // return .disarm;
         xev::CallbackAction::Disarm
+    }
+
+    // fn flatpakExit(
+    //     td_: ?*termio.Termio.ThreadData,
+    //     _: *xev.Loop,
+    //     _: *FlatpakHostCommand.Completion,
+    //     r: FlatpakHostCommand.WaitError!u8,
+    // ) void
+    //
+    // PORT NOTE (WS20): filled in. The userdata arrives as the `?*anyopaque` the
+    // `os/flatpak.zig` `Completion.callback` signature carries, so the typed
+    // `ThreadData<M>` pointer is recovered by cast exactly as the reference's
+    // `waitXev` trampoline does. `#[cfg(feature = "flatpak")]` because its only
+    // caller is the `comptime build_config.flatpak` arm of `threadEnter`.
+    #[cfg(feature = "flatpak")]
+    fn flatpakExit<M: rustty_apprt_api::surface::AppMailbox + 'static>(
+        td_: *mut core::ffi::c_void,
+        _l: *mut xev::Loop,
+        _c: *mut FlatpakHostCommandCompletion,
+        r: core::result::Result<u8, FlatpakHostCommandWaitError>,
+    ) {
+        // const exit_code = r catch unreachable;
+        let exit_code = r.unwrap();
+        // processExitCommon(td_.?, exit_code);
+        Self::processExitCommon::<M>(
+            td_.cast::<crate::termio_impl::ThreadData<M>>(),
+            exit_code as u32,
+        );
     }
 
     // fn termiosTimer(
@@ -2722,10 +2781,66 @@ impl Subprocess {
             // const cwd: ?[:0]const u8 = if (self.cwd) |proposed| cwd: {
             let cwd: Option<&[u8]> = if let Some(proposed) = &self.cwd {
                 // if ((comptime build_config.flatpak) and internal_os.isFlatpak()) {
-                //     ... flatpak test-spawn to verify cwd access ...
+                //     // Flatpak sandboxing prevents access to certain reserved paths
+                //     // regardless of configured permissions. Perform a test spawn
+                //     // to get around this problem
+                //     //
+                //     // https://docs.flatpak.org/en/latest/sandbox-permissions.html#reserved-paths
+                //     log.info("flatpak detected, will use host command to verify cwd access", .{});
+                //     const dev_null = try std.fs.cwd().openFile("/dev/null", .{ .mode = .read_write });
+                //     defer dev_null.close();
+                //     var cmd: internal_os.FlatpakHostCommand = .{
+                //         .argv = &[_][]const u8{ "/bin/sh", "-c", ":" },
+                //         .cwd = proposed,
+                //         .stdin = dev_null.handle, .stdout = dev_null.handle, .stderr = dev_null.handle,
+                //     };
+                //     _ = cmd.spawn(alloc) catch |err| {
+                //         log.warn("cannot spawn command at cwd, ignoring: {}", .{err});
+                //         break :cwd null;
+                //     };
+                //     _ = try cmd.wait();
+                //     break :cwd proposed;
                 // }
-                // (build_config.flatpak is const false -> this comptime-false
-                // branch is compiled out; verbatim in the reference block above.)
+                //
+                // (PORT NOTE (WS20): filled in. `comptime build_config.flatpak` is the
+                // `flatpak` cargo feature; with it off the block is compiled out.)
+                // (PORT NOTE: Zig's `break :cwd` out of the middle of the block maps
+                // to an `Option<Option<..>>` short-circuit: `Some(v)` == the labelled
+                // break took the value `v`, `None` == fall through to the `access`
+                // check below.)
+                #[cfg(feature = "flatpak")]
+                let flatpak_cwd: Option<Option<&[u8]>> = if rustty_os::flatpak::isFlatpak() {
+                    // log.info("flatpak detected, will use host command to verify cwd access", .{});
+                    // const dev_null = try ... openFile("/dev/null", .{ .mode = .read_write });
+                    let dev_null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR) };
+                    let mut cmd = rustty_os::flatpak::FlatpakHostCommand::default();
+                    cmd.argv = vec!["/bin/sh".to_string(), "-c".to_string(), ":".to_string()];
+                    cmd.cwd = Some(proposed.clone());
+                    cmd.stdin = dev_null;
+                    cmd.stdout = dev_null;
+                    cmd.stderr = dev_null;
+                    // _ = cmd.spawn(alloc) catch |err| { ...; break :cwd null; };
+                    let spawned = cmd.spawn().is_ok();
+                    // _ = try cmd.wait();
+                    if spawned {
+                        let _ = cmd.wait();
+                    }
+                    // defer dev_null.close();
+                    if dev_null >= 0 {
+                        unsafe { libc::close(dev_null) };
+                    }
+                    Some(if spawned {
+                        // break :cwd proposed;
+                        Some(proposed.to_bytes())
+                    } else {
+                        // log.warn("cannot spawn command at cwd, ignoring: {}", .{err});
+                        None
+                    })
+                } else {
+                    None
+                };
+                #[cfg(not(feature = "flatpak"))]
+                let flatpak_cwd: Option<Option<&[u8]>> = None;
 
                 // if (std.fs.cwd().access(proposed, .{})) {
                 //     break :cwd proposed;
@@ -2733,7 +2848,9 @@ impl Subprocess {
                 //     log.warn("cannot access cwd, ignoring: {}", .{err});
                 //     break :cwd null;
                 // }
-                if unsafe { libc::access(proposed.as_ptr(), libc::F_OK) } == 0 {
+                if let Some(v) = flatpak_cwd {
+                    v
+                } else if unsafe { libc::access(proposed.as_ptr(), libc::F_OK) } == 0 {
                     Some(proposed.to_bytes())
                 } else {
                     // log.warn("cannot access cwd, ignoring: {}", .{err});
@@ -2750,9 +2867,54 @@ impl Subprocess {
                 //     log.warn("flatpak detected, but flatpak support not built-in", .{});
                 //     break :flatpak;
                 // }
-                // (build_config.flatpak is const false -> the comptime-true
-                // branch: warn + break; the comptime-false HostCommand spawn is
-                // compiled out — verbatim in the reference block above.)
+                //
+                // (PORT NOTE (WS20): `comptime !build_config.flatpak` is
+                // `#[cfg(not(feature = "flatpak"))]`; with the option OFF this is
+                // the warn + break, with it ON the HostCommand spawn below.)
+
+                // Flatpak command must have a stable pointer.
+                // self.process = .{ .flatpak = .{ .argv = self.args, .cwd = cwd,
+                //     .env = if (self.env) |*env| env else null,
+                //     .stdin = pty.slave, .stdout = pty.slave, .stderr = pty.slave } };
+                // var cmd = &self.process.?.flatpak;
+                // const pid = try cmd.spawn(alloc);
+                // errdefer killCommandFlatpak(cmd);
+                // log.info("started subcommand on host via flatpak API path={s} pid={}", .{ self.args[0], pid });
+                // return .{ .read = pty.master, .write = pty.master };
+                #[cfg(feature = "flatpak")]
+                {
+                    let mut fcmd = rustty_os::flatpak::FlatpakHostCommand::default();
+                    fcmd.argv = self
+                        .args
+                        .iter()
+                        .map(|a| String::from_utf8_lossy(a.to_bytes()).into_owned())
+                        .collect();
+                    fcmd.cwd = cwd.map(|c| std::ffi::CString::new(c).unwrap());
+                    fcmd.env = self.env.clone();
+                    fcmd.stdin = slave;
+                    fcmd.stdout = slave;
+                    fcmd.stderr = slave;
+                    self.process = Some(Process::Flatpak(fcmd));
+                    // `var cmd = &self.process.?.flatpak;` — the STABLE pointer the
+                    // reference's comment demands (spawn's documented precondition).
+                    let Some(Process::Flatpak(cmd)) = self.process.as_mut() else {
+                        unreachable!()
+                    };
+                    match cmd.spawn() {
+                        Ok(_pid) => {
+                            // log.info("started subcommand on host via flatpak API ...");
+                        }
+                        Err(_) => {
+                            // errdefer killCommandFlatpak(cmd);
+                            let _ = killCommandFlatpak(cmd);
+                            return Err(crate::Error);
+                        }
+                    }
+                    return Ok(PtyFds {
+                        read: master,
+                        write: master,
+                    });
+                }
             }
 
             // [ADV-FIX F3] the pty.slave File is NON-owning: `Command` reads only
@@ -2987,9 +3149,19 @@ impl Subprocess {
                 //         log.err("error waiting for command to exit: {}", .{err});
                 // },
                 //
-                // (PORT NOTE: `build_config.flatpak` is const false — the comptime-
-                // false arm body is compiled out, exactly as Zig's lazy
-                // compilation leaves it unanalyzed; verbatim above.)
+                // (PORT NOTE (WS20): filled in. The `if (comptime build_config.flatpak)`
+                // guard is the `flatpak` cargo feature; with the feature off the arm
+                // body is compiled out exactly as Zig's lazy compilation leaves it.)
+                #[cfg(feature = "flatpak")]
+                Process::Flatpak(cmd) => {
+                    if killCommandFlatpak(cmd).is_err() {
+                        // log.err("error sending SIGHUP to command, may hang: {}", .{err});
+                    }
+                    if cmd.wait().is_err() {
+                        // log.err("error waiting for command to exit: {}", .{err});
+                    }
+                }
+                #[cfg(not(feature = "flatpak"))]
                 Process::Flatpak(_cmd) => {}
             }
         } else {
@@ -3452,14 +3624,22 @@ fn getpgid(pid: libc::pid_t) -> Option<libc::pid_t> {
 //     try command.signal(c.SIGHUP, true);
 // }
 //
-// PORT NOTE: `build_config.flatpak` is const false, so the reference never
-// instantiates this (Zig lazy compilation; its only callers sit in comptime-
-// false branches). The verbatim body binds `internal_os.FlatpakHostCommand`'s
-// signal API, which lands with the Linux/flatpak tier (DEFERRALS.md).
+// PORT NOTE (WS20): filled in. `internal_os.FlatpakHostCommand.signal` is fully
+// ported (`rustty-os/src/flatpak.rs`), so this is the reference body verbatim.
+// It is `#[cfg(feature = "flatpak")]` for exactly the reason the reference's
+// callers are `comptime build_config.flatpak`-gated: with the option off, the
+// `FlatpakHostCommand` type is the empty placeholder and has no `signal`.
+#[cfg(feature = "flatpak")]
 #[allow(dead_code)]
-fn killCommandFlatpak(_command: &mut FlatpakHostCommand) -> Result<(), crate::Error> {
-    unimplemented!("flatpak build-config branch (const false); verbatim body above")
+fn killCommandFlatpak(command: &mut FlatpakHostCommand) -> Result<(), crate::Error> {
+    // try command.signal(c.SIGHUP, true);
+    command.signal(SIGHUP as u8, true).map_err(|_| crate::Error)
 }
+
+/// PORT NOTE: `c.SIGHUP` — the reference `@cImport`s `signal.h`. Hand-rolled per
+/// repo convention (the `libc` crate is not a dependency of this crate).
+#[cfg(feature = "flatpak")]
+const SIGHUP: i32 = 1;
 
 /// The read thread sits in a loop doing the following pseudo code:
 ///
