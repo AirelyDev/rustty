@@ -2126,4 +2126,256 @@ mod tests {
         lib.deinit();
         Ok(())
     }
+
+    /// The negative control for the two resize KATs, made PERMANENT and
+    /// machine-checked instead of procedural.
+    ///
+    /// Tasks 4-5 established that the KATs discriminate by having a human re-apply a
+    /// nearest-neighbour substitution at the `stbir_resize_uint8` call site and watch
+    /// them go red. That evidence evaporates after the commit. This test bakes it in:
+    /// it recomputes nearest-neighbour and bilinear resamplings of the SAME source
+    /// strikes inside the test and asserts the fixtures REJECT them, with the measured
+    /// delta magnitudes as the assertion. If someone later loosens a KAT to a
+    /// tolerance, this fails.
+    ///
+    /// It also asserts the tolerated cross-toolchain envelope is DISJOINT from a wrong
+    /// resampler: the envelope D10 allows for ghostty's `ReleaseFast` build is max
+    /// delta 1 on <= 2 % of bytes, and a +1-on-2 % perturbation of a fixture is shown
+    /// to satisfy it — so the two bands cannot overlap.
+    ///
+    /// THRESHOLDS ARE PER-CASE AND MEASURED, not uniform. The grayscale strike is MONO
+    /// (num_grays = 2, so stb reads and writes 0/1 and `freetype.rs` multiplies by 255
+    /// afterwards — see `src/testdata/README.stb-resize.md` TRAP 2), which rounds a
+    /// wrong resampler's fractional output back onto the source values. So the
+    /// grayscale case has a small differing-byte COUNT at a huge delta, while the
+    /// 8-bit BGRA case moves most of the image:
+    ///
+    ///   gray 16x17  vs nearest   11/272 ( 4.0 %) maxdelta=255
+    ///               vs bilinear   2/272 ( 0.7 %) maxdelta=255
+    ///   BGRA 16x15  vs nearest  597/960 (62.2 %) maxdelta=210
+    ///               vs bilinear 575/960 (59.9 %) maxdelta=108
+    ///
+    /// (Those BGRA figures are 1-3 bytes off the ones in
+    /// `src/testdata/README.stb-resize.md`, which derives the source strike from the
+    /// dumped PRE-resize FT bitmap. This test recovers it from the atlas after an
+    /// UNCONSTRAINED render, which still passes through the resize call at scale 1.0 —
+    /// and stb at scale 1.0 is not bit-exactly the identity for 4 interleaved channels.
+    /// Both sets of numbers are real; the margins are unaffected.)
+    ///
+    /// (For completeness: gray 8x17 vs bilinear is 0/136 — INDISTINGUISHABLE. That is
+    /// why the BGRA KAT exists and why this test asserts the >50 %-of-bytes margin only
+    /// on the BGRA case.)
+    #[test]
+    fn stb_resize_kat_rejects_nearest_and_bilinear() -> Result<(), Error> {
+        const KAT_GRAY_16X17: &[u8] =
+            include_bytes!("../testdata/stb_resize_terminus_i_gray_16x17.bin");
+        const KAT_BGRA_16X15: &[u8] = include_bytes!("../testdata/stb_resize_emoji_bgra_16x15.bin");
+
+        /// The exact substitution that left all 9 pre-WS11 tests green.
+        fn nearest(src: &[u8], sw: usize, sh: usize, ow: usize, oh: usize, c: usize) -> Vec<u8> {
+            let mut out = Vec::with_capacity(ow * oh * c);
+            for oy in 0..oh {
+                let sy = oy * sh / oh;
+                for ox in 0..ow {
+                    let sx = ox * sw / ow;
+                    for ch in 0..c {
+                        out.push(src[(sy * sw + sx) * c + ch]);
+                    }
+                }
+            }
+            out
+        }
+
+        /// A plausible near-miss: pixel-centre mapping, clamped edges, 2 taps. stb's
+        /// default is a wider Mitchell/Catmull-Rom kernel.
+        fn bilinear(src: &[u8], sw: usize, sh: usize, ow: usize, oh: usize, c: usize) -> Vec<u8> {
+            let at = |x: isize, y: isize, ch: usize| -> f64 {
+                let x = x.clamp(0, sw as isize - 1) as usize;
+                let y = y.clamp(0, sh as isize - 1) as usize;
+                src[(y * sw + x) * c + ch] as f64
+            };
+            let mut out = Vec::with_capacity(ow * oh * c);
+            for oy in 0..oh {
+                let fy = (oy as f64 + 0.5) * sh as f64 / oh as f64 - 0.5;
+                let y0 = fy.floor();
+                let wy = fy - y0;
+                for ox in 0..ow {
+                    let fx = (ox as f64 + 0.5) * sw as f64 / ow as f64 - 0.5;
+                    let x0 = fx.floor();
+                    let wx = fx - x0;
+                    for ch in 0..c {
+                        let (xi, yi) = (x0 as isize, y0 as isize);
+                        let v = at(xi, yi, ch) * (1.0 - wx) * (1.0 - wy)
+                            + at(xi + 1, yi, ch) * wx * (1.0 - wy)
+                            + at(xi, yi + 1, ch) * (1.0 - wx) * wy
+                            + at(xi + 1, yi + 1, ch) * wx * wy;
+                        out.push(v.round().clamp(0.0, 255.0) as u8);
+                    }
+                }
+            }
+            out
+        }
+
+        fn delta(a: &[u8], b: &[u8]) -> (usize, u8) {
+            assert_eq!(a.len(), b.len(), "delta() operands must be the same length");
+            let n = a.iter().zip(b).filter(|(x, y)| x != y).count();
+            let mx = a
+                .iter()
+                .zip(b)
+                .map(|(x, y)| x.abs_diff(*y))
+                .max()
+                .unwrap_or(0);
+            (n, mx)
+        }
+
+        // The tolerated cross-toolchain envelope, verbatim from gate D10.
+        const ENVELOPE_MAX_DELTA: u8 = 1;
+        const ENVELOPE_MAX_FRACTION: f64 = 0.02;
+        // The margin a WRONG resampler must clear to be unambiguously outside it.
+        const MARGIN_MIN_DELTA: u8 = 10;
+
+        let alloc = Global;
+        let mut lib = Library::init()?;
+
+        // ---------- grayscale: recover the 8x16 source strike -------------------
+        // The atlas holds it post-normalisation (0/255). stb itself sees the MONO
+        // 0/1 values, so a substituted resampler would too: divide by 255, resample,
+        // then re-apply the x255 factor, exactly as `freetype.rs` does.
+        let mut gray_atlas = Atlas::init(alloc, 512, Format::Grayscale)?;
+        let mut terminus = Face::init(lib, embedded::TERMINUS_TTF, opts(size(12.0, 96, 96)))?;
+        let src_glyph = terminus.render_glyph(
+            alloc,
+            &mut gray_atlas,
+            77,
+            RenderOptions {
+                grid_metrics: Metrics::calc(terminus.get_metrics()),
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(
+            (8, 16),
+            (src_glyph.width, src_glyph.height),
+            "source strike must be 8x16"
+        );
+        let mut gray_src = Vec::with_capacity(8 * 16);
+        for y in 0..16usize {
+            for x in 0..8usize {
+                let v = gray_atlas.data()[(src_glyph.atlas_y as usize + y)
+                    * gray_atlas.size() as usize
+                    + (src_glyph.atlas_x as usize + x)];
+                gray_src.push(v / 255); // back to the mono 0/1 values stb sees
+            }
+        }
+        terminus.deinit();
+        gray_atlas.deinit(alloc);
+
+        for (name, wrong) in [
+            ("nearest", nearest(&gray_src, 8, 16, 16, 17, 1)),
+            ("bilinear", bilinear(&gray_src, 8, 16, 16, 17, 1)),
+        ] {
+            let wrong: Vec<u8> = wrong.iter().map(|v| v.saturating_mul(255)).collect();
+            let (n, mx) = delta(KAT_GRAY_16X17, &wrong);
+            assert_ne!(
+                KAT_GRAY_16X17,
+                &wrong[..],
+                "gray 16x17: {name} must NOT equal the fixture"
+            );
+            assert!(
+                n > 0,
+                "gray 16x17 vs {name}: expected differing bytes, got 0"
+            );
+            assert!(
+                mx >= MARGIN_MIN_DELTA,
+                "gray 16x17 vs {name}: maxdelta {mx} < required margin {MARGIN_MIN_DELTA}                  (measured: 255 for both)"
+            );
+            // Disjoint from the tolerated envelope.
+            assert!(
+                !(mx <= ENVELOPE_MAX_DELTA
+                    && (n as f64) <= ENVELOPE_MAX_FRACTION * KAT_GRAY_16X17.len() as f64),
+                "gray 16x17 vs {name}: {n} bytes at maxdelta {mx} falls INSIDE the                  cross-toolchain envelope — the envelope cannot discriminate"
+            );
+        }
+
+        // ---------- BGRA: recover the 136x128 source strike ---------------------
+        // Unconstrained render, metrics from the emoji face itself — that is the
+        // identity path `color_emoji` takes, and here it is exactly what we want: the
+        // untouched source strike.
+        let mut bgra_atlas = Atlas::init(alloc, 512, Format::Bgra)?;
+        let mut emoji = Face::init(lib, embedded::EMOJI, opts(size(12.0, 96, 96)))?;
+        let idx = emoji
+            .glyph_index(0x1F600)
+            .expect("U+1F600 must be in NotoColorEmoji");
+        let src_glyph = emoji.render_glyph(
+            alloc,
+            &mut bgra_atlas,
+            idx,
+            RenderOptions {
+                grid_metrics: Metrics::calc(emoji.get_metrics()),
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(
+            (136, 128),
+            (src_glyph.width, src_glyph.height),
+            "unconstrained emoji render must be the raw 136x128 strike"
+        );
+        let mut bgra_src = Vec::with_capacity(136 * 128 * 4);
+        for y in 0..128usize {
+            for x in 0..136usize {
+                let i = ((src_glyph.atlas_y as usize + y) * bgra_atlas.size() as usize
+                    + (src_glyph.atlas_x as usize + x))
+                    * 4;
+                bgra_src.extend_from_slice(&bgra_atlas.data()[i..i + 4]);
+            }
+        }
+        emoji.deinit();
+        bgra_atlas.deinit(alloc);
+
+        for (name, wrong) in [
+            ("nearest", nearest(&bgra_src, 136, 128, 16, 15, 4)),
+            ("bilinear", bilinear(&bgra_src, 136, 128, 16, 15, 4)),
+        ] {
+            let (n, mx) = delta(KAT_BGRA_16X15, &wrong);
+            let frac = n as f64 / KAT_BGRA_16X15.len() as f64;
+            assert_ne!(
+                KAT_BGRA_16X15,
+                &wrong[..],
+                "BGRA 16x15: {name} must NOT equal the fixture"
+            );
+            assert!(
+                frac > 0.5,
+                "BGRA 16x15 vs {name}: only {n}/{} bytes ({:.1} %) differ, expected >50 % (measured: 62.2 % nearest, 59.9 % bilinear)",
+                KAT_BGRA_16X15.len(),
+                frac * 100.0
+            );
+            assert!(
+                mx >= MARGIN_MIN_DELTA,
+                "BGRA 16x15 vs {name}: maxdelta {mx} < required margin {MARGIN_MIN_DELTA}                  (measured: 210 nearest, 108 bilinear)"
+            );
+            assert!(
+                !(mx <= ENVELOPE_MAX_DELTA && frac <= ENVELOPE_MAX_FRACTION),
+                "BGRA 16x15 vs {name}: {n} bytes at maxdelta {mx} falls INSIDE the                  cross-toolchain envelope — the envelope cannot discriminate"
+            );
+        }
+
+        // ---------- and the envelope really does admit cross-toolchain noise ----
+        // A fixture perturbed by +1 on 2 % of its bytes MUST satisfy the envelope,
+        // which is what makes "outside the envelope" a meaningful rejection above
+        // rather than a threshold nothing could ever meet.
+        let mut noisy = KAT_BGRA_16X15.to_vec();
+        let step = (1.0 / ENVELOPE_MAX_FRACTION) as usize;
+        for i in (0..noisy.len()).step_by(step) {
+            noisy[i] = noisy[i].saturating_add(1);
+        }
+        let (n, mx) = delta(KAT_BGRA_16X15, &noisy);
+        let frac = n as f64 / noisy.len() as f64;
+        assert!(
+            mx <= ENVELOPE_MAX_DELTA && frac <= ENVELOPE_MAX_FRACTION,
+            "a +1-on-2 % perturbation must satisfy the envelope, got {n} bytes ({:.1} %) at maxdelta {mx}",
+            frac * 100.0
+        );
+
+        lib.deinit();
+        Ok(())
+    }
 }
