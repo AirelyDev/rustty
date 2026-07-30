@@ -25,3 +25,11 @@ workspace = true
 [dependencies]
 rustty-config = { workspace = true }
 rustty-cli = { workspace = true }
+# WS13 mdgen/webgen: `help_strings.KeybindAction` (`keybind_help`) +
+# `binding::Action::FIELD_NAMES`, the reflected union the reference's
+# `genKeybindActions` walks (`mdgen.zig:85-117`). rustty-config already depends on
+# rustty-input, so this adds no new graph LEVEL — the acyclic gate is unaffected.
+rustty-input = { workspace = true }
+# `build_config.version_string`, substituted for the fixtures' `@@VERSION@@`
+# marker (`mdgen.zig:8-19`).
+rustty-build-config = { workspace = true }

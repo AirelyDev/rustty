@@ -26,6 +26,7 @@
 
 pub mod bash;
 pub mod fish;
+pub mod mdgen;
 pub mod sublime;
 pub mod vim;
 pub mod zsh;
