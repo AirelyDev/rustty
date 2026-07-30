@@ -1,0 +1,69 @@
+# rustty-zigimg — the SIX-OPERATION zigimg surface `libvaxis` 0.5.1 instantiates,
+# RE-HOMED onto ghostty's own vendored codecs (WS12 Decision 2, Option Z-C, ratified
+# 2026-07-29 — see .port/phase-2/VAXIS_C1B_DESIGN.md "WS12 decisions").
+#
+# THIS IS NOT A PORT OF zigimg. zigimg 0.1.0 (`ivanstepanovftw/zigimg`, commit
+# d7b7ab0ba0899643831ef042bd73289510b39906, package hash
+# `8_eo2vHnEwCIVW34Q14Ec-xUlzIoVg86-7FU2ypPtxms`) is 18,316 src LOC across 15 format
+# modules (bmp farbfeld gif iff jpeg pam netpbm pcx png qoi ras sgi tga tiff xbm) plus
+# color.zig (3,173), PixelFormatConverter.zig (1,408) and ~10,700 LOC of tests — for a
+# surface no ghostty code path calls (nothing in ghostty `src/` reaches `vaxis.Image`).
+#
+# What `libvaxis` ACTUALLY touches, verbatim from `libvaxis` 0.5.1
+# `src/Vaxis.zig:983-1033` (`transmitImage` + `loadImage`), is SIX operations:
+#   1. `zigimg.Image.fromFilePath(alloc, path, &read_buffer)`  — sniff + decode
+#   2. `zigimg.Image.fromMemory(alloc, bytes)`                 — sniff + decode
+#   3. `img.writeToMemory(png_buf, .{ .png = .{} })`           — PNG encode into a
+#                                                                caller-sized buffer
+#   4. `img.convert(.rgb24)` / `img.convert(.rgba32)`          — pixel-format convert
+#   5. `img.imageByteSize()` / `img.rawBytes()` / `img.width` / `img.height`
+#   6. `img.deinit()`
+# This crate implements exactly those, backed by code rustty already vendors:
+#   - decode  -> `rustty-wuffs` (ghostty's OWN `pkg/wuffs` PNG/JPEG decoders, already a
+#     full R1 port with its own KATs). Its RGBA_NONPREMUL output IS zigimg's `rgba32`.
+#   - convert -> a local faithful mirror of `PixelFormatConverter.zig`'s rgba32<->rgb24
+#     arms (NOTE: rgba32->rgb24 PREMULTIPLIES alpha, it does not drop it — see
+#     src/convert.rs).
+#   - PNG encode -> a local encoder (IHDR / one IDAT / IEND, filter 0) over the
+#     vendored zlib in `zlib-sys`.
+#
+# THE ONE BOUNDED DIVERGENCE, stated rather than seamed: the set of input formats
+# `load_image` accepts is **PNG + JPEG** rather than zigimg's 15. That is a superset of
+# what ghostty itself supports (kitty graphics and background images both go through
+# `pkg/wuffs`, i.e. PNG+JPEG), and it is a documented PORT-NOTE representation choice of
+# the same class as this tree's `Cow`/byte-slice notes — NOT an `unimplemented!()` and
+# NOT a deferral. If a future consumer needs BMP/GIF/TGA input, that is a new
+# workstream (Option Z-A), not a WS12 residual.
+#
+# R4: a LEAF. Deps are `rustty-wuffs` + `zlib-sys` + `allocator-api2`, none of which
+# has an edge back here; the only rustty consumer is `rustty-vaxis`
+# (`rustty-vaxis -> rustty-zigimg -> {rustty-wuffs, zlib-sys}`), so the graph stays
+# acyclic. NOT in the 3234-test src/ contract (its base is a vendored dep, not
+# ghostty `src/`).
+#
+# R6/Miri: this crate is FFI-TOUCHING (wuffs decode + zlib deflate), so the
+# decode/encode tests carry `#[cfg_attr(miri, ignore)]` and a MIRI_EXCEPTIONS.md row.
+# Precedent: `rustty-vt` links `zlib-sys` and still runs a Miri lane. The non-FFI logic
+# (magic-byte sniff, the converter, PNG chunk framing, the CRC-32 table) stays
+# Miri-live.
+[package]
+name = "rustty-zigimg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# ghostty's own vendored PNG/JPEG decoders (pkg/wuffs parity crate).
+rustty-wuffs = { workspace = true }
+# The vendored zlib 1.3.1 FFI leaf: `deflateInit2_`/`deflate`/`deflateEnd` for the
+# zlib-wrapped DEFLATE stream a PNG `IDAT` chunk requires.
+zlib-sys = { workspace = true }
+# `rustty_wuffs::{png,jpeg}::decode` take an `Allocator` parameter (the faithful map of
+# the reference's `std.mem.Allocator`); we pass `allocator_api2::alloc::Global`.
+allocator-api2 = { workspace = true }
