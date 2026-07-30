@@ -980,11 +980,51 @@ margin collapses by roughly 2.8× on the oracle side; the other 13 configs move
 little. A terminal-stream LOSS against head is **expected and is not a rustty
 regression**. The authoritative fence remains the **pinned** oracle.
 
-**WS10 execution status (2026-07-30):** the worktree was created and the
-`origin/main` build was started to discharge (b). Result not recorded here —
-whatever its outcome, it is **not** a fence, because the box was at load ~5
-(`IDLE_MAX` 2.0) and the harness stamps such runs provisional. Owner is Phase 3
-because `origin/main` **is** the upstream resync range: `BEYOND-PIN`.
+### WS10 execution status (2026-07-30): half (b) WAS RUN — and the result is worse than "the oracle got faster"
+
+`origin/main` (`6ad1fe7d8`) **does** build under Zig 0.16.0. Note the plan's
+recipe is incomplete: plain `zig build` installs `Ghostty.app` and **no bench
+binary**; the flag is **`-Demit-bench`** (`build.zig:105`, `Config.zig:391`).
+Built and run (PROVISIONAL — load 6.24, `IDLE_MAX` 2.0):
+
+| bench | PINNED zig ms | origin/main zig ms | oracle change | rust ms |
+|---|--:|--:|--:|--:|
+| terminal-stream | 543.97 | **51.59** | **10.5× FASTER** | 344.51 |
+| codepoint-width.wcwidth | 261.09 | **802.40** | **3.1× SLOWER** | 238.17 |
+| screen-clone.clone | 54.65 | **295.33** | **5.4× SLOWER** | 22.56 |
+| screen-clone.render | 16.64 | **420.01** | **25.2× SLOWER** | 14.71 |
+| screen-clone.noop | 6.87 | 9.91 | 1.4× slower | 5.38 |
+| codepoint-width.noop | 4.55 | 6.72 | 1.5× slower | 3.31 |
+| terminal-parser | 266.58 | 267.22 | flat | 106.40 |
+| the other 7 | — | — | within ~2% | — |
+
+**Verdict: `origin/main` is not a valid comparison target, and the reason is
+bigger than `quirks_memset`.** The expected phantom regression did appear —
+`LOST bench terminal-stream/ascii (STRICT): zig=51.59ms rust=344.51ms (+567.8%)`,
+the single RED in an otherwise 13/14 run — and at **10.5×**, not the ~2.8×
+E34 predicted. But four other configs moved the **opposite** way, up to 25×
+slower. A pure codegen win cannot do that.
+
+**The benchmarks themselves changed beyond the pin.** BL-4 contains the bench
+corpus commits: `258de36d1`/`4c5b1d5d5` swap `TerminalStream`'s handler and chunk
+size, and `446f80f4e` adds `--loops` plus three render modes to `ScreenClone`.
+So `+terminal-stream` and `+screen-clone` on `origin/main` **measure different
+work** than the same-named benches on the pin. Comparing rustty against them is
+not like-for-like in either direction, and neither column can be read as a
+speed-up or a slow-down.
+
+**Consequence for the port.** A rustty-vs-`origin/main` fence only becomes
+meaningful **after** rustty ports the BL-4 bench-corpus commits (plan T10-T12,
+T17) so both sides measure the same work again. Until then this row stays open
+and the **pinned** oracle remains the only valid fence. `quirks_memset` still
+must not be ported, for the reasons above.
+
+The oracle worktree was removed after the run (`git -C ../ghostty worktree
+remove`); the pinned working tree was never touched — no `checkout` was run in
+`../ghostty` at any point.
+
+Owner is Phase 3 because `origin/main` **is** the upstream resync range:
+`BEYOND-PIN`.
 
 ## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **OWNER: WS20**
 
