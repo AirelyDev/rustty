@@ -130,6 +130,22 @@ typedef struct {
     const VTable *vtable;
 } Allocator;
 
+/**
+ * The wasm-allocator `Opaque` handle. WS19 T3 (audit row N2): the wasm
+ * convenience exports `rustty_wasm_alloc_opaque` / `rustty_wasm_free_opaque`
+ * are typed `*mut conv::Opaque`, where `Opaque` is defined in the SIBLING crate
+ * `rustty-lib` (`allocator/convenience.rs:30`, `pub type Opaque = *mut c_void`,
+ * porting the reference's `pub const Opaque = *anyopaque`). With
+ * `parse_deps = false` cbindgen cannot see it and emitted `Opaque *` against an
+ * UNDECLARED type (`WARN: Can't find Opaque`), so `include/rustty.h` did not
+ * compile standalone as C at all. Pinned here by hand, like every other
+ * cross-crate C-ABI type in this block. `Opaque` == `void *`, so the exports'
+ * `Opaque *` is `void **` — one pointer-sized slot, byte-identical to the
+ * reference's `?*Opaque`.
+ * C: RusttyOpaque (rustty-lib allocator::convenience::Opaque)
+ */
+typedef void *Opaque;
+
 /** Opaque PageList node back-pointer (used only behind a pointer). */
 typedef struct Node Node;
 
@@ -199,6 +215,7 @@ exclude = [
     "Allocator",
     "Node",
     "Command",
+    "Opaque",
     "TerminalCompressionMode",
     "TerminalCompressionResult",
 ]
