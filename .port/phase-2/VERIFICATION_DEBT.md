@@ -715,9 +715,13 @@ plus the `deinit`/`familyName`/`name`/`load`/`hasCodepoint` Windows arms) are LI
 `target_os = "windows"` instead of falling through to the Fontconfig arm, matching
 `Backend.default`'s `.windows => .freetype_windows`.
 
-**Cross-check blocker:** identical to V10, one layer down — `rustty-font-shaper` pulls
-`freetype-sys`/`harfbuzz-sys`/`oniguruma-sys`, all `cc`-driven, all failing at the first
-`#include` when retargeted to `x86_64-pc-windows-msvc` from macOS.
+**Cross-check blocker:** identical to V10. `cargo check -p rustty-font-shaper --target
+x86_64-pc-windows-msvc --all-targets` dies in the vendored C/C++ build scripts before
+rustc sees any Rust — the first two to fail are `zlib-sys`
+(`vendor/zconf.h:446: fatal error: 'sys/types.h' file not found`) and `simdutf-sys`
+(`vendor/simdutf.h:5: fatal error: 'cstring' file not found`), both reached transitively
+via `rustty-vt`; `freetype-sys`/`harfbuzz-sys` (this crate's own C deps) are behind
+them in the queue and fail the same way.
 
 **Verified here:** `.port/phase-2/wincheck.sh` Recipe B, GREEN under
 `cargo clippy --all-targets -- -D warnings`; host `cargo test -p rustty-font-shaper`
