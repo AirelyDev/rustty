@@ -61,6 +61,10 @@
 #                                    PageList compressed-page encodings are not
 #                                    leaked (global-allocator Vec that no other
 #                                    memory gate can see)              -> HARD
+#   G6c check_leaks.sh --debug-assertions-off
+#                                    the vt page-compression family under Miri
+#                                    with `Page::assert_integrity` off — the
+#                                    tests G6 cannot reach at all -> PROGRESS
 #
 #   D1-D9  Bun semantic-mismatch detectors (BUN_PORT_LEARNINGS §4) — each kills a
 #          class of invisible Zig->Rust divergence that slipped every Bun gate:
@@ -217,6 +221,22 @@ GATE_REGISTRY=(
   # FAIL arm is proven reachable by `--self-test` (a negative control that
   # `mem::forget`s a compressed list, i.e. the real leak via the real path).
   "G6b|HARD|bash $GATES/check_pagelist_compress_leaks.sh"
+  # G6c — the `-C debug-assertions=off` vt Miri lane (WS19 T6, closure-audit row
+  # O2). ADDITIVE to G6, never a replacement: G6 keeps debug assertions ON (that
+  # is what upholds the integrity-assertion coverage, and without the existing
+  # `cfg_attr(miri, ignore)` annotations the vt G6 lane cannot complete at all).
+  # G6c disables `Page::assert_integrity` — which is O(page), runs on nearly
+  # every PageList mutation, and adds no SB/TB or leak coverage — and thereby
+  # RUNS the page-level compression tests that are pure TIMEOUTs in G6. It is
+  # NOT vacuous: the tests it counts are `cfg_attr(all(miri, debug_assertions),
+  # ignore)`, so if the flag is ever lost they all report `ignored`, the vacuity
+  # floor trips, and the gate goes RED rather than degenerating into a slow copy
+  # of G6 — that arm is proven by `--debug-assertions-off --self-test` (arm 1),
+  # alongside an injected-UB arm (arm 2). PROGRESS, not HARD, on first landing —
+  # the same bedding-in convention the D1-D9 detectors use; it is a multi-minute
+  # Miri lane on a shared host, so a loaded machine must not make CI
+  # un-passable (R5). Promote to HARD once it has ridden clean.
+  "G6c|PROGRESS|bash $GATES/check_leaks.sh --debug-assertions-off"
   # D1-D9 — Bun semantic-mismatch detectors (.port/phase-2/BUN_PORT_LEARNINGS.md
   # §4). Each kills one class of the invisible Zig->Rust divergence that slipped
   # every Bun gate. They are ADDITIVE (weaken no existing gate, R5). Registered

@@ -855,8 +855,8 @@ fn pagelist_grow_allows_exceeding_max_size_for_active_area() {
 
 // ref: test "PageList grow prune required with a single page"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_grow_prune_required_with_a_single_page() {
@@ -1029,8 +1029,8 @@ fn pagelist_grow_fit_in_capacity() {
 
 // ref: test "PageList grow allocate"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_grow_allocate() {
@@ -1302,8 +1302,8 @@ fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
 
 // ref: test "PageList increaseCapacity multi-page"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_increaseCapacity_multi_page() {
@@ -1479,8 +1479,8 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
 /// epoch. Growth, replacement and splitting must NOT advance it, because
 /// generations are not monotonic in list order.
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_only_reset_advances_the_serial_epoch() {
@@ -1611,8 +1611,8 @@ fn pagelist_clears_history() {
 
 // ref: test "PageList grow reuses non-standard page without leak"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_grow_reuses_non_standard_page_without_leak() {
@@ -1700,8 +1700,8 @@ fn pagelist_grow_reuses_non_standard_page_without_leak() {
 
 // ref: test "PageList grow non-standard page prune protection"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_grow_non_standard_page_prune_protection() {
@@ -1887,8 +1887,8 @@ fn pagelist_compact_then_clone() {
 
 // ref: test "PageList compact oversized page"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_compact_oversized_page() {
@@ -2054,8 +2054,8 @@ fn expect_live_page_serials_valid_for_test(s: &PageList) {
 
 /// PORTS: oracle dd956f37c `test "PageList row erasure renews affected page generations"`
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_row_erasure_renews_affected_page_generations() {
@@ -2111,7 +2111,7 @@ fn pagelist_trailing_row_truncation_renews_page_generation() {
 /// PORTS: the memoryStats assertions in oracle 0d015b2fc / 6d5dda40d.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.50s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
@@ -2148,7 +2148,7 @@ fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
 /// `Complete`, having compressed the cold history.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (2.51s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_compress_incremental_converges_to_complete() {
@@ -2179,7 +2179,7 @@ fn pagelist_compress_incremental_converges_to_complete() {
 /// finish, in one call.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (2.49s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_compress_drain_finishes_in_one_call() {
@@ -2198,8 +2198,8 @@ fn pagelist_compress_drain_finishes_in_one_call() {
 
 /// PageList mutations bump the activity token so schedulers know to recompress.
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (0.50s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_mutations_mark_compression_activity() {
@@ -2219,7 +2219,7 @@ fn pagelist_mutations_mark_compression_activity() {
 /// next step restarts safely rather than skipping newly allocated pages.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (4.48s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_compress_incremental_restarts_after_list_mutation() {
@@ -2245,7 +2245,7 @@ fn pagelist_compress_incremental_restarts_after_list_mutation() {
 /// Full mode compresses everything eligible and leaves no continuation state.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.49s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (361s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_compress_full_mode_leaves_no_continuation() {
@@ -2269,8 +2269,8 @@ fn pagelist_compress_full_mode_leaves_no_continuation() {
 /// A cold history page compresses, its mapping is discarded, and reading it
 /// back restores identical bytes.
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.00s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_compress_page_round_trips_a_cold_history_page() {
@@ -2304,7 +2304,7 @@ fn pagelist_compress_page_round_trips_a_cold_history_page() {
 /// Compressing twice is a no-op: `compress_page` only accepts resident nodes.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.00s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_compress_page_rejects_an_already_compressed_node() {
@@ -2329,7 +2329,7 @@ fn pagelist_compress_page_rejects_an_already_compressed_node() {
 )]
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.00s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): out of budget in the debug-assertions-ON G6 lane, and NOT rescuable by the G6c debug-assertions-off lane — this test drives a `debug_assertions`-only mechanism and is already `cfg_attr(not(debug_assertions), ignore)`, so turning the assertions off makes it inert rather than fast. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
@@ -2370,7 +2370,7 @@ fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
 /// viewport and active pages resident.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.51s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_compress_full_leaves_viewport_and_active_resident() {
@@ -2436,8 +2436,8 @@ fn pagelist_replacements_preserve_compression_continuation_and_mark_activity() {
 /// PORTS: oracle 91a63e528
 /// `test "PageList bounded pruning after split invalidation preserves live serials"`
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
@@ -2469,8 +2469,8 @@ fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
 /// PORTS: oracle a804e3ac7
 /// `test "PageList bounded pruning after partial erase preserves live serials"`
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
@@ -2501,7 +2501,7 @@ fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
 /// `test "PageList partial erase restarts compression before continuation"`
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_partial_erase_restarts_compression_before_continuation() {
@@ -2551,8 +2551,8 @@ fn pagelist_partial_erase_restarts_compression_before_continuation() {
 /// PORTS: oracle f1a5fab45 (+ f6d9a582e's epoch assertion)
 /// `test "PageList repeated bounded pruning after split preserves live serials"`
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_repeated_bounded_pruning_after_split_preserves_live_serials() {
@@ -2593,8 +2593,8 @@ fn pagelist_repeated_bounded_pruning_after_split_preserves_live_serials() {
 /// PORTS: oracle f1a5fab45
 /// `test "PageList bounded pruning after front replacement preserves live serials"`
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_bounded_pruning_after_front_replacement_preserves_live_serials() {
@@ -2619,8 +2619,8 @@ fn pagelist_bounded_pruning_after_front_replacement_preserves_live_serials() {
 /// PORTS: oracle f1a5fab45
 /// `test "PageList bounded pruning after middle replacement preserves live serials"`
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials() {
@@ -2814,8 +2814,8 @@ fn pagelist_decommit_pool_item_zeroes_the_dirty_region() {
 
 // ref: test "PageList destroyed pool page reuse is zeroed"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): scribbles over a full std_size page buffer; covered natively + by ASan"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
@@ -4645,8 +4645,8 @@ fn screen_jump_forward_prompt_skips_multiline_continuation() {
 
 // ref: test "PageList grow prune scrollback"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_grow_prune_scrollback() {
@@ -4740,8 +4740,8 @@ fn pagelist_grow_prune_scrollback() {
 
 // ref: test "PageList grow prune scrollback with viewport pin not in pruned page"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
@@ -4816,8 +4816,8 @@ fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
 
 // ref: test "PageList eraseRows invalidates viewport offset cache"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_eraseRows_invalidates_viewport_offset_cache() {
@@ -4878,8 +4878,8 @@ fn pagelist_eraseRows_invalidates_viewport_offset_cache() {
 
 // ref: test "PageList eraseRow invalidates viewport offset cache"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_eraseRow_invalidates_viewport_offset_cache() {
@@ -4937,8 +4937,8 @@ fn pagelist_eraseRow_invalidates_viewport_offset_cache() {
 
 // ref: test "PageList eraseRowBounded invalidates viewport offset cache"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_eraseRowBounded_invalidates_viewport_offset_cache() {
@@ -4997,8 +4997,8 @@ fn pagelist_eraseRowBounded_invalidates_viewport_offset_cache() {
 
 // ref: test "PageList eraseRowBounded multi-page invalidates viewport offset cache"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache() {
@@ -5061,8 +5061,8 @@ fn pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache() {
 
 // ref: test "PageList eraseRowBounded full page shift invalidates viewport offset cache"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache() {
@@ -5127,8 +5127,8 @@ fn pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache() 
 
 // ref: test "PageList eraseRowBounded exhausts pages invalidates viewport offset cache"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_eraseRowBounded_exhausts_pages_invalidates_viewport_offset_cache() {
@@ -8064,8 +8064,8 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() 
 
 // ref: test "PageList resize (no reflow) less rows trims blank lines erases pages"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
@@ -8498,8 +8498,8 @@ fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
 // we end up pruning our pages and that causes resizes to fail!
 // ref: test "PageList resize (no reflow) more cols forces less rows per page"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page() {
@@ -8826,8 +8826,8 @@ fn pagelist_resize_no_reflow_more_rows_and_less_cols() {
 
 // ref: test "PageList resize more rows and cols doesn't fit in single std page"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_more_rows_and_cols_doesnt_fit_in_single_std_page() {
@@ -8890,8 +8890,8 @@ fn pagelist_resize_no_reflow_empty_screen() {
 
 // ref: test "PageList resize (no reflow) more cols forces smaller cap"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_no_reflow_more_cols_forces_smaller_cap() {
@@ -9226,8 +9226,8 @@ fn pagelist_resize_reflow_invalidates_viewport_offset_cache() {
 
 // ref: test "PageList resize reflow more cols creates multiple pages"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_reflow_more_cols_creates_multiple_pages() {
@@ -9920,8 +9920,8 @@ fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
 
 // ref: test "PageList resize reflow exceeds hyperlink memory forcing capacity increase"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
@@ -10038,8 +10038,8 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
 
 // ref: test "PageList resize reflow exceeds grapheme memory forcing capacity increase"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
@@ -10133,8 +10133,8 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
 
 // ref: test "PageList resize reflow exceeds style memory forcing capacity increase"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
@@ -11903,8 +11903,8 @@ fn pagelist_resize_reflow_wrap_moves_kitty_placeholder() {
 
 // ref: test "PageList resize reflow grapheme map capacity exceeded"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_reflow_grapheme_map_capacity_exceeded() {
@@ -12066,8 +12066,8 @@ fn pagelist_resize_grow_cols_with_unwrap_fixes_viewport_pin() {
 
 // ref: test "PageList resize (no reflow) more cols remaps pins in backfill path"
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_resize_no_reflow_more_cols_remaps_pins_in_backfill_path() {
@@ -12173,8 +12173,8 @@ use super::page_tracking::PageLeakScope;
 /// Grow scrollback to several pages, scroll around, then deinit — assert every
 /// page allocated during the churn was freed (no page leak).
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_pagepool_no_leak_grow_and_scroll() {
@@ -12216,8 +12216,8 @@ fn pagelist_pagepool_no_leak_grow_and_scroll() {
 /// second PageList over many pages), then deinit both — assert no page leak. This
 /// is exactly the kind of many-page churn Miri cannot run to completion.
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_pagepool_no_leak_clone_many_pages() {
@@ -12252,8 +12252,8 @@ fn pagelist_pagepool_no_leak_clone_many_pages() {
 /// columns, forcing reflow to allocate and free pages), then deinit — assert no
 /// page leak. Reflow is the most allocation-churny PageList path.
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_pagepool_no_leak_resize_reflow() {
@@ -12315,8 +12315,8 @@ fn pagelist_pagepool_no_leak_resize_reflow() {
 /// `reset()` returns the pool to (near) baseline: build scrollback across several
 /// pages, reset, then deinit — assert no page leak across the reset+deinit cycle.
 #[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_pagepool_no_leak_reset_then_deinit() {

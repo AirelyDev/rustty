@@ -42,6 +42,7 @@ local iteration.
 | **G8** | `check_baseline_regression.py` | `_gatelib.py` | PROGRESS* |
 | **G5** | `run_fuzz_smoke.sh` | harness `FUZZ-INVENTORY.md`, `comparator.py` | PROGRESS* |
 | **G6** | `check_leaks.sh` | Miri (pure) / ASan (FFI + live-syscall tests), `_gatelib` done-detection; missing miri ⇒ exit 3 BLOCKED | PROGRESS* |
+| **G6c** | `check_leaks.sh --debug-assertions-off` | Miri with `Page::assert_integrity` off — runs the vt page-level compression tests G6 can only TIMEOUT on; vacuity floor doubles as the proof the flag took (WS19 T6) | PROGRESS |
 | **D1** | `check_slice_reinterpret.sh` | `.port/audits/slice-reinterpret.tsv` | PROGRESS |
 | **D2** | `check_capacity_saturation.sh` | `.port/audits/capacity-saturation.tsv` | PROGRESS |
 | **D3** | `check_constants_parity.py` | port markers + ghostty oracle | PROGRESS |
