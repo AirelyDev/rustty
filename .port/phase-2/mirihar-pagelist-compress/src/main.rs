@@ -40,6 +40,9 @@
 //! MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run --quiet     # Tree Borrows
 //! ```
 
+use rustty_vt::page::{Capacity, Page};
+use rustty_vt::size::OffsetBuf;
+use rustty_vt::style::Style;
 use rustty_vt::pagelist::compress::{CompressionMode, IncrementalCompressionResult};
 use rustty_vt::pagelist::{Node, Storage};
 use rustty_vt::point::{Coordinate, Point};
@@ -298,26 +301,160 @@ fn compress_reset_compress_deinit() {
 /// this FAIL with a positive delta equal to the retained encodings, while the
 /// entire native `rustty-vt` suite stays green.
 fn leak_check() {
+    leak_check_of("compress -> reset -> compress -> deinit", || {
+        compress_reset_compress_deinit()
+    });
+}
+
+/// The shared measurement + assertion used by BOTH `leakcheck` and its negative
+/// control, so the two arms differ only in the body being measured.
+fn leak_check_of(what: &str, body: impl Fn()) {
     // Warm-up: pay any one-time lazy allocation before the measured run.
-    compress_reset_compress_deinit();
+    body();
 
     let before = live_bytes();
-    compress_reset_compress_deinit();
+    body();
     let after = live_bytes();
 
     let delta = after - before;
     assert_eq!(
         delta, 0,
         "PageList leaked {delta} global-allocator bytes across \
-         compress -> reset -> compress -> deinit. The compressed pages' \
+         {what}. The compressed pages' \
          `encoded` Vec is only freed by the discard-restore in \
          `PageList::{{deinit,reset}}`; nothing else in the suite can see this."
     );
 }
 
+/// NEGATIVE CONTROL for `leakcheck` — this scenario MUST FAIL.
+///
+/// `leakcheck` is only worth gating if its assertion can actually fire, and the
+/// only way to make the real regression happen is to stop `PageList` from
+/// discard-restoring its compressed nodes. Editing production code to prove that
+/// is not something a gate can do, but skipping `deinit` entirely has exactly the
+/// same observable effect on the global allocator: the compressed nodes'
+/// `encoded` Vecs are never freed. `mem::forget` therefore drives the REAL leak
+/// through the REAL path rather than injecting a synthetic `Box::leak`.
+///
+/// `.port/tools/gates/check_pagelist_compress_leaks.sh --self-test` runs this and
+/// requires a non-zero exit with "leaked" in the output; that is the proof the
+/// gate's FAIL arm is reachable.
+fn compress_then_forget() {
+    let mut list = list_with_history(3);
+    assert_ne!(
+        list.compress(CompressionMode::Full),
+        IncrementalCompressionResult::Unsupported
+    );
+    assert!(count_storage(&list).1 > 0, "must compress");
+    // The regression, reproduced without touching production code: no
+    // discard-restore ever runs for these nodes.
+    core::mem::forget(list);
+}
+
+fn leak_check_negative() {
+    leak_check_of("compress -> forget (NEGATIVE CONTROL, must fail)", || {
+        compress_then_forget()
+    });
+}
+
+/// WS7 Phase E — the CHEAP, DECISIVE probe for the "uninit bytes in the page
+/// mapping fed to LZ4" finding.
+///
+/// `roundtrip`/`leak` take tens of minutes under Miri because they build several
+/// std-capacity pages (215x215) and then run LZ4 over every byte of each
+/// mapping. But the *defect* needs neither: it is created by `Page::init_buf`,
+/// so a SINGLE page at the smallest capacity that still allocates every
+/// sub-table reproduces it in seconds.
+///
+/// This scenario allocates such a page and then reads its mapping byte by byte
+/// exactly as `CompressedPage::init` does. Under Miri the read aborts at the
+/// FIRST uninitialized byte and names the offset, which is what identifies the
+/// write that de-initialized it. When the page mapping is fully initialized the
+/// scenario prints the checksum and returns.
+///
+/// `PAGE_SIZE_MIN`-rounded total size means the mapping is one OS page, so the
+/// scan is ~16K interpreted byte reads.
+fn mapping_is_fully_initialized() {
+    // The smallest capacity that still gives every sub-table a non-zero size:
+    // 1 style, 1 hyperlink, and enough grapheme/string bytes to force the
+    // bitmap allocators and hash maps to be laid out.
+    let cap = Capacity {
+        cols: 4,
+        rows: 2,
+        styles: 128,
+        grapheme_bytes: 128,
+        hyperlink_bytes: 128,
+        string_bytes: 128,
+    };
+    let mut page = Page::init(cap).expect("page alloc");
+    let ptr = page.memory_ptr();
+    let len = page.memory_len();
+
+    // The exact read `CompressedPage::init` performs. Reading it a byte at a
+    // time (rather than as `[u8; 8]` like the codec) makes Miri report the
+    // precise offset of the first uninitialized byte instead of the index
+    // within a word.
+    let mut sum: u64 = 0;
+    for i in 0..len {
+        // SAFETY: `ptr[0..len]` is the page's live resident mapping.
+        sum = sum.wrapping_add(unsafe { *ptr.add(i) } as u64);
+    }
+    eprintln!("     mapping of {len} bytes fully initialized (checksum {sum})");
+
+    page.deinit();
+}
+
+/// WS7 Phase E — the RESIDUAL probe. Same as `mapinit`, but a non-default
+/// `style::Style` is stored in the page's style set first.
+///
+/// `RefCountedSet::add` must place the caller's `T` in the item slot with a
+/// typed write, and `style::Style` is three `style::Color` values — a Rust enum
+/// whose `None`/`Palette` variants do not cover all four bytes of their slot. So
+/// a typed store of a `Style` re-introduces uninitialized bytes into the
+/// mapping, and this scenario is EXPECTED to abort until `style::Color` becomes
+/// a padding-free type. It exists so the residual is measurable rather than
+/// asserted; see `.port/phase-2/MIRI_EXCEPTIONS.md`.
+fn styled_mapping_is_fully_initialized() {
+    let cap = Capacity {
+        cols: 4,
+        rows: 2,
+        styles: 128,
+        grapheme_bytes: 128,
+        hyperlink_bytes: 128,
+        string_bytes: 128,
+    };
+    let mut page = Page::init(cap).expect("page alloc");
+    let base = OffsetBuf::init(page.memory_ptr());
+    let mut style = Style::default();
+    style.flags.bold = true;
+    // SAFETY: `base` is the page's own mapping base.
+    let id = unsafe { page.styles.add(base, style) }.expect("style add");
+    assert_ne!(id, 0);
+
+    let ptr = page.memory_ptr();
+    let len = page.memory_len();
+    let mut sum: u64 = 0;
+    for i in 0..len {
+        // SAFETY: `ptr[0..len]` is the page's live resident mapping.
+        sum = sum.wrapping_add(unsafe { *ptr.add(i) } as u64);
+    }
+    eprintln!("     styled mapping of {len} bytes fully initialized (checksum {sum})");
+
+    page.deinit();
+}
+
 fn main() {
     let selected: Vec<String> = std::env::args().skip(1).collect();
     let want = |name: &str| selected.is_empty() || selected.iter().any(|s| s == name);
+
+    if want("mapinit") {
+        mapping_is_fully_initialized();
+        eprintln!("ok  mapping_is_fully_initialized");
+    }
+    if want("mapinit_styled") {
+        styled_mapping_is_fully_initialized();
+        eprintln!("ok  styled_mapping_is_fully_initialized");
+    }
 
     if want("split") {
         split_holds_page_across_tracked_loop();
@@ -338,6 +475,13 @@ fn main() {
     if want("leakcheck") {
         leak_check();
         eprintln!("ok  leak_check (counting global allocator, delta == 0)");
+    }
+    // Selected explicitly only (never by the no-argument "run everything"
+    // default): this scenario is EXPECTED to panic.
+    if selected.iter().any(|s| s == "leakcheck_negative") {
+        leak_check_negative();
+        eprintln!("BUG: leak_check_negative did NOT fail");
+        std::process::exit(1);
     }
     eprintln!("all selected scenarios passed (leak check runs at exit)");
 }
