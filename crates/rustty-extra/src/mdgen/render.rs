@@ -486,14 +486,73 @@ fn find_emphasis_close(rest: &[u8], delim: u8) -> Option<usize> {
 /// wrapping can move a `.` to the start of a physical line.
 fn roff_escape(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len());
-    for b in src {
+    let mut i = 0usize;
+    while i < src.len() {
+        let b = src[i];
         match b {
-            b'\\' => out.extend_from_slice(b"\\e"),
-            b'-' => out.extend_from_slice(b"\\-"),
-            _ => out.push(*b),
+            b'\\' => {
+                out.extend_from_slice(b"\\e");
+                i += 1;
+            }
+            b'-' => {
+                out.extend_from_slice(b"\\-");
+                i += 1;
+            }
+            0x00..=0x7F => {
+                out.push(b);
+                i += 1;
+            }
+            // Non-ASCII: emit the roff `\[uXXXX]` escape rather than the raw
+            // UTF-8 bytes. Classic troff reads input as single bytes, so
+            // `groff -man -Tutf8` (without the `preconv` front end, which a
+            // packager will not necessarily invoke) reports
+            // `warning: invalid input character code 134` on every continuation
+            // byte and drops the character. mandoc performs the same rewrite
+            // internally, so this is what it measures for its 80-byte line
+            // check too — escaping here makes the whole page pure ASCII and the
+            // wrap arithmetic exact instead of approximate.
+            _ => {
+                let (scalar, len) = decode_utf8(&src[i..]);
+                out.extend_from_slice(format!("\\[u{scalar:04X}]").as_bytes());
+                i += len;
+            }
         }
     }
     out
+}
+
+/// Decode one UTF-8 scalar, returning `(codepoint, byte length)`. A malformed
+/// sequence decodes as U+FFFD consuming one byte, so no input can wedge the
+/// loop or produce a truncated escape.
+fn decode_utf8(src: &[u8]) -> (u32, usize) {
+    match std::str::from_utf8(&src[..src.len().min(4)]) {
+        Ok(s) => match s.chars().next() {
+            Some(c) => (c as u32, c.len_utf8()),
+            None => (0xFFFD, 1),
+        },
+        Err(e) => {
+            let valid = e.valid_up_to();
+            if valid > 0 {
+                let c = std::str::from_utf8(&src[..valid])
+                    .ok()
+                    .and_then(|s| s.chars().next());
+                match c {
+                    Some(c) => (c as u32, c.len_utf8()),
+                    None => (0xFFFD, 1),
+                }
+            } else {
+                // A prefix of a longer sequence truncated by the 4-byte window,
+                // or genuinely invalid input.
+                match std::str::from_utf8(src) {
+                    Ok(s) => match s.chars().next() {
+                        Some(c) => (c as u32, c.len_utf8()),
+                        None => (0xFFFD, 1),
+                    },
+                    Err(_) => (0xFFFD, 1),
+                }
+            }
+        }
+    }
 }
 
 /// Roff font-selection escapes. `\fP` ("previous font") is deliberately NOT
@@ -563,7 +622,7 @@ fn inline_roff_in(items: &[Inline], enclosing: &[u8]) -> Vec<u8> {
 /// bytes is strictly more conservative, and a roff newline in filled text is
 /// just a space, so nothing is lost.
 fn wrap_roff_line(line: &[u8], out: &mut Vec<Vec<u8>>) {
-    if lint_width(line) <= WRAP_COLUMNS {
+    if line.len() <= WRAP_COLUMNS {
         out.push(line.to_vec());
         return;
     }
@@ -574,7 +633,7 @@ fn wrap_roff_line(line: &[u8], out: &mut Vec<Vec<u8>>) {
         }
         if cur.is_empty() {
             cur.extend_from_slice(word);
-        } else if lint_width(&cur) + 1 + lint_width(word) <= WRAP_COLUMNS {
+        } else if cur.len() + 1 + word.len() <= WRAP_COLUMNS {
             cur.push(b' ');
             cur.extend_from_slice(word);
         } else {
@@ -587,27 +646,24 @@ fn wrap_roff_line(line: &[u8], out: &mut Vec<Vec<u8>>) {
     }
 }
 
-/// The length `mandoc -Tlint` actually measures for its 80-byte input-line
-/// check.
+/// Render one filled-text run: join the source lines, run the inline pass over
+/// the WHOLE run, then wrap and control-guard the result.
 ///
-/// It is NOT the raw byte length: mandoc rewrites every non-ASCII UTF-8 scalar
-/// into its `\[uXXXX]` roff escape BEFORE counting, so a 76-byte line holding
-/// one `–` (U+2013, 3 bytes) is measured as 81. Measured empirically against
-/// the generated pages — the naive byte count silently left three lines over
-/// the limit. Each non-ASCII scalar is therefore charged 8, the width of the
-/// four-hex-digit escape mandoc substitutes.
-fn lint_width(s: &[u8]) -> usize {
-    let mut w = 0usize;
-    for b in s {
-        w += match b {
-            0x00..=0x7F => 1,
-            // A UTF-8 continuation byte contributes nothing; the escape is
-            // charged once, on the lead byte.
-            0x80..=0xBF => 0,
-            _ => 8,
-        };
+/// Joining first is load-bearing, not tidiness: markdown inline markup wraps
+/// freely across source lines, and the ported fixtures do exactly that (a
+/// `[text](url)` link in the `class` doc comment is split over three lines). A
+/// per-line inline pass leaves such a construct unmatched and emits the raw
+/// markdown into the man page. Joining is also semantically free — in roff
+/// filled text a newline IS a space.
+fn render_text_run(out: &mut Vec<u8>, lines: &[Vec<u8>]) {
+    let mut joined: Vec<u8> = Vec::new();
+    for (n, l) in lines.iter().enumerate() {
+        if n > 0 {
+            joined.push(b' ');
+        }
+        joined.extend_from_slice(l);
     }
-    w
+    push_text_lines(out, &[inline_roff(&parse_inline(&joined))]);
 }
 
 /// Emit a run of already-inlined text lines as wrapped, control-guarded roff.
@@ -663,11 +719,7 @@ fn render_blocks_roff(out: &mut Vec<u8>, blocks: &[Block], nested: bool) {
                 if !after_heading {
                     out.extend_from_slice(b".PP\n");
                 }
-                let inlined: Vec<Vec<u8>> = lines
-                    .iter()
-                    .map(|l| inline_roff(&parse_inline(l)))
-                    .collect();
-                push_text_lines(out, &inlined);
+                render_text_run(out, lines);
             }
             Block::Code(lines) => {
                 out.extend_from_slice(b".RS 4\n.EX\n");
@@ -686,9 +738,7 @@ fn render_blocks_roff(out: &mut Vec<u8>, blocks: &[Block], nested: bool) {
             Block::Bullets(items) => {
                 for item in items {
                     out.extend_from_slice(b".IP \\(bu 2\n");
-                    let inlined: Vec<Vec<u8>> =
-                        item.iter().map(|l| inline_roff(&parse_inline(l))).collect();
-                    push_text_lines(out, &inlined);
+                    render_text_run(out, item);
                 }
             }
             Block::Def { term, body } => {
@@ -705,11 +755,7 @@ fn render_blocks_roff(out: &mut Vec<u8>, blocks: &[Block], nested: bool) {
                 // `pandoc --to man` emits for a multi-paragraph definition.
                 let tail = match body.split_first() {
                     Some((Block::Para(lines), rest)) => {
-                        let inlined: Vec<Vec<u8>> = lines
-                            .iter()
-                            .map(|l| inline_roff(&parse_inline(l)))
-                            .collect();
-                        push_text_lines(out, &inlined);
+                        render_text_run(out, lines);
                         rest
                     }
                     _ => &body[..],
@@ -812,13 +858,18 @@ fn inline_html(items: &[Inline], out: &mut Vec<u8>) {
     }
 }
 
+/// The HTML twin of [`render_text_run`]: the source lines of one filled run are
+/// joined before the inline pass so a construct split across lines (a
+/// `[text](url)` link, a `**bold**` phrase) is still recognised.
 fn inline_html_lines(lines: &[Vec<u8>], out: &mut Vec<u8>) {
+    let mut joined: Vec<u8> = Vec::new();
     for (n, l) in lines.iter().enumerate() {
         if n > 0 {
-            out.push(b'\n');
+            joined.push(b'\n');
         }
-        inline_html(&parse_inline(l), out);
+        joined.extend_from_slice(l);
     }
+    inline_html(&parse_inline(&joined), out);
 }
 
 fn render_blocks_html(out: &mut Vec<u8>, blocks: &[Block]) {
@@ -1079,6 +1130,42 @@ mod tests {
         let out = roff(b"% T(1) v | t\n\n# X\n\n_\\$XDG_CONFIG_HOME/rustty_\n");
         assert!(out.contains("$XDG_CONFIG_HOME/rustty"), "got {out}");
         assert!(!out.contains("\\e$"), "escape leaked as roff \\e: {out}");
+    }
+
+    /// Non-ASCII text becomes a `\[uXXXX]` roff escape, so the page is pure
+    /// ASCII. Raw UTF-8 makes `groff -man -Tutf8` emit
+    /// `warning: invalid input character code 134` per continuation byte and
+    /// DROP the character — measured on the real generated pages.
+    #[test]
+    fn non_ascii_becomes_a_unicode_escape() {
+        let out = roff("% T(1) v | t\n\n# X\n\ncolors (0\u{2013}15) \u{2014} ok\n".as_bytes());
+        assert!(out.contains("(0\\[u2013]15)"), "en dash not escaped: {out}");
+        assert!(out.contains("\\[u2014]"), "em dash not escaped: {out}");
+        // Control: the whole rendered page is ASCII.
+        assert!(out.is_ascii(), "non-ASCII byte survived into the roff");
+    }
+
+    /// Inline markup that WRAPS across source lines is still recognised: the
+    /// filled run is joined before the inline pass. The real fixtures do this —
+    /// the `class` doc comment splits a `[text](url)` link over three lines,
+    /// and a per-line pass emitted the raw markdown into the man page.
+    #[test]
+    fn inline_markup_spanning_source_lines_is_matched() {
+        let md = b"% T(1) v | t\n\n# X\n\nfollow the rules defined [in the GTK\ndocumentation](https://docs.gtk.org/x.html)\nor it is ignored.\n";
+        let out = roff(md);
+        assert!(
+            out.contains("\\(lahttps://docs.gtk.org/x.html\\(ra"),
+            "multi-line link not matched: {out}"
+        );
+        // Control: no raw markdown syntax survives.
+        assert!(!out.contains("]("), "raw markdown link leaked: {out}");
+        assert!(!out.contains("[in the GTK"), "raw link text leaked: {out}");
+        // The HTML back end must agree.
+        let html = String::from_utf8(markdown_to_html(md)).unwrap();
+        assert!(
+            html.contains("<a href=\"https://docs.gtk.org/x.html\">"),
+            "{html}"
+        );
     }
 
     /// HTML is well-formed, standalone, and escapes `<`/`>`/`&` in text.

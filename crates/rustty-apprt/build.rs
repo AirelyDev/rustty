@@ -260,9 +260,11 @@ fn main() {
     }
     build.compile("rustty_resources");
 
-    // 5. msgfmt each po/*.po -> locale/<locale>/LC_MESSAGES/<domain>.mo
-    //    (GhosttyI18n.zig:33-43). Load-bearing: the .blp use gettext `_()`.
-    build_translations(&manifest_dir, &out_dir, base_app_id);
+    // 5. Validity-check every po/*.po with `msgfmt --check` (WS13 T9). The
+    //    INSTALL half of GhosttyI18n.zig:33-43 is `xtask resources` ->
+    //    `res_misc::gen_locale`; see `check_translations` for why this leg is a
+    //    check and no longer an emit.
+    check_translations(&manifest_dir);
 }
 
 /// `/` + bundle id with every `.` replaced by `/` — the reverse-DNS path form
@@ -456,19 +458,36 @@ fn gio_include_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Port of `GhosttyI18n.zig:33-43`: `msgfmt` each `po/*.po` into
-/// `OUT_DIR/locale/<locale>/LC_MESSAGES/<domain>.mo`, where `<domain>` is the
-/// bundle id (the reference domain, `GhosttyI18n.zig:9`, is `bundle_id`) and
-/// `<locale>` is the `.po` file stem. The `po/` tree lives at the workspace
-/// root, two levels above the crate. Missing `po/` is a warn-and-skip (the
-/// gresource pipeline, not translations, is this task's gate).
-fn build_translations(manifest_dir: &Path, out_dir: &Path, domain: &str) {
+/// Port-adjacent VALIDITY CHECK (not an install step).
+///
+/// `GhosttyI18n.zig:33-43` compiles `po/*.po` and INSTALLS the result into
+/// `share/locale`. In rustty that install is `xtask resources` ->
+/// `res_misc::gen_locale`, which is what actually ships and what the macOS
+/// Copy-Resources phase references.
+///
+/// This `build.rs` leg used to ALSO run `msgfmt`, writing `.mo` files into
+/// `OUT_DIR/locale/<locale>/LC_MESSAGES/<domain>.mo` — and nothing anywhere
+/// read them (`grep -rn OUT_DIR crates/rustty-apprt/src crates/rustty-apprt/tests`
+/// -> no hits). That made it a vacuous artifact: it burned build time producing
+/// output no code path could observe, while the only real value it delivered
+/// was the side effect of `msgfmt` failing the build on a malformed catalog.
+///
+/// It now delivers exactly that value and nothing else: `msgfmt --check` per
+/// catalog, output to the null device. `--check` is STRICTLY STRONGER than the
+/// old plain `-o` invocation — it additionally validates the header fields and
+/// the plural-form expressions (`--check-header`, `--check-domain`,
+/// `--check-format`), so a catalog whose `Plural-Forms:` is broken now fails
+/// the build where before it compiled happily into a `.mo` nobody read.
+///
+/// Missing `po/` remains a warn-and-skip: the gresource pipeline, not
+/// translations, is this build script's gate.
+fn check_translations(manifest_dir: &Path) {
     let po_dir = manifest_dir.join("../../po");
     let entries = match fs::read_dir(&po_dir) {
         Ok(entries) => entries,
         Err(_) => {
             println!(
-                "cargo:warning=po directory not found at {}; skipping translations",
+                "cargo:warning=po directory not found at {}; skipping translation checks",
                 po_dir.display()
             );
             return;
@@ -482,26 +501,19 @@ fn build_translations(manifest_dir: &Path, out_dir: &Path, domain: &str) {
     po_files.sort();
 
     for po in &po_files {
-        let stem = po
-            .file_stem()
-            .expect("po file has a stem")
-            .to_string_lossy()
-            .into_owned();
         println!("cargo:rerun-if-changed={}", po.display());
 
-        let dest_dir = out_dir.join(format!("locale/{stem}/LC_MESSAGES"));
-        fs::create_dir_all(&dest_dir).expect("create locale dir");
-        let dest = dest_dir.join(format!("{domain}.mo"));
-
         let out = Command::new("msgfmt")
+            .arg("--check")
+            .arg("--statistics")
             .arg("-o")
-            .arg(&dest)
+            .arg(if cfg!(windows) { "NUL" } else { "/dev/null" })
             .arg(po)
             .output()
             .expect("run msgfmt");
         assert!(
             out.status.success(),
-            "msgfmt failed for {}:\n{}",
+            "msgfmt --check rejected {}:\n{}",
             po.display(),
             String::from_utf8_lossy(&out.stderr)
         );
