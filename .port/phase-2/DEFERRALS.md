@@ -5008,12 +5008,57 @@ From **WS7 Phase B review (I2 harness run)**:
    construction, removing the uninit at the source instead of the read). Phase E must
    either fix it or record a formal 4-criterion exception; it must NOT be left silently
    red.
+   **RESOLVED — WS7 Phase E (2026-07-29), commit `76bd5a9`.** Root-caused to a WRITE, not
+   the read: `RefCountedSet::init`'s `fill(Item::default())` (the port of
+   `@memset(items, .{})`), which every page runs twice over item arrays that live inside
+   the page mapping. `Item<Style, ..>` holds three `style::Color`s, and a typed Rust write
+   of an enum leaves the INACTIVE payload bytes uninitialized (verified with an isolated
+   probe). Fixed by zeroing the item bytes and writing `meta` field by field — faithful,
+   because the reference's `Item.value` has no default (its own comment says `undefined`),
+   so writing zeroes is strictly MORE defined than the reference.
+   **Two claims in the write-up above were WRONG and are corrected in `MIRI_EXCEPTIONS.md`:**
+   the inter-table alignment gaps are NOT a source (nothing writes them and the mapping
+   arrives zeroed), and the defect was NOT "entirely at the B7 call site" —
+   `CompressedPage::init`'s whole-mapping read is exactly what the oracle's
+   `compress/Page.zig` does with `page.memory`, so changing it would have been the fidelity
+   break. Measured with a new seconds-long harness probe `mapinit` (the multi-ten-minute
+   `roundtrip`/`leak` are no longer the primary probe): before, uninitialized at mapping
+   offset 0x160 = the first style-set `Item` slot; after, "mapping of 16384 bytes fully
+   initialized". **And on a REAL production test**, which is stronger evidence than the
+   harness scenarios: `pagelist::tests::pagelist_compress_page_round_trips_a_cold_history_page`
+   under Miri aborts with the exact `[u8; 8]` uninit error before the fix and reports
+   `1 passed` (194.01s) after it; `pagelist_compress_drain_finishes_in_one_call`, which
+   compresses SIX std-capacity mappings, also runs to completion post-fix (1631.36s, zero
+   UB, zero leaks). The harness's own `roundtrip`/`leak` could NOT serve as the acceptance
+   run: past the abort they interpret several std pages to completion, and two attempts
+   were killed by the host at ~45 and ~65 minutes without finishing. A narrower RESIDUAL
+   remains, now MEASURED rather than implicit
+   (`mapinit_styled`, aborts at [0x17c]): storing a non-default `style::Style` re-poisons
+   its own colour slots, because `RefCountedSet::add` must place the caller's `T` with a
+   typed write. The only fix is making `style::Color` padding-free — 163 sites across 17
+   files, a cross-crate type change outside this lane's fence — so it is carried with a
+   full 4-criterion basis in `MIRI_EXCEPTIONS.md` and listed for WS8 below.
 2. **I3 leak check is a manual proof artifact, not a gate.** Nothing in `.port/tools/` or
    `ci.sh` runs any `mirihar-*` crate, so `.port/phase-2/mirihar-pagelist-compress`'s
    `leakcheck` scenario (native, milliseconds, no Miri needed) demonstrates leak-freedom
    but does not automatically catch a future regression. This matches existing repo
    precedent (`mirihar-compress-lz4`, `mirihar-chunk3b`), so it is not being wired now —
    but at minimum the native `leakcheck` scenario should be wired into a gate in Phase E.
+   **RESOLVED — WS7 Phase E (2026-07-29), commit `f79a762`.** Wired as
+   `.port/tools/gates/check_pagelist_compress_leaks.sh`, registered in `ci.sh` as **G6b**
+   (HARD). Its FAIL arm is PROVEN reachable, not assumed: `--self-test` runs a new
+   `leakcheck_negative` scenario that reproduces the real leak through the real path
+   (`mem::forget` of a compressed list, so no discard-restore runs) under the SAME
+   assertion as `leakcheck`, and the gate is required to exit non-zero and report the
+   leaked bytes — measured 27402 bytes, gate exit 101, self-test RC=0.
+
+**Still open after Phase E (new, narrower, for WS8):** make `style::Color` padding-free
+(byte-complete `#[repr(C)]` value with accessors instead of a Rust enum whose `None`/
+`Palette` variants do not cover their whole slot) so that storing a non-default `Style`
+into a page's style set no longer leaves uninitialized bytes in the mapping that
+`CompressedPage::init` compresses. 163 sites across 17 files; reproduction is the
+committed `mapinit_styled` harness scenario (seconds); 4-criterion acceptance basis is in
+`MIRI_EXCEPTIONS.md`'s WS7 Phase E section.
 
 ---
 
@@ -5222,6 +5267,12 @@ not a hang site (confirmed by `sample`: the hang is inside `killPid`).
    — now corrected in-place. Phase E must either fix the test (re-derive the slice fresh
    after each `decommit_pool_item` call) or record a formal exception; it must NOT be
    left silently claimed-clean.
+   **RESOLVED — WS7 Phase E (2026-07-29).** Fixed exactly as sketched: every slice is now
+   derived fresh from `ptr` and none is live across `decommit_pool_item`. Assertions
+   unchanged (both the fully-dirty and the partially-dirty item must still read back
+   all-zero across the whole buffer). Measured under Miri: was the retag UB above, now
+   `1 passed` in 13.28s. Before/after output recorded in `MIRI_EXCEPTIONS.md`'s Category 2
+   correction note, which no longer claims anything unverified.
 4. **Several WS7 Phase B compression tests are ALSO Miri-intractable and undocumented
    (OPEN, discovered the same pass).** Attempting a bounded full-module pagelist Miri
    sweep (beyond I1's specific ask) found `pagelist_compress_incremental_converges_to_complete`,
@@ -5238,3 +5289,47 @@ not a hang site (confirmed by `sample`: the hang is inside `killPid`).
    family the same way (`bash .port/tools/miri-run.sh rustty-vt pagelist_compress 8 3 5`)
    and either annotate the genuinely-intractable ones or investigate why compression state
    machines are this expensive under Miri interpretation.
+   **RESOLVED — WS7 Phase E (2026-07-29).** Whole family measured, per test, with every
+   candidate re-verified in single-worker ISOLATION before being excepted (a parallel
+   TIMEOUT is a candidate, never a verdict). Full table in `MIRI_EXCEPTIONS.md`
+   ("WS7 Phase E — the page-compression test family"). Of **12** measured:
+   * **10 annotated** — the 4 named above plus the 4 other `pagelist_compress_*` tests,
+     plus **2 that this pass discovered and the earlier one had not named**
+     (`pagelist_mutations_mark_compression_activity`,
+     `pagelist_memory_stats_accounts_compressed_and_resident_bytes`). All 10 TIMEOUT at a
+     6-min bound in isolation.
+   * **1 TRACTABLE and deliberately left un-annotated** —
+     `pagelist_page_preserving_state_leaves_a_compressed_node_compressed`, ok in **77s**.
+     Blanket-annotating the family would have hidden a working check, exactly as the
+     Phase C pass warned.
+   * **1 already excepted** —
+     `search::pagelist::…::compressed_history_match_spanning_page_boundary_remains_compressed`.
+     `miri-run.sh` scored it `res=FAIL` / `VERDICT: PROBLEM`; the per-test output file
+     reads `ignored, MIRI EXCEPTION …`. Worked example of the harness's known
+     ignored-test-as-FAIL misclassification.
+
+   **Root cause, measured (this was the "investigate why" half of the ask).** Not hangs and
+   not a logic difference from the tractable siblings — pure volume, on two independent
+   measurements. (a) Natively these are the slowest PageList tests by two to three orders
+   of magnitude (0.50–4.48s debug vs ~0.00s typical): `fill_compressible_history` calls
+   `grow()` once per row until N std-capacity 215x215 pages exist, then `compress()`
+   LZ4-compresses AND verify-decompresses every byte of each mapping. (b) Two of them were
+   run to COMPLETION under Miri — `pagelist_compress_drain_finishes_in_one_call` **ok in
+   1631s**, `pagelist_compress_page_round_trips_a_cold_history_page` **ok in 194s**, both
+   with ZERO UB and ZERO leaks. That is direct positive criterion-3 evidence, not an
+   argument from a lighter sibling.
+
+   **One lever found, and a follow-up for WS8 rather than a change here.** Those completion
+   runs used `-C debug-assertions=off`, which disables `Page::assert_integrity` (O(page),
+   runs on nearly every PageList mutation; the `mirihar-pagelist-compress` harness already
+   uses this accommodation on the documented grounds that it adds no SB/TB or leak
+   coverage). With it, `pagelist_compress_page_round_trips_a_cold_history_page` goes from
+   TIMEOUT(360s) to **ok in 194s** — so the page-level tests are dominated by
+   `assert_integrity` and would be tractable in a `RUSTFLAGS=-Cdebug-assertions=off` Miri
+   lane, while the multi-page ones are dominated by LZ4 volume and stay out of budget
+   (1631s). The annotations are therefore correct for the lane as it runs today
+   (`check_leaks.sh`: `cargo +nightly miri test -p rustty-vt --lib`, debug assertions ON —
+   without them the rustty-vt G6 lane cannot complete at all). **NEW WS8 item:** add a
+   `-C debug-assertions=off` variant of the vt Miri lane and re-measure the whole
+   `cfg_attr(miri, ignore)` inventory against it; changing G6's flags is a cross-crate
+   change to a shared gate and would re-classify far more than the compression family.

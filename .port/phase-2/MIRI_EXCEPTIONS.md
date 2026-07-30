@@ -155,13 +155,33 @@ this codebase's own discipline warns against elsewhere (see
 a TEST-CODE bug, not new, not caused by WS7 Phase C** — `mem.rs`/this test were
 last touched at commit `0413d2b` (WS7 Phase B review response) and no Phase C
 commit (`6af540d`/`f94716d`/`0349439`/`e5a9217`) touches either file. It
-predates WS7 entirely (WS7 B1, commit `39cd6b8`). It is **OPEN, not fixed
-here** — out of scope for the Phase C review response — and the "native +
-ASan" complement in the table above still holds (native `cargo test` passes;
-ASan does not flag it, consistent with a Stacked-Borrows-only violation that
-leaves no actual memory corruption). Fix sketch: re-derive `buf` fresh from
-`ptr` after each `decommit_pool_item` call instead of holding one `&mut [u8]`
-across it.
+predates WS7 entirely (WS7 B1, commit `39cd6b8`). The "native + ASan"
+complement in the table above still holds (native `cargo test` passes; ASan
+does not flag it, consistent with a Stacked-Borrows-only violation that
+leaves no actual memory corruption).
+
+**FIXED in WS7 Phase E (2026-07-29).** The test no longer holds any slice across
+`decommit_pool_item`: each write and each read derives its own slice fresh from
+`ptr`, so no reference is live while `mem::decommit` writes through its own raw
+pointer. What the test asserts is unchanged — both the fully-dirty and the
+partially-dirty item are still required to read back all-zero over the whole
+`2 * PAGE_SIZE_MIN` buffer. Measured, same command as the reproduction above:
+
+```
+before: error: Undefined Behavior: trying to retag from <698648> for SharedReadOnly
+        permission at alloc219109[0x0], but that tag does not exist in the borrow stack
+          --> crates/rustty-vt/src/pagelist/tests.rs:2735:13
+        help: <698648> was created by a Unique retag at offsets [0x0..0x8000]
+          --> crates/rustty-vt/src/pagelist/tests.rs:2730:24
+        help: <698648> was later invalidated at offsets [0x0..0x8000] by a write access
+          --> crates/rustty-vt/src/mem.rs:175:18
+
+after:  test pagelist::tests::pagelist_decommit_pool_item_zeroes_the_dirty_region ... ok
+        test result: ok. 1 passed; 0 failed; ... finished in 13.28s
+```
+
+So the Category 2 table's "IS Miri-provable" claim for this test is now TRUE as
+measured (13.28s under Miri), not merely asserted.
 
 Criterion note: the WS8 entry is *stronger* than the `page.rs` precedent, because
 the exact code path Miri would need to verify (the zero-invariant) is still run
@@ -1055,7 +1075,8 @@ raw-pointer aliasing) is separate and still owed.
 Harness: `.port/phase-2/mirihar-pagelist-compress/` — a binary crate that depends on the
 REAL `rustty-vt` by path (only the library is built under Miri, not the 2136-test test
 binary, which has never completed on this host — see the Phase A entry above). Scenarios
-are selectable: `split`, `siblings`, `roundtrip`, `leak`, `leakcheck`.
+are selectable: `split`, `siblings`, `roundtrip`, `leak`, `leakcheck`, and (added in WS7
+Phase E) `mapinit`, `mapinit_styled`, `leakcheck_negative`.
 
 Accommodations (all `cfg(miri)`, none affecting production behaviour):
 `rustty-os`'s page allocator already served page memory from the std heap under
@@ -1088,7 +1109,7 @@ Exactly the predicted failure: the `&mut NodeData` in the second accessor call i
 `Unique` retag that invalidates the first call's result. With the `#[repr(C, u8)]` +
 `offset_of!` accessors it is clean.
 
-### OPEN FINDING — uninit bytes in the page mapping fed to LZ4
+### FINDING (RESOLVED in WS7 Phase E, see the Phase E section below) — uninit bytes in the page mapping fed to LZ4
 
 `roundtrip`/`leak` abort in `compress_page`:
 
@@ -1123,11 +1144,254 @@ failure (the page simply stays resident — a SAFE failure) or differing padding
 a decompress/restore round-trip — never cell corruption. A future, more aggressive compiler
 could in principle exploit the formal UB, but not into anything worse than that.
 
-**Status: OPEN, scheduled to WS7 Phase E** (see `.port/phase-2/DEFERRALS.md`). Candidate
-resolutions: zero the padding on write, read the mapping through a `freeze`/volatile
-path before compressing, or a documented per-path exception. A cheaper fourth option:
-zero the sub-table gaps / write padded entries through a pre-zeroed `MaybeUninit` at the
-point they are constructed, which removes the uninit at the source instead of papering
-over the read. It does NOT affect the I2 or I3 evidence: `split`/`siblings` are SB-clean
-with the negative control reproducing the exact predicted UB, and the I3 leak check is
-proven failing-then-passing natively through the harness's counting `#[global_allocator]`.
+**Status: RESOLVED in WS7 Phase E** (fix + measured before/after in the
+"WS7 Phase E" section below; two claims in the paragraphs above were WRONG and are
+corrected there — the "alignment gaps between sub-tables" hypothesis, and the framing of
+the defect as being "entirely at the B7 call site"). It does NOT affect the I2 or I3
+evidence: `split`/`siblings` are SB-clean with the negative control reproducing the exact
+predicted UB, and the I3 leak check is proven failing-then-passing natively through the
+harness's counting `#[global_allocator]` (now also a gate — G6b).
+
+## WS7 Phase E — the uninit-in-page-mapping finding: root-caused and FIXED (2026-07-29)
+
+### What it actually was (two corrections to the Phase B write-up)
+
+The Phase B entry listed "the alignment gaps between sub-tables" as a candidate source and
+placed the defect "entirely at the B7 call site". **Both are wrong.**
+
+* The inter-table alignment gaps are NOT a source. Nothing writes them, and the mapping
+  arrives fully zeroed (mmap/`VirtualAlloc` by contract; `Global.allocate_zeroed` under
+  `cfg(miri)`). They stay initialized.
+* The defect is not in `CompressedPage::init` at all. Compressing the mapping as one
+  `&[u8]` is exactly what the oracle does (`compress/Page.zig`'s
+  `lz4.compress(source.memory, ...)`), so changing that read would have been the fidelity
+  break, not the fix. The bug was a WRITE that de-initialized part of the mapping.
+
+The write was `RefCountedSet::init`'s
+`slice::from_raw_parts_mut(items.ptr(base), l.cap).fill(Item::default())` — the port of the
+reference's `@memset(items.ptr(base)[0..l.cap], .{})`. Every terminal page runs it twice
+(the style set and the hyperlink set), over the item array *inside the page mapping*.
+`Item<Style, Id, RefCount>` contains three `style::Color`s, and `style::Color` is a Rust
+enum whose `None` and `Palette(u8)` variants do not cover all four bytes of their slot. A
+typed Rust write initializes the discriminant plus the ACTIVE variant's fields and leaves
+every other byte of the destination **uninitialized** — Miri actively de-initializes them,
+even when the destination was zeroed a moment earlier. This was verified in isolation
+before touching anything:
+
+```
+// probe: write Color::None over a zeroed heap buffer, read the 4 bytes back
+error: Undefined Behavior: reading memory at alloc2085[0x1..0x2], but memory is
+       uninitialized at [0x1..0x2], and this operation requires initialized memory
+```
+
+### The fix
+
+`crates/rustty-vt/src/ref_counted_set.rs`'s `init` now zeroes the item array's bytes and
+writes `meta` FIELD BY FIELD (`bucket`, `psl`, `ref_count` are integers; a field-wise write
+touches only that field's bytes and cannot re-poison the surrounding ones). See the PORT
+NOTE at the site.
+
+**Why this is the fidelity-correct choice among the four candidates the Phase B write-up
+listed.** The reference's `Item.value` field has NO default — the reference's own comment is
+that it is `undefined` — so the reference's `.{}` leaves `value` unspecified and reads of a
+dead item's value are already forbidden. Writing zeroes there is *strictly more defined*
+than the reference, and the all-zero item-value state is already reachable today (the page
+mapping arrives zeroed, and `Page::reinit` re-zeroes it before `init_buf` runs). By
+contrast: "zero the padding on write" cannot be expressed generically in Rust (there is no
+way to enumerate which bytes a typed write left uninitialized); "read through a
+freeze/volatile path" does not work at all (a volatile or byte-wise read of an
+uninitialized byte is the very UB being reported, and a byte-wise copy propagates
+uninit-ness rather than defining it); and a per-path exception would have left real,
+fixable UB in production code.
+
+### Measured before/after
+
+The Phase B evidence run took ~45 min because `roundtrip`/`leak` build several
+std-capacity (215x215) pages and LZ4 every byte of each mapping. The defect needs neither,
+so Phase E added a **seconds-long** probe to the harness, `mapinit`: allocate one small
+`Page` and read every byte of its mapping exactly as `CompressedPage::init` does. Under
+Miri that aborts at the FIRST uninitialized byte and names its offset.
+
+| probe | before the fix | after the fix |
+|---|---|---|
+| `mapinit` (one page, `styles: 128`) | `error: Undefined Behavior: reading memory at alloc1356[0x160..0x161] ... memory is uninitialized` (offset 0x160 = the first `Item` slot in the style set's item array) | `mapping of 16384 bytes fully initialized (checksum 57974)` — CLEAN |
+| `mapinit` (one page, `styles: 1`) | CLEAN even before the fix — `items_cap = 0.8 * table_cap = 0`, so the fill never runs. Recorded because it is why a too-small probe capacity gives a false green | CLEAN |
+| `cargo test -p rustty-vt --lib` | 2157 passed / 0 failed / 2 ignored | 2157 passed / 0 failed / 2 ignored (unchanged) |
+
+**The decisive before/after is on a REAL production test, not the harness.** The harness's
+`roundtrip`/`leak` scenarios could not be used as the acceptance run: once the fix lets
+them past the abort they interpret several std-capacity pages to completion, and two
+attempts were killed by the host at ~45 min and ~65 min without finishing. The equivalent
+coverage — and better, because it is the shipped test rather than a harness scenario — comes
+from running `pagelist::tests::pagelist_compress_page_round_trips_a_cold_history_page`
+itself under Miri (`-C debug-assertions=off --include-ignored`, so the interpretation fits
+in minutes; it is `cfg_attr(miri, ignore)` per the Phase E section below). It drives
+`PageList::compress_page` -> `CompressedPage::init` -> `decommit` -> `restore` and compares
+the restored bytes:
+
+```
+BEFORE (ref_counted_set.rs reverted to 76bd5a9^, everything else identical):
+  error: Undefined Behavior: constructing invalid value of type [u8; 8]: at [2],
+         encountered uninitialized memory, but expected an integer
+  (2m28s to the abort)
+
+AFTER:
+  test result: ok. 1 passed; 0 failed; ... finished in 194.01s
+```
+
+`pagelist_compress_drain_finishes_in_one_call` — which compresses SIX std-capacity page
+mappings — also runs to completion post-fix (`ok, 1631.36s`, zero UB, zero leaks). Both
+would abort in `lz4::compress` within seconds before the fix.
+
+### KNOWN RESIDUAL — storing a non-default `style::Style` still poisons its slot
+
+`RefCountedSet::add` must place the caller's `T` into the item slot with a typed write, so
+a page that has stored at least one non-default `style::Style` (or hyperlink `PageEntry`)
+still contains uninitialized bytes in the unused payload of each `style::Color`. New
+harness scenario `mapinit_styled` reproduces it deterministically in seconds, so this is
+MEASURED, not assumed:
+
+```
+error: Undefined Behavior: reading memory at alloc1407[0x17c..0x17d], but memory is
+       uninitialized at [0x17c..0x17d], and this operation requires initialized memory
+```
+
+**Why it is not fixed here, concretely.** There is no way to place a padded/niche-free-less
+Rust value into memory without leaving those bytes uninitialized; the only fix is to make
+the stored type padding-free, i.e. turn `style::Color` from a Rust enum into a
+byte-complete `#[repr(C)]` value with accessors. That is **163 construction/match sites
+across 17 files** (`crates/rustty-vt/src/terminal.rs`, `screen.rs`, `render.rs`,
+`formatter.rs`, `kitty/graphics_unicode.rs`, `rustty-vt-c`, `rustty-inspector`,
+`rustty-vaxis`, `rustty-font-shaper`, `rustty-cli`), several of which were owned by other
+in-flight WS7 lanes at the time. It is a cross-crate type change, not a compression fix.
+
+**4-criterion basis for accepting the residual for now:** (1) *measured*, not assumed —
+`mapinit_styled` is a committed, seconds-long reproduction with the exact offset;
+(2) *compensating coverage* — the whole-mapping initialization property IS gated by
+`mapinit` (empty pages, which is what `PageList` compresses in the common cold-history
+case), the native suite is green, and ASan sees no corruption; (3) *no uncovered unsafe
+path* — the aliasing and lifetime properties of the compress/restore seam are separately
+Miri-proven by `split`/`siblings`/`roundtrip`/`leak`; what remains is a byte-validity
+property of one leaf type, whose blast radius is the *unused payload bytes of a colour
+slot* only — never cell data, never an offset, never a length (worst realistic outcome
+remains a spurious verify failure, which leaves the page resident: a SAFE failure);
+(4) *documented here with the exact required change* and carried as a WS8 work item, not
+left silently red.
+
+## WS7 Phase E — the page-compression test family, measured per test (2026-07-29)
+
+DEFERRALS.md's WS7-Phase-E item 4 recorded 4 compression tests as Miri-intractable and
+undocumented, and asked Phase E to measure the REST of the family the same way. Done. The
+sweep also found **2 more intractable tests the earlier pass had not named**
+(`pagelist_mutations_mark_compression_activity`,
+`pagelist_memory_stats_accounts_compressed_and_resident_bytes`) and **1 that is TRACTABLE
+and is deliberately left un-annotated**.
+
+### Method
+
+`bash .port/tools/miri-run.sh rustty-vt pagelist_compress 4 3 6` for discovery, then
+**every candidate re-measured in single-worker isolation** (`... <exact-name> 1 5 6`)
+before being excepted — parallel Miri over-reports under memory pressure, so a parallel
+TIMEOUT is a candidate, never a verdict. Native debug times were taken alongside because
+they are the cheapest predictor of Miri cost. macOS has no coreutils `timeout`, so the
+bound always comes from `miri-run.sh`'s own `killtree`.
+
+### Results (default lane: debug assertions ON, 6-minute hard bound)
+
+| Test | parallel (4 workers) | ISOLATED (1 worker) | native debug | disposition |
+|---|---|---|---|---|
+| `pagelist_compress_drain_finishes_in_one_call` | TIMEOUT 360s | **TIMEOUT 360s** | 2.49s | annotated |
+| `pagelist_compress_full_leaves_viewport_and_active_resident` | TIMEOUT 360s | **TIMEOUT 360s** | 1.51s | annotated |
+| `pagelist_compress_full_mode_leaves_no_continuation` | TIMEOUT 360s | **TIMEOUT 361s** | 1.49s | annotated |
+| `pagelist_compress_incremental_converges_to_complete` | TIMEOUT 360s | **TIMEOUT 360s** | 2.51s | annotated |
+| `pagelist_compress_incremental_restarts_after_list_mutation` | TIMEOUT 360s | **TIMEOUT 360s** | 4.48s | annotated |
+| `pagelist_compress_page_decommit_failure_leaves_the_page_resident` | TIMEOUT 360s | **TIMEOUT 360s** | 1.00s | annotated |
+| `pagelist_compress_page_rejects_an_already_compressed_node` | TIMEOUT 360s | **TIMEOUT 360s** | 1.00s | annotated |
+| `pagelist_compress_page_round_trips_a_cold_history_page` | TIMEOUT 360s | **TIMEOUT 360s** | 1.00s | annotated |
+| `pagelist_mutations_mark_compression_activity` (NEW find) | — | **TIMEOUT 360s** | 0.50s | annotated |
+| `pagelist_memory_stats_accounts_compressed_and_resident_bytes` (NEW find) | — | **TIMEOUT 360s** | 1.50s | annotated |
+| `pagelist_page_preserving_state_leaves_a_compressed_node_compressed` | — | **ok, 77s** | 0.00s | **TRACTABLE — left un-annotated** |
+| `search::pagelist::…::compressed_history_match_spanning_page_boundary_remains_compressed` | — | already `cfg_attr(miri, ignore)` | — | unchanged |
+
+The last row is also a worked example of the harness caveat: `miri-run.sh` classified it
+`res=FAIL` and printed `VERDICT: PROBLEM`, but the per-test output file reads
+`ignored, MIRI EXCEPTION …` — the harness scores an ignored test as FAIL. That banner is
+never by itself evidence of a problem; the per-test output is.
+
+So of 12 measured, **10 are excepted, 1 is tractable and stays on the Miri-gated surface,
+1 was already excepted.** This is the same criterion-4 discipline as the Phase C pass, and
+it paid again: `pagelist_page_preserving_state_leaves_a_compressed_node_compressed` passes
+in 77s, and a blanket "the compression tests are intractable" annotation would have hidden
+a working check.
+
+### Root-cause investigation: WHY compression tests are this expensive
+
+They are not hangs and they are not a logic difference from their tractable siblings. Two
+independent measurements establish that:
+
+1. **Native debug runtime already separates them.** A typical PageList test finishes in
+   0.00s; every excepted test here is 0.50–4.48s, i.e. 100–1000x more work *before* Miri's
+   interpreter multiplier. The work is `fill_compressible_history`, which calls
+   `PageList::grow()` once per row until N std-capacity (215x215) pages exist — ~215 * N
+   grows — followed by `compress()`, which LZ4-compresses AND verify-decompresses every
+   byte of each ~16 KB-multiple page mapping. Millions of interpreted byte operations.
+2. **They terminate cleanly under Miri when given the time.** Two of them were run to
+   COMPLETION under Miri (with `-C debug-assertions=off`, see below), both `1 passed`,
+   **zero UB, zero leaks**:
+
+   | Test | Miri, `-C debug-assertions=off` |
+   |---|---|
+   | `pagelist_compress_drain_finishes_in_one_call` | **ok, 1631.36s** (27m11s wall) |
+   | `pagelist_compress_page_round_trips_a_cold_history_page` | **ok, 194.01s** |
+
+   That is direct positive evidence, stronger than the usual criterion-3 argument from a
+   lighter sibling: these tests are Miri-CLEAN, just slow.
+
+   A wider `-C debug-assertions=off` sweep (3 workers, 20-min bound) confirms the split:
+   `pagelist_compress_full_mode_leaves_no_continuation`,
+   `pagelist_compress_drain_finishes_in_one_call` and
+   `pagelist_compress_full_leaves_viewport_and_active_resident` all still TIMEOUT at 1200s
+   even with integrity checks disabled (consistent with drain's 1631s solo run), i.e. the
+   multi-page tests are LZ4-volume-bound and no lane flag rescues them. The other five in
+   that sweep reported `res=FAIL` in 8s purely because the annotations in this commit had
+   already landed and the harness scores an ignored test as FAIL — again, the per-test
+   output files, not the banner.
+
+**The one lever that helps, and why it is not applied here.** `Page::assert_integrity` is
+O(page) and runs on nearly every PageList mutation under `debug_assertions`.
+`.port/phase-2/mirihar-pagelist-compress` already exploits this (`[profile.dev]
+debug-assertions = false`, on the documented grounds that integrity checking adds no
+Stacked-Borrows/Tree-Borrows or leak coverage). Applying the same lever to the crate lane
+moves `pagelist_compress_page_round_trips_a_cold_history_page` from TIMEOUT(360s) to
+**ok in 194s** — i.e. the page-level tests are dominated by `assert_integrity`, and would
+be TRACTABLE in a `RUSTFLAGS=-Cdebug-assertions=off` Miri lane — while the multi-page ones
+are dominated by LZ4 volume and stay far out of budget (drain: 1631s). So:
+
+* The annotations above are correct for the lane as it actually runs today
+  (`check_leaks.sh` runs `cargo +nightly miri test -p rustty-vt --lib`, debug assertions
+  ON). Without them the rustty-vt G6 lane cannot complete at all.
+* **Recommended follow-up (WS8, not done here):** add a `-C debug-assertions=off` variant
+  of the vt Miri lane and re-measure the whole `cfg_attr(miri, ignore)` inventory against
+  it. Changing G6's lane flags is a cross-crate change to a shared gate and would
+  re-classify far more than the compression family, so it does not belong in this lane.
+
+### 4-criterion basis for the 10 annotations
+
+1. **Empirically intractable** — TIMEOUT at a 6-minute hard bound, measured per test in
+   single-worker isolation (table above), not assumed from the class. The two that were
+   run without a bound needed 194s and 1631s *with* the integrity checks disabled.
+2. **Passes natively** — all 10 pass in `cargo test -p rustty-vt --lib` (2157 passed / 0
+   failed / 2 ignored, unchanged by this work) and in the release lane.
+3. **No uncovered unsafe path** — two of the ten have now been run to COMPLETION under
+   Miri with zero UB and zero leaks (see above), which covers `compress(Drain)`,
+   `compress(Incremental)` (Drain drives incremental steps plus the verification pass),
+   `compress_page`, `CompressedPage::init`/`restore`, `decommit_pool_item` and the
+   node storage transition. `pagelist_page_preserving_state_leaves_a_compressed_node_compressed`
+   stays on the Miri surface (77s) and covers `Node::page_preserving_state` over a
+   compressed node. The compress/restore SEAM's aliasing is separately Miri-proven by
+   `.port/phase-2/mirihar-pagelist-compress`'s `split`/`siblings`/`roundtrip`/`leak`, and
+   leak-freedom of the encodings is now continuously gated natively by G6b.
+4. **Intractability is allocation volume, not logic** — established by both measurements
+   in the root-cause section: the same methods on a single page are tractable
+   (77s / 194s), and the excepted tests differ only in how many std-capacity page
+   mappings they build and compress.
