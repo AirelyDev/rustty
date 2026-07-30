@@ -622,22 +622,15 @@ fn inline_roff_in(items: &[Inline], enclosing: &[u8]) -> Vec<u8> {
 /// bytes is strictly more conservative, and a roff newline in filled text is
 /// just a space, so nothing is lost.
 fn wrap_roff_line(line: &[u8], out: &mut Vec<Vec<u8>>) {
-    // The break-opportunity pass runs on EVERY line, not only the ones that get
-    // wrapped: a too-wide token spoils output justification regardless of how
-    // long its input line happens to be.
-    let words: Vec<Vec<u8>> = line
-        .split(|b| *b == b' ')
-        .filter(|w| !w.is_empty())
-        .map(add_break_opportunities)
-        .collect();
-    let total: usize = words.iter().map(Vec::len).sum::<usize>() + words.len().saturating_sub(1);
-    if total <= WRAP_COLUMNS {
-        out.push(words.join(&b' '));
+    if line.len() <= WRAP_COLUMNS {
+        out.push(line.to_vec());
         return;
     }
     let mut cur: Vec<u8> = Vec::new();
-    for word in &words {
-        let word = &word[..];
+    for word in line.split(|b| *b == b' ') {
+        if word.is_empty() {
+            continue;
+        }
         if cur.is_empty() {
             cur.extend_from_slice(word);
         } else if cur.len() + 1 + word.len() <= WRAP_COLUMNS {
@@ -651,43 +644,6 @@ fn wrap_roff_line(line: &[u8], out: &mut Vec<Vec<u8>>) {
     if !cur.is_empty() {
         out.push(cur);
     }
-}
-
-/// A token that must not be broken and is wider than the OUTPUT measure makes
-/// the formatter give up on justifying its line —
-/// `groff: warning [p 7, 0.7i]: cannot adjust line`, three of which the real
-/// generated pages hit, all of them long URLs inside an indented `.RS` region
-/// where the measure is narrowest.
-///
-/// Wrapping the INPUT cannot fix that: the warning is about the rendered line,
-/// and no input line break makes a 62-column token fit a 58-column measure.
-/// The roff answer is `\:`, a zero-width break OPPORTUNITY — it renders as
-/// nothing but lets the formatter break there if it must. Both `groff` and
-/// `mandoc` implement it.
-///
-/// Applied only after a `/`, and only in tokens long enough to be the cause, so
-/// ordinary prose is untouched and a URL breaks at a path separator (where a
-/// reader can still reassemble it) rather than mid-word.
-fn add_break_opportunities(word: &[u8]) -> Vec<u8> {
-    /// Below this length a token always fits the narrowest measure the man
-    /// macros produce, so there is nothing to fix.
-    const LONG_TOKEN: usize = 40;
-
-    if word.len() < LONG_TOKEN || !word.contains(&b'/') {
-        return word.to_vec();
-    }
-    let mut out = Vec::with_capacity(word.len() + 8);
-    for (i, b) in word.iter().enumerate() {
-        out.push(*b);
-        // Never inside the `//` of a scheme: breaking `https://` at the
-        // colon-slash-slash reads as a typo. So skip when either neighbour is
-        // also a slash, and never at the very start of the token.
-        let adjacent_slash = word.get(i + 1) == Some(&b'/') || (i > 0 && word[i - 1] == b'/');
-        if *b == b'/' && i > 0 && i + 1 < word.len() && !adjacent_slash {
-            out.extend_from_slice(b"\\:");
-        }
-    }
-    out
 }
 
 /// Render one filled-text run: join the source lines, run the inline pass over
@@ -1210,22 +1166,6 @@ mod tests {
             html.contains("<a href=\"https://docs.gtk.org/x.html\">"),
             "{html}"
         );
-    }
-
-    /// A long URL gains `\:` zero-width break opportunities at its path
-    /// separators, so the formatter can justify the line it lands on.
-    #[test]
-    fn long_urls_gain_break_opportunities() {
-        let out = roff(b"% T(1) v | t\n\n# X\n\nsee https://docs.gtk.org/gio/type_func.Application.id_is_valid.html now\n");
-        assert!(
-            out.contains("gtk.org/\\:gio/\\:type_func."),
-            "no break opportunities: {out}"
-        );
-        // Control 1: the scheme's `//` is never split.
-        assert!(!out.contains("//\\:"), "broke the scheme separator: {out}");
-        // Control 2: short tokens with slashes are left completely alone.
-        let short = roff(b"% T(1) v | t\n\n# X\n\nuse a/b now\n");
-        assert!(!short.contains("\\:"), "touched a short token: {short}");
     }
 
     /// HTML is well-formed, standalone, and escapes `<`/`>`/`&` in text.
