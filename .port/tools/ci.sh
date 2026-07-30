@@ -343,6 +343,19 @@ GATE_REGISTRY=(
   "D1|PROGRESS|bash $GATES/check_slice_reinterpret.sh"
   "D2|PROGRESS|bash $GATES/check_capacity_saturation.sh"
   "D3|PROGRESS|$PY $GATES/check_constants_parity.py"
+  # G-LZ4 — the LZ4 encoder BYTE STREAM matches the oracle's, not merely
+  # round-trips. Sits next to D3 because it extends D3's subject matter from
+  # derived constants to the emitted bytes. `lz4_differential_light` is a real
+  # guard for format conformance and every decoder bounds/margin path (4 of 7
+  # injected faults caught, measured in assessment B §2.3) but it is BLIND to
+  # match-finder heuristics: HASH_LOG 12->11 diverges 1,631/7,976 encoded blocks
+  # with the whole rustty suite green (reproduced at P3-W0 T1 step 1).
+  # Upstream's compress/AGENTS.md mandates exactly this proof; it is now ported
+  # to crates/rustty-vt/src/compress/AGENTS.md. PROGRESS while it beds in — it
+  # exits 3 BLOCKED without the oracle checkout or a zig toolchain, and
+  # run_gate's PROGRESS-went-RED branch still escalates a genuine mismatch. Its
+  # FAIL arm is proven by `--self-test` (exactly 1,631 diverging rows).
+  "G-LZ4|PROGRESS|bash $GATES/check_lz4_byte_exact.sh"
   "D4|PROGRESS|bash $GATES/check_comptime_phase.sh"
   "D5|PROGRESS|bash $GATES/check_paired_invariants.sh"
   "D6|PROGRESS|bash $GATES/check_sanitizer_canary.sh"

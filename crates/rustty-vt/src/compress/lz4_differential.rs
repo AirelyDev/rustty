@@ -302,7 +302,11 @@ impl Workspace {
             // One extra byte so wrong-size decompression can be tested above
             // the exact length as well as below it.
             decoded: vec![0u8; max_input + 1],
-            table: Box::new([0u32; 4096]),
+            // Derived from the codec's own constant, never a literal: a bare
+            // `4096` makes `HASH_LOG` un-perturbable, which is precisely the
+            // knob G-LZ4's negative control has to move
+            // (`.port/tools/gates/check_lz4_byte_exact.sh --self-test`).
+            table: Box::new([0u32; lz4::HASH_TABLE_LEN]),
         }
     }
 }
