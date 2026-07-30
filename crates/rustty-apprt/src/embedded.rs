@@ -134,6 +134,12 @@ pub use rustty_os::resourcesDir;
 #[cfg(target_os = "macos")]
 pub type KeymapError = rustty_input::keymap_darwin::Error;
 /// See the macOS variant.
+//
+// PORT NOTE: off Darwin the reference's `Keymap` is `KeymapNoop`, whose
+// `init`/`reload` error sets carry no tags; the port spells that empty set as
+// the unit error, the same choice `keymap_noop.rs` records — hence the
+// `clippy::result_unit_err` allows on the two signatures below, matching that
+// module's per-occurrence allow.
 #[cfg(not(target_os = "macos"))]
 pub type KeymapError = ();
 
@@ -291,6 +297,9 @@ impl KeyEvent<'_> {
 }
 
 impl App {
+    // See the `KeymapError` note: off Darwin this is the noop keymap's empty
+    // error set, spelled as the unit error like `keymap_noop.rs`.
+    #[allow(clippy::result_unit_err)]
     pub fn init(
         core_app: *mut CoreApp,
         config: &Config,
@@ -415,6 +424,9 @@ impl App {
     }
 
     /// This should be called whenever the keyboard layout was changed.
+    // See the `KeymapError` note: off Darwin this is the noop keymap's empty
+    // error set, spelled as the unit error like `keymap_noop.rs`.
+    #[allow(clippy::result_unit_err)]
     pub fn reloadKeymap(&mut self) -> Result<(), KeymapError> {
         // Reload the keymap
         // try self.keymap.reload();

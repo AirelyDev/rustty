@@ -106,6 +106,16 @@ mod imp {
         Expired,
     }
 
+    /// Storage for the type-erased `present-surface` seam
+    /// ([`Application::present_surface_thunk`]), named so the field type stays
+    /// under the type-complexity threshold.
+    type PresentSurfaceThunk = RefCell<Option<Box<dyn Fn(u64)>>>;
+
+    /// Storage for the type-erased color-scheme seam
+    /// ([`Application::color_scheme_thunk`]), named for the same reason as
+    /// [`PresentSurfaceThunk`].
+    type ColorSchemeThunk = RefCell<Option<Box<dyn Fn(bool)>>>;
+
     /// PORTS: `application.zig:163-222` `Application.Private`. Every pointer-typed
     /// field maps a PREPORT_GTK §1.1 LIFETIMES row; the transfer/ownership mode is
     /// preserved 1:1 (see the field docs). Interior mutability is `RefCell`/`Cell`
@@ -230,7 +240,7 @@ mod imp {
         /// `core_app` points at, so [`super::Application::bind_core_app`] captures
         /// it here. `None` until bound; the `present-surface` handler is then a
         /// no-op (placeholder-leaf doctrine).
-        pub present_surface_thunk: RefCell<Option<Box<dyn Fn(u64)>>>,
+        pub present_surface_thunk: PresentSurfaceThunk,
 
         /// rustty-only seam carrying the monomorphized color-scheme propagation
         /// (`core_app.colorSchemeEvent(self.rt(), scheme)` plus, per surface,
@@ -244,7 +254,7 @@ mod imp {
         /// [`super::Application::bind_core_app`] captures both backrefs here.
         /// `None` until bound; [`Self::handle_style_manager_dark`] then propagates
         /// nothing (faithful to a not-yet-wired core, placeholder-leaf doctrine).
-        pub color_scheme_thunk: RefCell<Option<Box<dyn Fn(bool)>>>,
+        pub color_scheme_thunk: ColorSchemeThunk,
 
         /// rustty-only seam carrying the monomorphized inline core tick
         /// (`try priv.core_app.tick(priv.rt_app)`, `application.zig:552`) — **the
@@ -1331,24 +1341,25 @@ mod imp {
         // other theme defers to the system/libadwaita styling (`:941-963`).
         // (`WindowTheme::Rustty` is this port's rename of the oracle's
         // `.ghostty`.)
-        match config.window_theme {
-            WindowTheme::Rustty => {
-                write!(
-                    css,
-                    "windowhandle {{\n  background-color: rgb({},{},{});\n  color: rgb({},{},{});\n}}\nwindowhandle:backdrop {{\n background-color: oklab(from rgb({},{},{}) calc(l * 0.9) a b / alpha);\n}}\n",
-                    headerbar_background.r,
-                    headerbar_background.g,
-                    headerbar_background.b,
-                    headerbar_foreground.r,
-                    headerbar_foreground.g,
-                    headerbar_foreground.b,
-                    headerbar_background.r,
-                    headerbar_background.g,
-                    headerbar_background.b,
-                )
-                .unwrap();
-            }
-            _ => {}
+        //
+        // PORT NOTE: the reference is `switch (window_theme) { .ghostty => ...,
+        // else => {} }`; a two-arm match whose second arm is the catch-all IS an
+        // `if` (clippy::single_match), so it is spelled as one.
+        if config.window_theme == WindowTheme::Rustty {
+            write!(
+                css,
+                "windowhandle {{\n  background-color: rgb({},{},{});\n  color: rgb({},{},{});\n}}\nwindowhandle:backdrop {{\n background-color: oklab(from rgb({},{},{}) calc(l * 0.9) a b / alpha);\n}}\n",
+                headerbar_background.r,
+                headerbar_background.g,
+                headerbar_background.b,
+                headerbar_foreground.r,
+                headerbar_foreground.g,
+                headerbar_foreground.b,
+                headerbar_background.r,
+                headerbar_background.g,
+                headerbar_background.b,
+            )
+            .unwrap();
         }
     }
 
@@ -1430,9 +1441,12 @@ mod imp {
         // color variables + headerbar (`:1032-1063`). (`WindowTheme::Rustty`
         // is this port's rename of the oracle's `.ghostty`.) Note: this block
         // intentionally has no trailing newline, matching the oracle bytes.
-        match config.window_theme {
-            WindowTheme::Rustty => {
-                write!(
+        //
+        // PORT NOTE: the reference is `switch (window_theme) { .ghostty => ...,
+        // else => {} }`; a two-arm match whose second arm is the catch-all IS an
+        // `if` (clippy::single_match), so it is spelled as one.
+        if config.window_theme == WindowTheme::Rustty {
+            write!(
                     css,
                     ":root {{\n  \
                      --ghostty-fg: rgb({},{},{});\n  \
@@ -1462,8 +1476,6 @@ mod imp {
                     headerbar_background.b,
                 )
                 .unwrap();
-            }
-            _ => {}
         }
     }
 }

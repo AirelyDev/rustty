@@ -51,8 +51,8 @@ pub struct ClipboardRequestBoxed(pub ClipboardRequest);
 mod imp {
     use super::*;
 
-    /// PORTS: `clipboard_confirmation_dialog.zig:19-352` `ClipboardConfirmationDialog`
-    /// + its `Private` (`:117-138`). A `CompositeTemplate` over
+    /// PORTS: `clipboard_confirmation_dialog.zig:19-352` `ClipboardConfirmationDialog` +
+    /// its `Private` (`:117-138`). A `CompositeTemplate` over
     /// `ui/1.4/clipboard-confirmation-dialog.ui` that binds the four content
     /// children + the `remember_choice` switch and the reveal/hide/notify template
     /// callbacks.
@@ -222,7 +222,7 @@ impl ClipboardConfirmationDialog {
     /// clipboard request without copying (a cheap `Copy` here).
     #[must_use]
     pub fn get_request(&self) -> Option<ClipboardRequestBoxed> {
-        self.imp().request.borrow().clone()
+        *self.imp().request.borrow()
     }
 
     /// PORTS: `clipboard_confirmation_dialog.zig:161-164` `getClipboardContents`.
