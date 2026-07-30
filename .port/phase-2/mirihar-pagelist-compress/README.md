@@ -48,6 +48,43 @@ Miri's exit-time leak checker does see it.
 Scenario: `compress_reset_compress_deinit` (compress -> `reset()` -> compress ->
 `deinit()`).
 
+### WS7 Phase E — the page mapping fed to LZ4 must be fully INITIALIZED
+
+`compress::CompressedPage::init` compresses the page's whole backing mapping as
+one `&[u8]` (faithfully: the oracle's `compress/Page.zig` compresses
+`page.memory`). So no byte of that mapping may be uninitialized — and a typed
+Rust write of a value with padding, or of an enum whose active variant does not
+cover its whole slot, leaves exactly such bytes behind.
+
+`RefCountedSet::init` used to `@memset`-equivalent the whole item array with
+`fill(Item::default())`, which de-initialized padding across the styles and
+hyperlink item tables of every page. `lz4::compress` then read it and Miri
+aborted with "constructing invalid value of type `[u8; 8]`: encountered
+uninitialized memory". Fixed by zeroing the item bytes and writing the metadata
+field by field (see the PORT NOTE at `ref_counted_set.rs`'s `init`).
+
+Scenarios:
+
+* `mapinit` — allocates one small `Page` and reads every byte of its mapping,
+  which is the read `CompressedPage::init` performs. Aborts at the first
+  uninitialized byte AND NAMES ITS OFFSET, in **seconds** — this is the cheap
+  probe to use, not the multi-ten-minute `roundtrip`/`leak`.
+* `mapinit_styled` — same, but stores one non-default `style::Style` first. This
+  is the KNOWN RESIDUAL and is EXPECTED TO ABORT: `RefCountedSet::add` must place
+  the caller's `T` with a typed write, and `style::Color` is a Rust enum whose
+  `None`/`Palette` variants do not cover all four bytes of their slot. See
+  `../MIRI_EXCEPTIONS.md`.
+
+### WS7 Phase E — `leakcheck` is now a real gate, with a negative control
+
+`.port/tools/gates/check_pagelist_compress_leaks.sh` runs the native `leakcheck`
+scenario (milliseconds, no Miri) and is registered in `ci.sh` as **G6b**.
+`--self-test` runs `leakcheck_negative`, which reproduces the real leak through
+the real path (`mem::forget` of a compressed list, so no discard-restore runs)
+under the same assertion — that is the proof the gate's FAIL arm is reachable.
+`leakcheck_negative` is only run when named explicitly; it is not part of the
+no-argument "run everything" default because it is expected to panic.
+
 ## Miri accommodations
 
 * `rustty-os`'s page allocator already serves page memory from the std heap
