@@ -314,7 +314,7 @@ mod host_command {
         /// state in "init".
         ///
         /// Precondition: The self pointer MUST be stable.
-        pub fn spawn(&mut self) -> Result<u32, Error> {
+        pub fn spawn(&self) -> Result<u32, Error> {
             // PORT NOTE: `const thread = try std.Thread.spawn(.{}, threadMain, .{ self, alloc });`
             // `thread.setName("flatpak-host-command") catch {};`
             //
@@ -324,18 +324,23 @@ mod host_command {
             // thread also holds one would be aliasing UB. `SendPtr` is the
             // minimal `Send` shim for the raw pointer, matching Zig's untyped
             // thread argument.
-            struct SendPtr(*mut FlatpakHostCommand);
+            struct SendPtr(*const FlatpakHostCommand);
             // SAFETY: the pointee is `Sync`-guarded by `state_mutex`/`state_cv`
-            // for every field the worker touches, exactly as the reference relies
-            // on the same mutex across its spawned thread.
+            // for every field the worker MUTATES, exactly as the reference relies
+            // on the same mutex across its spawned thread; the immutable fields
+            // (`argv`/`cwd`/`env`/the three fds) are read-only after `spawn`.
             unsafe impl Send for SendPtr {}
-            let arg = SendPtr(self as *mut FlatpakHostCommand);
+            let arg = SendPtr(self as *const FlatpakHostCommand);
             let builder = std::thread::Builder::new().name("flatpak-host-command".to_string());
             let thread = builder
                 .spawn(move || {
                     let arg = arg;
-                    // SAFETY: stable-pointer precondition (documented above).
-                    threadMain(unsafe { &mut *arg.0 });
+                    // SAFETY: stable-pointer precondition (documented above). This
+                    // is a SHARED reference on purpose: no `&mut` to the command
+                    // exists anywhere (every method takes `&self` and every
+                    // mutation goes through `state_mutex`), so the worker can never
+                    // invalidate an exclusive tag the spawning thread holds.
+                    threadMain(unsafe { &*arg.0 });
                 })
                 .map_err(|_| Error::FlatpakSpawnFail)?;
             // We don't track this thread, it will terminate on its own on command exit
@@ -360,7 +365,7 @@ mod host_command {
 
         /// Wait for the process to end and return the exit status. This
         /// can only be called ONCE. Once this returns, the state is reset.
-        pub fn wait(&mut self) -> Result<u8, Error> {
+        pub fn wait(&self) -> Result<u8, Error> {
             let mut guard = self.state_mutex.lock().unwrap();
 
             // `while (true) { switch (self.state) {...}; self.state_cv.wait(...); }`
@@ -390,7 +395,7 @@ mod host_command {
         #[allow(clippy::too_many_arguments)]
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub fn waitXev(
-            &mut self,
+            &self,
             loop_: *mut xev::Loop,
             completion: *mut Completion,
             userdata: *mut c_void,
@@ -445,7 +450,7 @@ mod host_command {
 
         /// Send a signal to the started command. This does nothing if the
         /// command is not in the started state.
-        pub fn signal(&mut self, sig: u8, pg: bool) -> Result<(), Error> {
+        pub fn signal(&self, sig: u8, pg: bool) -> Result<(), Error> {
             let pid = {
                 let guard = self.state_mutex.lock().unwrap();
                 match &*guard {
@@ -503,7 +508,7 @@ mod host_command {
         }
     }
 
-    fn threadMain(self_: &mut FlatpakHostCommand) {
+    fn threadMain(self_: &FlatpakHostCommand) {
         unsafe {
             // Create a new thread-local context so that all our sources go
             // to this context and we can run our loop correctly.
@@ -560,7 +565,7 @@ mod host_command {
         /// Once this is called, the self pointer MUST remain stable. This
         /// requirement is due to using GLib under the covers with callbacks.
         fn start(
-            &mut self,
+            &self,
             bus: *mut c::GDBusConnection,
             loop_: *mut c::GMainLoop,
         ) -> Result<(), Error> {
@@ -659,7 +664,10 @@ mod host_command {
                     std::ptr::null(),
                     0,
                     onExit,
-                    self as *mut _ as *mut c_void,
+                    // (`self` is `&Self` — the callback userdata is an opaque
+                    // `gpointer`; `onExit` recovers it as `&FlatpakHostCommand`,
+                    // never `&mut`.)
+                    self as *const _ as *mut c_void,
                     std::ptr::null_mut(),
                 );
 

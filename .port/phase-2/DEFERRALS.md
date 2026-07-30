@@ -933,9 +933,18 @@ with an `unimplemented!()` marker (NOT fabricated logic).
     `{rustty-global, libc}` only). Verified: `cargo check`/`clippy -D warnings`
     GREEN for `-p rustty-os --features flatpak` and `-p rustty-termio --features
     flatpak --all-targets`.
+  - **Aliasing:** the one new cross-thread raw-pointer handoff (`spawn` handing
+    `self` to the detached `threadMain`, plus the GIO `onExit` callback recovering
+    it from an opaque `gpointer`) is proven Stacked- AND Tree-Borrows clean on the
+    isolated harness `.port/phase-2/mirihar-ws20-flatpak/` — with a NEGATIVE
+    CONTROL (`-- --unsound`, the first draft's `&mut self` + `&mut *ptr` shape)
+    that Miri rejects under both models, so the green arm is non-vacuous. The cure
+    is the same discipline the xev lane established: no `&mut` to the shared
+    object anywhere (every method takes `&self`; all mutation goes through
+    `state_mutex`), so there is no exclusive tag a foreign thread can invalidate.
   - **Remaining (NOT a scope exclusion):** the feature cannot be EXECUTED on this
     host — it links GIO/GLib and needs a live flatpak session bus. That is
-    verification debt with a runnable recipe (VERIFICATION_DEBT.md), owned by
+    verification debt with a runnable recipe (VERIFICATION_DEBT.md V10), owned by
     WS20.
 - **`Backend.childExitedAbnormally` (backend.rs) — Zig lazy compilation.** The
   reference delegates to `exec.childExitedAbnormally(...)`, a method
