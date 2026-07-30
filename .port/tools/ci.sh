@@ -136,6 +136,19 @@ run_test_counts() {
     echo "         test-count gate cannot bind here."
     return 3
   fi
+  # WS19 T1 (N4), defense 3: the ZIG-DEP corpora under ~/.cache/zig/p/ are a CACHE and
+  # get evicted (a zig upgrade or `rm -rf ~/.cache` is enough). check_test_counts.py
+  # already exits 3 BLOCKED in that case, but it does so with a wall of paths and no
+  # remedy. Pre-flight it here so the BLOCKED message names the one command that fixes
+  # it. --verify-only never fetches, so CI stays hermetic.
+  if ! bash "$ROOT/.port/tools/restore_zig_deps.sh" --verify-only >/dev/null 2>&1; then
+    echo "BLOCKED: the pinned zig-dep source corpora (libxev / zf / vaxis) under"
+    echo "         ~/.cache/zig/p/ are absent or incomplete, so G1b's ZIG side"
+    echo "         cannot bind (a missing ref would count zig=0 -> vacuous green)."
+    echo "         Restore with: bash .port/tools/restore_zig_deps.sh"
+    bash "$ROOT/.port/tools/restore_zig_deps.sh" --verify-only 2>&1 | sed 's/^/         /'
+    return 3
+  fi
   "$PY" "$GATES/check_test_counts.py"
 }
 
@@ -286,7 +299,15 @@ echo "=================================================================="
 run_cargo "cargo fmt --check"        cargo fmt --check
 run_cargo "cargo clippy -D warnings" cargo clippy --workspace --all-targets -- -D warnings
 run_cargo "cargo build --workspace"  cargo build --workspace
-run_cargo "cargo test --workspace"   cargo test --workspace
+# WS19 T1 (N5): --no-fail-fast. Bare `cargo test --workspace` STOPS at the first failing
+# test target, so every crate ordered after it is never run and its failures are MASKED.
+# That is how `rustty-extra`'s golden failures hid behind `rustty-apprt-c --test smoke`.
+# `check_release_lane.sh:155` is the precedent (it already runs --no-fail-fast).
+# NOTE: the `cargo build --workspace` step immediately above already pays the cold-target/
+# compile cost, so the "one early failure also wastes the uplift" half of that symptom
+# does not bite INSIDE ci.sh — only outside it, which is what WS19 T16 addresses for the
+# example/*/build.sh scripts.
+run_cargo "cargo test --workspace"   cargo test --workspace --no-fail-fast
 
 # ---- 5: parity gates (HARD first, then PROGRESS) ---------------------------
 for phase in HARD PROGRESS; do
