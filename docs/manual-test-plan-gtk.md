@@ -131,6 +131,30 @@ gtk,wayland --test gtk_wayland_winproto -- --ignored` and the `gtk,x11` counterp
       full-width drop-down anchors at the top (verified on sway 1.11). Inert on GNOME/mutter (no
       wlr-layer-shell — `supports_quick_terminal()` returns false, graceful).
 
+### X11 arm (WS16, 2026-07-29) — run the binary with `--features gtk,x11`
+
+Note the `rustty` BINARY needs its own pass-through feature: `cargo build -p rustty
+--features gtk,x11` (a plain `--features gtk` binary is noop-only and none of the rows
+below will show anything). Under a Wayland session, force the X11 backend with
+`GDK_BACKEND=x11` plus `DISPLAY=:0` and an `XAUTHORITY` from the session; the app log
+must print `debug(gtk): windowing protocol=X11`.
+- [ ] **X.1:** a window appears and `xprop -id <wid> WM_CLASS` reads
+      `"rustty-debug", "io.airely.rustty-debug"` (release: `"rustty", "io.airely.rustty"`).
+- [ ] **X.2:** `--window-decoration=server` → `xprop -id <wid> _MOTIF_WM_HINTS` has
+      decorations (3rd) word `0x1` and the WM draws the title bar; the default reads
+      `0x0` with the app's own header bar.
+- [ ] **X.3:** `--background-blur=true` → `_KDE_NET_WM_BLUR_BEHIND_REGION` is a
+      CARDINAL rect list (4-tuples); without it the property is absent. (VISIBLE blur
+      needs KWin — see `VERIFICATION_DEBT.md` V5.)
+- [ ] **X.4:** `rustty -e /bin/sh -c 'printenv WINDOWID'` prints an XID that
+      `xprop -id <that XID> WM_CLASS` resolves to the same window.
+- [ ] **X.5:** ring the bell in an UNFOCUSED window (`printf '\a'`) → `xprop -id <wid>
+      WM_HINTS` gains `The urgency hint bit is set`; it is absent before the bell.
+- [ ] **X.6:** press Shift, then Ctrl, on a PHYSICAL keyboard in the focused window →
+      stderr logs `debug(gtk-x11): found extra XkbStateNotify event w/lookup_mods: …`.
+      SSH-injected input (xdotool/XTEST) does NOT work for this on a mutter session —
+      see `VERIFICATION_DEBT.md` V5 item 1.
+
 ## Deferred / not-yet-wired (do NOT test as bugs)
 
 - **[implemented 2026-07-19] Terminal inspector (Dear ImGui over OpenGL):** press **Ctrl+Shift+I** to
