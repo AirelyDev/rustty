@@ -244,7 +244,7 @@ GATE_REGISTRY=(
   "D9|PROGRESS|bash $GATES/check_stale_comments.sh"
   # D10 — the vendored stb_image_resize glyph resampler vs ghostty's OWN build of the
   # byte-identical header, at all four Zig optimize modes, plus a negative control
-  # proving the +/-1-on-2% envelope still rejects nearest/bilinear. PROGRESS because
+  # proving the +/-1-on-3% envelope still rejects nearest/bilinear. PROGRESS because
   # it reports BLOCKED (exit 3) on a box without `zig` or the oracle checkout; a
   # genuine mismatch is still escalated by run_gate's PROGRESS-went-RED branch.
   "D10|PROGRESS|bash $GATES/check_stb_resize_parity.sh"
