@@ -83,6 +83,7 @@ pub fn unknown_cval(self_: sgr::Unknown<'_>) -> UnknownC {
     }
 }
 
+/// C: RusttySgrAttributeTag (R2) — checked by the A5 enum-discriminant arm.
 /// The C ABI compatible tag type for `Attribute`.
 // PORT NOTE: `Attribute.Tag = lib.Enum(lib.target, &.{ "unset", "unknown",
 // "bold", "reset_bold", "italic", "reset_italic", "faint", "underline",

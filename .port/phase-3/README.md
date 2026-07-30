@@ -123,3 +123,37 @@ Largest single files: `PageList.zig` (+5,088/−1,430), `Terminal.zig` (+3,286/�
 ### Files upstream DELETED (port must delete too, or justify keeping)
 
 `pkg/harfbuzz/c.zig`, `pkg/wuffs/src/c.zig`, `src/os/args.zig`, `src/os/env.zig`.
+
+---
+
+## `P3-W0` artifacts — the evidence instruments
+
+Produced by `P3-W0` (instruments and evidence closure). Every later workstream
+is expected to read these rather than re-derive them.
+
+* **[`SAMPLING_CLOSURE.md`](SAMPLING_CLOSURE.md)** — the ten declared-sampled
+  coverage gaps closed with a per-hunk verdict. Five ACTIONS found in material
+  four assessments had declared "expected to be mechanical", each with an owner.
+  Includes the corrected golden-PNG pixel sweep (6 of 37 files differ, exactly
+  area F's predicted set) and a note on why the first comparator was vacuous.
+* **[`png_pixel_sweep.py`](png_pixel_sweep.py)** — the reproducible sweep behind
+  that result, with a self-check that refuses to report unless a known-different
+  pair is detected.
+* **[`REACHABILITY.md`](REACHABILITY.md)** — per-item caller-reachability triage
+  for the nine claimed-live vt defects, and the resulting `P3-W1` task order
+  (which differs from area A §4's "Wave A1"). `pin.rs:494` is **LATENT**, not
+  live. Five rows are explicitly **UNTRIAGED** and are `P3-W1`'s to close.
+* **[`REVIEW_CLASSES.md`](REVIEW_CLASSES.md)** — four binding cross-cutting
+  rules: release arithmetic (saturate **and** assert), `rustty-bench` gating,
+  `cfg(test)` non-transitivity, the `lz4_differential_exhaustive` false PASS,
+  and the `quirks_memset` perf-baseline invalidation.
+
+New/changed gates from `P3-W0`:
+
+| gate | what it proves | state on arrival |
+|---|---|---|
+| **G-LZ4** `check_lz4_byte_exact.sh` | the LZ4 encoder BYTE STREAM matches the oracle's on 7,976 differential points | GREEN; FAIL arm pinned at 1,631 rows via `--self-test` |
+| **A5** `check_rustty_vt_headers.sh` | + a vacuous-shrink floor, a header-driven layout arm with oracle `type_json` registry parity, and an enum-discriminant arm (562 discriminants) | GREEN |
+| **D11** `check_closed_enum_abi.sh` | no closed `#[repr(C)]` enum is received by value across the C ABI | **RED by design** — 33 sites / 27 exports, owner `P3-W6 T2` |
+| **G-BENCH** `check_bench_tests.sh` | + oracle-driven action-set parity, both directions | GREEN |
+| `ci.sh --lz4-slow` | the exhaustive LZ4 differential actually runs (marker-checked) | opt-in lane, PASS |

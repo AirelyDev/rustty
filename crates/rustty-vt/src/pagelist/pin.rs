@@ -643,3 +643,64 @@ impl Pin {
         }
     }
 }
+
+// =============================================================================
+// P3-W0 T6 step 3 — NEGATIVE CONTROLS for the LATENT verdicts in
+// `.port/phase-3/REACHABILITY.md`.
+//
+// A LATENT verdict is only trustworthy if it is falsifiable. Each test below
+// calls the defect site DIRECTLY with an out-of-domain argument and asserts the
+// panic; each panics on today's `main` (proving the defect is real) while the
+// public API path does not (proving the verdict). If one of these ever STOPS
+// panicking, the defect analysis is wrong and the row must be escalated, not
+// downgraded.
+// =============================================================================
+#[cfg(test)]
+mod p3_reachability_negative_controls {
+    use super::super::PageList;
+    use crate::point;
+
+    /// `pin.rs` `right_wrap`: `result.x = (extra_after_remaining % cols - 1)`.
+    /// When `extra_after_remaining` is an exact multiple of `cols` the modulo is
+    /// 0 and the `- 1` underflows `usize`. All four production callers pass
+    /// `n = 1` (selection_gesture.rs:910,915,925,930), which reaches this branch
+    /// only when `cols == 1`; at the standard widths used everywhere in this
+    /// suite `1 % cols == 1` and the subtraction is safe. Hence LATENT — but the
+    /// defect itself is real, and this is the proof.
+    #[test]
+    #[should_panic(expected = "attempt to subtract with overflow")]
+    fn p3_right_wrap_exact_row_multiple_underflows() {
+        let s = PageList::init(80, 24, None).unwrap();
+        let pin = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+            .unwrap();
+        // 80 - 0 - 1 = 79 remaining in the row, so n = 79 + 80 = 159 gives
+        // extra_after_remaining = 80, and 80 % 80 == 0 -> 0 - 1 underflows.
+        let _ = pin.right_wrap(159);
+    }
+
+    /// `pin.rs` `left_wrap`: the symmetric site,
+    /// `result.x = (cols - extra_after_remaining % cols)`. This one does not
+    /// underflow; on an exact row multiple it yields `x == cols`, which is ONE
+    /// PAST the last valid column. That is a silently invalid pin rather than a
+    /// panic, which is why it needs its own control with a value assertion
+    /// instead of `#[should_panic]`.
+    #[test]
+    fn p3_left_wrap_exact_row_multiple_yields_out_of_range_x() {
+        let s = PageList::init(80, 24, None).unwrap();
+        // Start far enough down that the upward walk stays in range.
+        let pin = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 10 }))
+            .unwrap();
+        // x = 0 -> remaining_in_row = 0, so n = 80 gives
+        // extra_after_remaining = 80 and 80 % 80 == 0 -> x = 80 - 0 = 80,
+        // which is out of range for an 80-column page (valid x is 0..=79).
+        let got = pin.left_wrap(80).expect("within the pagelist");
+        assert_eq!(
+            got.x, 80,
+            "the defect is real: an exact row multiple yields x == cols, one \
+             past the last valid column. If this ever stops being 80, the \
+             LATENT verdict in REACHABILITY.md must be re-derived, not deleted."
+        );
+    }
+}

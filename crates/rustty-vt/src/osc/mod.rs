@@ -270,6 +270,7 @@ impl Command {
     }
 }
 
+/// C: RusttyOscCommandType (R2) — checked by the A5 enum-discriminant arm.
 /// PORT NOTE: `Command.Key = LibEnum(lib.target, &.{...})` — the union's tag
 /// type. For the `.c` target this is a fieldless `enum(c_int)` with the keys in
 /// declaration order. Modeled here as a `#[repr(i32)]` Rust enum (`Command` is

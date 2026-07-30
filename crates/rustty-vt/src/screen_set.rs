@@ -24,6 +24,7 @@ use crate::screen::Screen;
 use crate::pagelist::OutOfMemory;
 use allocator_api2::alloc::Global as Allocator;
 
+/// C: RusttyTerminalScreen (R2) — checked by the A5 enum-discriminant arm.
 /// The possible keys for screens in the screen set.
 // PORT NOTE: `Key = lib.Enum(lib.target, &.{ "primary", "alternate" })`. This
 // type is `#[repr(C)]` (primary=0, alternate=1) — it is used as an EnumMap key

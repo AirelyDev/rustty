@@ -6,6 +6,7 @@
 //! 0a410f18e) is subsumed by this protocol-neutral shape — a normalized
 //! `Location` plus decoded MIME `Content` representations.
 
+/// C: RusttyClipboardLocation (R2) — checked by the A5 enum-discriminant arm.
 /// The clipboard destination for a write.
 // pub const Location = enum(c_int) { standard = 0, selection = 1, primary = 2, _ };
 #[repr(i32)]

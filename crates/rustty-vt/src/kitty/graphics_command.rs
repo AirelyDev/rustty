@@ -584,6 +584,7 @@ impl Default for Transmission {
     }
 }
 
+/// C: RusttyKittyImageFormat (R2) — checked by the A5 enum-discriminant arm.
 /// PORT NOTE: `lib.Enum(lib.target, &.{ "rgb", "rgba", "png", "gray_alpha",
 /// "gray" })` synthesizes a C-ABI-aware enum. Like the `osc` port, we model the
 /// nominal enum with named variants in declaration order and expose the
@@ -641,6 +642,7 @@ impl Medium {
     }
 }
 
+/// C: RusttyKittyImageCompression (R2) — checked by the A5 enum-discriminant arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compression {
     None,

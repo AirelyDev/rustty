@@ -41,7 +41,7 @@ use std::mem::{align_of, size_of};
 // recon, NOT a fabrication). The `to_zig`/`from_zig` bridges keep the
 // discriminants pinned to the pure-VT key order.
 
-/// C: GhosttySelectionAdjustment -> RusttySelectionAdjustment (R2) — the `enum(c_int)` projection of
+/// C: GhosttySelectionAdjustment -> RusttySelectionAdjust (R2) — the `enum(c_int)` projection of
 /// `Selection.Adjustment`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,7 +112,7 @@ impl Order {
     }
 }
 
-/// C: GhosttySelectionFormat -> RusttySelectionFormat (R2) — the `enum(c_int)` projection of `formatter.Format`.
+/// C: GhosttySelectionFormat -> RusttyFormatterFormat (R2) — the `enum(c_int)` projection of `formatter.Format`.
 // PORT NOTE: `formatter.Format = lib.Enum(lib.target, &.{ "plain", "vt", "html" })`;
 // for the `.c` target a fieldless `enum(c_int)` with the keys in order (pinned
 // here against `rustty_vt::formatter::Format`). The `to_zig` bridge keeps the

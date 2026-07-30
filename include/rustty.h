@@ -1863,6 +1863,22 @@ void rustty_render_state_free(RenderState state);
 int rustty_render_state_update(RenderState state, Terminal terminal);
 
 /**
+ * C: rustty_render_state_begin_update
+ *
+ * # Safety
+ * `state`/`terminal`, if non-null, must be live handles.
+ */
+int rustty_render_state_begin_update(RenderState state, Terminal terminal);
+
+/**
+ * C: rustty_render_state_end_update
+ *
+ * # Safety
+ * `state`, if non-null, must be a live handle.
+ */
+int rustty_render_state_end_update(RenderState state);
+
+/**
  * C: rustty_render_state_get
  *
  * # Safety

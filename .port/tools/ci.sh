@@ -141,12 +141,59 @@ PERF_METRICS="${PERF_METRICS:-${TMPDIR:-/tmp}/rustty-perf-metrics.json}"
 # Parsed and dispatched BEFORE the default run so `--webgl` is a lane you ask for,
 # not an addition to what CI runs by default.
 WEBGL_LANE=0
+LZ4_SLOW_LANE=0
 for arg in "$@"; do
   case "$arg" in
     --webgl) WEBGL_LANE=1 ;;
-    *) echo "ci.sh: unknown argument '$arg' (known opt-in lanes: --webgl)" >&2; exit 2 ;;
+    --lz4-slow) LZ4_SLOW_LANE=1 ;;
+    *) echo "ci.sh: unknown argument '$arg' (known opt-in lanes: --webgl, --lz4-slow)" >&2; exit 2 ;;
   esac
 done
+
+# P3-W0 T7 step 3 — the PERIODIC lane for the exhaustive LZ4 differential.
+#
+# `compress::lz4_differential::lz4_differential_exhaustive` early-returns unless
+# RUSTTY_LZ4_SLOW is set, and that variable was set NOWHERE in the repo: no
+# gate, no ci.sh entry, no workflow. The shape is faithful to upstream, but a
+# Rust early return reports PASSED where Zig's error.SkipZigTest reports
+# SKIPPED, so the default run read as "4 seeds x the exhaustive budget just
+# ran". The test is now `#[ignore]`d (honest reporting) AND this lane exists so
+# the coverage is actually obtainable rather than theoretical.
+#
+# Opt-in because it is minutes, not seconds. Run it on any change under
+# crates/rustty-vt/src/compress/, alongside G-LZ4.
+run_lz4_slow_lane() {
+  section "opt-in lane: exhaustive LZ4 differential  (--lz4-slow)"
+  echo "--- RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release --ignored lz4_differential_exhaustive"
+  local out
+  out="$(RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release -- --ignored --nocapture \
+          --exact compress::lz4_differential::lz4_differential_exhaustive 2>&1)"
+  local crc=$?
+  printf '%s\n' "$out" | tail -5
+  if [ "$crc" -ne 0 ]; then
+    echo ">> FAIL: the exhaustive LZ4 differential did not pass" >&2
+    return 1
+  fi
+  # ANTI-VACUITY: the whole point of this lane is that the test really ran. An
+  # `ignored` or `0 passed` result here means the env gate or the filter did not
+  # take effect, and must NOT be reported as coverage.
+  if ! printf '%s\n' "$out" | grep -q 'test result: ok\. 1 passed'; then
+    echo ">> FAIL: expected exactly 1 passed test; the exhaustive differential" >&2
+    echo "         did not actually run (filter did not take)." >&2
+    return 1
+  fi
+  # "1 passed" is ALSO what an env-gated early return prints, so it proves
+  # nothing on its own. The test emits this marker only after all four seeds
+  # have actually run.
+  if ! printf '%s\n' "$out" | grep -q 'RUSTTY_LZ4_SLOW_RAN seeds=4'; then
+    echo ">> FAIL: the test reported success but never emitted its" >&2
+    echo "         RUSTTY_LZ4_SLOW_RAN marker — the env gate did not take and" >&2
+    echo "         the suite did NOT run. This is not coverage." >&2
+    return 1
+  fi
+  echo "OK: the exhaustive LZ4 differential ran and passed."
+  return 0
+}
 
 # WS14 — the wasm/WebGL lane. Two commands, in order; the gate itself owns the
 # pass/fail verdict (positive arm must match AND both negative controls must fail)
@@ -343,6 +390,19 @@ GATE_REGISTRY=(
   "D1|PROGRESS|bash $GATES/check_slice_reinterpret.sh"
   "D2|PROGRESS|bash $GATES/check_capacity_saturation.sh"
   "D3|PROGRESS|$PY $GATES/check_constants_parity.py"
+  # G-LZ4 — the LZ4 encoder BYTE STREAM matches the oracle's, not merely
+  # round-trips. Sits next to D3 because it extends D3's subject matter from
+  # derived constants to the emitted bytes. `lz4_differential_light` is a real
+  # guard for format conformance and every decoder bounds/margin path (4 of 7
+  # injected faults caught, measured in assessment B §2.3) but it is BLIND to
+  # match-finder heuristics: HASH_LOG 12->11 diverges 1,631/7,976 encoded blocks
+  # with the whole rustty suite green (reproduced at P3-W0 T1 step 1).
+  # Upstream's compress/AGENTS.md mandates exactly this proof; it is now ported
+  # to crates/rustty-vt/src/compress/AGENTS.md. PROGRESS while it beds in — it
+  # exits 3 BLOCKED without the oracle checkout or a zig toolchain, and
+  # run_gate's PROGRESS-went-RED branch still escalates a genuine mismatch. Its
+  # FAIL arm is proven by `--self-test` (exactly 1,631 diverging rows).
+  "G-LZ4|PROGRESS|bash $GATES/check_lz4_byte_exact.sh"
   "D4|PROGRESS|bash $GATES/check_comptime_phase.sh"
   "D5|PROGRESS|bash $GATES/check_paired_invariants.sh"
   "D6|PROGRESS|bash $GATES/check_sanitizer_canary.sh"
@@ -354,6 +414,19 @@ GATE_REGISTRY=(
   # it reports BLOCKED (exit 3) on a box without `zig` or the oracle checkout; a
   # genuine mismatch is still escalated by run_gate's PROGRESS-went-RED branch.
   "D10|PROGRESS|bash $GATES/check_stb_resize_parity.sh"
+  # D11 — no CLOSED #[repr(C)] enum may be received BY VALUE across the C ABI.
+  # An out-of-range tag is materialized by the callee's prologue, before any
+  # `match` can narrow it; every flagged enum's header declaration carries a
+  # `…_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE` enumerator, so the header itself
+  # documents that value as writable by a conforming C caller.
+  # (P3-W0 T3 calls this "D10" in prose; that id was taken by the stb gate
+  # above, so it is D11.)
+  # RED ON ARRIVAL by design — 33 sites across 27 exports, including
+  # rustty_terminal_scroll_viewport(behavior.tag), whose ScrollViewportTag
+  # gained `Row = 3` in 3a2e28329 inside the Phase 3 range. A gate that lands
+  # green is unproven; this one is provably non-vacuous the day it lands.
+  # PROGRESS while P3-W6 T2 sweeps the sites; promote to HARD after that.
+  "D11|PROGRESS|bash $GATES/check_closed_enum_abi.sh"
   # A3 — the rustty-embed.h product-umbrella ABI gate (rebrand Task 4; formerly
   # the ghostty.h byte-freeze). Asserts include/rustty-embed.h is EXACTLY
   # ghostty's upstream include/ghostty.h (read from the pinned $ORACLE_HEADER_PATH
@@ -442,6 +515,15 @@ if [ "$WEBGL_LANE" = "1" ]; then
     0) echo "CI RESULT (--webgl lane): PASS"; ;;
     3) echo "CI RESULT (--webgl lane): BLOCKED — environment missing, NOT green" >&2 ;;
     *) echo "CI RESULT (--webgl lane): FAIL (exit $rc)" >&2 ;;
+  esac
+  exit "$rc"
+fi
+if [ "$LZ4_SLOW_LANE" = "1" ]; then
+  run_lz4_slow_lane; rc=$?
+  hr
+  case "$rc" in
+    0) echo "CI RESULT (--lz4-slow lane): PASS"; ;;
+    *) echo "CI RESULT (--lz4-slow lane): FAIL (exit $rc)" >&2 ;;
   esac
   exit "$rc"
 fi

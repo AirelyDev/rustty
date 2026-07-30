@@ -84,6 +84,7 @@ pub struct Buffer<T> {
     // reference inconsistency (`buffer.zig:46` vs `:62`), reproduced verbatim
     // below rather than harmonized. The doc comment above is the reference's own,
     // and it too is only true for the `init` path.
+    // RE-AFFIRMED (P3-W0 T5): checked against oracle range 4749c4e93..6ad1fe7d8 — src/renderer/opengl/buffer.zig is UNTOUCHED there, so this quirk is still faithful. Ledger: .port/tools/gates/stale-comments-D9.tsv.
     pub len: usize,
 
     // PORT NOTE: `T` is carried in the Zig type `Buffer(T)` itself; Rust needs a
@@ -179,6 +180,7 @@ impl<T> Buffer<T> {
             // exactly, NOT corrected. (`size_of_val(data)` is definitionally
             // `data.len * @sizeOf(T)` for a `&[T]` — the clippy-preferred spelling,
             // same as the Metal twin's `init_fill`.)
+            // RE-AFFIRMED (P3-W0 T5): checked against oracle range 4749c4e93..6ad1fe7d8 — src/renderer/opengl/buffer.zig is UNTOUCHED there, so this quirk is still faithful. Ledger: .port/tools/gates/stale-comments-D9.tsv.
             len: size_of_val(data),
             _marker: PhantomData,
         })

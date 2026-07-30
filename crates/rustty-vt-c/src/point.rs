@@ -25,6 +25,7 @@ use rustty_vt::point::{Coordinate, Tag};
 use std::mem::{align_of, size_of};
 use std::os::raw::c_int;
 
+/// C: RusttyPointTag (R2) — checked by the A5 enum-discriminant arm.
 /// The C ABI compatible tag type for `Point`.
 // PORT NOTE: `Point.Tag = lib.Enum(lib.target, &.{ "active", "viewport",
 // "screen", "history" })`. For the C target this is a fieldless `enum(c_int)`
