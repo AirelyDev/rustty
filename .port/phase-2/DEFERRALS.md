@@ -4,6 +4,19 @@ Hard tracker for code/tests/comments deferred from an earlier sub-batch because 
 dependency wasn't ported yet. Each MUST be completed by its target sub-batch — the
 target workflow consumes this file. Nothing here is "dropped" (R1); it is scheduled.
 
+> **READ THIS BEFORE GREPPING FOR "Phase-3" [WS19 T2, 2026-07-29 — audit row W10].**
+> The hyphenated token **`Phase-3`** in this file is the **pre-workstream CODENAME**
+> for the GPU-renderer / xev / inspector tiers — **all of which have since LANDED**
+> (windowing `W0`–`W5`, xev Milestones `A`/`B`, `WS6` for the inspector/dcimgui).
+> It is **NOT** `.port/phase-3/` (the upstream-resync phase), which is what "Phase 3"
+> means today. Grepping this file's `Phase-3` labels to build a Phase-3 worklist
+> yields ~40 **false positives**. WS19 T2 retargeted every tier-qualified label to the
+> owning tier with its landing evidence (`[LANDED: …]`); the bare narrative mentions
+> that remain are history, not open work. The authoritative index of what is actually
+> open, and who owns it, is the `# PHASE 2 CLOSURE AUDIT (WS19)` section at the end of
+> this file, and the standing invariant is gate **G-P2**
+> (`.port/tools/gates/check_phase2_closure.py`).
+
 ## Deferred to vt-12 (Terminal/Screen cluster)
 
 From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
@@ -966,7 +979,7 @@ for provenance only.
 
 Chunk C1 of CORE_BLUEPRINT §6 (§4 "Inspector seam", [ADV-FIX 7]) carves ONLY
 the surface core's input hot path needs. Deferrals created (all 0 tests —
-R1-safe; owner: the Phase-3 inspector port):
+R1-safe; owner: the the inspector tier [LANDED: WS6] port):
 
 - **PARTIAL-FILE: `src/inspector/widgets/key.zig` ImGui section**
   (`Event.render`/`renderUtf8`/`renderPty`, `modsTooltip`, the `Stream`
@@ -1002,7 +1015,7 @@ map") lands `crates/rustty-core/src/renderer_seam.rs` — core-local
 DEPENDENCY PLACEHOLDERS (the termio `xev_seam` precedent: inhabited structs,
 faithful field/signature shapes, `unimplemented!()` bodies; NO reference
 logic stubbed), NOT verbatim-body deferrals. All 0 tests — R1-safe.
-Owner of the fill: the Phase-3 R-d GPU renderer tier + the D6 libxev port.
+Owner of the fill: the the R-d GPU/renderer tier [LANDED: windowing W0–W5] GPU renderer tier + the D6 libxev port.
 
 - **DEFERRED (dependency placeholder): `renderer.Renderer`**
   (src/renderer/generic.zig `GenericRenderer(Metal|OpenGL)`, comptime-chosen
@@ -1026,7 +1039,7 @@ Owner of the fill: the Phase-3 R-d GPU renderer tier + the D6 libxev port.
   and `init`/`threadMain`/`deinit` as `unimplemented!()` placeholders. The
   run loop (`threadMain_`, `drainMailbox`, render/draw/cursor callbacks,
   `DRAW_INTERVAL`/`CURSOR_BLINK_INTERVAL`, `must_draw_from_app_thread`) is
-  Phase-3 R-d + D6 work that lands WITH the real port (renderer/Thread.zig
+  the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6 work that lands WITH the real port (renderer/Thread.zig
   imports configpkg AND core's App.Mailbox — both edges cycle from
   rustty-renderer, which is WHY the shape lives core-local).
 - **Ported live (not deferred): `renderer.Options`** (renderer/Options.zig,
@@ -1509,7 +1522,7 @@ resolved. Ledger:
   `if (self.inspector) |insp| { insp.mouse.last_* = ..; }` block writes the
   Phase-3 `Inspector.mouse` state — the pointee is uninhabited, so the arm is
   preserved verbatim above `unreachable!()` (the C6 deinit teardown-arm
-  precedent). Resolved by the Phase-3 inspector fill.
+  precedent). Resolved by the the inspector tier [LANDED: WS6] fill.
 - **[ADV 6.1] completion:** mousePressureCallback/cursorPosCallback/
   colorSchemeCallback add the LAST three `crash.sentry.thread_state`
   guard sites — all 13 reference sites are now live (`ThreadStateGuard`).
@@ -1836,9 +1849,16 @@ NO stragglers.
 - `app.rs` — **8**, ALL inside `#[cfg(test)] mod test_runtime` (the §7
   TestSurface fake methods the C4 seam tests do not drive — honest test glue,
   NOT production leaves and NOT deferrals).
-- `renderer_seam.rs` — **15**, the C3 dependency-placeholder bodies (below).
+- ~~`renderer_seam.rs` — **15**, the C3 dependency-placeholder bodies (below).~~
+  **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W1]** All 15 sit inside
+  `#[cfg(test)] mod compression_tests` (`renderer_seam.rs:2013`), each reading
+  `unimplemented!("test runtime: not driven by the compression tests")` — test-runtime
+  fakes, the same honest test glue as `app.rs`'s 8. The production bodies are LIVE
+  (`Renderer::{surfaceInit,init,finalizeSurfaceInit,attachHostView,threadEnter,drawFrame,displayRealized,displayUnrealized,deinit}`
+  at `:242,:269,:321,:337,:361,:390,:415,:439,:454`; `Thread::{init,threadMain,deinit}`
+  at `:669,:875,:939`). **Zero production leaves.**
 
-**OPEN core deferrals (roll-up — targets: Phase-3 inspector tier / Phase-3 R-d
+**OPEN core deferrals (roll-up — targets: the inspector tier [LANDED: WS6] tier / the R-d GPU/renderer tier [LANDED: windowing W0–W5]
 GPU renderer / D6 libxev port):**
 
 1. **Inspector activate/deactivate — RESOLVED (WS6, 2026-07-28).**
@@ -1866,16 +1886,25 @@ GPU renderer / D6 libxev port):**
    `deinit` retrofit to the decoupled handles; `searchCallback_` retyped off
    `&mut Surface` to `*mut Surface`.
 
-3. **`renderer_seam.rs` dependency placeholders (C3, §5).** Inhabited structs
+3. ~~**`renderer_seam.rs` dependency placeholders (C3, §5).** Inhabited structs
    with `unimplemented!()` bodies (termio `xev_seam` precedent; no reference
-   logic stubbed):
-   - `Renderer` (generic.zig GenericRenderer) — `surfaceInit`/`init`/
+   logic stubbed):~~
+   ~~- `Renderer` (generic.zig GenericRenderer) — `surfaceInit`/`init`/
      `finalizeSurfaceInit`/`threadEnter`/`drawFrame`/`deinit` + the
-     `Renderer.DerivedConfig` placeholder. **Target: Phase-3 R-d GPU tier.**
-   - `Thread<A>` run loop — faithful renderer/Thread.zig field shape (rustty-xev
+     `Renderer.DerivedConfig` placeholder. **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5].**~~
+   ~~- `Thread<A>` run loop — faithful renderer/Thread.zig field shape (rustty-xev
      handles + REAL state/mailbox); `init`/`threadMain`/`deinit` unimplemented.
-     **Target: Phase-3 R-d + D6.**
+     **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6.**~~
    (`renderer_seam::Options<A>` is LIVE, not deferred.)
+
+   **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W1].** The GPU tier
+   (W0–W5) and the xev port (Milestones A/B) both landed; the production
+   `Renderer` and `Thread<A>` bodies listed above are LIVE at the line numbers
+   given in the struck bullet at `renderer_seam.rs`'s leaf roll-up above. The only
+   remaining `unimplemented!()` in the file are the 15 `#[cfg(test)] mod
+   compression_tests` fakes. NOTE the "Phase-3" in the struck **Target:** lines is
+   the pre-WS codename for the GPU/xev tiers, not `.port/phase-3/` (upstream
+   resync) — see the "Phase-3" note at the top of this file.
 
 4. **D6 xev leaves in surface.rs (live calls into the `rustty-xev`
    placeholder).** These are COMPILED, real logic — they panic only at runtime
@@ -1935,7 +1964,7 @@ The deferrals E0 CREATES (all scheduled, nothing dropped — R1):
    (event loop), and macOS objc/Metal/CGS (Platform messaging, Inspector Metal,
    quicklook, `set_window_background_blur`) `unimplemented!()` leaves are CREATED
    by E3/E4/E10 — **not by E0** (E0 creates no runtime leaf; `none`/`browser` are
-   inert stubs and `rustty_init` is runtime-live). **Targets: Phase-3 R-d (GPU) +
+   inert stubs and `rustty_init` is runtime-live). **Targets: the R-d GPU/renderer tier [LANDED: windowing W0–W5] (GPU) +
    D6 (xev) + E10 (macOS objc/CGS), per EMBEDDED_BLUEPRINT §1.**
 
 **Gate deltas (E0):** new crate `rustty-apprt-c` (cdylib/staticlib/rlib) —
@@ -1970,7 +1999,7 @@ backend). Deferred out of E1:
    GPU/xev/objc leaves — they are replaced wholesale by the faithful port in
    **E2** (Surface struct + `init`/`deinit` + `impl apprt_api::Surface`, the §2
    growth-point table), **E3** (surface event callbacks), and **E4**
-   (`queueInspectorRender` = Inspector, Phase-3 dcimgui/Metal). `App::newSurface`
+   (`queueInspectorRender` = Inspector, the dcimgui tier [LANDED: WS6]/Metal). `App::newSurface`
    reaches `Surface::init` (the stub), so it panics until E2 — no E1 gate exercises
    it. **Targets: E2/E3/E4, EMBEDDED_BLUEPRINT §7.** (This is a chunk-sequencing
    stub, per the constitution's "faithful sequencing stub" rule, not a Phase-3
@@ -2024,7 +2053,7 @@ rustty_core::Surface<embedded::App>` bound against a REAL backend (core's C0 gat
 used a dummy `A`). The E1 leaves at `core`/`rt_app`/… are now RESOLVED (real
 bodies). Deferred out of E2:
 
-1. **`Inspector` E2→E4 SEQUENCING STUB (Phase-3 dcimgui/Metal leaf).** `Surface`
+1. **`Inspector` E2→E4 SEQUENCING STUB (the dcimgui tier [LANDED: WS6]/Metal leaf).** `Surface`
    carries `inspector: Option<*mut Inspector>` and `deinit` calls `freeInspector`,
    so the `Inspector` type must exist NOW. E2 defines a MINIMAL opaque `Inspector`
    (`#[allow(dead_code)]`) whose `deinit` is an `unimplemented!()` leaf; `deinit`/
@@ -2044,7 +2073,7 @@ bodies). Deferred out of E2:
    and `deinit` calls the core `Surface::deinit` renderer/io-thread teardown. These
    **compile + link now** but PANIC at the renderer leaf the moment a LIVE surface
    is created — which requires `ghostty_surface_new` (**E7**) AND the renderer land
-   (**Phase-3 R-d + D6**). No E2 gate exercises a live surface (the smoke KAT, E11,
+   (**the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6**). No E2 gate exercises a live surface (the smoke KAT, E11,
    stays app-level per ADV-FIX 2/3). This is the milestone's documented honest line.
 
 4. **macOS objc / Platform messaging — NOT E2 (raw pointers only).** Per blueprint
@@ -2088,12 +2117,12 @@ leaves) EXCEPT `draw`/`refresh` (item 1). The E2 growth-point trait method
 `default_termio_env` (also inside the 610-990 range, at 953) was already landed in
 E2 — E3 does not re-port it. Deferred out of E3:
 
-1. **`draw`/`refresh` reach the Phase-3 GPU renderer leaf at RUNTIME.**
+1. **`draw`/`refresh` reach the the GPU tier [LANDED: W0–W5] renderer leaf at RUNTIME.**
    `Surface::draw`/`refresh` delegate to core `Surface::draw`/`refreshCallback`,
    which drive the `renderer_seam` Phase-3 `unimplemented!()` leaves (blueprint §1).
    The delegation is ported LIVE (byte-faithful) — the panic is in the leaf, not
    here; it fires only once a LIVE surface exists (`ghostty_surface_new`, **E7**) AND
-   the renderer lands (**Phase-3 R-d + D6**). Same honest line as E2 item 3 — E3
+   the renderer lands (**the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6**). Same honest line as E2 item 3 — E3
    introduces NO new leaf, only LIVE delegation to an already-tracked one.
 
 2. **`initInspector` (embedded.zig:611-623) — E4, NOT E3.** Although it falls inside
@@ -2299,14 +2328,14 @@ heap-boxes + pins the backend `Surface` via the backend `App::newSurface`
 **Runtime-live split (EMBEDDED_BLUEPRINT §1):** only `rustty_surface_config_new` (a
 pure defaulted `Surface.Options`) is runtime-live. **Every other E7 export needs a
 LIVE surface**, which only exists past `rustty_surface_new` → core `Surface::init` →
-`renderer_seam::{Renderer,Thread}` (surface.rs:324/333 — the Phase-3 R-d GPU + D6 xev
+`renderer_seam::{Renderer,Thread}` (surface.rs:324/333 — the the R-d GPU/renderer tier [LANDED: windowing W0–W5] GPU + D6 xev
 leaves, already in the core C3 deferral set above). So the whole E7 surface set
 **COMPILES + LINKS + header-generates NOW and PANICS when driven against a real
 surface**. E7 adds **NO new `unimplemented!()` leaf in apprt-c** — it is a pure FFI
 projection that REACHES the existing renderer/xev leaves at runtime:
 
 1. **`rustty_surface_new`** → `App::newSurface` → `Surface::init` → core
-   `Surface::init` constructs `renderer_seam::{Renderer,Thread}` (Phase-3 R-d/D6
+   `Surface::init` constructs `renderer_seam::{Renderer,Thread}` (the R-d GPU/renderer tier [LANDED: windowing W0–W5]/D6
    leaf). LINKS now; a live-surface call panics in the core init leaf.
 2. **`_refresh`/`_draw`/`_set_size`/`_set_content_scale`/`_set_focus`/`_set_occlusion`/
    `_set_color_scheme`** → the backend `Surface::{refresh,draw,updateSize,
@@ -2378,7 +2407,7 @@ reinterpreted as `input.Mods`; the `input.Mouse{ButtonState,Button,PressureStage
 straight to the core surface (`mouseCaptured`/`keyEventIsBinding`/`imePoint`).
 
 **Runtime split (EMBEDDED_BLUEPRINT §1):** every E8 export needs a **LIVE surface**
-(created via `rustty_surface_new`, the Phase-3 GPU-leaf boundary — core `Surface::init`
+(created via `rustty_surface_new`, the GPU-tier-leaf [LANDED: W0–W5] boundary — core `Surface::init`
 constructs `renderer_seam::{Renderer,Thread}`, the R-d/D6 leaves already in the core C3
 deferral set above). The wrappers LINK now; a live-surface call reaches the renderer
 leaf only when driven (key/mouse callbacks schedule a render). E8 adds **NO new
@@ -2442,7 +2471,7 @@ clipboard sink forwards to the backend `Surface::completeClipboardRequest` (E3);
 inspector sinks forward to the E4 `Inspector` methods.
 
 **Runtime split (EMBEDDED_BLUEPRINT §1):** every E9 export needs a **LIVE surface**
-(created via `rustty_surface_new`, the Phase-3 GPU-leaf boundary — the R-d/D6 leaves in
+(created via `rustty_surface_new`, the GPU-tier-leaf [LANDED: W0–W5] boundary — the R-d/D6 leaves in
 the core C3 deferral set). The surface-action + clipboard exports are pure FFI
 marshaling once a surface exists (the split exports reach the host `action` callback;
 `_binding_action` runs real core logic; `_complete_clipboard_request` runs the real E3
@@ -2450,7 +2479,7 @@ backend, reaching the host `confirm_read_clipboard` callback on the unsafe/unaut
 paste arm). The **inspector per-callback exports additionally reach the E4 `Inspector`
 `unimplemented!()` leaves** (dcimgui `ImGuiIO_Add*Event`, `Inspector::init`): a LIVE
 inspector cannot yet exist because `_surface_inspector` → `Surface::initInspector` →
-`Inspector::init` is a Phase-3 dcimgui leaf, so `_inspector_{mouse_button,mouse_pos,
+`Inspector::init` is a the dcimgui tier [LANDED: WS6] leaf, so `_inspector_{mouse_button,mouse_pos,
 mouse_scroll,key,text,set_focus}` are unreachable this milestone (their leaves are E4's,
 already documented above). E9 adds **NO new `unimplemented!()` leaf in apprt-c** — it is
 a pure FFI projection (the E6/E7/E8 precedent), so there is nothing to un-defer here
@@ -2524,20 +2553,20 @@ objc/CGS/Metal/coretext logic fabricated. Runtime split + targets:
    leaf (objc `msgSend(windowNumber)` + private CGS `CGSSetWindowBackgroundBlurRadius`).
    The two private CoreGraphics `extern "c"` decls (`CGSSetWindowBackgroundBlurRadius`/
    `CGSDefaultConnectionForThread`, embedded.zig:2128-2130) are preserved as comments
-   (they land as live `extern "C"` fns WITH the leaf in Phase-3). NOT in the runtime-safe
-   list; the E11 smoke KAT MUST NOT call it. **Target: Phase-3 (macOS objc/CGS glue).**
+   (they land as live `extern "C"` fns WITH the leaf). NOT in the runtime-safe
+   list; the E11 smoke KAT MUST NOT call it. ~~**Target: Phase-3 (macOS objc/CGS glue).**~~
 2. **`rustty_surface_set_display_id` — renderer/xev leaf.** Pushes a `.macos_display_id`
    message to `renderer_thread.mailbox` + `wakeup.notify()`; both the renderer thread
-   and its xev `wakeup` are placeholders. `unimplemented!()` leaf. **Target: Phase-3 R-d
+   and its xev `wakeup` are placeholders. `unimplemented!()` leaf. **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5]
    (renderer) + D6 (xev).**
 3. **`rustty_surface_quicklook_font` — objc/coretext + renderer leaf.** Reaches the
    renderer `font_grid` primary CoreText face + `copyAttribute`/`copyWithAttributes`
-   (coretext). `unimplemented!()` leaf. **Target: Phase-3 R-d (renderer) + coretext.**
+   (coretext). `unimplemented!()` leaf. **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5] (renderer) + coretext.**
 4. **`rustty_surface_quicklook_word` — renderer_state live-surface leaf.** Real terminal
    logic (`getCursorPos`/`posToViewport`/`pages.pin`/`selectWord` + the E7 `readTextLocked`
    helper) under `renderer_state.mutex` — grouped with the Darwin block per the blueprint,
    ported as an `unimplemented!()` leaf (reaches the live-surface renderer_state seam).
-   **Target: Phase-3 R-d (renderer_state).**
+   **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5] (renderer_state).**
 5. **`rustty_inspector_metal_init` / `_metal_render` / `_metal_shutdown` — delegate to
    the E4 backend leaves (NO new apprt-c leaf).** The reference bodies are pure
    delegations, so the wrappers forward to the already-landed E4 backend methods
@@ -2546,7 +2575,20 @@ objc/CGS/Metal/coretext logic fabricated. Runtime split + targets:
    + logs the error exactly as the reference `catch |err| { log.err(...); return; }`;
    `_metal_shutdown` is a faithful `if let Some(v) = ptr.backend { v.deinit(); ptr.backend
    = None }` (a no-op this milestone, since `initMetal` is a leaf so `backend == None`).
-   The panic is in the E4 backend leaf. **Target: Phase-3 R-d (objc/Metal + dcimgui).**
+   The panic is in the E4 backend leaf. **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5] (objc/Metal + dcimgui).**
+
+**ALL FIVE ITEMS ABOVE ARE RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row
+W2].** This is the second copy of the "apprt-c has exactly 4 `unimplemented!()`
+code-leaves" claim (the first is the struck E11 leaf-audit paragraph earlier in this
+file). Verified against code: `grep -rn 'unimplemented!' crates/rustty-apprt-c/src/`
+→ **6 hits, every one inside a comment**; zero live leaves. All five exports are live
+in `crates/rustty-apprt-c/src/lib.rs`: `rustty_set_window_background_blur` `:2515`
+(real `objc2` `msg_send!` + the two private CGS `extern "C"` decls, no longer
+comments), `rustty_surface_set_display_id` `:2629`, `rustty_surface_quicklook_font`
+`:2674`, `rustty_surface_quicklook_word` `:2811`, `rustty_inspector_metal_init`
+`:2929`. Closed by P2.1 / P2.2 / WS2 / WS6 plus the W0–W5 GPU tier. The struck
+**Target:** lines say "Phase-3", which in this file is the pre-WS codename for those
+tiers — see the note at the top of this file.
 
 **Darwin gating (§3/§7 + E5 `capi.rs` decision):** the six Darwin exports are
 `#[cfg(target_os = "macos")]`-gated free functions (the compiler pulls them into the C
@@ -2606,12 +2648,18 @@ generation + the C compile+link+run KAT and audits the completed 71-export surfa
    `SurfaceOptions`==88, `EnvVar`==16, `PlatformC`==8, `TargetC`==16, `ActionC`==32 +
    the enum-width pins — the drift gate that keeps the hand-pinned header honest.
 
-**Leaf audit (E11 item 5) — apprt-c has exactly 4 `unimplemented!()` code-leaves, ALL
+~~**Leaf audit (E11 item 5) — apprt-c has exactly 4 `unimplemented!()` code-leaves, ALL
 E10-created, ALL documented above:** `rustty_set_window_background_blur` (macOS
 objc/CGS), `rustty_surface_set_display_id` (renderer/xev), `rustty_surface_quicklook_font`
 (objc/coretext + renderer), `rustty_surface_quicklook_word` (renderer_state). The
 inspector `_metal_*` exports delegate to the E4 backend leaves (no apprt-c leaf). E11
-adds none.
+adds none.~~
+
+**RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W2].** `grep -rn
+'unimplemented!' crates/rustty-apprt-c/src/` → **6 hits, every one inside a comment**;
+zero live leaves. `rustty_set_window_background_blur` is LIVE at
+`crates/rustty-apprt-c/src/lib.rs:2515` (real `objc2` `msg_send!` + CGS). The other
+three were closed by P2.1 / P2.2 / WS2 / WS6. The inspector `_metal_*` note still holds.
 
 **Gate deltas (E11):** NO new `rustty-apprt-c` Cargo dep (uses apprt-api types already
 in the closure). `apprt_embedded`/`apprt_none`/`apprt_browser` MAP rows unchanged +
@@ -2932,7 +2980,7 @@ deferrals; two convention notes (NOT deferrals — no follow-up scheduled):
   seam (`record_replay_arg` → `_ssh_args`, `apply_e_command` → halt) — the
   aliasing-safe analogue of the `-e` path (memory `rust-mut-args-strongly-protected`).
 
-## rustty-cli C5 (Phase-2 CLI milestone) — vaxis/zf-touching actions [RECONCILED 2026-07-10, T14: TUI wiring landed; `boo.rs:22` is the crate's ONLY live seam]
+## rustty-cli C5 (Phase-2 CLI milestone) — vaxis/zf-touching actions [RECONCILED 2026-07-10, T14: TUI wiring landed; ~~`boo.rs:22` is the crate's ONLY live seam~~ **boo RESOLVED — WS19 T2 audit row W3, 2026-07-29**]
 
 C5 (CLI_BLUEPRINT.md §1/§7 + Risk 1/2) lands the four vaxis/zf-touching actions
 into `rustty-cli`: `list_colors.zig` (0t → `list_colors.rs`), `list_keybinds.zig`
@@ -2951,8 +2999,9 @@ GONE.** `vaxis` and `zf` are no longer "unported Zig-source dependencies" —
 and the TUI-CLI wiring commits (e55e39d — `list_colors`/`list_keybinds`
 `prettyPrint`; 1f88eec — the `list_themes` interactive vaxis+zf fuzzy picker,
 Miri-proven) FILLED three of the four deferred render leaves. Of the items
-below, only **`boo`** remains deferred: `boo.rs:22` `unimplemented!()` is the
-crate's ONLY live seam (it needs the vaxis `vxfw` widget framework tier — NOT
+below, only **`boo`** remains deferred: ~~`boo.rs:22` `unimplemented!()` is the
+crate's ONLY live seam~~ **(boo has since RESOLVED too — WS19 T2 audit row W3; see
+the struck bullet below)** (it needs the vaxis `vxfw` widget framework tier — NOT
 ported by chunks 1a–4b, which stop at the `widgets`/TextInput tier — plus the
 `framedata` compressed asset). Un-defer trigger: a vaxis vxfw follow-up chunk.
 The per-leaf notes below are kept for history with their outcomes marked:
@@ -2986,14 +3035,22 @@ The per-leaf notes below are kept for history with their outcomes marked:
     `color`, `ThemeListElement.toUri`) is a deferred leaf~~ **RESOLVED (1f88eec):
     the interactive fuzzy picker is LIVE over rustty-vaxis + rustty-zf
     (Miri-proven), `lorem_ipsum.txt` included.**
-  - **`boo` — STILL DEFERRED (the crate's ONLY live seam, `boo.rs:22`).** A 100%
+  - ~~**`boo` — STILL DEFERRED (the crate's ONLY live seam, `boo.rs:22`).** A 100%
     vaxis/**vxfw** ghost animation (needs the `framedata` compressed asset too);
     `run` is an `unimplemented!()` marker and the whole reference (`Boo` widget,
     span-parser, flate decompression) is preserved verbatim as comments
     (comment-fidelity, scoped-G3b missing=0). NOT unblocked by the vaxis port:
     chunks 1a–4b stop at the `widgets`/TextInput tier and do NOT port the `vxfw`
     widget framework `Boo` is built on. Un-defer trigger: a vaxis vxfw follow-up
-    chunk + the `framedata` asset (R3 copy).
+    chunk + the `framedata` asset (R3 copy).~~
+
+    **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W3].** This row was
+    already self-contradicted 240 lines earlier by the `boo` entry at the
+    "cli C5 finale" heading above, which records it ✅ RESOLVED.
+    `crates/rustty-cli/src/boo.rs` is a **525-line LIVE port** with a real
+    `pub fn run() -> Result<u8, Error>` at `:406`; `boo.rs:22` is a doc-comment
+    line, not an `unimplemented!()`. The vxfw tier and the `framedata` asset both
+    landed. Nothing here is open.
 
 - **`list_themes` resources-dir two-seam note (NOT a new deferral).** The reference
   reads `global_state.resources_dir.app()` (the process-global) for BOTH the
@@ -3035,16 +3092,28 @@ lib_vt 0/308→vt-c); scoped-G3b **missing=0** on the two ported `.zig` files
 bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
 `rustty-build-config`, `rustty-identity`. Deferrals introduced/continued:
 
-- **Phase-3 GUI launch leaf (`main_ghostty.rs`).** The reference `main()`'s GUI
+- ~~**Phase-3 GUI launch leaf (`main_ghostty.rs`).**~~ **[WS19 T2 audit, 2026-07-29 —
+  audit row W9: MOSTLY RESOLVED; the file is now `main_rustty.rs` (renamed 410c387),
+  and the GTK arm is LIVE.]** The reference `main()`'s GUI
   path (`App.create(alloc)` + `apprt.App.init/run` the event loop, `startQuitTimer`)
-  reaches the concrete embedded/GTK apprt backend + the xev event loop (D6). It is
+  reaches the concrete embedded/GTK apprt backend + the xev event loop (D6). ~~It is
   ported as a documented `unimplemented!()` leaf with the reference body preserved
-  verbatim as comments (the GPU/GTK/xev "deferred placeholder leaf" precedent). The
+  verbatim as comments (the GPU/GTK/xev "deferred placeholder leaf" precedent).~~ The
   reference reaches it only for a GUI build (`app_runtime != .none`); the headless
   `.none` bin (the current darwin/Windows default) never does — it runs the action
-  or prints the usage banner. **Target:** un-defer when the embedded/GTK apprt
-  backend + xev (D6) land (Phase-3). The no-args KAT is scoped to `.none`
+  or prints the usage banner. ~~**Target:** un-defer when the embedded/GTK apprt
+  backend + xev (D6) land (Phase-3).~~ The no-args KAT is scoped to `.none`
   (`app_runtime()` guard) so it stays honest on a future `.gtk` build.
+
+  **CURRENT STATE.** `crates/rustty/src/main_rustty.rs` has exactly ONE
+  `unimplemented!()`, at `:299`, and it is NOT the GUI-launch port: the GTK arm
+  `run_gtk(&state.logging)` at `:292` is LIVE and diverges (`-> !`, every arm ends in
+  `std::process::exit` after the reference's `terminate`/`destroy` teardown), so
+  control never reaches `:299` on a GTK build. `:299` is reachable only on a
+  configuration with **no compiled GUI backend** (e.g. a Linux
+  `--no-default-features` build with GTK off) — unreachable on both supported hosts
+  (macOS `app_runtime()` is `.none` and takes the banner path). It is therefore a
+  configuration-guard leaf, not a deferred port; no owner and no trigger are needed.
 
 - **`main_c.zig` (3t) re-homed to rustty-apprt-c; `lib_vt.zig` (1t) re-homed to
   rustty-vt-c [ADV-FIX 6].** The 3 `ghostty_string_s` tests are ported
@@ -3086,11 +3155,18 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   separately from that stderr noise. **Target:** un-defer with the unified log-facade
   follow-up.
 
-- **`version.zig` renderer/libxev/toolchain STUB lines (continued from C1, ADV-FIX
+- ~~**`version.zig` renderer/libxev/toolchain STUB lines (continued from C1, ADV-FIX
   1).** The `+version` KAT asserts ONLY exit 0 + stdout starts `rustty ` — it does
   NOT assert the `- renderer` (`RENDERER_STUB`), `- libxev` (`LIBXEV_STUB`), or
   `- Rust version` (`TOOLCHAIN_VERSION_STUB`) line CONTENT, which stay documented
-  stubs until R-d (renderer) / D6 (libxev) land. Unchanged by C6.
+  stubs until R-d (renderer) / D6 (libxev) land. Unchanged by C6.~~
+
+  **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W8].** `grep -rn
+  'RENDERER_STUB\|LIBXEV_STUB\|TOOLCHAIN_VERSION_STUB' crates/` → **zero hits**.
+  WS3-B replaced all three with real values and `crates/rustty/tests/cli_smoke.rs`'s
+  `version_plus` KAT now asserts their CONTENT. The `D:2639` copy of this row already
+  recorded that; this C6 copy was never struck. The only `+version` residual left is
+  the OSC-8 commit hyperlink (audit row O12 → **WS19 T12**).
 
 - **`explain_config` (1t DEFERRED) + `help_strings` codegen (continued, ADV-FIX 3).**
   The bin does not un-defer these; `Action::help_text` still returns "" (the
@@ -3255,15 +3331,24 @@ Every mapped module is rust ≥ zig.
 
 DEFERRED (documented; not needed to boot a shell on macOS — the permanent finale list):
 
-- **`ThreadPool.zig` work-stealing BODY** (§1/§6). Only the TYPE SURFACE
+- ~~**`ThreadPool.zig` work-stealing BODY** (§1/§6). Only the TYPE SURFACE
   (`Task`/`Batch`/`schedule`/`init`/`deinit`/`shutdown` sigs) is ported in
-  `thread_pool.rs` so `kqueue.rs` compiles; ghostty passes NO `thread_pool`
+  `thread_pool.rs` so `kqueue.rs` compiles~~; ghostty passes NO `thread_pool`
   (`Loop.init(.{})` with no pool), so the pool is unreachable on macOS. Consequence:
   the `kqueue: file IO on thread pool` test is a **SkipZigTest-style skip-stub
   `#[test]`** (`kqueue_file_io_on_thread_pool` — the count stays 12, honest R5-safe:
-  it defers genuinely-unused functionality, not a live path). G3b on `ThreadPool.zig`
+  it defers genuinely-unused functionality, not a live path). ~~G3b on `ThreadPool.zig`
   is intentionally NOT missing=0 (only the type surface is ported; the deferred body's
-  ~700 comments are the documented gap, this bullet).
+  ~700 comments are the documented gap, this bullet).~~
+
+  **BODY RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W5].**
+  `crates/rustty-xev/src/thread_pool.rs` is **1630 lines with 0 `unimplemented!()`** —
+  the full Zap work-stealing pool, shared by both targets, SB/TB-proven on
+  `.port/phase-2/mirihar-threadpool` (commits 89dde0f / e6885c0). Only the NARROW
+  residual survives: the macOS `kqueue: file IO on thread pool` skip-stub above, kept
+  as-is and **reclassified as a permanent Justified R1 Divergence by WS19 T11**
+  (audit row O10) — see the `# Justified R1 Divergences` section. Nothing in this
+  bullet is a Phase-2 deferral any more.
 - **`dynamic.zig`** (525 loc, 5 tests) — comptime-elided on single-candidate macOS
   (§0: `Backend::candidates()` is `&[Kqueue]`, so `Xev(bes)` collapses to
   `bes[0].Api()`); N/A, not weakened. The `Dynamic`/`DynamicXev`/`Sys`/`dynamic`/
@@ -3286,7 +3371,7 @@ DEFERRED (documented; not needed to boot a shell on macOS — the permanent fina
 - **Milestone B (NEXT — not this chunk):** un-defer TERMIO ONLY ([ADV-FIX F8]) —
   `Thread.run` loop + `Termio.init/threadEnter/processOutput` + `Exec`
   `Subprocess.start`/`ReadThread`/`queueWrite` + the core `Async::notify()` leaves —
-  capped with a live-shell KAT. `renderer.Thread` stays Phase-3 GPU tier (GPU-and-xev
+  capped with a live-shell KAT. `renderer.Thread` stays the GPU tier [LANDED: W0–W5] tier (GPU-and-xev
   blocked; landing rustty-xev does not unblock it). See NEXT_PHASE_PLAN.md.
 
 ## rustty-xev LINUX port L1 LT8 (per-target Dynamic re-export + gate wiring) — deferrals
@@ -3406,7 +3491,7 @@ follow-up, not a weakening of a live path):
   `Dynamic` has no such decl; `detect`/`prefer` (exported) consult each candidate's
   `available()` internally (dynamic.zig:98/113), so `epoll::available`/
   `io_uring::available` stay module-private.
-- **`Timer::cancel` on Linux** (timer.zig:369) — carried over from LT7 (see
+- ~~**`Timer::cancel` on Linux** (timer.zig:369) — carried over from LT7 (see
   dynamic.rs's PORT NOTE at the end of `impl Timer`). `TimerLoop.cancel` must WRITE a
   backend `Operation` (`epoll::Operation::Cancel` / `io_uring::Operation::TimerRemove`)
   into a completion, and neither backend exposes a `Completion::new_op` seam to
@@ -3418,7 +3503,15 @@ follow-up, not a weakening of a live path):
   epoll.rs/io_uring.rs and add the two arms. NOTE `rustty-core`'s renderer_seam
   (`cursor_h.cancel(...)`, renderer_seam.rs:1060) DOES call it — that is a
   core-tier/Phase-3 path, not termio's, but it means core will not build on Linux
-  until this is un-deferred.
+  until this is un-deferred.~~
+
+  **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W4].**
+  `crates/rustty-xev/src/dynamic.rs:1532` `Timer::cancel` is fully ported with BOTH
+  arms — `io_uring::Operation::TimerRemove` (`:1565`) and `epoll::Operation::Cancel`
+  (`:1578`) — through the `Completion::new_op` seam the struck text said did not
+  exist; its own PORT NOTE says "This un-defers the C7 gap". The "core will not build
+  on Linux" claim is therefore **false**: Linux `cargo build --workspace` is green
+  (ROADMAP flagged this; only the ledger row was never struck).
 - **`io_uring::available()`'s false path is untestable on this host** (carried over
   from LT5), and so is the `detect()` FALLBACK arm that depends on it: this host has
   io_uring enabled, so `detect()` always lands on the FIRST candidate and the
@@ -3755,22 +3848,33 @@ build may be needed** if bit-exact parity with stb's resampler is required.
 
 ## Sub-project #2 (macos-swift-app): the `ghostty_*`→`rustty_*` C-ABI compatibility ALIAS layer
 
-**Context:** the reused macOS Swift app hard-codes ~163 `ghostty_`-prefixed
+~~**Context:** the reused macOS Swift app hard-codes ~163 `ghostty_`-prefixed
 symbols, but the rustty C-ABI (rustty-apprt-c, the E-series) exports `rustty_`-
 prefixed symbols (R2 identity rename). **What's deferred:** a compatibility ALIAS
 layer that re-exports each `rustty_*` C export under its original `ghostty_*` name
 (so the unmodified Swift app links against `librustty_apprt_c`). No rustty crate
-provides this yet. **Locked decisions (per the critics):** identity is
-`io.airely.rustty`; **iOS is in scope** (the alias layer + xcframework must cover
-the iOS targets too). **Why deferred:** only needed when the Swift frontend is
+provides this yet.~~ **Locked decisions (per the critics):** identity is
+`io.airely.rustty`; **iOS is in scope** (the xcframework must cover the iOS targets
+too). ~~**Why deferred:** only needed when the Swift frontend is
 actually reused (Phase-3, after R-d windowed present + D6 land). **What unblocks
 it:** sub-project #2 (macos-swift-app, GAP_ANALYSIS §3.3) — generate the ~163
 `ghostty_*` = `rustty_*` alias exports (comptime/attribute export aliases) as part
-of the Swift-app reuse milestone.
+of the Swift-app reuse milestone.~~
+
+**SUPERSEDED — THE PREMISE IS MOOT [WS19 T2 audit, 2026-07-29 — audit row W7].**
+Upstream **deleted** the `ghostty_*` C-ABI forwarder layer at `e4cc852`, so there is
+no ~163-symbol legacy surface to be compatible with. `grep -rn 'export_name'
+crates/rustty-apprt-c/src/` → **0 hits**, and `crates/rustty-apprt-c/Cargo.toml:31-33`
+states the crate "no longer compiles any `ghostty_*` C-ABI alias layer … exports ONLY
+`rustty_*` (R2), always, in every profile"; `identity-oracle` now flips only the
+`rustty-identity` STRING identity for the differential harness. **Do not re-add
+aliases.** Consequence outside this file: the ROADMAP's global constraint
+"`ghostty_*` C-ABI aliases stay" (`ROADMAP:25`) was FALSE and is corrected by the same
+WS19 T2 commit.
 
 ## Sub-project #2 (macos-swift-app): signed `.xcframework` repackaging xtask (`GhosttyKit.xcframework`)
 
-**Context:** the Xcode project consumes a `GhosttyKit.xcframework`; the rustty
+~~**Context:** the Xcode project consumes a `GhosttyKit.xcframework`; the rustty
 build produces `librustty_apprt_c` (the apprt-c staticlib/dylib). **What's
 deferred:** an `xtask` (build-orchestration) subcommand that repackages
 `librustty_apprt_c` (+ the generated C header + the `ghostty_*` alias layer above)
@@ -3779,7 +3883,17 @@ iOS slices). No such xtask exists yet (the current `xtask` only does
 `header-gen-apprt` cbindgen, see E11/E-series). **Why deferred:** only needed for
 the Swift-app reuse build. **What unblocks it:** sub-project #2 (macos-swift-app,
 GAP_ANALYSIS §3.3) — add the `xtask xcframework` packaging + codesign step
-alongside the alias layer.
+alongside the alias layer.~~
+
+**RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W6].** The xtask exists:
+`xtask/src/main.rs:65` registers `xcframework` ("Package rustty-apprt-c into
+`dist/RusttyKit.xcframework` (macOS Swift-app tier)"), dispatched at `:103`, implemented
+at `:305` (staticlib under the `xcframework` profile, archive folding, then
+`xcodebuild -create-xcframework`). `xtask/src/` also carries `dist.rs`, `archives.rs`,
+`res_*`, `translations.rs`, `wasm_patch_growable_table.rs`. The R2 artifact name is
+`RusttyKit.xcframework`, not `GhosttyKit.xcframework`. **The `ghostty_*` alias-layer
+clause is moot**: upstream deleted that layer at `e4cc852` — see audit row W7 and the
+struck alias-layer entry.
 
 ## Sub-project #4 (gtk): the `apprt-gtk` subsystem (`src/apprt/gtk/**`)
 
@@ -4710,57 +4824,6 @@ Backend rasterization is additionally gated by the offscreen KAT
 
 ---
 
-## rustty-termio ReadThread — PRESERVED REFERENCE QUIRK: trailing pty output dropped on Linux POLLHUP (L1 LT9)
-
-**Status: preserved verbatim, NOT fixed. This is reference behavior, not a port bug.**
-
-`ReadThread.threadMainPosix` checks HUP *before* it re-drains the pty:
-
-```zig
-// ghostty src/termio/Exec.zig:1355-1358
-if (pollfds[0].revents & posix.POLL.HUP != 0) {
-    log.info("pty fd closed, read thread exiting", .{});
-    return;
-}
-```
-
-The read loop's shape is: tight `read()` until `EAGAIN` -> blocking `poll(-1)` ->
-quit check -> **HUP check -> return**. There is no final drain after the HUP check.
-
-**Why this is invisible on macOS but bites on Linux** (a kernel pty-semantics
-difference, verified empirically in L1 LT9, not inferred):
-
-* **Linux** raises `POLLHUP` on the pty *master* as soon as the last *slave* fd
-  closes — **even while unread bytes are still buffered** — so a child that writes
-  and immediately exits produces `POLLIN|POLLHUP` in the SAME `revents` word
-  (measured: `0x11`). The reference returns on the HUP check and the buffered bytes
-  are never read. Measured directly: at that HUP return the pty still held the
-  unread `"RUSTTY_OK\r\n"`.
-* **macOS** does not surface the dying child as HUP here; it surfaces as
-  `read() == 0`, which the loop already handles (`if (n == 0) break;` — and the
-  reference's own comment there says *"This happens on macOS instead of WouldBlock
-  when the child process dies"*). So macOS drains first and loses nothing.
-
-**Consequence:** on Linux, output written by a child in the same instant it exits
-can be dropped by the read thread. For a real interactive shell this is a
-shutdown-time edge (the shell is long-lived; the HUP only arrives at exit), which
-is presumably why it is unfixed upstream.
-
-**Why we do NOT fix it:** R1 — port faithfully, preserve reference quirks. Adding a
-post-HUP drain would be a real behavioral divergence from ghostty on the hot read
-path. If upstream fixes it, port the fix.
-
-**Impact on the KAT:** `crates/rustty-termio/tests/live_shell.rs` therefore spells
-its command `/bin/sh -c 'echo RUSTTY_OK; /bin/sleep 1'` rather than a bare `echo`:
-the trailing sleep keeps a slave fd open for a beat after the write, decoupling
-`POLLIN` from `POLLHUP` so the read thread drains on a HUP-free wakeup exactly as
-it does on macOS. This removes only the exit RACE — the KAT still spawns a real
-`/bin/sh` in a real pty and asserts the echo round-trips into the terminal
-`Screen`. (`/bin/sleep` is absolute because that harness's `Config.env` is an empty
-`EnvMap` — there is no PATH to search.)
-
-**Un-defer trigger:** an upstream ghostty fix to the `threadMainPosix` HUP path.
-
 ---
 
 ## GTK winproto (wayland/x11 arms) + dcimgui inspector — Linux/GTK tail [2026-07-18, final parity audit]
@@ -4907,28 +4970,6 @@ Two known residuals (grounding-review):
   `name→tag` map entry, so a later `global_remove(old_name)` would unbind the live proxy. Compositors
   don't re-advertise these singletons in practice. (globals.rs bind_global/remove_global.)
 
-### xev ThreadPool `Event` shutdown wake — DELIBERATE DEVIATION (controller-approved) [2026-07-19, Task 1]
-`crates/rustty-xev/src/thread_pool.rs` `Event::wake` deviates from the oracle
-(`ThreadPool.zig:508-518`, kprotty's Zap pool) in two ways, both confined to `wake`:
-**(1)** the terminal SHUTDOWN transition's `futex_wake` is UNCONDITIONAL (the oracle skips it when
-the pre-swap state is not WAITING, which strands remaining parked sleepers when a trailing run-loop
-`notify()` left the event NOTIFIED — `join()` then hangs); **(2)** SHUTDOWN is STICKY (the NOTIFIED
-transition is a CAS loop that no-ops on a shutdown event, because the oracle's unconditional swap
-lets a late `notifySlow` event-write resurrect the dead event and re-park a woken sleeper forever).
-Rationale: SHUTDOWN is terminal/unrepeatable, so the extra wake is sound (sleepers re-check state;
-late arrivals fail the futex value-check) and notifying a shutdown event is already a no-op by
-`Event::wait`'s own contract; cost = one extra syscall at pool shutdown. Both oracle holes are
-ANALYTIC windows (the originally-observed 100% teardown deadlock was root-caused to a rustty port
-bug — the `futex_wake` shim passed `u32::MAX` unclamped through FUTEX_WAKE's C-int slot = `-1` =
-wake at most ONE; fixed with the oracle's own `min(i32::MAX)` clamp semantics, after which the
-VERBATIM oracle Event passed 400/400 multi-worker lifecycles). ghostty never instantiates the pool
-(all 4 xev loops are `Loop.init(.{})`), and upstream libxev `1c80766` (Dec 2024) fixed a DIFFERENT
-join race already in our pin — upstream HEAD still carries these two windows. rustty's Task-5 epoll
-File watcher WILL multi-worker-join, hence the defensive close. Full interleavings + soundness
-argument: the DELIBERATE DEVIATION note on `Event::wake`; RED/GREEN evidence + regression gate
-(`thread_pool::tests::multi_worker_quiesce_then_join_50x`, 50 lifecycles under a 60s watchdog):
-`.superpowers/sdd/task-1-report.md` addendum 2.
-
 ### `share/{APP}` resource root — shell-integration + themes SHIPPED ✅ RESOLVED [2026-07-23, WS1]
 The R5 placeholder (`share/{APP}/DEFERRALS.md`, written by
 `xtask/src/res_terminfo.rs::gen_app_root`) that stood in for the
@@ -4975,10 +5016,18 @@ From **WS7 Phase B review (I1)** — these need the final
    `Limits.enforce`) therefore has nothing to port onto. rustty's PageList carries
    its byte limit as a plain field with no `Limits` struct, so there are 10
    `mark_activity` sites, not 11. See the PORT NOTE next to `mark_activity` in
-   `crates/rustty-vt/src/pagelist/compress.rs`. If a `Limits` struct is ever
-   introduced, `enforce` must `mark_activity` on entry.
+   `crates/rustty-vt/src/pagelist/compress.rs`.
 
-## Deferred to WS8 upstream sweep — WS7 Phase C divergence #11 (`Screen::cursor_scroll_region_up` unported)
+   **RESTATED AS A PHASE 3 RE-VET ROW [WS19 T2, 2026-07-29 — audit row O5].** This is
+   not a Phase-2 deferral: there is nothing in the pinned tree to port. `Limits` is a
+   **beyond-pin** struct, so the item is **pin-conditional** and its owner is
+   **Phase 3** (`.port/phase-3/`, upstream resync), whose re-vet list carries the exact
+   assertion to make: *"if the resync introduces a `PageList::Limits` struct, then
+   `Limits::enforce` must call `mark_activity` on entry, taking rustty's
+   `mark_activity` site count from 10 to 11."* If the resync does **not** introduce it,
+   the row closes with no work. **Owner: Phase 3. Trigger: the resync.**
+
+## ~~Deferred to WS8 upstream sweep~~ **→ OWNER: WS10 (BL-4 perf series), pin-sequenced** — WS7 Phase C divergence #11 (`Screen::cursor_scroll_region_up` unported) [re-owned WS19 T2, 2026-07-29 — audit row O3]
 
 From **WS7 Phase C review (I2)**. The Phase C plan
 (`docs/superpowers/plans/2026-07-23-ws7-scrollback-compression.md:3790,3830`)
@@ -5008,10 +5057,22 @@ cursor-page rotation) and all 3 Screen tests the oracle commit added (grep
 `cursor_scroll_above` / `cursor_scroll_above_rotate` regression tests around
 lines 11634, 11731, 11946).
 
-**Disposition:** belongs to the **WS8 upstream-sweep backlog** (BL-4). When
-`77190bd02` is ported, its `invalidateNodeLayout` site and
-`screen_cursor_scroll_region_up_renews_page_generation` test should be added
-alongside it — not retrofitted into WS7.
+**Disposition [REWRITTEN — WS19 T2, 2026-07-29, audit row O3].** ~~belongs to the
+**WS8 upstream-sweep backlog** (BL-4)~~ — that was wrong **twice over**: WS8 is
+`[x]` AUTHORED + EXECUTED + **MERGED** (a closed workstream, so the row was
+ORPHANED), **and** BL-4 is the `stream`/`terminal`/`termio` **performance series**,
+which has never been WS8's scope — it is **WS10**'s.
+
+**OWNER: WS10 (BL-4 perf series).**
+
+**Sequencing (a stated decision, NOT a deferral — the owner AND the trigger are both
+named).** `77190bd02` is **beyond the pin** (`../ghostty` working tree is pinned at
+`4749c4e93`). Porting a beyond-pin function into the pinned tree means
+hand-transcribing a commit that Phase 3's upstream re-vet will revisit anyway, so it
+is **cheaper AFTER Phase 3 advances the pin**, and WS10 should sequence it that way.
+When `77190bd02` is ported, its `invalidateNodeLayout` call site and the
+`screen_cursor_scroll_region_up_renews_page_generation` test land **alongside it** —
+not retrofitted into WS7.
 
 ## Deferred to WS7 Phase E (Miri / gates)
 
@@ -5085,6 +5146,95 @@ into a page's style set no longer leaves uninitialized bytes in the mapping that
 committed `mapinit_styled` harness scenario (seconds); 4-criterion acceptance basis is in
 `MIRI_EXCEPTIONS.md`'s WS7 Phase E section.
 
+
+**[WS19 T2, 2026-07-29 — audit §E.1] Items 3 and 4 below were physically MIS-FILED:**
+they had been appended AFTER the `# Justified R1 Divergences` heading and had come to
+sit *inside* the `killPid` divergence entry, which made item 4's open work (the
+`-C debug-assertions=off` vt Miri lane, audit row O2) invisible to anyone grepping for
+open items — it read as part of a permanent divergence. Moved back here under their own
+heading, restoring the 1–2–3–4 numbering. Not one word of their text is changed.
+
+3. **`pagelist_decommit_pool_item_zeroes_the_dirty_region` has a real Stacked-Borrows
+   violation under Miri (OPEN, discovered while proving WS7 Phase C's I1).** Confirmed
+   deterministic in isolation — full backtrace and root cause in
+   `.port/phase-2/MIRI_EXCEPTIONS.md`'s Category 2 correction note. **Pre-existing (WS7
+   B1, commit `39cd6b8`; last touched at `0413d2b`), NOT introduced by Phase C** — no
+   Phase C commit touches `mem.rs` or this test. It is a test-code bug (holds a `&mut
+   [u8]` across a call that mutates the same bytes through a separate raw pointer, then
+   reads through the stale reference), not a production-code bug; native `cargo test`
+   and ASan both stay green. The claim in `MIRI_EXCEPTIONS.md`'s Category 2 table that
+   this test "IS Miri-provable" was asserted without having actually been run under Miri
+   — now corrected in-place. Phase E must either fix the test (re-derive the slice fresh
+   after each `decommit_pool_item` call) or record a formal exception; it must NOT be
+   left silently claimed-clean.
+   **RESOLVED — WS7 Phase E (2026-07-29).** Fixed exactly as sketched: every slice is now
+   derived fresh from `ptr` and none is live across `decommit_pool_item`. Assertions
+   unchanged (both the fully-dirty and the partially-dirty item must still read back
+   all-zero across the whole buffer). Measured under Miri: was the retag UB above, now
+   `1 passed` in 13.28s. Before/after output recorded in `MIRI_EXCEPTIONS.md`'s Category 2
+   correction note, which no longer claims anything unverified.
+4. **Several WS7 Phase B compression tests are ALSO Miri-intractable and undocumented
+   (OPEN, discovered the same pass).** Attempting a bounded full-module pagelist Miri
+   sweep (beyond I1's specific ask) found `pagelist_compress_incremental_converges_to_complete`,
+   `pagelist_compress_full_leaves_viewport_and_active_resident`,
+   `pagelist_compress_drain_finishes_in_one_call`, and
+   `pagelist_compress_full_mode_leaves_no_continuation` all TIMEOUT at a 2–3 min bound —
+   confirmed in single-worker isolation (not a parallel-contention artifact), and
+   `…_leaves_no_continuation` reproduces identically on **pre-Phase-C** commit `098fc63`,
+   proving this is a **pre-existing WS7 Phase B gap** (these tests were apparently never
+   run under a bounded Miri harness before), not a Phase C regression. `MIRI_EXCEPTIONS.md`
+   had cited two of these as "lighter, passing" coverage for a Phase C exception row; that
+   citation is now corrected (see the row's inline correction). Out of scope for the Phase
+   C review response — Phase E should measure the rest of the `compress`/`pagelist_compress`
+   family the same way (`bash .port/tools/miri-run.sh rustty-vt pagelist_compress 8 3 5`)
+   and either annotate the genuinely-intractable ones or investigate why compression state
+   machines are this expensive under Miri interpretation.
+   **RESOLVED — WS7 Phase E (2026-07-29).** Whole family measured, per test, with every
+   candidate re-verified in single-worker ISOLATION before being excepted (a parallel
+   TIMEOUT is a candidate, never a verdict). Full table in `MIRI_EXCEPTIONS.md`
+   ("WS7 Phase E — the page-compression test family"). Of **12** measured:
+   * **10 annotated** — the 4 named above plus the 4 other `pagelist_compress_*` tests,
+     plus **2 that this pass discovered and the earlier one had not named**
+     (`pagelist_mutations_mark_compression_activity`,
+     `pagelist_memory_stats_accounts_compressed_and_resident_bytes`). All 10 TIMEOUT at a
+     6-min bound in isolation.
+   * **1 TRACTABLE and deliberately left un-annotated** —
+     `pagelist_page_preserving_state_leaves_a_compressed_node_compressed`, ok in **77s**.
+     Blanket-annotating the family would have hidden a working check, exactly as the
+     Phase C pass warned.
+   * **1 already excepted** —
+     `search::pagelist::…::compressed_history_match_spanning_page_boundary_remains_compressed`.
+     `miri-run.sh` scored it `res=FAIL` / `VERDICT: PROBLEM`; the per-test output file
+     reads `ignored, MIRI EXCEPTION …`. Worked example of the harness's known
+     ignored-test-as-FAIL misclassification.
+
+   **Root cause, measured (this was the "investigate why" half of the ask).** Not hangs and
+   not a logic difference from the tractable siblings — pure volume, on two independent
+   measurements. (a) Natively these are the slowest PageList tests by two to three orders
+   of magnitude (0.50–4.48s debug vs ~0.00s typical): `fill_compressible_history` calls
+   `grow()` once per row until N std-capacity 215x215 pages exist, then `compress()`
+   LZ4-compresses AND verify-decompresses every byte of each mapping. (b) Two of them were
+   run to COMPLETION under Miri — `pagelist_compress_drain_finishes_in_one_call` **ok in
+   1631s**, `pagelist_compress_page_round_trips_a_cold_history_page` **ok in 194s**, both
+   with ZERO UB and ZERO leaks. That is direct positive criterion-3 evidence, not an
+   argument from a lighter sibling.
+
+   **One lever found, and a follow-up for WS8 rather than a change here.** Those completion
+   runs used `-C debug-assertions=off`, which disables `Page::assert_integrity` (O(page),
+   runs on nearly every PageList mutation; the `mirihar-pagelist-compress` harness already
+   uses this accommodation on the documented grounds that it adds no SB/TB or leak
+   coverage). With it, `pagelist_compress_page_round_trips_a_cold_history_page` goes from
+   TIMEOUT(360s) to **ok in 194s** — so the page-level tests are dominated by
+   `assert_integrity` and would be tractable in a `RUSTFLAGS=-Cdebug-assertions=off` Miri
+   lane, while the multi-page ones are dominated by LZ4 volume and stay out of budget
+   (1631s). The annotations are therefore correct for the lane as it runs today
+   (`check_leaks.sh`: `cargo +nightly miri test -p rustty-vt --lib`, debug assertions ON —
+   without them the rustty-vt G6 lane cannot complete at all). **NEW WS8 item:** add a
+   `-C debug-assertions=off` variant of the vt Miri lane and re-measure the whole
+   `cfg_attr(miri, ignore)` inventory against it; changing G6's flags is a cross-crate
+   change to a shared gate and would re-classify far more than the compression family.
+   **[WS19 AUDIT 2026-07-29] WS8 IS CLOSED — this item was ORPHANED. Re-owned as O2 of
+   the Phase 2 Closure Audit below (owner: WS19 T6).**
 ---
 
 ## `threadEnter` error arms should drain the pty master BEFORE `stop()` — residual cure for the teardown wedge [added 2026-07-29, WS-hang review I3]
@@ -5169,6 +5319,116 @@ Divergences from the oracle that are intentional and will NOT be "completed"
 later. Each records what diverges, why fidelity was overruled, and how the
 divergence is bounded. Anything here must be a conscious decision with a
 rationale — never an accident.
+
+## rustty-termio ReadThread — PRESERVED REFERENCE QUIRK: trailing pty output dropped on Linux POLLHUP (L1 LT9)
+
+**[RECLASSIFIED — WS19 T2, 2026-07-29, audit §E.2.]** This entry was filed among the
+DEFERRALS even though its own first line says "preserved verbatim, NOT fixed … reference
+behavior, not a port bug". It is a permanent Justified R1 Divergence and is moved here so
+no closure sweep reads it as open work. **4-criterion basis:**
+1. **It is FIDELITY, not a gap.** Rustty reproduces `threadMainPosix`'s HUP-before-drain
+   ordering byte-for-byte; "fixing" it would be a *divergence from* the oracle, which is
+   the opposite of R1.
+2. **Bounded.** It costs at most the trailing output of a process that exits in the same
+   `revents` word that raised `POLLHUP`, on Linux only (macOS's kqueue does not coalesce
+   this way). No state corruption, no hang.
+3. **Gate/KAT-pinned.** The KAT spawns a real `/bin/sh` in a real pty and asserts the echo
+   round-trips into the terminal `Screen`, with the exit RACE (not the quirk) removed, so
+   the behavior cannot drift silently.
+4. **The only correct trigger is upstream.** Un-diverging means upstream changes
+   `threadMainPosix`; Phase 3's resync is where that would arrive. Keeping a rustty-local
+   fix would put the port permanently ahead of its reference on a path with a live KAT.
+
+
+**Status: preserved verbatim, NOT fixed. This is reference behavior, not a port bug.**
+
+`ReadThread.threadMainPosix` checks HUP *before* it re-drains the pty:
+
+```zig
+// ghostty src/termio/Exec.zig:1355-1358
+if (pollfds[0].revents & posix.POLL.HUP != 0) {
+    log.info("pty fd closed, read thread exiting", .{});
+    return;
+}
+```
+
+The read loop's shape is: tight `read()` until `EAGAIN` -> blocking `poll(-1)` ->
+quit check -> **HUP check -> return**. There is no final drain after the HUP check.
+
+**Why this is invisible on macOS but bites on Linux** (a kernel pty-semantics
+difference, verified empirically in L1 LT9, not inferred):
+
+* **Linux** raises `POLLHUP` on the pty *master* as soon as the last *slave* fd
+  closes — **even while unread bytes are still buffered** — so a child that writes
+  and immediately exits produces `POLLIN|POLLHUP` in the SAME `revents` word
+  (measured: `0x11`). The reference returns on the HUP check and the buffered bytes
+  are never read. Measured directly: at that HUP return the pty still held the
+  unread `"RUSTTY_OK\r\n"`.
+* **macOS** does not surface the dying child as HUP here; it surfaces as
+  `read() == 0`, which the loop already handles (`if (n == 0) break;` — and the
+  reference's own comment there says *"This happens on macOS instead of WouldBlock
+  when the child process dies"*). So macOS drains first and loses nothing.
+
+**Consequence:** on Linux, output written by a child in the same instant it exits
+can be dropped by the read thread. For a real interactive shell this is a
+shutdown-time edge (the shell is long-lived; the HUP only arrives at exit), which
+is presumably why it is unfixed upstream.
+
+**Why we do NOT fix it:** R1 — port faithfully, preserve reference quirks. Adding a
+post-HUP drain would be a real behavioral divergence from ghostty on the hot read
+path. If upstream fixes it, port the fix.
+
+**Impact on the KAT:** `crates/rustty-termio/tests/live_shell.rs` therefore spells
+its command `/bin/sh -c 'echo RUSTTY_OK; /bin/sleep 1'` rather than a bare `echo`:
+the trailing sleep keeps a slave fd open for a beat after the write, decoupling
+`POLLIN` from `POLLHUP` so the read thread drains on a HUP-free wakeup exactly as
+it does on macOS. This removes only the exit RACE — the KAT still spawns a real
+`/bin/sh` in a real pty and asserts the echo round-trips into the terminal
+`Screen`. (`/bin/sleep` is absolute because that harness's `Config.env` is an empty
+`EnvMap` — there is no PATH to search.)
+
+**Un-defer trigger:** an upstream ghostty fix to the `threadMainPosix` HUP path.
+
+
+---
+
+### xev ThreadPool `Event` shutdown wake — DELIBERATE DEVIATION (controller-approved) [2026-07-19, Task 1]
+
+**[RECLASSIFIED — WS19 T2, 2026-07-29, audit §E.2.]** Filed among the deferrals despite
+being labelled a controller-approved DELIBERATE DEVIATION in its own heading. Moved here.
+**4-criterion basis** (the detail below is the original rationale, unchanged):
+1. **Conscious and approved** — the deviation was decided, reviewed and recorded, not
+   discovered; it is not an unported remainder.
+2. **Bounded to `wake`'s shutdown transition** — both changes are confined to the terminal
+   SHUTDOWN edge; the steady-state notify path is byte-faithful to `ThreadPool.zig:508-518`.
+3. **The failure mode it removes is a lost-wakeup HANG**, i.e. liveness beats byte-fidelity
+   here — the same trade the bounded `killPid` wait already made and recorded.
+4. **Regression-gated** — RED/GREEN evidence plus a regression gate accompany it (see the
+   argument recorded in the entry), so it cannot silently widen.
+
+`crates/rustty-xev/src/thread_pool.rs` `Event::wake` deviates from the oracle
+(`ThreadPool.zig:508-518`, kprotty's Zap pool) in two ways, both confined to `wake`:
+**(1)** the terminal SHUTDOWN transition's `futex_wake` is UNCONDITIONAL (the oracle skips it when
+the pre-swap state is not WAITING, which strands remaining parked sleepers when a trailing run-loop
+`notify()` left the event NOTIFIED — `join()` then hangs); **(2)** SHUTDOWN is STICKY (the NOTIFIED
+transition is a CAS loop that no-ops on a shutdown event, because the oracle's unconditional swap
+lets a late `notifySlow` event-write resurrect the dead event and re-park a woken sleeper forever).
+Rationale: SHUTDOWN is terminal/unrepeatable, so the extra wake is sound (sleepers re-check state;
+late arrivals fail the futex value-check) and notifying a shutdown event is already a no-op by
+`Event::wait`'s own contract; cost = one extra syscall at pool shutdown. Both oracle holes are
+ANALYTIC windows (the originally-observed 100% teardown deadlock was root-caused to a rustty port
+bug — the `futex_wake` shim passed `u32::MAX` unclamped through FUTEX_WAKE's C-int slot = `-1` =
+wake at most ONE; fixed with the oracle's own `min(i32::MAX)` clamp semantics, after which the
+VERBATIM oracle Event passed 400/400 multi-worker lifecycles). ghostty never instantiates the pool
+(all 4 xev loops are `Loop.init(.{})`), and upstream libxev `1c80766` (Dec 2024) fixed a DIFFERENT
+join race already in our pin — upstream HEAD still carries these two windows. rustty's Task-5 epoll
+File watcher WILL multi-worker-join, hence the defensive close. Full interleavings + soundness
+argument: the DELIBERATE DEVIATION note on `Event::wake`; RED/GREEN evidence + regression gate
+(`thread_pool::tests::multi_worker_quiesce_then_join_50x`, 50 lifecycles under a 60s watchdog):
+`.superpowers/sdd/task-1-report.md` addendum 2.
+
+
+---
 
 ## `killPid` bounded wait (`crates/rustty-termio/src/exec.rs`) — WS-hang
 
@@ -5279,87 +5539,6 @@ child. The deterministic evidence lives out-of-suite in
 oracle and the port. It is left verbatim — it terminates as soon as the child
 `setsid`s or dies, and a wedged `?Es` child still reports a valid pgid, so it is
 not a hang site (confirmed by `sample`: the hang is inside `killPid`).
-3. **`pagelist_decommit_pool_item_zeroes_the_dirty_region` has a real Stacked-Borrows
-   violation under Miri (OPEN, discovered while proving WS7 Phase C's I1).** Confirmed
-   deterministic in isolation — full backtrace and root cause in
-   `.port/phase-2/MIRI_EXCEPTIONS.md`'s Category 2 correction note. **Pre-existing (WS7
-   B1, commit `39cd6b8`; last touched at `0413d2b`), NOT introduced by Phase C** — no
-   Phase C commit touches `mem.rs` or this test. It is a test-code bug (holds a `&mut
-   [u8]` across a call that mutates the same bytes through a separate raw pointer, then
-   reads through the stale reference), not a production-code bug; native `cargo test`
-   and ASan both stay green. The claim in `MIRI_EXCEPTIONS.md`'s Category 2 table that
-   this test "IS Miri-provable" was asserted without having actually been run under Miri
-   — now corrected in-place. Phase E must either fix the test (re-derive the slice fresh
-   after each `decommit_pool_item` call) or record a formal exception; it must NOT be
-   left silently claimed-clean.
-   **RESOLVED — WS7 Phase E (2026-07-29).** Fixed exactly as sketched: every slice is now
-   derived fresh from `ptr` and none is live across `decommit_pool_item`. Assertions
-   unchanged (both the fully-dirty and the partially-dirty item must still read back
-   all-zero across the whole buffer). Measured under Miri: was the retag UB above, now
-   `1 passed` in 13.28s. Before/after output recorded in `MIRI_EXCEPTIONS.md`'s Category 2
-   correction note, which no longer claims anything unverified.
-4. **Several WS7 Phase B compression tests are ALSO Miri-intractable and undocumented
-   (OPEN, discovered the same pass).** Attempting a bounded full-module pagelist Miri
-   sweep (beyond I1's specific ask) found `pagelist_compress_incremental_converges_to_complete`,
-   `pagelist_compress_full_leaves_viewport_and_active_resident`,
-   `pagelist_compress_drain_finishes_in_one_call`, and
-   `pagelist_compress_full_mode_leaves_no_continuation` all TIMEOUT at a 2–3 min bound —
-   confirmed in single-worker isolation (not a parallel-contention artifact), and
-   `…_leaves_no_continuation` reproduces identically on **pre-Phase-C** commit `098fc63`,
-   proving this is a **pre-existing WS7 Phase B gap** (these tests were apparently never
-   run under a bounded Miri harness before), not a Phase C regression. `MIRI_EXCEPTIONS.md`
-   had cited two of these as "lighter, passing" coverage for a Phase C exception row; that
-   citation is now corrected (see the row's inline correction). Out of scope for the Phase
-   C review response — Phase E should measure the rest of the `compress`/`pagelist_compress`
-   family the same way (`bash .port/tools/miri-run.sh rustty-vt pagelist_compress 8 3 5`)
-   and either annotate the genuinely-intractable ones or investigate why compression state
-   machines are this expensive under Miri interpretation.
-   **RESOLVED — WS7 Phase E (2026-07-29).** Whole family measured, per test, with every
-   candidate re-verified in single-worker ISOLATION before being excepted (a parallel
-   TIMEOUT is a candidate, never a verdict). Full table in `MIRI_EXCEPTIONS.md`
-   ("WS7 Phase E — the page-compression test family"). Of **12** measured:
-   * **10 annotated** — the 4 named above plus the 4 other `pagelist_compress_*` tests,
-     plus **2 that this pass discovered and the earlier one had not named**
-     (`pagelist_mutations_mark_compression_activity`,
-     `pagelist_memory_stats_accounts_compressed_and_resident_bytes`). All 10 TIMEOUT at a
-     6-min bound in isolation.
-   * **1 TRACTABLE and deliberately left un-annotated** —
-     `pagelist_page_preserving_state_leaves_a_compressed_node_compressed`, ok in **77s**.
-     Blanket-annotating the family would have hidden a working check, exactly as the
-     Phase C pass warned.
-   * **1 already excepted** —
-     `search::pagelist::…::compressed_history_match_spanning_page_boundary_remains_compressed`.
-     `miri-run.sh` scored it `res=FAIL` / `VERDICT: PROBLEM`; the per-test output file
-     reads `ignored, MIRI EXCEPTION …`. Worked example of the harness's known
-     ignored-test-as-FAIL misclassification.
-
-   **Root cause, measured (this was the "investigate why" half of the ask).** Not hangs and
-   not a logic difference from the tractable siblings — pure volume, on two independent
-   measurements. (a) Natively these are the slowest PageList tests by two to three orders
-   of magnitude (0.50–4.48s debug vs ~0.00s typical): `fill_compressible_history` calls
-   `grow()` once per row until N std-capacity 215x215 pages exist, then `compress()`
-   LZ4-compresses AND verify-decompresses every byte of each mapping. (b) Two of them were
-   run to COMPLETION under Miri — `pagelist_compress_drain_finishes_in_one_call` **ok in
-   1631s**, `pagelist_compress_page_round_trips_a_cold_history_page` **ok in 194s**, both
-   with ZERO UB and ZERO leaks. That is direct positive criterion-3 evidence, not an
-   argument from a lighter sibling.
-
-   **One lever found, and a follow-up for WS8 rather than a change here.** Those completion
-   runs used `-C debug-assertions=off`, which disables `Page::assert_integrity` (O(page),
-   runs on nearly every PageList mutation; the `mirihar-pagelist-compress` harness already
-   uses this accommodation on the documented grounds that it adds no SB/TB or leak
-   coverage). With it, `pagelist_compress_page_round_trips_a_cold_history_page` goes from
-   TIMEOUT(360s) to **ok in 194s** — so the page-level tests are dominated by
-   `assert_integrity` and would be tractable in a `RUSTFLAGS=-Cdebug-assertions=off` Miri
-   lane, while the multi-page ones are dominated by LZ4 volume and stay out of budget
-   (1631s). The annotations are therefore correct for the lane as it runs today
-   (`check_leaks.sh`: `cargo +nightly miri test -p rustty-vt --lib`, debug assertions ON —
-   without them the rustty-vt G6 lane cannot complete at all). **NEW WS8 item:** add a
-   `-C debug-assertions=off` variant of the vt Miri lane and re-measure the whole
-   `cfg_attr(miri, ignore)` inventory against it; changing G6's flags is a cross-crate
-   change to a shared gate and would re-classify far more than the compression family.
-   **[WS19 AUDIT 2026-07-29] WS8 IS CLOSED — this item was ORPHANED. Re-owned as O2 of
-   the Phase 2 Closure Audit below (owner: WS19 T6).**
 
 ---
 

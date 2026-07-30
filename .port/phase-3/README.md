@@ -57,6 +57,21 @@ against this diff.** The reasons this is not paranoia:
 A verdict of "already ported" is only acceptable with **evidence**: the rustty
 symbol, its file:line, and a test or gate that would fail if it regressed.
 
+### Named re-vet assertions inherited from Phase 2 (WS19 T2, 2026-07-29)
+
+These are **not** deferrals: they are items with nothing to port in the pinned tree,
+handed to Phase 3 with the exact assertion to make. Each was orphaned in
+`.port/phase-2/DEFERRALS.md` and re-owned by the WS19 Phase 2 closure audit (gate
+`G-P2`, `.port/tools/gates/check_phase2_closure.py`, enforces that no ledger row is
+open without an owner in an open workstream).
+
+| # | Assertion Phase 3 must make | Ledger row |
+|---|---|---|
+| P3-RV1 | **If** the resync introduces a `PageList::Limits` struct, **then** `Limits::enforce` must call `mark_activity` on entry, taking rustty's `mark_activity` site count from **10 to 11** (`crates/rustty-vt/src/pagelist/compress.rs`, PORT NOTE at `mark_activity`). If the resync does not introduce it, the row closes with no work. | `DEFERRALS.md` "Deferred to WS7 D6" item 2 (audit row **O5**) |
+| P3-RV2 | Advancing the oracle pin past `4749c4e93` is what resolves G3b's beyond-pin comment-coverage deltas **wholesale** (a sentence upstream DELETED beyond the pin still exists at the pin and is reported `missing`). After the resync, re-run every G3b lane and confirm the beyond-pin `missing` counts drop by construction. **A per-file `GHOSTTY_SRC` override is forbidden** — it is the spoof hole `.port/tools/ci.sh:114-129` killed for G1b. | audit row **N6**; `.port/tools/gates/README.md` G3b subsection |
+| P3-RV3 | `Screen::cursor_scroll_region_up` is defined by beyond-pin commit `77190bd02` (BL-4). It is owned by **WS10**, sequenced to run **after** the pin advances. When the resync lands `77190bd02`, its `invalidateNodeLayout` call site and the `screen_cursor_scroll_region_up_renews_page_generation` test must land alongside it. Phase 3 must surface `77190bd02` to WS10 rather than absorbing it silently. | audit row **O3** |
+| P3-RV4 | The `rustty-termio` ReadThread Linux `POLLHUP` quirk is preserved **verbatim** as a Justified R1 Divergence; its only correct trigger is an upstream fix to `threadMainPosix`. If the resync range contains such a fix, port it and retire the divergence entry. | `DEFERRALS.md` `# Justified R1 Divergences` (audit §E.2) |
+
 ## Area breakdown (drives the assessment fan-out)
 
 | Area | +ins | −del | files |

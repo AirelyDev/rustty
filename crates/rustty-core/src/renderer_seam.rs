@@ -32,7 +32,20 @@
 //! `Options<A>.config` field below; only the windowing `Renderer`/xev `Thread`
 //! shapes remain placeholders here.
 //!
-//! PORT STATUS: placeholder (core chunk C3; filled by Phase-3 R-d + D6).
+//! PORT STATUS: **LIVE** (core chunk C3; the R-d GPU tier W0–W5 and the xev
+//! port Milestones A/B both landed, so the `Renderer`/`Thread<A>` bodies below
+//! are real). Superseded status, kept for provenance:
+//! ~~placeholder (core chunk C3; filled by Phase-3 R-d + D6)~~.
+//!
+//! WS19 T2 audit correction [2026-07-29, audit row W1]: `DEFERRALS.md` claimed
+//! this file carried "15 `unimplemented!()` C3 dependency-placeholder bodies,
+//! Target: Phase-3 R-d GPU tier / D6". It does not. All 15 `unimplemented!()`
+//! in this file are inside `#[cfg(test)] mod compression_tests` (`:2013`) and
+//! read `unimplemented!("test runtime: not driven by the compression tests")` —
+//! test-runtime fakes, the same honest test glue `app.rs` uses. **Zero
+//! production leaves.** The PORTS/what-is-NOT-here prose above still describes
+//! the original placeholder intent and the crate-graph reason the real GPU
+//! tier lives in `rustty-renderer`; read it as history, not as current status.
 
 // PARITY: the reference's identifiers are camelCase (`surfaceInit`,
 // `finalizeSurfaceInit`, `threadEnter`, `drawFrame`, `threadMain`); preserved

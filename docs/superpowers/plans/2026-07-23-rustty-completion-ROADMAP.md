@@ -22,7 +22,13 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 - R1 full fidelity vs the ghostty oracle at `../ghostty` (pinned `4749c4e`); the
   oracle is reference-only — no build-time dependency on it (R3).
 - R2 product identity: rustty naming with per-token casing preservation
-  (Ghostty→Rustty, ghostty→rustty); `ghostty_*` C-ABI aliases stay.
+  (Ghostty→Rustty, ghostty→rustty); ~~`ghostty_*` C-ABI aliases stay~~ —
+  **CORRECTED [WS19 T2, 2026-07-29, audit rows W7 / §E.3]: `ghostty_*` C-ABI aliases
+  were DELETED UPSTREAM at `e4cc852`; rustty exports `rustty_*` only, in every
+  profile** (`crates/rustty-apprt-c/Cargo.toml:31-33`; a repo-wide search for
+  `export_name` under `crates/rustty-apprt-c/src/` returns 0 hits). `identity-oracle`
+  flips only the `rustty-identity` STRING identity, for the differential harness.
+  **Do not re-add aliases.**
 - R4/R5: acyclic crate graph; gates (`check_acyclic.sh`, A4 ABI gate, Miri lanes)
   are invariant — never weakened to pass.
 - DG5: C-ABI panic policy is ABORT — no unwind across the ABI.
@@ -165,11 +171,57 @@ loud RED rather than an infinite CI wait.
 - [x] WS7 scrollback compression — AUTHORED; **Phase A EXECUTED + MERGED** (LZ4 codec); Phases B-E = Round 2
 - [x] WS8 upstream small-sweep — AUTHORED + EXECUTED + MERGED (both platforms green)
 - [x] WS9 packaging — AUTHORED + EXECUTED + MERGED (self-contained xcframework proven)
-- [ ] WS10–WS17: authored at wave start
+- ~~[ ] WS10–WS17: authored at wave start~~ **STALE [WS19 T2, 2026-07-29 — audit
+  §E.4]; per-WS rows:**
+- [ ] WS10 perf (BL-4) — **NOT authored**, not executed. Open. Inherits audit row **O3**
+  (`Screen::cursor_scroll_region_up`, beyond-pin `77190bd02`, pin-sequenced).
+- [ ] WS11 font glyph resize — **NOT authored**, not executed. Open. Inherits audit row
+  **O17** (`stb_image_resize` glyph resize).
+- [x] WS12 vaxis completion — authored (`c7c93f7`); **NOT executed**. Open. Consumes
+  WS19 T1's `.port/tools/restore_zig_deps.sh`.
+- [x] WS13 i18n & docs — authored (`39355ff`); **NOT executed**. Open. Owns audit rows
+  **N8** (3 `.blp` msgids + the unwrapped code-side call sites) and **O13b**
+  (`main_build_data` + the `+gen-*` file-emit wiring).
+- [ ] WS14 wasm/WebGL — **NOT authored**, not executed. Open. Inherits audit rows
+  **O13a** (`main_wasm.zig`), **O14** (`Atlas.Wasm` test), **O15** (`App.zig` Wasm
+  block), **O16** (WebGL renderer backend).
+- [x] WS15 GTK GlobalShortcuts — authored + EXECUTED + **MERGED `e8a9f59`**. DONE.
+- [x] WS16 X11 winproto — authored + EXECUTED + **MERGED `07b64db`**. DONE.
+- [x] WS17 verification debt — authored (`ef7621a`); **NOT executed**. Open. Scope is
+  V2/V3/V4/V1b **plus V5** (V5 was orphaned; WS19 T14 adds it).
+- [x] WS18 release lane — authored in-ROADMAP + EXECUTED + **MERGED `eeec83f`**. DONE.
+- [x] WS19 Phase 2 closeout — authored
+  (`docs/superpowers/plans/2026-07-29-ws19-phase2-closeout.md`); executing. Closes
+  Phase 2 and lands the standing closure gate **G-P2**.
 
 ## Wave status
 - **Wave 0 COMPLETE** (WS1/WS2/WS3) — both platforms green.
 - **Wave 1 COMPLETE** (WS4/WS5) — both platforms green.
 - **Wave 2 COMPLETE** (WS6/WS7-A/WS8/WS9) — main 53f1387; macOS + Linux both `cargo build --workspace`
   exit 0 and rustty-vt 2111 passed/0 failed; BL-2 rss_probe PASS (9.0 MiB returned) on Linux.
-- **Round 2 next**: WS7 Phases B-E (unblocked — BL-2 has landed).
+- ~~**Round 2 next**: WS7 Phases B-E (unblocked — BL-2 has landed).~~
+  **STALE [WS19 T2, 2026-07-29 — audit §E.4]: WS7 Phases B (`098fc63`), C (`ab2c08c`),
+  D1–D8 and E (`bbecaf7`) are ALL MERGED.**
+
+### True remaining scope [WS19 T2, 2026-07-29]
+
+| WS | Plan | Executed | True state |
+|---|---|---|---|
+| WS1–WS9 | authored | **merged** | DONE |
+| WS10 perf (BL-4) | **NOT authored** | no | open; inherits O3 (pin-sequenced) |
+| WS11 font glyph resize | **NOT authored** | no | open; inherits O17 |
+| WS12 vaxis completion | authored (`c7c93f7`) | **no** | open; consumes WS19 T1's restore script |
+| WS13 i18n & docs | authored (`39355ff`) | **no** | open; owns N8, O13b |
+| WS14 wasm/WebGL | **NOT authored** | no | open; inherits O13a/O14/O15/O16 |
+| WS15 GTK GlobalShortcuts | authored | **merged `e8a9f59`** | DONE |
+| WS16 X11 winproto | authored | **merged `07b64db`** | DONE |
+| WS17 verification debt | authored (`ef7621a`) | **no** | open; scope V2/V3/V4/V1b **+ V5** |
+| WS18 release lane | authored in-ROADMAP | **merged `eeec83f`** | DONE |
+| **WS19 Phase 2 closeout** | this wave | in flight | closes Phase 2; lands **G-P2** |
+
+**The open set is exactly WS10, WS11, WS12, WS13, WS14, WS17 — plus Phase 3
+(`.port/phase-3/`, upstream resync).** Gate **G-P2**
+(`.port/tools/gates/check_phase2_closure.py`) derives that set FROM THIS CHECKLIST and
+FAILS if any Phase-2 ledger row is open without an owner in it, so this table and the
+per-WS checklist above are load-bearing: marking a WS `merged`/`DONE` immediately makes
+filing new work into it a gate failure.

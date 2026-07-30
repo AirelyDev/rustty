@@ -56,6 +56,33 @@ Helpers (not gates themselves):
 - `cargo_cycle_check.py` — the real-rustty-Cargo-graph SCC checker that backs G7
   (dependency-free TOML scan + Tarjan; `--fail-on-scc` default on).
 
+## G3b (`check_comment_coverage.py`) — beyond-pin comment deltas are EXPECTED (WS19 T2 verdict)
+
+**Read this before "fixing" a G3b `missing` count that went UP after a port lane.**
+
+`check_comment_coverage.py:34` resolves its reference side from `GHOSTTY_SRC`, defaulting
+to `/Users/gael/projects/ghostty/src` — the oracle **working tree, which is pinned at
+`4749c4e93`**. Consequence: when a lane ports a **beyond-pin** upstream state in which
+upstream **DELETED** a comment, that sentence still exists on the reference side at the
+pin, so the gate reports it `missing`. WS7 D2's config lane went `5 → 9` for exactly this
+reason. **The rise is an artifact of the pin, not a fidelity regression.**
+
+**VERDICT [WS19 T2, 2026-07-29 — audit row N6].** **Advancing the pin in Phase 3 resolves
+this WHOLESALE, and is the only correct fix.** Once `GHOSTTY_SRC` is the resynced tree,
+the deleted sentences are absent from the reference side and the counts drop *by
+construction* — no per-file exception list, no gate change, no R5 exposure. Phase 3
+carries this as re-vet assertion **P3-RV2** (`.port/phase-3/README.md`).
+
+**FORBIDDEN: a per-file / per-lane `GHOSTTY_SRC` override.** That is precisely the spoof
+hole `.port/tools/ci.sh:114-129` deliberately killed for G1b — a reference path
+redirected away from what the gate actually reads yields a **vacuous green** (R5). Do not
+re-open it here.
+
+**Until the pin advances:** each lane records its own beyond-pin delta in its own report
+(which file, which sentence, and the upstream commit that deleted it), so the residual is
+attributable rather than merely tolerated. A `missing` rise with **no** such attribution
+is a real regression and must be treated as one.
+
 ## Per-crate gates (P-T / P-A / P-C / P-SURF)
 
 The content gates accept `--crate <name>` to scope to a single crate (the DoP
