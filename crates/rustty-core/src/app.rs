@@ -996,40 +996,50 @@ impl<A: apprt::App + 'static> Clone for Mailbox<A> {
 impl<A: apprt::App + 'static> Copy for Mailbox<A> {}
 
 // Wasm API.
+// PORT: `pub const Wasm = if (!builtin.target.isWasm()) struct {} else struct { … };`
 //
-// PORT NOTE (documented-deferred, config wasm.rs precedent): the reference is
-// gated on the wasm build target (`if (!builtin.target.isWasm()) struct {}
-// else struct { ... }`) and its entire body — beyond the two file-local
-// imports — is commented out in the reference itself. It joins the Rustty
-// wasm app-runtime (off-by-default `wasm` feature family) when that target
-// lands; the faithful body is preserved verbatim below (R1).
-//
-// pub const Wasm = if (!builtin.target.isWasm()) struct {} else struct {
-//     const wasm = @import("os/wasm.zig");
-//     const alloc = wasm.alloc;
-//
-//     // export fn app_new(config: *Config) ?*App {
-//     //     return app_new_(config) catch |err| { log.err("error initializing app err={}", .{err});
-//     //         return null;
-//     //     };
-//     // }
-//     //
-//     // fn app_new_(config: *Config) !*App {
-//     //     const app = try App.create(alloc, config);
-//     //     errdefer app.destroy();
-//     //
-//     //     const result = try alloc.create(App);
-//     //     result.* = app;
-//     //     return result;
-//     // }
-//     //
-//     // export fn app_free(ptr: ?*App) void {
-//     //     if (ptr) |v| {
-//     //         v.destroy();
-//     //         alloc.destroy(v);
-//     //     }
-//     // }
-// };
+// PORT STATUS: ported — COMPLETE, and deliberately EMPTY. On non-wasm targets the
+// reference yields `struct {}`; on wasm it yields a struct whose ONLY live members
+// are two private aliases (`wasm`, `alloc`) and whose three exports (`app_new`,
+// `app_new_`, `app_free`) are COMMENTED OUT IN THE REFERENCE. Retaining it emits
+// zero symbols and pulls no App implementation into the wasm module — which is why
+// `crates/rustty-wasm` does NOT need a `rustty-core` dependency edge to be a
+// faithful `main_wasm.zig` (WS14 T7); a `rustty-core` edge would over-retain an
+// entire application tier and drag rustty-inspector → dcimgui-sys → freetype-sys →
+// zlib-sys into a freestanding wasm link. The reference's commented-out bodies are
+// preserved verbatim below so a future un-comment is a diff, not archaeology.
+#[cfg(target_arch = "wasm32")]
+pub mod wasm {
+    //     const wasm = @import("os/wasm.zig");
+    //     const alloc = wasm.alloc;
+    #[allow(unused_imports)]
+    use rustty_os::wasm as _wasm;
+
+    // (The three reference exports, commented out IN THE REFERENCE:)
+    //
+    //     // export fn app_new(config: *Config) ?*App {
+    //     //     return app_new_(config) catch |err| { log.err("error initializing app err={}", .{err});
+    //     //         return null;
+    //     //     };
+    //     // }
+    //     //
+    //     // fn app_new_(config: *Config) !*App {
+    //     //     const app = try App.create(alloc, config);
+    //     //     errdefer app.destroy();
+    //     //
+    //     //     const result = try alloc.create(App);
+    //     //     result.* = app;
+    //     //     return result;
+    //     // }
+    //     //
+    //     // export fn app_free(ptr: ?*App) void {
+    //     //     if (ptr) |v| {
+    //     //         v.destroy();
+    //     //         alloc.destroy(v);
+    //     //     }
+    //     // }
+    // };
+}
 
 /// rustty-only test glue (CORE_BLUEPRINT §7) — NOT a port.
 ///
