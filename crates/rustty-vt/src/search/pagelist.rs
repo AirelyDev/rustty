@@ -332,8 +332,8 @@ mod tests {
 
     // test "feed multiple pages with matches"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn feed_multiple_pages_with_matches() {
@@ -406,8 +406,8 @@ mod tests {
 
     // test "feed multiple pages no matches"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn feed_multiple_pages_no_matches() {
@@ -461,8 +461,8 @@ mod tests {
 
     // test "feed iteratively through multiple matches"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn feed_iteratively_through_multiple_matches() {
@@ -519,8 +519,8 @@ mod tests {
 
     // test "feed with match spanning page boundary"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn feed_with_match_spanning_page_boundary() {
@@ -609,7 +609,7 @@ mod tests {
     /// `test "compressed history match spanning page boundary remains compressed"`
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
     )]
     #[test]
     fn compressed_history_match_spanning_page_boundary_remains_compressed() {
@@ -625,52 +625,64 @@ mod tests {
         )
         .unwrap();
         let active_ptr: *mut Screen = t.screens.active;
-        let pages: *mut crate::pagelist::PageList = unsafe { &mut (*active_ptr).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let pages =
+            || -> *mut crate::pagelist::PageList { unsafe { &raw mut (*active_ptr).pages } };
 
         let mut stream = t.vt_stream();
 
-        let first = unsafe { (*pages).pages.first };
+        let first = unsafe { (*pages()).pages.first };
         let first_page_rows = unsafe { PlNode::capacity(first) }.rows;
 
         // Put half the needle on either side of a soft-wrapped page boundary.
         for _ in 0..first_page_rows - 1 {
             stream.next_slice(b"\r\n");
         }
-        for _ in 0..unsafe { (*pages).cols } - 2 {
+        for _ in 0..unsafe { (*pages()).cols } - 2 {
             stream.next_slice(b"x");
         }
         stream.next_slice(b"Test");
         let second = unsafe { (*first).next };
-        assert!(core::ptr::eq(second, unsafe { (*pages).pages.last }));
+        assert!(core::ptr::eq(second, unsafe { (*pages()).pages.last }));
 
         // Move both matching pages completely into history. The third page holds
         // the active area, making the first two eligible for compression.
-        while core::ptr::eq(unsafe { (*pages).pages.last }, second) {
+        while core::ptr::eq(unsafe { (*pages()).pages.last }, second) {
             stream.next_slice(b"\r\n");
         }
-        for _ in 0..unsafe { (*pages).rows } {
+        for _ in 0..unsafe { (*pages()).rows } {
             stream.next_slice(b"\r\n");
         }
         assert!(!core::ptr::eq(
-            unsafe { (*pages).get_top_left(point::Tag::Active) }.node,
+            unsafe { (*pages()).get_top_left(point::Tag::Active) }.node,
             second
         ));
 
-        let _ = unsafe { (*pages).compress(CompressionMode::Full) };
+        let _ = unsafe { (*pages()).compress(CompressionMode::Full) };
         assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
         assert_eq!(unsafe { PlNode::storage(second) }, Storage::Compressed);
-        let compressed = unsafe { (*pages).memory_stats() };
+        let compressed = unsafe { (*pages()).memory_stats() };
         assert!(compressed.compressed_pages >= 2);
 
         let mut search: PageListSearch =
-            PageListSearch::init(alloc, b"Test", pages, unsafe { (*pages).pages.last }).unwrap();
+            PageListSearch::init(alloc, b"Test", pages(), unsafe { (*pages()).pages.last })
+                .unwrap();
 
         // Drain and feed incrementally until the boundary match is available. The
         // exact number of feeds depends on how much blank-page text the formatter
         // trims, so bound progress by the number of pages rather than encoding
         // that implementation detail in the test.
         let mut found: Option<FlattenedHighlight> = None;
-        for _ in 0..unsafe { (*pages).total_pages() } + 1 {
+        for _ in 0..unsafe { (*pages()).total_pages() } + 1 {
             if let Some(m) = search.next() {
                 found = Some(m);
                 break;
@@ -684,12 +696,12 @@ mod tests {
         let m = found.untracked();
         assert!(core::ptr::eq(m.start.node, first));
         assert!(core::ptr::eq(m.end.node, second));
-        assert_eq!(m.start.x, unsafe { (*pages).cols } - 2);
+        assert_eq!(m.start.x, unsafe { (*pages()).cols } - 2);
         assert_eq!(m.end.x, 1);
 
         // Search owns formatted text and coordinate maps, not page snapshots. The
         // original raw mappings therefore remain discarded after matching.
-        assert_eq!(unsafe { (*pages).memory_stats() }, compressed);
+        assert_eq!(unsafe { (*pages()).memory_stats() }, compressed);
         assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
         assert_eq!(unsafe { PlNode::storage(second) }, Storage::Compressed);
 
@@ -700,8 +712,8 @@ mod tests {
 
     // test "feed with match spanning page boundary with newline"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn feed_with_match_spanning_page_boundary_with_newline() {
@@ -755,8 +767,8 @@ mod tests {
 
     // test "feed with pruned page"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn feed_with_pruned_page() {
@@ -834,7 +846,7 @@ mod tests {
     /// `test "feed keeps its tracked pin within a shorter page"`
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): out of budget in the debug-assertions-ON G6 lane, and NOT rescuable by the G6c debug-assertions-off lane — this test drives a `debug_assertions`-only mechanism and is already `cfg_attr(not(debug_assertions), ignore)`, so turning the assertions off makes it inert rather than fast. Covered natively + by ASan."
     )]
     // Release lane: this test drives a slow-runtime-safety mechanism (the
     // pagelist integrity gate / `pin_is_valid`), which the port compiles out

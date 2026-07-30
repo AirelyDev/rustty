@@ -1703,8 +1703,8 @@ mod tests {
 
     // test "simple search with history"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn simple_search_with_history() {
@@ -1768,8 +1768,8 @@ mod tests {
 
     // test "reload active with history change"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn reload_active_with_history_change() {
@@ -2141,8 +2141,8 @@ mod tests {
 
     // test "select into history"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn select_into_history() {
@@ -2401,8 +2401,8 @@ mod tests {
 
     // test "select prev with history"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn select_prev_with_history() {
@@ -2479,8 +2479,8 @@ mod tests {
 
     // test "select prev wraps when all matches are in history"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn select_prev_wraps_when_all_matches_are_in_history() {
@@ -2593,7 +2593,7 @@ mod tests {
     // test "reloadActive partial history cleanup on appendSlice error"
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): out of budget in the debug-assertions-ON G6 lane, and NOT rescuable by the G6c debug-assertions-off lane — this test drives a `debug_assertions`-only mechanism and is already `cfg_attr(not(debug_assertions), ignore)`, so turning the assertions off makes it inert rather than fast. Covered natively + by ASan."
     )]
     #[test]
     // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
@@ -2665,7 +2665,7 @@ mod tests {
     // test "reloadActive partial history cleanup on loop append error"
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): out of budget in the debug-assertions-ON G6 lane, and NOT rescuable by the G6c debug-assertions-off lane — this test drives a `debug_assertions`-only mechanism and is already `cfg_attr(not(debug_assertions), ignore)`, so turning the assertions off makes it inert rather than fast. Covered natively + by ASan."
     )]
     #[test]
     // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
@@ -2735,8 +2735,8 @@ mod tests {
     /// PORTS: oracle d239f9805
     /// `test "select after partial history erase drops a pruned selection"`
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn select_after_partial_history_erase_drops_a_pruned_selection() {
@@ -2746,12 +2746,22 @@ mod tests {
         // whose row-by-row fill costs ~30s in a debug Rust build.
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
-        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
 
         let mut stream = t.vt_stream();
         stream.next_slice(b"error\r\n");
-        let first = unsafe { (*list).pages.first };
-        while unsafe { (*list).total_pages() } < 3 {
+        let first = unsafe { (*list()).pages.first };
+        while unsafe { (*list()).total_pages() } < 3 {
             stream.next_slice(b"\r\n");
         }
         let first_rows = unsafe { crate::pagelist::Node::rows(first) };
@@ -2763,7 +2773,7 @@ mod tests {
         assert!(search.select(Select::Next).unwrap());
 
         unsafe {
-            (*list).erase_history(Some(point::Point::History(point::Coordinate {
+            (*list()).erase_history(Some(point::Point::History(point::Coordinate {
                 x: 0,
                 y: (first_rows - 1) as u32,
             })))
@@ -2781,8 +2791,8 @@ mod tests {
     /// PORTS: oracle 86e1f7b8b
     /// `test "select after history compaction ignores replaced results"`
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn select_after_history_compaction_ignores_replaced_results() {
@@ -2792,16 +2802,26 @@ mod tests {
         // whose row-by-row fill costs ~30s in a debug Rust build.
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
-        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
 
         let mut stream = t.vt_stream();
         stream.next_slice(b"error\r\n");
-        let first = unsafe { (*list).pages.first };
-        while unsafe { (*list).total_pages() } < 3 {
+        let first = unsafe { (*list()).pages.first };
+        while unsafe { (*list()).total_pages() } < 3 {
             stream.next_slice(b"\r\n");
         }
         unsafe {
-            (*list)
+            (*list())
                 .split(Pin {
                     node: first,
                     y: crate::pagelist::Node::rows(first) / 2,
@@ -2815,7 +2835,7 @@ mod tests {
         search.search_all().unwrap();
         assert_eq!(search.history_results.len(), 1);
 
-        let replacement = unsafe { (*list).compact(first) }.unwrap().unwrap();
+        let replacement = unsafe { (*list()).compact(first) }.unwrap().unwrap();
         assert!(!core::ptr::eq(replacement, first));
 
         assert!(!search.select(Select::Next).unwrap());
@@ -2829,8 +2849,8 @@ mod tests {
     /// PORTS: oracle 89eca063e
     /// `test "reload defers pruning unselected history results"`
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn reload_defers_pruning_unselected_history_results() {
@@ -2840,21 +2860,31 @@ mod tests {
         // whose row-by-row fill costs ~30s in a debug Rust build.
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
-        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
 
         let mut stream = t.vt_stream();
         // const first = list.pages.first.?;
         // while (first.rows() < first.capacity().rows) stream.nextSlice("\r\n");
         // stream.nextSlice("error");
         // for (0..list.rows + 1) |_| stream.nextSlice("\r\n");
-        let first = unsafe { (*list).pages.first };
+        let first = unsafe { (*list()).pages.first };
         while unsafe { crate::pagelist::Node::rows(first) }
             < unsafe { crate::pagelist::Node::capacity(first) }.rows
         {
             stream.next_slice(b"\r\n");
         }
         stream.next_slice(b"error");
-        for _ in 0..unsafe { (*list).rows } + 1 {
+        for _ in 0..unsafe { (*list()).rows } + 1 {
             stream.next_slice(b"\r\n");
         }
 
@@ -2865,7 +2895,7 @@ mod tests {
 
         // list.eraseHistory(.{ .history = .{ .y = 0 } });
         unsafe {
-            (*list).erase_history(Some(point::Point::History(point::Coordinate {
+            (*list()).erase_history(Some(point::Point::History(point::Coordinate {
                 x: 0,
                 y: 0,
             })))
@@ -2891,8 +2921,8 @@ mod tests {
     /// PORTS: oracle a89c6133c
     /// `test "reload after partial history page erase drops shifted selection first"`
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn reload_after_partial_history_page_erase_drops_shifted_selection_first() {
@@ -2902,17 +2932,27 @@ mod tests {
         // whose row-by-row fill costs ~30s in a debug Rust build.
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
-        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
 
         let mut stream = t.vt_stream();
-        let first = unsafe { (*list).pages.first };
+        let first = unsafe { (*list()).pages.first };
         while unsafe { crate::pagelist::Node::rows(first) }
             < unsafe { crate::pagelist::Node::capacity(first) }.rows
         {
             stream.next_slice(b"\r\n");
         }
         stream.next_slice(b"error");
-        for _ in 0..unsafe { (*list).rows } + 1 {
+        for _ in 0..unsafe { (*list()).rows } + 1 {
             stream.next_slice(b"\r\n");
         }
 
@@ -2925,7 +2965,7 @@ mod tests {
 
         // list.eraseHistory(.{ .history = .{ .y = 0 } });
         unsafe {
-            (*list).erase_history(Some(point::Point::History(point::Coordinate {
+            (*list()).erase_history(Some(point::Point::History(point::Coordinate {
                 x: 0,
                 y: 0,
             })))
@@ -2938,9 +2978,9 @@ mod tests {
         // while (list.getTopLeft(.active).node == active_node) {
         //     stream.nextSlice("error\r\n");
         // }
-        let active_node = unsafe { (*list).get_top_left(point::Tag::Active) }.node;
+        let active_node = unsafe { (*list()).get_top_left(point::Tag::Active) }.node;
         while core::ptr::eq(
-            unsafe { (*list).get_top_left(point::Tag::Active) }.node,
+            unsafe { (*list()).get_top_left(point::Tag::Active) }.node,
             active_node,
         ) {
             stream.next_slice(b"error\r\n");
@@ -2959,8 +2999,8 @@ mod tests {
     /// PORTS: oracle a804e3ac7
     /// `test "select after partial history page erase ignores shifted results"`
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn select_after_partial_history_page_erase_ignores_shifted_results() {
@@ -2970,20 +3010,30 @@ mod tests {
         // whose row-by-row fill costs ~30s in a debug Rust build.
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
-        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
 
         let mut stream = t.vt_stream();
-        let first = unsafe { (*list).pages.first };
+        let first = unsafe { (*list()).pages.first };
         while unsafe { crate::pagelist::Node::rows(first) }
             < unsafe { crate::pagelist::Node::capacity(first) }.rows
         {
             stream.next_slice(b"\r\n");
         }
         stream.next_slice(b"error");
-        for _ in 0..unsafe { (*list).rows } + 1 {
+        for _ in 0..unsafe { (*list()).rows } + 1 {
             stream.next_slice(b"\r\n");
         }
-        assert!(!core::ptr::eq(first, unsafe { (*list).pages.last }));
+        assert!(!core::ptr::eq(first, unsafe { (*list()).pages.last }));
 
         let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"error").unwrap();
         search.search_all().unwrap();
@@ -2992,7 +3042,7 @@ mod tests {
 
         let old_rows = unsafe { crate::pagelist::Node::rows(first) };
         unsafe {
-            (*list).erase_history(Some(point::Point::History(point::Coordinate {
+            (*list()).erase_history(Some(point::Point::History(point::Coordinate {
                 x: 0,
                 y: 0,
             })))
@@ -3010,8 +3060,8 @@ mod tests {
     /// PORTS: oracle 91a63e528
     /// `test "select after history page split ignores moved results"`
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn select_after_history_page_split_ignores_moved_results() {
@@ -3021,17 +3071,27 @@ mod tests {
         // whose row-by-row fill costs ~30s in a debug Rust build.
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(80, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
-        let list: *mut PageList = unsafe { &mut (*active_ptr).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
 
         let mut stream = t.vt_stream();
-        let first = unsafe { (*list).pages.first };
+        let first = unsafe { (*list()).pages.first };
         while unsafe { crate::pagelist::Node::rows(first) }
             < unsafe { crate::pagelist::Node::capacity(first) }.rows
         {
             stream.next_slice(b"\r\n");
         }
         stream.next_slice(b"error");
-        for _ in 0..unsafe { (*list).rows } + 1 {
+        for _ in 0..unsafe { (*list()).rows } + 1 {
             stream.next_slice(b"\r\n");
         }
 
@@ -3040,7 +3100,7 @@ mod tests {
         assert_eq!(search.history_results.len(), 1);
 
         unsafe {
-            (*list)
+            (*list())
                 .split(Pin {
                     node: first,
                     y: crate::pagelist::Node::rows(first) / 2,
@@ -3060,8 +3120,8 @@ mod tests {
 
     // test "select after clearing scrollback"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn select_after_clearing_scrollback() {

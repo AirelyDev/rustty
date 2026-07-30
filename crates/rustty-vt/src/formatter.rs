@@ -3715,8 +3715,8 @@ mod tests {
 
     // test "PageList plain spanning two pages"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn pagelist_plain_spanning_two_pages() {
@@ -3732,15 +3732,26 @@ mod tests {
             }
             s.next_slice(b"page one");
         }
-        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let active_ptr = t.screens.active;
+        let pages_ptr = || -> *const PageList { unsafe { &raw const (*active_ptr).pages } };
         // Verify we're still on one page
-        assert!(unsafe { core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        assert!(unsafe { core::ptr::eq((*pages_ptr()).pages.first, (*pages_ptr()).pages.last) });
         // Add one more newline to push content to a second page
         {
             let mut s = t.vt_stream();
             s.next_slice(b"\r\n");
         }
-        assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        assert!(unsafe { !core::ptr::eq((*pages_ptr()).pages.first, (*pages_ptr()).pages.last) });
         // Write content on the second page
         {
             let mut s = t.vt_stream();
@@ -3749,7 +3760,8 @@ mod tests {
 
         // Format the entire PageList
         let mut pin_map: Vec<Pin> = Vec::new();
-        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        let mut formatter: PageListFormatter =
+            PageListFormatter::init(pages_ptr(), Options::plain());
         formatter.pin_map = Some(PinMap {
             alloc: Global,
             map: &mut pin_map,
@@ -3761,8 +3773,8 @@ mod tests {
 
         // Verify pin map
         assert_eq!(full_output.len(), pin_map.len());
-        let first_node = unsafe { (*pages_ptr).pages.first };
-        let last_node = unsafe { (*pages_ptr).pages.last };
+        let first_node = unsafe { (*pages_ptr()).pages.first };
+        let last_node = unsafe { (*pages_ptr()).pages.last };
         let trimmed_count = full_output.len() - output.len();
 
         // First part (trimmed blank lines) maps to first node
@@ -3791,8 +3803,8 @@ mod tests {
 
     // test "PageList soft-wrapped line spanning two pages without unwrap"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn pagelist_soft_wrapped_line_spanning_two_pages_without_unwrap() {
@@ -3854,8 +3866,8 @@ mod tests {
 
     // test "PageList soft-wrapped line spanning two pages with unwrap"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn pagelist_soft_wrapped_line_spanning_two_pages_with_unwrap() {
@@ -3921,8 +3933,8 @@ mod tests {
 
     // test "PageList VT spanning two pages"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn pagelist_vt_spanning_two_pages() {
@@ -3938,15 +3950,26 @@ mod tests {
             }
             s.next_slice(b"\x1b[1mpage one");
         }
-        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let active_ptr = t.screens.active;
+        let pages_ptr = || -> *const PageList { unsafe { &raw const (*active_ptr).pages } };
         // Verify we're still on one page
-        assert!(unsafe { core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        assert!(unsafe { core::ptr::eq((*pages_ptr()).pages.first, (*pages_ptr()).pages.last) });
         // Add one more newline to push content to a second page
         {
             let mut s = t.vt_stream();
             s.next_slice(b"\r\n");
         }
-        assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        assert!(unsafe { !core::ptr::eq((*pages_ptr()).pages.first, (*pages_ptr()).pages.last) });
         // New content is still styled
         {
             let mut s = t.vt_stream();
@@ -3955,7 +3978,7 @@ mod tests {
 
         // Format the entire PageList with VT
         let mut pin_map: Vec<Pin> = Vec::new();
-        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::vt());
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr(), Options::vt());
         formatter.pin_map = Some(PinMap {
             alloc: Global,
             map: &mut pin_map,
@@ -3970,8 +3993,8 @@ mod tests {
 
         // Verify pin map
         assert_eq!(full_output.len(), pin_map.len());
-        let first_node = unsafe { (*pages_ptr).pages.first };
-        let last_node = unsafe { (*pages_ptr).pages.last };
+        let first_node = unsafe { (*pages_ptr()).pages.first };
+        let last_node = unsafe { (*pages_ptr()).pages.last };
 
         // Just verify we have entries for both pages in the pin map
         let mut first_count: usize = 0;
@@ -4028,8 +4051,8 @@ mod tests {
 
     // test "PageList plain with x offset spanning two pages"
     #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
     )]
     #[test]
     fn pagelist_plain_with_x_offset_spanning_two_pages() {
@@ -4045,25 +4068,37 @@ mod tests {
             }
             s.next_slice(b"hello world");
         }
-        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        // PORT NOTE (WS19 T6) — RE-DERIVE, NEVER CACHE. `Terminal::active_mut()`
+        // (`&mut *self.screens.active`) is a Unique retag over the whole `Screen`
+        // allocation, so it pops any raw pointer derived from that allocation
+        // earlier; reading through a cached one afterwards is Stacked-Borrows UB
+        // (memory: rust-mut-args-strongly-protected). This test used to cache it
+        // across its `vt_stream()`/search writes. The violation was real and
+        // deterministic, and had never been observed because a blanket
+        // "multi-page PageList intractable" annotation kept the test out of Miri
+        // entirely — found the moment the G6c (`-C debug-assertions=off`) lane
+        // made it runnable. Test-code only: no production path caches this.
+        let active_ptr = t.screens.active;
+        let pages_ptr = || -> *const PageList { unsafe { &raw const (*active_ptr).pages } };
         // Verify we're still on one page
-        assert!(unsafe { core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        assert!(unsafe { core::ptr::eq((*pages_ptr()).pages.first, (*pages_ptr()).pages.last) });
         // Push to second page
         {
             let mut s = t.vt_stream();
             s.next_slice(b"\r\n");
         }
-        assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        assert!(unsafe { !core::ptr::eq((*pages_ptr()).pages.first, (*pages_ptr()).pages.last) });
         {
             let mut s = t.vt_stream();
             s.next_slice(b"foo bar test");
         }
-        let first_node = unsafe { (*pages_ptr).pages.first };
-        let last_node = unsafe { (*pages_ptr).pages.last };
+        let first_node = unsafe { (*pages_ptr()).pages.first };
+        let last_node = unsafe { (*pages_ptr()).pages.last };
         let first_node_size_rows = unsafe { crate::pagelist::Node::rows(first_node) };
 
         let mut pin_map: Vec<Pin> = Vec::new();
-        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        let mut formatter: PageListFormatter =
+            PageListFormatter::init(pages_ptr(), Options::plain());
         formatter.top_left = Some(pin(first_node, 6, first_node_size_rows - 1));
         formatter.bottom_right = Some(pin(last_node, 2, 1));
         formatter.pin_map = Some(PinMap {

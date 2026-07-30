@@ -1458,7 +1458,13 @@ are dominated by LZ4 volume and stay far out of budget (drain: 1631s). So:
   it. Changing G6's lane flags is a cross-crate change to a shared gate and would
   re-classify far more than the compression family, so it does not belong in this lane.
 
-### 4-criterion basis for the 10 annotations
+> **SUPERSEDED IN PART — WS19 T6 (2026-07-30).** This basis was written against a
+> one-lane world. 2 of these 10 are now RUN by the G6c `-C debug-assertions=off`
+> lane, and the remaining 8 were re-measured against it. See
+> "WS19 T6 — the SECOND vt Miri lane" at the end of this file for the current,
+> per-test, two-lane basis.
+
+### 4-criterion basis for the 10 annotations (as of WS7 Phase E; see the WS19 T6 note above)
 
 1. **Empirically intractable** — TIMEOUT at a 6-minute hard bound, measured per test in
    single-worker isolation (table above), not assumed from the class. The two that were
@@ -1489,3 +1495,273 @@ are dominated by LZ4 volume and stay far out of budget (drain: 1631s). So:
    in the root-cause section: the same methods on a single page are tractable
    (77s / 194s), and the excepted tests differ only in how many std-capacity page
    mappings they build and compress.
+
+
+## WS19 T6 — the SECOND vt Miri lane (G6c, `-C debug-assertions=off`), and the whole `cfg_attr(miri, ignore)` inventory re-measured against it (2026-07-30)
+
+**What this closes.** `DEFERRALS.md`'s "NEW WS8 item" — closure-audit row **O2**: *add a
+`-C debug-assertions=off` variant of the vt Miri lane and re-measure the whole
+`cfg_attr(miri, ignore)` inventory against it*. WS8 closed without taking it. WS19 T6 owns
+and closes it.
+
+**The lane.** `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` — **G6c**,
+registered in `.port/tools/ci.sh` as PROGRESS. It is **ADDITIVE, never a replacement**
+(R5): G6 still runs `cargo +nightly miri test -p rustty-vt --lib` with debug assertions ON,
+unchanged, because that is what upholds the `Page::assert_integrity` coverage and because
+without the annotations the vt G6 lane cannot complete at all. G6c disables
+`assert_integrity` — which is O(page), runs on nearly every PageList mutation, and adds no
+Stacked-Borrows/Tree-Borrows and no leak coverage — and thereby *runs* the tests G6 can only
+time out on. The partition is expressed in the annotation itself:
+`#[cfg_attr(all(miri, debug_assertions), ignore = …)]` = ignored in G6, RUN in G6c;
+`#[cfg_attr(miri, ignore = …)]` = out of both. G6c derives its test set by grepping those
+annotations out of `crates/rustty-vt/src`, so **the annotation is the registration** and the
+two lanes cannot drift apart.
+
+### Headline: the inventory was 97 tests, and 82 of them were never intractable
+
+The `cfg_attr(miri, ignore)` inventory for `rustty-vt` is **109** annotations: 97 in the two
+"intractable" classes this pass re-measured (87 `multi-page-PageList intractable` + 10
+`page-compression intractable`), plus 11 kitty-graphics ones (real-OS temp files / zlib FFI —
+a different exception class, untouched here) and 1 rustc/Miri interpreter ICE
+(`search::thread::search_thread` — untouched).
+
+Of the 97:
+
+| | |
+|---|---|
+| **RESCUED** — now RUN, UB-clean and leak-clean, in G6c | **82** |
+| Still excepted, re-measured and justified per test | **15** |
+| Real Stacked-Borrows violations the blanket annotation was hiding | **10** (all fixed here) |
+
+The `multi-page-PageList intractable` reason text asserted these tests "exceed Miri's
+interpreter budget (>20min)". Measured per test, the great majority finish in **6–30
+seconds**. That number was a class-level assumption, never a per-test measurement, and it is
+the exact failure mode this file's own criterion 1 exists to prevent ("*measured per test in
+single-worker isolation, not assumed from the class*"). It is corrected below and in every
+annotation.
+
+### Method
+
+* Build once: `RUSTFLAGS="-C debug-assertions=off" cargo +nightly miri test -p rustty-vt --lib --no-run` (**9.3s** — worth recording, because this file has twice carried a "70-minute Miri build" figure that was never real).
+* The 10-test page-compression family: **each test measured in single-worker isolation**, `--exact`, `MIRIFLAGS=-Zmiri-disable-isolation`, hard 6-minute bound (killtree; macOS has no coreutils `timeout`).
+* The 87-test multi-page class: 4-worker **triage** first, then — per this file's own rule that a parallel non-`ok` is a *candidate, never a verdict* — every non-`ok` re-measured in isolation. That rule paid immediately: `select_after_clearing_scrollback` was `TIMEOUT` at 240s in the parallel run and is **ok in 260s** in isolation, so it is rescued rather than excepted.
+* Finally the whole rescued set is re-run **serially in one process** by the G6c lane itself (`--test-threads=1`), which is the isolated confirmation of every row in the first table below. That run is GREEN: `test result: ok. 82 passed; 0 failed; 0 ignored; 0 measured; 2078 filtered out; finished in 3092.38s` — **52 minutes of Miri interpretation that the vt crate previously had no way to run at all.**
+
+### The 82 rescued tests
+
+Each is now `#[cfg_attr(all(miri, debug_assertions), ignore = …)]` and runs in G6c.
+
+| Test (82) | file | G6c (`-C debug-assertions=off`) |
+|---|---|---|
+| `feed_iteratively_through_multiple_matches` | `search/pagelist.rs` | **ok, 15s** (4-worker triage) |
+| `feed_multiple_pages_no_matches` | `search/pagelist.rs` | **ok, 23s** (isolated) |
+| `feed_multiple_pages_with_matches` | `search/pagelist.rs` | **ok, 27s** (4-worker triage) |
+| `feed_with_match_spanning_page_boundary` | `search/pagelist.rs` | **ok, 13s** (4-worker triage) |
+| `feed_with_match_spanning_page_boundary_with_newline` | `search/pagelist.rs` | **ok, 15s** (4-worker triage) |
+| `feed_with_pruned_page` | `search/pagelist.rs` | **ok, 21s** (4-worker triage) |
+| `history_search_no_active_area` | `search/viewport.rs` | **ok, 20s** (4-worker triage) |
+| `link_cells_with_scrollback_spanning_pages` | `render.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_bounded_pruning_after_front_replacement_preserves_live_serials` | `pagelist/tests.rs` | **ok, 8s** (4-worker triage) |
+| `pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_bounded_pruning_after_partial_erase_preserves_live_serials` | `pagelist/tests.rs` | **ok, 8s** (4-worker triage) |
+| `pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_compact_oversized_page` | `pagelist/tests.rs` | **ok, 49s** (4-worker triage) |
+| `pagelist_compress_page_round_trips_a_cold_history_page` | `pagelist/tests.rs` | **ok, 195s** (isolated) |
+| `pagelist_destroyed_pool_page_reuse_is_zeroed` | `pagelist/tests.rs` | **ok, 167s** (4-worker triage) |
+| `pagelist_eraseRowBounded_exhausts_pages_invalidates_viewport_offset_cache` | `pagelist/tests.rs` | **ok, 6s** (4-worker triage) |
+| `pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache` | `pagelist/tests.rs` | **ok, 6s** (4-worker triage) |
+| `pagelist_eraseRowBounded_invalidates_viewport_offset_cache` | `pagelist/tests.rs` | **ok, 8s** (4-worker triage) |
+| `pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_eraseRow_invalidates_viewport_offset_cache` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_eraseRows_invalidates_viewport_offset_cache` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_grow_allocate` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_grow_non_standard_page_prune_protection` | `pagelist/tests.rs` | **ok, 8s** (4-worker triage) |
+| `pagelist_grow_prune_required_with_a_single_page` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_grow_prune_scrollback` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page` | `pagelist/tests.rs` | **ok, 8s** (4-worker triage) |
+| `pagelist_grow_reuses_non_standard_page_without_leak` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_increaseCapacity_multi_page` | `pagelist/tests.rs` | **ok, 8s** (4-worker triage) |
+| `pagelist_mutations_mark_compression_activity` | `pagelist/tests.rs` | **ok, 5s** (isolated) |
+| `pagelist_only_reset_advances_the_serial_epoch` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_pagepool_no_leak_clone_many_pages` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_pagepool_no_leak_grow_and_scroll` | `pagelist/tests.rs` | **ok, 6s** (4-worker triage) |
+| `pagelist_pagepool_no_leak_reset_then_deinit` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_pagepool_no_leak_resize_reflow` | `pagelist/tests.rs` | **ok, 16s** (4-worker triage) |
+| `pagelist_plain_spanning_two_pages` | `formatter.rs` | **ok, 12s** (isolated) |
+| `pagelist_plain_with_x_offset_spanning_two_pages` | `formatter.rs` | **ok, 6s** (isolated) |
+| `pagelist_repeated_bounded_pruning_after_split_preserves_live_serials` | `pagelist/tests.rs` | **ok, 8s** (4-worker triage) |
+| `pagelist_resize_more_rows_and_cols_doesnt_fit_in_single_std_page` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages` | `pagelist/tests.rs` | **ok, 27s** (4-worker triage) |
+| `pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page` | `pagelist/tests.rs` | **ok, 10s** (4-worker triage) |
+| `pagelist_resize_no_reflow_more_cols_forces_smaller_cap` | `pagelist/tests.rs` | **ok, 14s** (4-worker triage) |
+| `pagelist_resize_no_reflow_more_cols_remaps_pins_in_backfill_path` | `pagelist/tests.rs` | **ok, 58s** (4-worker triage) |
+| `pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase` | `pagelist/tests.rs` | **ok, 127s** (4-worker triage) |
+| `pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase` | `pagelist/tests.rs` | **ok, 165s** (4-worker triage) |
+| `pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase` | `pagelist/tests.rs` | **ok, 13s** (4-worker triage) |
+| `pagelist_resize_reflow_grapheme_map_capacity_exceeded` | `pagelist/tests.rs` | **ok, 129s** (4-worker triage) |
+| `pagelist_resize_reflow_more_cols_creates_multiple_pages` | `pagelist/tests.rs` | **ok, 38s** (4-worker triage) |
+| `pagelist_row_erasure_renews_affected_page_generations` | `pagelist/tests.rs` | **ok, 7s** (4-worker triage) |
+| `pagelist_soft_wrapped_line_spanning_two_pages_with_unwrap` | `formatter.rs` | **ok, 26s** (4-worker triage) |
+| `pagelist_soft_wrapped_line_spanning_two_pages_without_unwrap` | `formatter.rs` | **ok, 26s** (4-worker triage) |
+| `pagelist_vt_spanning_two_pages` | `formatter.rs` | **ok, 12s** (isolated) |
+| `reload_active_with_history_change` | `search/screen.rs` | **ok, 28s** (4-worker triage) |
+| `reload_after_partial_history_page_erase_drops_shifted_selection_first` | `search/screen.rs` | **ok, 64s** (isolated) |
+| `reload_defers_pruning_unselected_history_results` | `search/screen.rs` | **ok, 12s** (isolated) |
+| `screen_cursor_absolute_to_page_with_insufficient_capacity` | `screen.rs` | **ok, 15s** (4-worker triage) |
+| `screen_cursor_set_hyperlink_oom_uri_too_large_for_string_alloc` | `screen.rs` | **ok, 16s** (4-worker triage) |
+| `screen_scrolling_when_viewport_is_pruned` | `screen.rs` | **ok, 13s** (4-worker triage) |
+| `select_after_clearing_scrollback` | `search/screen.rs` | **ok, 260s** (isolated) |
+| `select_after_history_compaction_ignores_replaced_results` | `search/screen.rs` | **ok, 62s** (isolated) |
+| `select_after_history_page_split_ignores_moved_results` | `search/screen.rs` | **ok, 15s** (isolated) |
+| `select_after_partial_history_erase_drops_a_pruned_selection` | `search/screen.rs` | **ok, 119s** (isolated) |
+| `select_after_partial_history_page_erase_ignores_shifted_results` | `search/screen.rs` | **ok, 12s** (isolated) |
+| `select_into_history` | `search/screen.rs` | **ok, 52s** (4-worker triage) |
+| `select_prev_with_history` | `search/screen.rs` | **ok, 53s** (4-worker triage) |
+| `select_prev_wraps_when_all_matches_are_in_history` | `search/screen.rs` | **ok, 45s** (4-worker triage) |
+| `simple_search_with_history` | `search/screen.rs` | **ok, 49s** (4-worker triage) |
+| `sliding_window_two_pages` | `search/sliding_window.rs` | **ok, 11s** (isolated) |
+| `sliding_window_two_pages_match_across_boundary` | `search/sliding_window.rs` | **ok, 12s** (4-worker triage) |
+| `sliding_window_two_pages_match_across_boundary_reversed` | `search/sliding_window.rs` | **ok, 12s** (4-worker triage) |
+| `sliding_window_two_pages_no_match_across_boundary_with_newline` | `search/sliding_window.rs` | **ok, 11s** (4-worker triage) |
+| `sliding_window_two_pages_no_match_across_boundary_with_newline_reverse` | `search/sliding_window.rs` | **ok, 14s** (4-worker triage) |
+| `sliding_window_two_pages_no_match_keeps_both_pages` | `search/sliding_window.rs` | **ok, 15s** (4-worker triage) |
+| `sliding_window_two_pages_no_match_keeps_both_pages_reversed` | `search/sliding_window.rs` | **ok, 20s** (4-worker triage) |
+| `sliding_window_two_pages_no_match_prunes_first_page` | `search/sliding_window.rs` | **ok, 16s** (4-worker triage) |
+| `sliding_window_two_pages_no_match_prunes_first_page_reversed` | `search/sliding_window.rs` | **ok, 16s** (4-worker triage) |
+| `sliding_window_two_pages_reversed` | `search/sliding_window.rs` | **ok, 11s** (4-worker triage) |
+| `sliding_window_two_pages_single_char` | `search/sliding_window.rs` | **ok, 16s** (4-worker triage) |
+| `terminal_delete_lines_across_page_boundary_marks_all_shifted_rows_dirty` | `terminal.rs` | **ok, 13s** (4-worker triage) |
+| `terminal_input_glitch_text` | `terminal.rs` | **ok, 8s** (4-worker triage) |
+| `terminal_insert_lines_across_page_boundary_marks_all_shifted_rows_dirty` | `terminal.rs` | **ok, 13s** (4-worker triage) |
+| `terminal_pagepool_no_leak_scroll_insert_multi_page` | `terminal.rs` | **ok, 11s** (4-worker triage) |
+| `terminal_resize_with_high_unique_style_per_cell_with_wrapping` | `terminal.rs` | **ok, 17s** (4-worker triage) |
+
+### The 15 that stay excepted, and why
+
+| Test (15) | file | G6c verdict | why it is NOT rescuable |
+|---|---|---|---|
+| `compressed_history_match_spanning_page_boundary_remains_compressed` | `search/pagelist.rs` | TIMEOUT, 361s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `feed_keeps_its_tracked_pin_within_a_shorter_page` | `search/pagelist.rs` | FAIL, 50s (4-worker triage) | needs `debug_assertions` (already `cfg_attr(not(debug_assertions), ignore)`); G6c makes it inert, not fast |
+| `pagelist_compress_drain_finishes_in_one_call` | `pagelist/tests.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `pagelist_compress_full_leaves_viewport_and_active_resident` | `pagelist/tests.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `pagelist_compress_full_mode_leaves_no_continuation` | `pagelist/tests.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `pagelist_compress_incremental_converges_to_complete` | `pagelist/tests.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `pagelist_compress_incremental_restarts_after_list_mutation` | `pagelist/tests.rs` | TIMEOUT, 361s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `pagelist_compress_page_decommit_failure_leaves_the_page_resident` | `pagelist/tests.rs` | FAIL, 150s (isolated) | needs `debug_assertions` (already `cfg_attr(not(debug_assertions), ignore)`); G6c makes it inert, not fast |
+| `pagelist_compress_page_rejects_an_already_compressed_node` | `pagelist/tests.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `pagelist_memory_stats_accounts_compressed_and_resident_bytes` | `pagelist/tests.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `pagelist_partial_erase_restarts_compression_before_continuation` | `pagelist/tests.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `reload_active_partial_history_cleanup_on_append_slice_error` | `search/screen.rs` | FAIL, 106s (4-worker triage) | needs `debug_assertions` (already `cfg_attr(not(debug_assertions), ignore)`); G6c makes it inert, not fast |
+| `reload_active_partial_history_cleanup_on_loop_append_error` | `search/screen.rs` | FAIL, 129s (4-worker triage) | needs `debug_assertions` (already `cfg_attr(not(debug_assertions), ignore)`); G6c makes it inert, not fast |
+| `screen_set_attribute_splits_page_on_out_of_space_at_max_styles` | `screen.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+| `terminal_pagepool_no_leak_resize_grow` | `terminal.rs` | TIMEOUT, 360s (isolated) | TIMEOUT in BOTH lanes — page-mapping/LZ4 volume, not assertion overhead |
+
+Two distinct reasons, both measured, neither a class assumption:
+
+1. **TIMEOUT in BOTH lanes (11).** Turning the integrity assertions off does not rescue
+   them: they are bound by how many std-capacity (215x215) page mappings they build,
+   LZ4-compress and verify-decompress, not by assertion overhead. `pagelist_compress_drain_finishes_in_one_call`
+   remains the calibration point — WS7 Phase E ran it to completion, unbounded, in **1631s
+   with assertions already off**, zero UB and zero leaks.
+2. **Needs `debug_assertions` (4).** These drive a `debug_assertions`-only mechanism
+   (tripwire failure injection, or `PageList::pin_is_valid`, which the port compiles out
+   with slow-runtime-safety off, faithful to the reference). They already carry
+   `#[cfg_attr(not(debug_assertions), ignore)]`. G6c would make them **inert, not fast**, so
+   G6c cannot rescue them and their `cfg_attr(miri, ignore)` is correct. *Do not read the
+   `FAIL` in the table as a soundness signal*: it is what a forced `--include-ignored`
+   measurement run produces when a test asserts on an injection that cannot fire — e.g.
+   `assertion failed: !s.compress_page(node)`, and `assertion failed: cfg!(debug_assertions)`
+   from `pagelist/mod.rs:2210` itself. The G6c lane does **not** pass `--include-ignored`, so
+   they are correctly ignored there.
+
+### What the lane found: 10 real Stacked-Borrows violations, hidden by the blanket annotation
+
+Making the tests runnable made them *fail*. Ten of the 97 reported genuine Miri
+Stacked-Borrows UB, deterministically, in seconds. All ten are one pattern, in **test code**:
+
+```rust
+let active_ptr: *mut Screen = t.screens.active;
+let list: *mut PageList = unsafe { &mut (*active_ptr).pages };   // cached ...
+let mut stream = t.vt_stream();
+stream.next_slice(b"error\r\n");                                  // ... invalidated here
+let first = unsafe { (*list).pages.first };                       // <- UB: stale tag
+```
+
+`Terminal::active_mut()` (`unsafe { &mut *self.screens.active }`, `terminal.rs:5263`) is a
+Unique retag over the whole `Screen` allocation, so it pops every raw pointer derived from
+that allocation earlier. Reading through the cached one afterwards is UB (memory:
+`rust-mut-args-strongly-protected`). Production code never caches this; the fix is
+test-local — re-derive per use via a `|| -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } }`
+closure — and every assertion is unchanged.
+
+Fixed and re-verified under G6c (all `ok`, zero UB, zero leaks):
+
+| Test | file | after the fix |
+|---|---|---|
+| `pagelist_plain_spanning_two_pages` | `formatter.rs` | ok, 12s |
+| `pagelist_vt_spanning_two_pages` | `formatter.rs` | ok, 12s |
+| `pagelist_plain_with_x_offset_spanning_two_pages` | `formatter.rs` | ok, 6s |
+| `select_after_partial_history_erase_drops_a_pruned_selection` | `search/screen.rs` | ok, 119s |
+| `select_after_history_compaction_ignores_replaced_results` | `search/screen.rs` | ok, 62s |
+| `reload_defers_pruning_unselected_history_results` | `search/screen.rs` | ok, 12s |
+| `reload_after_partial_history_page_erase_drops_shifted_selection_first` | `search/screen.rs` | ok, 64s |
+| `select_after_partial_history_page_erase_ignores_shifted_results` | `search/screen.rs` | ok, 12s |
+| `select_after_history_page_split_ignores_moved_results` | `search/screen.rs` | ok, 15s |
+| `compressed_history_match_spanning_page_boundary_remains_compressed` | `search/pagelist.rs` | **fixed, but now TIMEOUT** — see below |
+
+The last row is the sharpest lesson in this file. Before the fix it "finished" in **8s** —
+because it aborted on UB. Fixed, it runs to a 6-minute TIMEOUT. **A short runtime that ends
+in UB is not a measurement of that test's cost**, and any exception table that had recorded
+"8s" would have been recording an abort. (This file has made that exact mistake before: a
+"~45 min" figure that was really a run aborting early on UB.) It is therefore filed under
+"TIMEOUT in BOTH lanes" above, on the post-fix measurement.
+
+### Corrections to earlier write-ups in this file
+
+1. **"WS7 Phase E — the page-compression test family" predicted too much.** It wrote that
+   "the page-level tests are dominated by `assert_integrity` and would be TRACTABLE in a
+   `RUSTFLAGS=-Cdebug-assertions=off` Miri lane". Measured: **2 of the 10 are**
+   (`pagelist_compress_page_round_trips_a_cold_history_page` **ok 195s**, reproducing its
+   194.01s figure after WS19 T5 landed; `pagelist_mutations_mark_compression_activity` **ok
+   5s**). A third page-level test, `pagelist_compress_page_rejects_an_already_compressed_node`,
+   is *still* TIMEOUT(360s) with assertions off, and `pagelist_compress_page_decommit_failure_leaves_the_page_resident`
+   is not rescuable at all. Right in direction, wrong in extent.
+2. **The `multi-page-PageList intractable` ">20min" claim was never measured.** 82 of 87 run
+   in seconds. Every one of those annotations has been rewritten with what was actually
+   measured.
+3. **`search::pagelist::…::compressed_history_match_spanning_page_boundary_remains_compressed`
+   was carried as a plain "already excepted" row.** It was excepted *and* UB. Now fixed, and
+   excepted on a real post-fix timing.
+
+### 4-criterion basis for the 15 remaining annotations
+
+1. **Empirically intractable / inapplicable — measured per test, in BOTH lanes.** 11 TIMEOUT
+   at a 6-minute hard bound in single-worker isolation with `-C debug-assertions=off`, i.e.
+   the one lever that exists has already been pulled and did not help; 4 are
+   `debug_assertions`-only by construction. Never assumed from the class — that assumption is
+   exactly what this pass overturned for the other 82.
+2. **Passes natively** — all 15 pass in `cargo test -p rustty-vt --lib` (2159 passed / 0
+   failed / 2 ignored) and in the release lane.
+3. **No uncovered unsafe path.** The compress/restore seam's aliasing and lifetime properties
+   are Miri-proven by `.port/phase-2/mirihar-pagelist-compress` (`split`/`siblings`/
+   `roundtrip`/`leak`); `compress(Drain)`/`compress(Incremental)`/`compress_page`/
+   `CompressedPage::init`/`restore`/`decommit_pool_item` were run to completion under Miri by
+   WS7 Phase E (194s and 1631s, zero UB, zero leaks); encoding leak-freedom is gated natively
+   and continuously by G6b; and the multi-page PageList surface these 15 shared with the other
+   82 is now genuinely Miri-covered by G6c rather than merely asserted to be covered "natively
+   + by ASan".
+4. **Documented here with the exact per-test evidence**, and the annotations name which lane
+   they apply to, so widening one back to a plain `cfg_attr(miri, ignore)` is a visible edit
+   rather than a silent loss of coverage.
+
+### Honest limits of this pass
+
+* **The ON-lane cost of the 82 rescued tests was not re-measured.** They are annotated
+  `all(miri, debug_assertions)` on the strength of the original class annotation. Some of them
+  might well fit G6's budget too, which would let them run in *both* lanes. That is a pure
+  optimisation, **not** a coverage gap — every one of the 82 is now Miri-covered by G6c — and
+  it was not attempted because 87 tests x a 6-minute ON-lane bound is ~9 hours of interpreter
+  time on a shared host.
+* **The 11 kitty-graphics annotations and the `search_thread` interpreter ICE were not
+  re-measured.** Neither class is assertion-bound (real-OS temp files, zlib FFI, an upstream
+  rustc bug), so the G6c lever cannot apply to them; they keep their existing entries.
