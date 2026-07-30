@@ -123,7 +123,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `9a4bd2120` | terminal: optimize LZ4 decoding + differential tests | missing BL-1 | compress/lz4 does not exist |
 | `d34b54e9b` | renderer: hand off state mutex to avoid starving frames | **PORTED** (WS7 D4) | renderer/state.rs `lock_demand`/`unlock_demand`/`yield_to_demand` + `HandoffPark` (futex substitute) + 4 tests; generic.rs AND generic/linux_impl.rs `update_frame` critical sections; termio/exec.rs `threadMainPosix` batch boundary. No compression dependency. |
 | `25e624569` | renderer: avoid starving scrollback compression | missing BL-1 | — |
-| `172f15da3` | terminal: expose compression through libghostty-vt | missing BL-1 | — |
+| `172f15da3` | terminal: expose compression through libghostty-vt | **PORTED** (WS7 D5) | vt-c `terminal.rs` `CompressionMode`/`CompressionResult` aliases + `compression_activity`/`compress` + `lib.rs` `rustty_terminal_compression_activity`/`rustty_terminal_compress` exports + 2 tests; `include/rustty/vt/terminal.h` enums/decls/`## Scrollback Compression` section, `include/rustty/vt.h` example refs, cbindgen `after_includes` enum pins, `example/c-vt-compression`. The `Terminal.zig` half landed as WS7 D1 (`782e574`); the `PageList.compress` full-mode `unsupported` hunk already landed in WS7 Phase A/B (`pagelist/compress.rs:501`). |
 | `6d5dda40d` | inspector: clarify page compression memory | missing BL-1 | — |
 | `0fb89f4ff` | terminal: configure scrollback compression | missing BL-1 | — |
 | `95685afd2` | terminal: compress offscreen scrollback history | missing BL-1 | — |

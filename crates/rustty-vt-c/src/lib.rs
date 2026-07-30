@@ -2499,6 +2499,40 @@ pub unsafe extern "C" fn rustty_terminal_scroll_viewport(
     unsafe { terminal::scroll_viewport(terminal, behavior) }
 }
 
+// pub const terminal_compression_activity = terminal.compression_activity;  (ghostty_terminal_compression_activity)
+/// C: rustty_terminal_compression_activity
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle;
+/// `out_activity`, if non-null, must be a valid, writable pointer to a `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_compression_activity(
+    terminal: terminal::Terminal,
+    out_activity: *mut u64,
+) -> c_int {
+    // SAFETY: `terminal`/`out_activity` validity is the caller's contract.
+    unsafe { terminal::compression_activity(terminal, out_activity) }.to_c_int()
+}
+
+// pub const terminal_compress = terminal.compress;  (ghostty_terminal_compress)
+/// C: rustty_terminal_compress
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_result`,
+/// if non-null, must be a valid, writable pointer to a
+/// `RusttyTerminalCompressionResult`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_compress(
+    terminal: terminal::Terminal,
+    mode: c_int,
+    out_result: *mut terminal::CompressionResult,
+) -> c_int {
+    // SAFETY: `terminal`/`out_result` validity is the caller's contract. The
+    // `mode` `intToEnum` guard lives inside `terminal::compress` (an explicit
+    // `match` on the raw `c_int`; never a transmute).
+    unsafe { terminal::compress(terminal, mode, out_result) }.to_c_int()
+}
+
 // pub const terminal_mode_get = terminal.mode_get;  (ghostty_terminal_mode_get)
 /// C: rustty_terminal_mode_get
 ///

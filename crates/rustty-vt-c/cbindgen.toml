@@ -59,6 +59,8 @@ header = """
 #   - Allocator      { void* ctx; const VTable* vtable }  (rustty-lib Allocator)
 #   - Node           opaque (pointer-only; PageList node back-pointer)
 #   - Command        opaque pointer to osc::Command (OSC parser handle)
+#   - TerminalCompressionMode   enum(C) 0..1  (rustty-vt terminal)
+#   - TerminalCompressionResult enum(C) 0..2  (rustty-vt terminal)
 after_includes = """
 
 typedef uint16_t CellCountInt;
@@ -133,6 +135,27 @@ typedef struct Node Node;
 
 /** Opaque OSC parser command handle (a pointer to the internal command). */
 typedef struct RusttyOscCommand *Command;
+
+/**
+ * Amount of compression work `rustty_terminal_compress` performs. `#[repr(C)]`;
+ * the declaration order is part of the librustty-vt C ABI.
+ * C: RusttyTerminalCompressionMode (rustty-vt terminal::TerminalCompressionMode)
+ */
+typedef enum {
+    TERMINAL_COMPRESSION_MODE_INCREMENTAL = 0,
+    TERMINAL_COMPRESSION_MODE_FULL = 1,
+} TerminalCompressionMode;
+
+/**
+ * Scheduling result from `rustty_terminal_compress`. `#[repr(C)]`; the
+ * declaration order is part of the librustty-vt C ABI.
+ * C: RusttyTerminalCompressionResult (rustty-vt terminal::TerminalCompressionResult)
+ */
+typedef enum {
+    TERMINAL_COMPRESSION_RESULT_UNSUPPORTED = 0,
+    TERMINAL_COMPRESSION_RESULT_PENDING = 1,
+    TERMINAL_COMPRESSION_RESULT_COMPLETE = 2,
+} TerminalCompressionResult;
 """
 
 [parse]
@@ -176,6 +199,8 @@ exclude = [
     "Allocator",
     "Node",
     "Command",
+    "TerminalCompressionMode",
+    "TerminalCompressionResult",
 ]
 
 [export.rename]
