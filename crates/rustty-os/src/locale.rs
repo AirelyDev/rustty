@@ -18,6 +18,10 @@
 use rustty_util::quirks::inlineAssert as assert;
 
 use crate::env as internal_os;
+// PORT NOTE: `i18n.canonicalizeLocale` is only called from `setLangFromCocoa`'s
+// preferred-languages loop, which is a real `cfg(target_os = "macos")` here, so
+// the import carries the same cfg.
+#[cfg(target_os = "macos")]
 use crate::i18n;
 
 // PORT NOTE: `const log = std.log.scoped(.os_locale);`. Routed through the log facade
@@ -47,6 +51,12 @@ pub fn ensureLocale() -> std::io::Result<()> {
             setLangFromCocoa();
         }
     }
+    // PORT NOTE: off Darwin the reference's `lang` is touched only by its
+    // `defer ... deinit(alloc)`, which Rust's Drop performs at scope end. Name
+    // the binding here so it still counts as used, rather than dropping it early
+    // (which would run the release before the reference's `defer` would).
+    #[cfg(not(target_os = "macos"))]
+    let _ = &lang;
 
     // Set the locale to whatever is set in env vars.
     if let Some(v) = setlocale(LC_ALL, c"") {

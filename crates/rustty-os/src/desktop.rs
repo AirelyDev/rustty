@@ -10,6 +10,10 @@
 // `unistd.h`. In Rust we use `rustty-build-config` for the build flags and
 // `libc` (R3: a binding to the SAME system library) for `getppid`/`getpid`.
 
+// PORT NOTE: the reference's `builtin.os.tag.isDarwin()` guard is a real `cfg`
+// here, and `build_config` is only read inside it, so the import carries the
+// same cfg (an unconditional `use` is an unused-import warning off Darwin).
+#[cfg(target_os = "macos")]
 use rustty_build_config as build_config;
 
 // PORT NOTE: `const c = @cImport({ @cInclude("unistd.h"); });`.

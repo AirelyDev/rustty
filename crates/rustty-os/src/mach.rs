@@ -218,7 +218,10 @@ impl TaggedPageAllocator {
             if new_memory == libc::MAP_FAILED {
                 return None;
             }
-            return Some(new_memory.cast());
+            // PORT NOTE: the tail expression of the block, not a `return` — on
+            // Linux the `cfg(not(linux))` block below is stripped, so this block
+            // IS the function's tail.
+            Some(new_memory.cast())
         }
 
         #[cfg(not(target_os = "linux"))]
