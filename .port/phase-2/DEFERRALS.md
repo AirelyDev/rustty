@@ -3516,10 +3516,13 @@ DEFERRED (documented; not needed to boot a shell on macOS — the permanent fina
   `backend`/`available` main.zig decls are noted (reference doc preserved, R3) but not
   re-exported.
 - **Other backends** (`backend/epoll` 12t, `io_uring` 13t — **both since PORTED**;
-  `iocp` 14t, `wasi_poll` 9t — out-of-scope-by-platform per `ROADMAP:214`, not
-  deferrals; **formally ledgered with a 4-criterion basis + the G-XEVSCOPE gate by
-  WS19 T7, 2026-07-30** — see "libxev `iocp` (Windows) + `wasi_poll` …" in the
-  `# Justified R1 Divergences` section), ~~**`watcher/file`** (8t, `xev.File` — zero ghostty uses),
+  ~~`iocp` 14t, `wasi_poll` 9t — out-of-scope-by-platform per `ROADMAP:214`, not
+  deferrals; formally ledgered with a 4-criterion basis + the G-XEVSCOPE gate by
+  WS19 T7, 2026-07-30~~ **[STRUCK — WS20, 2026-07-30: that classification was
+  WRONG and is retracted; `iocp` and `wasi_poll` are BOTH PORTED (`iocp.rs` +
+  `windows.rs`, `wasi_poll.rs` + `wasi.rs`) and gate-counted by
+  `check_test_counts.py` rows `xev_iocp`/`xev_wasi_poll`. See the RETRACTED entry
+  in `# Justified R1 Divergences`.]**), ~~**`watcher/file`** (8t, `xev.File` — zero ghostty uses),
   **`watcher/tcp`** (5t), **`watcher/udp`** (6t), **`c_api.zig`** (1t, libxev's C ABI —
   rustty consumers use the Rust API) — whole follow-up ports (§1). Non-macOS handle
   types stay `lib.rs` placeholders.~~
@@ -3560,10 +3563,13 @@ imports the package as `@import("xev").Dynamic` and `Xev(bes)` short-circuits to
 `#[cfg(not(target_os = "macos"))]` placeholder seam (no-op `unimplemented!()`
 handles) is NARROWED to `not(any(macos, linux))` and renamed `deferred_backend_seam`
 — it now stands in only for the `wasi_poll`/`iocp` targets it actually describes
-(notably the wasm32 build, which has no event loop at all). **[WS19 T7, 2026-07-30:
-renamed again to `unsupported_target_seam` and re-worded — these are a permanent
-SCOPE BOUNDARY, not a deferral; see the `# Justified R1 Divergences` entry and the
-`G-XEVSCOPE` gate.]**
+(notably the wasm32 build, which has no event loop at all). ~~**[WS19 T7,
+2026-07-30: renamed again to `unsupported_target_seam` and re-worded — these are a
+permanent SCOPE BOUNDARY, not a deferral.]**~~ **[WS20, 2026-07-30: that wording is
+RETRACTED. `iocp` and `wasi_poll` are ported; the seam is now split into
+`watcher_seam` (the not-yet-instantiated watcher layer, owner `Phase 3`) and
+`no_backend_seam` (freestanding wasm — a target the REFERENCE has no backend for,
+so there is nothing to port).]**
 
 **[ADV-FIX F7] gate wiring:** `check_test_counts.py` gains four rows against the
 SAME pinned `GHXEV` libxev package the macOS rows use (the Linux read-only oracle
@@ -3573,7 +3579,8 @@ rust=16), `xev_dynamic` (zig=4 gate-counted of 5 `test{}` — the 5th is the ano
 `refAllDecls`, rust=14), `xev_timerfd` (zig=1, rust=1). All 19 xev rows are rust ≥
 zig. This moves `backend/epoll` / `io_uring` / `dynamic.zig` OUT of the C7 finale's
 "Other backends ... whole follow-up ports (§1)" DEFERRED bullet above — that bullet
-is now only `iocp` (14t) and `wasi_poll` (9t).
+is now only `iocp` (14t) and `wasi_poll` (9t). **[WS20, 2026-07-30: and now it is
+EMPTY — both are ported and gate-counted.]**
 
 **R1 tally (Linux side, gate-counted):** in-scope zig `test{}` = 12 (epoll) + 13
 (io_uring) + 4 (dynamic) + 1 (timerfd) = **30**. Rust `#[test]` over the same four
@@ -6324,66 +6331,123 @@ later. Each records what diverges, why fidelity was overruled, and how the
 divergence is bounded. Anything here must be a conscious decision with a
 rationale — never an accident.
 
-## libxev `iocp` (Windows) + `wasi_poll` (WASI/wasm) backends — OUT OF SCOPE BY PLATFORM
+## ~~libxev `iocp` (Windows) + `wasi_poll` (WASI/wasm) backends — OUT OF SCOPE BY PLATFORM~~ — **RETRACTED. THE BACKENDS ARE PORTED.**
 
-**[FILED — WS19 T7, 2026-07-30.]** `crates/rustty-xev/src/lib.rs`'s
-`unsupported_target_seam` (formerly `deferred_backend_seam`) carried **10**
-`unimplemented!("xev has no backend for this target (XEV_BLUEPRINT §1):
-wasi_poll/iocp deferred")` bodies. The word "deferred" was wrong in both
-directions: DEFERRALS.md §"Other backends" already classified `iocp` (14t) and
-`wasi_poll` (9t) as *out-of-scope-by-platform, not deferrals*, and the WS19 T19
-row at `D:4900` lists them alongside every `#[cfg(windows)]` seam — but the code
-said "deferred", with no owner and no check. Re-worded at all 10 sites and
-ledgered here.
+**[RETRACTED AND REPLACED — WS20, 2026-07-30.]** The entry that stood here was
+**wrong** and is struck in full. It claimed `backend/iocp.zig` (2,376 lines) and
+`backend/wasi_poll.zig` (1,648 lines) were "out of scope by platform,
+permanently", on a 4-criterion basis whose real content was *"no artifact rustty
+builds today links these bodies"*.
 
-**What diverges.** libxev upstream implements `backend/iocp.zig` and
-`backend/wasi_poll.zig`. rustty ports neither; the handle types
-(`Loop`/`Async`/`Completion`/`Timer`/`Process`/`Stream`/`WriteRequest`/`WriteQueue`)
-exist on those targets as type-check-only placeholders whose methods panic.
+**Why it was wrong.** The binding rule for this port is: **everything the
+reference supports gets PORTED.** An inability to BUILD or RUN a target on the
+porting host is **verification debt**, never a scope exclusion. "No shipped
+artifact reaches it" is an argument about *reachability*, and reachability is not
+scope — by that standard most of `rustty-vt`'s conformance surface would also be
+out of scope. Criterion 1 in particular ("there is no owner to name because there
+is no plan for the target") inverted the rule: the absence of a plan is a reason
+to WRITE one, not a reason to declare the reference's own source out of scope.
+The word "deferred" in the code was replaced by a WORSE word, and a gate was
+built to defend the wrong conclusion.
 
-**4-criterion basis:**
-1. **The targets are out of the port's scope, permanently.** `iocp` is Windows;
-   the port emits no Windows artifact and Windows is out of scope at the ROADMAP
-   level (`ROADMAP:214`), the same boundary as the `#[cfg(windows)]` seams in
-   `rustty-vaxis` (`tty.rs`, `loop_.rs`) and `rustty-termio` (`exec.rs:2506`).
-   There is no owner to name because there is no plan for the target — which is
-   the definition of a scope boundary rather than a deferral.
-2. **No artifact rustty builds can reach the bodies — and that is CHECKED, not
-   argued.** `wasi_poll` is the subtle half, because WS14 widened `backend.rs` to
-   select `Backend::WasiPoll` for `all(target_family = "wasm", not(emscripten))`,
-   so a wasm build does compile this seam. It never *executes* it: `rustty-xev`
-   is in NO wasm dependency graph. All four wasm builds
-   (`rustty-wasm`, `rustty-web-canvas`, `rustty-vt-c` on
-   `wasm32-unknown-unknown`, and `rustty-vt-c` on `wasm32-wasip1`) run the
-   SYNCHRONOUS C-ABI with no event loop, and the only sub-app-tier xev edge —
-   `rustty-os → rustty-xev` — is `#[cfg(target_os = "macos")]`.
-   **Gate: `.port/tools/gates/xev_scope_boundary_gate.sh`** (wired into `ci.sh`
-   as HARD gate **G-XEVSCOPE**) asserts exactly that, so the day someone adds an
-   xev edge to a wasm deliverable this entry goes RED and the backend becomes
-   real work again. Mutation-proven RED on BOTH arms: appending
-   `rustty-xev = { workspace = true }` to `crates/rustty-web-canvas/Cargo.toml`
-   → `FAIL: rustty-web-canvas (wasm32-unknown-unknown) DEPENDS ON rustty-xev`;
-   re-gating the `rustty-os` edge to `cfg(unix)` →
-   `FAIL: rustty-os -> rustty-xev is NOT macOS-gated`. Both reverted, green
-   re-confirmed.
-3. **The placeholders are load-bearing for type-checking only, and are named for
-   it.** They exist so `cargo check -p rustty-xev --target wasm32-*` still
-   type-checks the crate's public surface. Deleting them would break that check
-   for zero behavioural gain; filling them would port two backends no rustty
-   artifact links. The module and every doc comment now say "out of scope by
-   platform", and the panic messages point at this entry — a stale *name* here is
-   precisely what would let a future target land on panicking handles while
-   believing it had a backend (the LT8 lesson, preserved).
-4. **R5-safe: nothing on a supported target changes.** The 10 bodies are inside
-   `#[cfg(not(any(target_os = "macos", target_os = "linux")))]`; macOS keeps the
-   flat kqueue Api and Linux keeps the real `Dynamic`/`epoll`/`io_uring` surface.
-   `cargo test -p rustty-xev` and the whole workspace are byte-identical in
-   behaviour before and after — this change is comments and panic strings on a
-   module no supported target compiles into an artifact.
+**What is true now.** Both backends are ported, in full, as first-class
+self-contained backends alongside `kqueue`/`epoll`/`io_uring`:
 
-**Un-diverge trigger:** rustty adopting Windows as a target, or a wasm artifact
-growing a genuine event loop. Either flips G-XEVSCOPE (or makes it moot) and this
-entry must be reopened as a real port.
+| reference | port | notes |
+| --- | --- | --- |
+| `backend/wasi_poll.zig` | `crates/rustty-xev/src/wasi_poll.rs` | Loop (submissions/asyncs/Batch/timer heap/`poll_oneoff` tick), Completion (`subscription`/`perform`/state), every Operation, the 1024-slot `Batch` with its swap-on-put invariant, all error sets, `COMPLETION_SIZE = 80` (wasm32, measured) |
+| `std.os.wasi` + `loop.zig` ABI | `crates/rustty-xev/src/wasi.rs` | the `wasi_snapshot_preview1` imports + subscription/event ABI structs + the `Options`/`RunMode`/`CallbackAction`/`CompletionState` twins (the `linux.rs` pattern) |
+| `backend/iocp.zig` | `crates/rustty-xev/src/iocp.rs` | Loop (IOCP handle, submissions/cancellations/completions/asyncs, timer heap, `submit`/`tick`/`start_completion`/`stop_completion`/`associate_fd`/`async_notify`), Completion with the `OVERLAPPED` field recovered by `offset_of!` container_of (faithful `@fieldParentPtr`), every Operation incl. `job_object`, `COMPLETION_SIZE = 248` (x86_64, measured) |
+| libxev's own `src/windows.zig` | `crates/rustty-xev/src/windows.rs` | the `std.os.windows` forwards + the whole `exp` namespace (job objects, `CreateFile`/`ReadFile`/`WriteFile`/`DeleteFile`), the `loop.zig` twins, and the `std.net.Address` subset on the WINDOWS `sockaddr` layout. Hand-rolled `extern "system"` — no crate dependency added (R4) |
+
+`lib.rs` re-exports each under the SAME public names the macOS block uses; both
+are single-candidate targets (`backend.zig`'s `.windows => &.{.iocp}` /
+`.wasi => &.{.wasi_poll}`), so the Dynamic layer comptime-elides exactly as it
+does for macOS/kqueue (§0). Test parity is now GATED, not asserted:
+`check_test_counts.py` gains `xev_wasi_poll` (zig=8, rust=9) and `xev_iocp`
+(zig=14, rust=14).
+
+**What actually remains** (REAL PORT WORK with an owner — read the rows below, and
+note that none of it is recorded as out of scope):
+
+- **[OPEN — owner `Phase 3`] the libxev WATCHER layer instantiated against
+  `iocp`/`wasi_poll`.** `watcher/{async,timer,process,stream}.zig` are generic over
+  the backend upstream. rustty has instantiated them against `kqueue` (macOS:
+  `async.rs`/`timer.rs`/`process.rs`/`stream.rs`) and against the Linux pair
+  (`dynamic.rs`). The `iocp`/`wasi_poll` instantiations are not written yet;
+  `lib.rs`'s `watcher_seam` holds those six handle types with panicking bodies
+  whose message says exactly that and points here. **Recipe:** mirror `timer.rs`
+  against `iocp::Loop`/`wasi_poll::Loop` (both expose the same
+  `timer`/`timer_reset`/`add`/`Completion::state` surface the kqueue one uses),
+  then `async.rs` over `Operation::AsyncWait` + `Loop::async_notify` (already
+  ported in both backends), then `stream.rs`/`process.rs`. Gate: extend
+  `check_test_counts.py` with the per-target rows once each lands.
+- **[OPEN — owner `Phase 3`] `ThreadPool`'s Windows futex arm.** `thread_pool.rs`
+  (kprotty's Zap pool) is `#[cfg(any(macos, linux))]` because its futex primitive
+  has only those two arms; the reference's `std.Thread.Futex` also has a Windows
+  one (`WaitOnAddress`/`WakeByAddressSingle`). Neither `iocp` nor `wasi_poll`
+  consumes the pool (`Loop.init` discards `options` in both), so this blocks
+  nothing today; until it lands, `windows.rs`/`wasi.rs`'s `Options.thread_pool`
+  carries the caller-owned handle as an opaque pointer rather than the concrete
+  type. **Recipe:** add the `WaitOnAddress` arm to `futex_wait`/`futex_wake` and
+  widen the `#[cfg]`; `cargo check -p rustty-xev --target x86_64-pc-windows-msvc`.
+
+**Verification status — the honest version.** This host builds macOS and Linux
+only. What was actually run:
+
+- `cargo check -p rustty-xev --target wasm32-wasip1 --all-targets` — GREEN.
+- `cargo test -p rustty-xev --target wasm32-wasip1 --no-run` — GREEN (both test
+  binaries link).
+- `cargo check -p rustty-xev --target x86_64-pc-windows-msvc --all-targets` — GREEN.
+- `cargo check -p rustty-xev --target wasm32-unknown-unknown` — GREEN.
+
+Nothing in either backend has been EXECUTED. That is recorded in
+`.port/phase-2/VERIFICATION_DEBT.md` with runnable recipes (a wasm runtime for
+wasi_poll; a Windows host for iocp), and it is **verification debt, not a scope
+exclusion**.
+
+**What happened to the gate.** `.port/tools/gates/xev_scope_boundary_gate.sh` was
+built to defend the conclusion this entry has just retracted, so its conclusion is
+void. Its *factual* assertion is not: it is retained and REPURPOSED as
+`G-XEVREACH`, a dependency-graph invariant (`rustty-xev` stays out of every wasm
+artifact's tree; the one sub-app-tier xev edge stays macOS-gated) that no longer
+draws any scope conclusion from that fact. See the header of the script.
+
+## rustty-termio Windows paths (`Exec.Subprocess.start` spawn half, `ReadThread.threadMainWindows`) — **PORTED, was mis-scoped**
+
+**[RETRACTION + PORT — WS20, 2026-07-30.]** `crates/rustty-termio/src/exec.rs`
+carried two `unimplemented!("... OUT OF SCOPE BY PLATFORM ...")` bodies for code
+the oracle has in full (`src/termio/Exec.zig` has 45 `windows` references with
+real bodies). Same error as the xev entry above, same retraction. Both are now
+ported:
+
+- `ReadThread::threadMainWindows` — the real `ReadFile`/`PeekNamedPipe` loop
+  (quit handle closed on exit; `processOutput` + `yieldToDemand` per batch;
+  `OPERATION_ABORTED` = quit signal).
+- `Subprocess::start`'s Windows arm — pty open, `Command` with `pseudo_console` +
+  null std handles + null `os_pre_exec`, returning `{ read: pty.out_pipe, write:
+  pty.in_pipe }`. `PtyFds` now carries the reference's per-target `Pty.Fd` type.
+- Support: `rustty-os::windows` gains the three `kernel32` forwards termio names
+  but that hand-rolled forwarding set was missing (`ReadFile`, `CancelIoEx`,
+  `TerminateProcess` — `CancelIoEx`/`TerminateProcess` were already CALLED by
+  `Exec.threadExit`/`killCommand`, so the Windows build could not have compiled
+  before this), and `WindowsPty`'s pipe/console fields become `pub`, matching
+  Zig's default-public struct fields.
+
+**Verification status.** `rustty-termio` cannot even be cross-CHECKED for Windows
+on this host: its transitive `highway-sys` C++ build script cannot cross-compile
+to MSVC from macOS —
+
+```
+cargo check -p rustty-termio --target x86_64-pc-windows-msvc
+  ...
+  cargo:warning=.../clang/21/include/mm_malloc.h:13:10: fatal error: 'stdlib.h' file not found
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1)
+```
+
+so this code is UNCOMPILED, not merely unrun. Row + recipe in
+`.port/phase-2/VERIFICATION_DEBT.md`. **Verification debt, not a scope
+exclusion.**
 
 ## wayland `Globals::bind_global` — duplicate re-advertisement of a SINGLETON global leaves a stale `name→tag` entry
 

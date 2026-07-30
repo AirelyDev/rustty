@@ -2497,18 +2497,172 @@ impl Subprocess {
     //     write: Pty.Fd,
     // } {
     pub fn start(&mut self, alloc: Allocator) -> Result<PtyFds, crate::Error> {
-        // The windows spawn half (out_pipe/in_pipe + pseudo_console) is OUT OF
-        // SCOPE BY PLATFORM, not deferred — Windows is not a target this port
-        // builds (`.port/phase-2/DEFERRALS.md`, `# Justified R1 Divergences`);
-        // the reference block above is preserved verbatim and termio's
-        // pty/PtyFds surface is posix-typed.
+        // The windows spawn half (out_pipe/in_pipe + pseudo_console), PORTED
+        // (WS20). VERIFICATION DEBT, not a scope exclusion: this host cannot even
+        // cross-CHECK `rustty-termio` for Windows (its transitive `highway-sys`
+        // C++ build script cannot cross-compile to MSVC from macOS). Recipe in
+        // `.port/phase-2/VERIFICATION_DEBT.md`.
+        //
+        // PORT NOTE (why this is a separate arm rather than `if (windows)` inside
+        // one body, as the reference has it): the reference's single body differs
+        // on windows in FOUR places — the `Command` literal's
+        // stdin/stdout/stderr (`null`), its `pseudo_console` field, its
+        // `os_pre_exec` (`null`), and the returned pair (`out_pipe`/`in_pipe` vs
+        // `master`/`master`). In Rust those are TYPE differences (the fd type, an
+        // absent-vs-present struct field), not value differences, so the split is
+        // forced by the language, exactly as it already is for `Pty`/`Command`
+        // themselves.
         #[cfg(windows)]
         {
-            let _ = alloc;
-            unimplemented!(
-                "termio.Exec.Subprocess.start windows spawn: OUT OF SCOPE BY PLATFORM \
-                 (DEFERRALS.md, # Justified R1 Divergences); verbatim body above"
-            )
+            // assert(self.pty == null and self.process == null);
+            assert!(self.pty.is_none() && self.process.is_none());
+
+            // (`in_child` is the POSIX fork/exec flag; `Command.start` on windows
+            // "can't ever return ExecFailedInChild" — the reference says so at the
+            // `cmd.start` call site — so there is no child continuation here.)
+
+            // Create our pty
+            let pty = Pty::open(ptypkg::winsize {
+                ws_row: self.grid_size.rows,
+                ws_col: self.grid_size.columns,
+                ws_xpixel: self.screen_size.width.try_into().unwrap(),
+                ws_ypixel: self.screen_size.height.try_into().unwrap(),
+            })
+            .map_err(|_| crate::Error)?;
+            // (capture the handles the reference's `pty.*` reads want before the
+            // move into `self.pty`; they are `Copy` HANDLEs.)
+            let out_pipe = pty.out_pipe;
+            let in_pipe = pty.in_pipe;
+            let pseudo_console = pty.pseudo_console;
+            // self.pty = pty;
+            self.pty = Some(pty);
+
+            let rt_pre = self.rt_pre_exec_info;
+            let rt_post = self.rt_post_fork_info;
+            let self_ptr: *mut Subprocess = std::ptr::addr_of_mut!(*self);
+
+            // If we can't access the cwd, then don't set any cwd and inherit.
+            // This is important because our cwd can be set by the shell (OSC 7)
+            // and we don't want to break new windows.
+            //
+            // PORT NOTE: `std.fs.cwd().access(proposed, .{})` — on windows the
+            // posix `access(2)` shim is not available, so the existence probe is
+            // `std::path::Path::exists` over the same raw path bytes (R3: the same
+            // question, asked through the platform's own API).
+            let cwd: Option<&[u8]> = if let Some(proposed) = &self.cwd {
+                let bytes = proposed.to_bytes();
+                let ok = std::str::from_utf8(bytes)
+                    .map(|s| std::path::Path::new(s).exists())
+                    .unwrap_or(false);
+                if ok {
+                    Some(bytes)
+                } else {
+                    // log.warn("cannot access cwd, ignoring: {}", .{err});
+                    None
+                }
+            } else {
+                None
+            };
+
+            // (`if (internal_os.isFlatpak()) flatpak: { ... }` — flatpak is a
+            // Linux-only container runtime and `build_config.flatpak` is const
+            // false, so the branch is dead here exactly as it is on macOS.)
+
+            let argv: Vec<&CStr> = self.args.iter().map(|c| c.as_c_str()).collect();
+            let env_ref: Option<&EnvMap> = self.env.as_ref();
+
+            // Build our subcommand
+            let mut cmd: Command = Command {
+                // .path = self.args[0],
+                path: argv[0],
+                // .args = self.args,
+                args: argv.as_slice(),
+                // .env = if (self.env) |*env| env else null,
+                env: env_ref,
+                // .cwd = cwd,
+                cwd,
+                // .stdin = if (builtin.os.tag == .windows) null else ...,
+                stdin: None,
+                // .stdout = if (builtin.os.tag == .windows) null else ...,
+                stdout: None,
+                // .stderr = if (builtin.os.tag == .windows) null else ...,
+                stderr: None,
+                // .pseudo_console = if (builtin.os.tag == .windows) pty.pseudo_console else {},
+                pseudo_console: Some(pseudo_console),
+                // .os_pre_exec = switch (comptime builtin.os.tag) { .windows => null, ... },
+                os_pre_exec: None,
+                // .rt_pre_exec = if (comptime @hasDecl(apprt.runtime, "pre_exec")) ... else null,
+                rt_pre_exec: None,
+                rt_pre_exec_info: rt_pre,
+                rt_post_fork: None,
+                rt_post_fork_info: rt_post,
+                // .data = self,
+                data: Some(self_ptr.cast::<std::ffi::c_void>()),
+                pid: None,
+            };
+
+            // cmd.start(alloc) catch |err| { ... else => return err };
+            let result: Result<PtyFds, crate::Error> = match cmd.start(alloc) {
+                Err(_e) => Err(crate::Error),
+                Ok(()) => {
+                    // errdefer killCommand(&cmd) catch ...;
+                    // (no reachable error return between here and the success
+                    // return below — same as the posix arm.)
+                    // log.info("started subcommand path={s} pid={?}", .{ self.args[0], cmd.pid });
+                    let pid = cmd.pid;
+
+                    // self.process = .{ .fork_exec = cmd };
+                    // (PORT NOTE §2: store a pid-only handle — the stored
+                    // Command's reference fields are TRUE 'static empties, so no
+                    // self-referential borrow can exist at rest.)
+                    self.process = Some(Process::ForkExec(Command {
+                        path: c"",
+                        args: &[],
+                        env: None,
+                        cwd: None,
+                        stdin: None,
+                        stdout: None,
+                        stderr: None,
+                        pseudo_console: None,
+                        os_pre_exec: None,
+                        rt_pre_exec: None,
+                        rt_pre_exec_info: rt_pre,
+                        rt_post_fork: None,
+                        rt_post_fork_info: rt_post,
+                        data: None,
+                        pid,
+                    }));
+
+                    // return switch (builtin.os.tag) {
+                    //     .windows => .{ .read = pty.out_pipe, .write = pty.in_pipe },
+                    // };
+                    Ok(PtyFds {
+                        read: out_pipe,
+                        write: in_pipe,
+                    })
+                }
+            };
+
+            // The reference errdefer/defer, now that the spawn resolved. There is
+            // no `posix.close(pty.slave)` half on windows (no slave fd exists —
+            // the pty's child ends are the `*_pty` pipe handles the pseudo console
+            // owns and `Pty.deinit` closes).
+            match &result {
+                Ok(_) => {
+                    // Successful start we can clear out some memory.
+                    // if (self.env) |*env| { env.deinit(); self.env = null; }
+                    self.env = None;
+                }
+                Err(_) => {
+                    // pty.deinit(); self.pty = null;
+                    if let Some(p) = &mut self.pty {
+                        p.deinit();
+                    }
+                    self.pty = None;
+                }
+            }
+
+            result
         }
 
         #[cfg(not(windows))]
@@ -2913,8 +3067,18 @@ impl Subprocess {
 /// PORT NOTE (Rust-only glue): the anonymous return struct of
 /// `Subprocess.start` (`struct { read: Pty.Fd, write: Pty.Fd }`).
 pub struct PtyFds {
+    // PORT NOTE (WS20): the reference's return type is `struct { read: Pty.Fd,
+    // write: Pty.Fd }`, and `Pty.Fd` is `posix.fd_t` — which IS a
+    // `windows.HANDLE` on Windows. The port therefore carries the same per-target
+    // split `rustty_os::pty` does (`PosixPtyFd` / `WindowsPtyFd`).
+    #[cfg(not(windows))]
     pub read: ptypkg::PosixPtyFd,
+    #[cfg(not(windows))]
     pub write: ptypkg::PosixPtyFd,
+    #[cfg(windows)]
+    pub read: ptypkg::WindowsPtyFd,
+    #[cfg(windows)]
+    pub write: ptypkg::WindowsPtyFd,
 }
 
 /// PORT NOTE (Rust-only glue): the error set of `killCommand`/`killPid` —
@@ -3668,7 +3832,8 @@ impl ReadThread {
         }
     }
 
-    // DEFERRED (D6 thread lifecycle, windows half). Preserved verbatim:
+    // The reference body, preserved verbatim (it is PORTED below — this block is
+    // the R3 verbatim record, not a deferral marker):
     //
     // fn threadMainWindows(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
     //     // Always close our end of the pipe when we exit.
@@ -3719,17 +3884,113 @@ impl ReadThread {
     //         }
     //     }
     // }
+    // PORTED (WS20). VERIFICATION DEBT: this host builds macOS/Linux only and
+    // `rustty-termio` cannot even be cross-CHECKED for Windows here — its
+    // transitive `highway-sys` C++ build script cannot cross-compile to MSVC from
+    // macOS (`fatal error: 'stdlib.h' file not found`). Recipe in
+    // `.port/phase-2/VERIFICATION_DEBT.md`. That is verification debt, NOT a
+    // scope exclusion.
     #[cfg(windows)]
-    #[allow(dead_code)]
     fn threadMainWindows<M: rustty_apprt_api::surface::AppMailbox>(
-        _fd: rustty_os::windows::HANDLE,
-        _io: *mut crate::Termio<M>,
-        _quit: rustty_os::windows::HANDLE,
+        fd: rustty_os::windows::HANDLE,
+        io: *mut crate::Termio<M>,
+        quit: rustty_os::windows::HANDLE,
     ) {
-        unimplemented!(
-            "termio.Exec.ReadThread.threadMainWindows: OUT OF SCOPE BY PLATFORM \
-             (DEFERRALS.md, # Justified R1 Divergences); verbatim body above"
-        )
+        use rustty_os::windows as win;
+
+        // Always close our end of the pipe when we exit.
+        // defer _ = posix.system.close(quit);
+        //
+        // PORT NOTE: `quit` is a Win32 HANDLE here (the reference's `posix.fd_t`
+        // IS a HANDLE on windows), so the close is `CloseHandle` — the same call
+        // the posix arm's `close(2)` maps to for this handle class, and the one
+        // `Exec.deinit` already uses on `read_thread_pipe`.
+        struct CloseOnExit(win::HANDLE);
+        impl Drop for CloseOnExit {
+            fn drop(&mut self) {
+                let _ = win::CloseHandle(self.0);
+            }
+        }
+        let _quit_guard = CloseOnExit(quit);
+
+        // Setup our crash metadata
+        // crash.sentry.thread_state = .{ .type = .io, .surface = io.surface_mailbox.surface };
+        // defer crash.sentry.thread_state = null;
+        //
+        // PORT NOTE: identical to the posix arm — the crash-reporter thread-state
+        // seam is the same call there; see `threadMainPosix` for the ported form.
+
+        // var buf: [1024]u8 = undefined;
+        let mut buf = [0u8; 1024];
+        loop {
+            loop {
+                // var n: windows.DWORD = 0;
+                let mut n: win::DWORD = 0;
+                // if (windows.exp.kernel32.ReadFile(fd, &buf, buf.len, &n, null) == windows.FALSE) {
+                if unsafe {
+                    win::exp::kernel32::ReadFile(
+                        fd,
+                        buf.as_mut_ptr().cast::<std::ffi::c_void>(),
+                        buf.len() as win::DWORD,
+                        &mut n,
+                        std::ptr::null_mut(),
+                    )
+                } == win::FALSE
+                {
+                    // const err = windows.GetLastError();
+                    let err = unsafe { win::kernel32::GetLastError() };
+                    // switch (err) { .OPERATION_ABORTED => break, else => { ... unreachable; } }
+                    const ERROR_OPERATION_ABORTED: win::DWORD = 995;
+                    if err == ERROR_OPERATION_ABORTED {
+                        // Check for a quit signal
+                        break;
+                    }
+                    // log.err("io reader error err={}", .{err});
+                    unreachable!("io reader error");
+                }
+
+                // @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+                //
+                // SAFETY: `io` is the read thread's sole `processOutput` toucher
+                // (the `ReadThreadArgs` contract); its `renderer_state` is live for
+                // the pointer's lifetime (joined in `threadExit` before teardown).
+                unsafe {
+                    crate::Termio::processOutput(io, &buf[..n as usize]);
+                }
+
+                // See threadMainPosix: hand the renderer state mutex
+                // off if the renderer is waiting, since this loop
+                // would otherwise starve it under heavy output.
+                // io.renderer_state.yieldToDemand();
+                unsafe {
+                    (*(*io).renderer_state).yield_to_demand();
+                }
+            }
+
+            // var quit_bytes: windows.DWORD = 0;
+            let mut quit_bytes: win::DWORD = 0;
+            // if (windows.exp.kernel32.PeekNamedPipe(quit, null, 0, null, &quit_bytes, null) == windows.FALSE) {
+            if unsafe {
+                win::exp::kernel32::PeekNamedPipe(
+                    quit,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut quit_bytes,
+                    std::ptr::null_mut(),
+                )
+            } == win::FALSE
+            {
+                // const err = windows.GetLastError();
+                // log.err("quit pipe reader error err={}", .{err});
+                unreachable!("quit pipe reader error");
+            }
+
+            // if (quit_bytes > 0) { log.info("read thread got quit signal", .{}); return; }
+            if quit_bytes > 0 {
+                return;
+            }
+        }
     }
 }
 

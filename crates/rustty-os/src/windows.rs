@@ -38,6 +38,8 @@ pub type LPWSTR = *mut u16;
 pub type WCHAR = u16;
 pub type CHAR = u8;
 pub type ULONG_PTR = usize;
+/// PORT NOTE (WS20): the Win32 `UINT` (`TerminateProcess`'s exit code).
+pub type UINT = u32;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -243,6 +245,23 @@ pub mod exp {
                 lpTotalBytesAvail: *mut DWORD,
                 lpBytesLeftThisMessage: *mut DWORD,
             ) -> BOOL;
+            // PORT NOTE (WS20): the reference forwards `std.os.windows.kernel32`
+            // wholesale (`pub const kernel32 = windows.kernel32;`), so every entry
+            // point termio's Windows paths call is reachable as
+            // `internal_os.windows.(exp.)kernel32.*`. These three are the ones
+            // `termio.Exec` names — `ReadThread.threadMainWindows`'s `ReadFile`,
+            // `Exec.threadExit`'s `CancelIoEx`, and `killCommand`'s
+            // `TerminateProcess` — and they were missing from this hand-rolled
+            // forwarding set.
+            pub fn ReadFile(
+                hFile: HANDLE,
+                lpBuffer: super::super::LPVOID,
+                nNumberOfBytesToRead: DWORD,
+                lpNumberOfBytesRead: *mut DWORD,
+                lpOverlapped: super::super::LPVOID,
+            ) -> BOOL;
+            pub fn CancelIoEx(hFile: HANDLE, lpOverlapped: super::super::LPVOID) -> BOOL;
+            pub fn TerminateProcess(hProcess: HANDLE, uExitCode: super::super::UINT) -> BOOL;
             // Duplicated here because lpCommandLine is not marked optional in zig std
             pub fn CreateProcessW(
                 lpApplicationName: LPWSTR,

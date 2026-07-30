@@ -6,7 +6,15 @@
 //! `Api()`, since `Backend::candidates()` has one element, so `dynamic.zig` is
 //! comptime-elided/deferred, not weakened) and Linux/`{io_uring, epoll}` behind
 //! the real `Dynamic` selector (§1 Linux port, tasks L1 LT1-LT8 — two candidates,
-//! so nothing elides). `wasi_poll`/`iocp` remain whole follow-up ports.
+//! so nothing elides). WS20 adds the remaining two reference backends —
+//! WASI/`wasi_poll` (`wasi_poll.rs` + `wasi.rs`) and Windows/`iocp` (`iocp.rs` +
+//! `windows.rs`, itself the port of libxev's own `src/windows.zig`) — each a
+//! single-candidate target, so each is the flat static `Api()` exactly as
+//! macOS/kqueue is. Those two are CROSS-COMPILE-VERIFIED ONLY on this host
+//! (`cargo check --target {x86_64-pc-windows-msvc, wasm32-wasip1}`); their
+//! reference tests are ported and compile but cannot be EXECUTED here — that is
+//! verification debt with a runnable recipe in
+//! `.port/phase-2/VERIFICATION_DEBT.md`, NOT a scope exclusion.
 //!
 //! Every termio reference file (and, with the core tier, renderer/Thread.zig +
 //! core Surface.zig) imports `const xev = @import("../global.zig").xev` — the
@@ -105,6 +113,30 @@ mod epoll;
 mod io_uring;
 #[cfg(target_os = "linux")]
 mod linux;
+
+// WS20: the two remaining reference backends, ported for real (they were briefly
+// and WRONGLY recorded as "out of scope by platform"; the binding rule is that
+// everything the reference supports gets PORTED, and an inability to BUILD or RUN
+// on the porting host is VERIFICATION DEBT, never a scope exclusion).
+//
+//  - `wasi_poll` (backend/wasi_poll.zig) + `wasi` (its `std.os.wasi`/`loop.zig`
+//    ABI companions, the twin of `linux.rs`) — the WASI `poll_oneoff` backend.
+//  - `iocp` (backend/iocp.zig) + `windows` (the port of libxev's own
+//    `src/windows.zig` Win32 shim, plus the `loop.zig` ABI twins) — the Win32
+//    I/O-completion-port backend.
+//
+// Each is a SELF-CONTAINED whole backend exactly as `kqueue`/`epoll`/`io_uring`
+// are, and each is a SINGLE-candidate target (backend.rs: `.wasi =>
+// &.{.wasi_poll}`, `.windows => &.{.iocp}`), so — like macOS/kqueue (§0) — the
+// Dynamic layer comptime-elides and the crate surface IS the backend's `Api()`.
+#[cfg(target_os = "windows")]
+mod iocp;
+#[cfg(target_os = "wasi")]
+mod wasi;
+#[cfg(target_os = "wasi")]
+mod wasi_poll;
+#[cfg(target_os = "windows")]
+mod windows;
 
 // XEV_BLUEPRINT §8 chunk C1: the pure intrusive data structures that establish the
 // raw-pointer discipline for the whole libxev port (queue.zig / queue_mpsc.zig /
@@ -482,146 +514,228 @@ mod api_tests {
 }
 
 // ---------------------------------------------------------------------------
-// SCOPE BOUNDARY (not a deferral). Neither macOS nor Linux — i.e. the `iocp`
-// (Windows) and `wasi_poll` (WASI/wasm) backends. Both are OUT OF SCOPE BY
-// PLATFORM for this port, permanently: see `.port/phase-2/DEFERRALS.md`,
-// `# Justified R1 Divergences` → "libxev `iocp` / `wasi_poll` backends", for the
-// 4-criterion basis. This is the same scope class as the `#[cfg(windows)]` seams
-// in `rustty-vaxis`/`rustty-termio`, NOT the "whole follow-up port" class that
-// `epoll`/`io_uring` were in before they landed.
+// The WASI/`wasi_poll` package re-export surface (WS20).
 //
-// Why the placeholder types still exist: `cargo check -p rustty-xev` for a wasm
-// target must still type-check (`backend.rs` selects `Backend::WasiPoll` there),
-// and these are the handle types the crate's public surface names. NOTHING
-// executes them: `rustty-xev` appears in NO wasm dependency graph — the three
-// wasm artifacts (`rustty-wasm`, `rustty-web-canvas`, `rustty-vt-c`) all run the
-// SYNCHRONOUS C-ABI with no event loop, and `rustty-os`'s only xev edge is
-// `#[cfg(target_os = "macos")]`. That reachability claim is a checked invariant,
-// not a comment: `.port/tools/gates/xev_scope_boundary_gate.sh`.
-//
-// PORT NOTE (LT8): this block used to be `#[cfg(not(target_os = "macos"))]` and
-// therefore stood in for LINUX too. Linux now has real backends (`epoll`/
-// `io_uring`) behind the real `Dynamic` surface re-exported above, so the
-// placeholder is narrowed to exclude it. The module was named `non_macos_seam`
-// while that was true, then `deferred_backend_seam`; it is named for the cfg it
-// actually carries, since a stale name here is exactly what would let a future
-// target quietly land on panicking handles while believing it had a backend.
+// `backend.zig`'s `.wasi` arm is the SINGLE-candidate `&.{.wasi_poll}`, so — like
+// macOS/kqueue (§0) — `Xev(bes)` short-circuits to `bes[0].Api()` and the crate
+// surface IS the flat static `wasi_poll` Api(). Hence the direct `wasi_poll::*` /
+// `wasi::*` re-exports below, mirroring the macOS block above rather than the
+// Linux `dynamic::*` one.
 // ---------------------------------------------------------------------------
+#[cfg(target_os = "wasi")]
+pub use wasi::{CallbackAction, CompletionState, Options, RunMode};
+#[cfg(target_os = "wasi")]
+pub use wasi_poll::{
+    noop_callback, AcceptError, AsyncError, Callback, CancelError, CloseError, Completion,
+    ConnectError, Loop, Operation, ReadBuffer, ReadError, Result, ShutdownError, ShutdownHow,
+    TimerError, TimerTrigger, WriteBuffer, WriteError,
+};
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub use unsupported_target_seam::*;
+// ---------------------------------------------------------------------------
+// The Windows/`iocp` package re-export surface (WS20).
+//
+// `backend.zig`'s `.windows` arm is the SINGLE-candidate `&.{.iocp}` — the same
+// §0 elision as macOS and WASI, so the crate surface IS the flat static `iocp`
+// Api().
+// ---------------------------------------------------------------------------
+#[cfg(target_os = "windows")]
+pub use iocp::{
+    noop_callback, AcceptError, AsyncError, Callback, CancelError, CloseError, Completion,
+    ConnectError, JobObjectError, JobObjectResult, Loop, Operation, ReadBuffer, ReadError, Result,
+    ShutdownError, ShutdownHow, TimerError, TimerTrigger, WriteBuffer, WriteError,
+};
+#[cfg(target_os = "windows")]
+pub use windows::{CallbackAction, CompletionState, Options, RunMode};
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-mod unsupported_target_seam {
+// ---------------------------------------------------------------------------
+// REMAINING PORT WORK (explicitly NOT a scope exclusion). The `iocp` and
+// `wasi_poll` LOOPS are ported in full (iocp.rs / wasi_poll.rs). The HIGH-LEVEL
+// WATCHER layer (`watcher/async.zig`, `watcher/timer.zig`, `watcher/process.zig`,
+// `watcher/stream.zig`) is generic over the backend in the reference and has so
+// far been instantiated only against `kqueue` (macOS: `async.rs`/`timer.rs`/
+// `process.rs`/`stream.rs`) and the Linux backends (`dynamic.rs`). Instantiating
+// it against `iocp`/`wasi_poll` is the next chunk of this same lane — tracked in
+// `.port/phase-2/DEFERRALS.md` (WS20) with a concrete recipe, NOT recorded as out
+// of scope by platform.
+//
+// Until it lands these handle types keep placeholder bodies so the crate's public
+// surface stays nameable on those targets. The panic messages say exactly what
+// they are: unported work with a ledger row.
+// ---------------------------------------------------------------------------
+#[cfg(any(target_os = "windows", target_os = "wasi"))]
+pub use watcher_seam::*;
+
+#[cfg(any(target_os = "windows", target_os = "wasi"))]
+mod watcher_seam {
     use super::Error;
 
-    /// PORT NOTE: `xev.Loop` placeholder (wasi_poll/iocp backends are out of scope by platform).
-    pub struct Loop {}
-    /// PORT NOTE: `xev.Async` placeholder (wasi_poll/iocp backends are out of scope by platform).
+    const MSG: &str = "rustty-xev: the libxev WATCHER layer (watcher/{async,timer,process,\
+                       stream}.zig) is not yet instantiated against this backend. The iocp/\
+                       wasi_poll LOOPS are ported (iocp.rs / wasi_poll.rs); this is REMAINING \
+                       PORT WORK tracked in .port/phase-2/DEFERRALS.md (WS20), NOT a platform \
+                       scope exclusion.";
+
+    /// PORT NOTE: `xev.Async` — watcher layer, see the module note.
     #[derive(Clone, Copy)]
     pub struct Async {}
-    /// PORT NOTE: `xev.Completion` placeholder (wasi_poll/iocp backends are out of scope by platform).
-    #[derive(Default)]
-    pub struct Completion {}
-    /// PORT NOTE: `xev.Timer` placeholder (wasi_poll/iocp backends are out of scope by platform).
+    /// PORT NOTE: `xev.Timer` — watcher layer, see the module note.
     pub struct Timer {}
-    /// PORT NOTE: `xev.Process` placeholder (wasi_poll/iocp backends are out of scope by platform).
+    /// PORT NOTE: `xev.Process` — watcher layer, see the module note.
     #[derive(Clone, Copy)]
     pub struct Process {}
-    /// PORT NOTE: `xev.Stream` placeholder (wasi_poll/iocp backends are out of scope by platform).
+    /// PORT NOTE: `xev.Stream` — watcher layer, see the module note.
     #[derive(Clone, Copy)]
     pub struct Stream {}
-    /// PORT NOTE: `xev.WriteRequest` placeholder (wasi_poll/iocp backends are out of scope by platform) — Exec's
-    /// `SegmentedPool<xev::WriteRequest>` requires `Default`.
+    /// PORT NOTE: `xev.WriteRequest` — Exec's `SegmentedPool<xev::WriteRequest>`
+    /// requires `Default`.
     #[derive(Default)]
     pub struct WriteRequest {}
-    /// PORT NOTE: `xev.WriteQueue` placeholder (wasi_poll/iocp backends are out of scope by platform) — Exec's
-    /// `write_queue` field default-constructs it.
+    /// PORT NOTE: `xev.WriteQueue` — Exec's `write_queue` field default-constructs it.
     #[derive(Default)]
     pub struct WriteQueue {}
 
     impl Stream {
         pub fn deinit(&self) {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
-        }
-    }
-
-    impl Loop {
-        pub fn init() -> Result<Loop, Error> {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
-        }
-        pub fn deinit(&mut self) {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
+            unimplemented!("{}", MSG)
         }
     }
 
     impl Async {
         pub fn init() -> Result<Async, Error> {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
+            unimplemented!("{}", MSG)
         }
         pub fn deinit(&mut self) {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
+            unimplemented!("{}", MSG)
         }
         pub fn notify(&self) -> Result<(), super::NotifyError> {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
+            unimplemented!("{}", MSG)
         }
     }
 
     impl Timer {
         pub fn init() -> Result<Timer, Error> {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
+            unimplemented!("{}", MSG)
         }
         pub fn deinit(&self) {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
+            unimplemented!("{}", MSG)
         }
     }
 
     impl Process {
         pub fn init(_pid: i32) -> Result<Process, Error> {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
+            unimplemented!("{}", MSG)
         }
         pub fn deinit(&mut self) {
-            unimplemented!(
-                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
-                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
-                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
-            )
+            unimplemented!("{}", MSG)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The NO-BACKEND seam: a target the REFERENCE ITSELF has no backend for.
+//
+// `backend.zig` enumerates exactly five backends and maps every target it
+// supports onto one of them. Freestanding wasm (`wasm32-unknown-unknown`) is NOT
+// one of them: the reference's `.wasi` arm is the WASI ABI, and a freestanding
+// wasm module has no `wasi_snapshot_preview1` import to poll. rustty widens
+// `backend.rs`'s `default()`/`candidates()` to answer `WasiPoll` there only so the
+// enum stays total (WS14 T6); there is no reference body to port for it.
+//
+// This is therefore NOT "a backend we chose not to port" — it is a target the
+// upstream library does not support. Every rustty artifact for this target
+// (`rustty-wasm`, `rustty-web-canvas`, `rustty-vt-c`) runs the SYNCHRONOUS C-ABI
+// with no event loop, which is why the crate is only required to TYPE-CHECK here.
+// ---------------------------------------------------------------------------
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "wasi"
+)))]
+pub use no_backend_seam::*;
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "wasi"
+)))]
+mod no_backend_seam {
+    use super::Error;
+
+    const MSG: &str = "rustty-xev: libxev declares no backend for this target (backend.zig maps \
+                       every supported target onto one of io_uring/epoll/kqueue/wasi_poll/iocp; \
+                       freestanding wasm has no WASI ABI to poll). Nothing to port — no rustty \
+                       artifact for this target runs an event loop.";
+
+    /// PORT NOTE: `xev.Loop` placeholder — no reference backend for this target.
+    pub struct Loop {}
+    /// PORT NOTE: `xev.Async` placeholder — no reference backend for this target.
+    #[derive(Clone, Copy)]
+    pub struct Async {}
+    /// PORT NOTE: `xev.Completion` placeholder — no reference backend for this target.
+    #[derive(Default)]
+    pub struct Completion {}
+    /// PORT NOTE: `xev.Timer` placeholder — no reference backend for this target.
+    pub struct Timer {}
+    /// PORT NOTE: `xev.Process` placeholder — no reference backend for this target.
+    #[derive(Clone, Copy)]
+    pub struct Process {}
+    /// PORT NOTE: `xev.Stream` placeholder — no reference backend for this target.
+    #[derive(Clone, Copy)]
+    pub struct Stream {}
+    /// PORT NOTE: `xev.WriteRequest` placeholder — Exec's
+    /// `SegmentedPool<xev::WriteRequest>` requires `Default`.
+    #[derive(Default)]
+    pub struct WriteRequest {}
+    /// PORT NOTE: `xev.WriteQueue` placeholder — Exec's `write_queue` field
+    /// default-constructs it.
+    #[derive(Default)]
+    pub struct WriteQueue {}
+
+    impl Stream {
+        pub fn deinit(&self) {
+            unimplemented!("{}", MSG)
+        }
+    }
+
+    impl Loop {
+        pub fn init() -> Result<Loop, Error> {
+            unimplemented!("{}", MSG)
+        }
+        pub fn deinit(&mut self) {
+            unimplemented!("{}", MSG)
+        }
+    }
+
+    impl Async {
+        pub fn init() -> Result<Async, Error> {
+            unimplemented!("{}", MSG)
+        }
+        pub fn deinit(&mut self) {
+            unimplemented!("{}", MSG)
+        }
+        pub fn notify(&self) -> Result<(), super::NotifyError> {
+            unimplemented!("{}", MSG)
+        }
+    }
+
+    impl Timer {
+        pub fn init() -> Result<Timer, Error> {
+            unimplemented!("{}", MSG)
+        }
+        pub fn deinit(&self) {
+            unimplemented!("{}", MSG)
+        }
+    }
+
+    impl Process {
+        pub fn init(_pid: i32) -> Result<Process, Error> {
+            unimplemented!("{}", MSG)
+        }
+        pub fn deinit(&mut self) {
+            unimplemented!("{}", MSG)
         }
     }
 }

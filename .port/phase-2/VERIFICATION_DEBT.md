@@ -537,3 +537,96 @@ LANG=he_IL.UTF-8 LC_ALL=he_IL.UTF-8 \
    `LANG=C LC_ALL=C` and confirm the same chrome renders in English and
    left-to-right. Hebrew in both runs would mean the text is baked in; English
    in both would mean the lookup never fired.
+
+---
+
+## V8. libxev `wasi_poll` + `iocp` backends: cross-compile-verified only, never EXECUTED — **OWNER: Phase 3**
+
+**Filed WS20, 2026-07-30.** Both backends are PORTED (see the RETRACTED
+"OUT OF SCOPE BY PLATFORM" entry in `DEFERRALS.md` — that classification was
+wrong and is struck). This row is the honest remainder: on the porting host
+(macOS aarch64) nothing in either backend can be RUN.
+
+**What WAS run here, and passed:**
+```
+cargo check -p rustty-xev --target wasm32-wasip1          --all-targets   # GREEN
+cargo test  -p rustty-xev --target wasm32-wasip1 --no-run                 # GREEN (both binaries link)
+cargo check -p rustty-xev --target x86_64-pc-windows-msvc --all-targets   # GREEN
+cargo check -p rustty-xev --target wasm32-unknown-unknown                 # GREEN
+```
+(`rustup target add wasm32-wasip1 x86_64-pc-windows-msvc` first.)
+
+**What is NOT shown.** That the loops actually tick: `poll_oneoff` timing/wakeup
+on a WASI host, and `GetQueuedCompletionStatusEx`/`OVERLAPPED` completion
+recovery + `CancelIoEx` cancellation on Windows. The reference's own tests are
+ported (`xev_wasi_poll` zig=8/rust=9, `xev_iocp` zig=14/rust=14, both gated by
+`check_test_counts.py`) — they compile, they have simply never executed.
+
+**Recipe — wasi_poll (any host with a wasm runtime):**
+```
+rustup target add wasm32-wasip1
+cargo install wasmtime-cli          # or use an existing wasmtime/wasmer
+cargo test -p rustty-xev --target wasm32-wasip1 \
+  --config 'target.wasm32-wasip1.runner=["wasmtime","--dir=."]'
+```
+Expect the 8 `wasi_*` loop/timer tests plus `batch_get_put` to pass. The `--dir=.`
+preopen is also what unblocks the ONE documented skip-stub,
+`wasi_file_skip_stub` (the reference's `test "wasi: file"`): with a preopened cwd
+its fixture can be written against `std::fs`, at which point the stub should be
+replaced by the real read/write/close round-trip. **Negative control:** drop
+`--dir=.` and confirm the file test's fixture is what fails, not the loop.
+
+**Recipe — iocp (a Windows host, or a Windows CI runner):**
+```
+cargo test -p rustty-xev                 # on Windows: runs the 9 live iocp tests
+```
+Expect `iocp_loop_time`, `iocp_stop`, `iocp_timer`, the four `timer_reset*`
+variants, `iocp_timer_cancellation`, `iocp_canceling_a_completed_operation` and
+`iocp_noop` to pass. The five skip-stubs
+(`iocp_file_io*`, `iocp_socket_*`, `iocp_recv_cancellation`,
+`iocp_accept_cancellation`) are skipped for their FIXTURES, not their subjects:
+the file pair needs a `sliceToPrefixedFileW`-equivalent NT path normalizer, the
+socket trio needs Winsock startup plus the `std.net` server/client fixture. On a
+Windows host those fixtures are cheap; write them and delete the stubs.
+**Negative control (this is what makes the run non-vacuous):** temporarily make
+`Loop::tick` return `Ok(())` immediately and confirm `iocp_timer` FAILS. A green
+suite with a no-op tick would mean the tests never drove the loop.
+
+---
+
+## V9. `rustty-termio` Windows paths: cannot even be CROSS-CHECKED on this host — **OWNER: Phase 3**
+
+**Filed WS20, 2026-07-30.** `ReadThread::threadMainWindows` and
+`Subprocess::start`'s Windows spawn half are PORTED (they previously carried
+`unimplemented!("... OUT OF SCOPE BY PLATFORM ...")`; that classification was
+wrong and is struck in `DEFERRALS.md`). This row is stronger debt than V8: the
+code is not merely unrun, it is **uncompiled**.
+
+**Why.** `rustty-termio` transitively depends on `highway-sys`, whose `cc`-driven
+C++ build script cannot cross-compile to MSVC from macOS:
+```
+$ cargo check -p rustty-termio --target x86_64-pc-windows-msvc
+  ...
+  cargo:warning=.../clang/21/include/mm_malloc.h:13:10: fatal error: 'stdlib.h' file not found
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1):
+    LC_ALL="C" "c++" ... "--target=x86_64-pc-windows-msvc" ... crates-sys/highway-sys/cpp/per_target.cc
+```
+This is a toolchain gap (no MSVC headers/libs on this machine), not a code
+problem: `cargo check -p rustty-xev --target x86_64-pc-windows-msvc` — a crate
+with no C++ dependency — is GREEN, which proves the Windows target itself works.
+
+**Recipe (a Windows host, or a `windows-latest` CI runner with MSVC):**
+```
+cargo check   -p rustty-termio --all-targets
+cargo clippy  -p rustty-termio --all-targets -- -D warnings
+cargo test    -p rustty-termio
+```
+Expect compile errors on the first run to be *mechanical* (field/API spellings in
+`rustty-os::windows`, `rustty-os::pty::WindowsPty`, `rustty-termio::command`'s
+Windows arm) — fix them in place; do NOT reintroduce a scope exclusion. Then
+drive the end-to-end path: launch a surface, confirm `cmd.exe` spawns through the
+pseudo console, that output reaches the terminal via `threadMainWindows`, and
+that closing the surface makes `Exec.threadExit`'s `CancelIoEx` break the read
+loop instead of hanging. **Negative control:** stub `threadMainWindows` to return
+immediately and confirm the surface shows NO output — a passing run with a dead
+read thread would prove nothing.
