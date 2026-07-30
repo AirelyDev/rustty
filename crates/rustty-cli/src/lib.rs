@@ -13,7 +13,13 @@
 //! vaxis animation leaf, DEFERRALS.md "cli C5").~~
 //! **CORRECTION [WS19 T2 audit, 2026-07-29 — audit row W3]: `boo.rs` is NOT a
 //! seam.** It is a 525-line live port with a real `run()` at `boo.rs:406`
-//! (`boo.rs:22` is a doc-comment line). The crate has **zero live seams**.
+//! (`boo.rs:22` is a doc-comment line). The crate has **zero live seams**. `boo` landed
+//! in `e7e5a8c` and is now **verified end-to-end** [WS12 T5] by
+//! `tests/boo_pty_e2e.rs` over `.port/tools/boo_pty_kat.py`, which drives the real
+//! binary through a pty: 69 frames / 2,009 colour runs / max column 142 in ~3 s, and
+//! `EXIT_STATUS=0` 0.04 s after ESC, with a `--no-dsr` negative control that stays alive
+//! 4.37 s (see that test's header for the two traps — no-winsize renders nothing, and a
+//! bare pty must answer DSR or `Loop::stop` blocks).
 //!
 //! History: C1 landed the action dispatcher
 //! (`action.zig` 7t, `ghostty.zig` Action enum + `run`/`runMain` 4t), `help.zig`,

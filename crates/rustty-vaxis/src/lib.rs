@@ -48,20 +48,32 @@
 //!   the query-futex; init/deinit/reset_state/resize/alt-screen/window; queryTerminal/
 //!   deviceStatusReport capability queries; the RENDER diff-and-emit engine and its simpler
 //!   `pretty_print` mirror; the setters/queries; the portable kitty-graphics transmit paths.
-//!   The two `zigimg`-decode paths (`transmit_image`/`load_image`) are R5 seams. Filling the
-//!   placeholder threaded `'a` through `Loop<'a, T>`.)
+//!   The two `zigimg`-decode paths (`transmit_image`/`load_image`) are LIVE since WS12 T8/T9
+//!   over `rustty_zigimg`. Filling the placeholder threaded `'a` through `Loop<'a, T>`.)
 //!
 //! PORT STATUS: done (chunk 1a — value types; chunk 1b — gwidth/unicode + the uucode
 //! width/grapheme tables; chunk 2 — the Screen/InternalScreen/Window rendering layer;
 //! chunk 3a — the event/ctlseqs/parser input-parsing layer; chunk 3b — the tty backend
 //! and concurrency layer (queue/tty/loop_) plus the Vaxis placeholder; chunk 4a — the real
 //! `Vaxis<'a>` object + the render diff-and-emit engine; chunk 4b — the `widgets` tier +
-//! the `TextInput` gap-buffer widget). The chunk sequence is FINISHED; the crate's
-//! remaining live seams (DEFERRALS.md "rustty-vaxis Chunks 4a/4b"): the two zigimg
-//! seams (`Vaxis::transmit_image`/`load_image`) plus `Image::draw`/`Image::cell_size`
-//! (unreachable until the zigimg tier lands — an `Image` is only constructed through
-//! those two), and the `#[cfg(windows)]` family (`WindowsTty` + the windows `tty_run`
-//! arm + `TestTty::next_event`, DEFERRALS.md Chunk 3b).
+//! the `TextInput` gap-buffer widget). The chunk sequence is FINISHED.
+//!
+//! REMAINING LIVE SEAMS: **the `#[cfg(windows)]` family ONLY** — `WindowsTty`
+//! (`tty.rs:419-445`), the windows `tty_run` arm (`loop_.rs:341`), and
+//! `TestTty::next_event` (`tty.rs:539`, Windows-API compat only). See DEFERRALS.md
+//! "rustty-vaxis Chunk 3b". These are undischargeable here *with evidence* rather than
+//! merely unfinished: the program has no Windows host and no Windows target, and the
+//! non-Windows build never names them.
+//!
+//! THE IMAGE TIER IS LIVE [WS12 T8–T11, 2026-07-29]. `Vaxis::transmit_image` and
+//! `Vaxis::load_image` run over `rustty_zigimg`, which re-homes the six zigimg operations
+//! `libvaxis` instantiates onto ghostty's own vendored codecs (decode via `rustty-wuffs`,
+//! PNG encode over `zlib-sys`) — WS12 Decision 2, Option Z-C. One bounded, documented
+//! divergence, a PORT NOTE and not a seam: `load_image` accepts PNG + JPEG rather than
+//! zigimg's 15 formats, which is a superset of what ghostty itself decodes anywhere.
+//! [`image::Image::draw`]/[`image::Image::cell_size`] are LIVE too and, as it turned out,
+//! never needed zigimg at all — they are pure `Window` geometry. DEFERRALS.md
+//! "rustty-vaxis Chunks 4a/4b" is now RESOLVED.
 //!
 //! CHUNK 4b adds the first WIDGET (the new `widgets` tier, ABOVE `window`):
 //! - [`widgets`] — `widgets.zig` aggregator + [`widgets::text_input`] (`widgets/TextInput.zig`):
