@@ -4764,7 +4764,7 @@ mod tests {
             assert!(prefer(be));
 
             let mut loop_ = Loop::init(Options::default()).unwrap();
-            let notifier = Async::init().unwrap();
+            let mut notifier = Async::init().unwrap();
 
             let mut c_wait = Completion::default();
             let mut ud = Ud {
