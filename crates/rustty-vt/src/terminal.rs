@@ -333,6 +333,37 @@ pub enum ScrollViewport {
     Row(usize),
 }
 
+/// The amount of compression work performed by `compress` before returning.
+///
+/// The declaration order is part of the librustty-vt C ABI. Removed values
+/// must leave a `null` hole so later values retain their integer values.
+// PORT NOTE: the reference declares this inside `Terminal` as
+// `CompressionMode = lib.Enum(lib.target, &.{ "incremental", "full" })`. Rust
+// has no namespaced type declarations inside an `impl`, so it is hoisted to the
+// module and prefixed like the other hoisted `Terminal` types. For the `.zig`
+// target `lib.Enum(...)` is a plain enum with the keys in order; the C-ABI
+// surface lives in `rustty-vt-c`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalCompressionMode {
+    Incremental = 0,
+    Full = 1,
+}
+
+/// The scheduling result of a `compress` call.
+///
+/// The declaration order is part of the librustty-vt C ABI. Removed values
+/// must leave a `null` hole so later values retain their integer values.
+// PORT NOTE: hoisted out of `Terminal` and prefixed; see
+// `TerminalCompressionMode`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalCompressionResult {
+    Unsupported = 0,
+    Pending = 1,
+    Complete = 2,
+}
+
 /// The modes for DECCOLM.
 // pub const DeccolmMode = enum(u1) { @"80_cols" = 0, @"132_cols" = 1 };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2784,6 +2815,82 @@ impl Terminal {
             ScrollViewport::Delta(delta) => crate::screen::Scroll::DeltaRow(delta),
             ScrollViewport::Row(row) => crate::screen::Scroll::Row(row),
         });
+    }
+
+    /// Return the current compression activity value.
+    ///
+    /// Callers should schedule a `compress` call whenever this value changes.
+    /// The direction of the change has no meaning; this is an opaque change
+    /// token rather than a monotonic sequence exposed by Terminal.
+    ///
+    /// It is up to the terminal what it decides to compress, but currently
+    /// we compress cold (non-viewed, non-editable) scrollback history on
+    /// the primary screen.
+    ///
+    /// Note that compression requires specific system features, namely
+    /// the ability to retain virtual memory allocations while discarding their
+    /// physical memory backings. Callers must still use `compress` to determine
+    /// whether compression is supported on the current target.
+    pub fn compression_activity(&self) -> u64 {
+        // const state = &self.screens.get(.primary).?.pages.page_compression;
+        let primary: *mut Screen = self.screens.get(crate::screen_set::Key::Primary).unwrap();
+        let state = unsafe { &(*primary).pages.page_compression };
+        // For now we don't use the extra 16 bits.
+        // return @as(u64, state.activity_serial);
+        //
+        // PORT NOTE: the reference field is a `u48` widened here to `u64`.
+        // Rustty stores it as a `u64` already masked to 48 bits by
+        // `mark_activity`, so the widening is a plain read.
+        state.activity_serial
+    }
+
+    /// Compress cold memory to save resident memory space.
+    ///
+    /// Full compression does a full pass compressing everything it can before
+    /// returning. This is not recommended for interactive terminals because
+    /// compression is relatively slow and with large scrollbacks this can cause
+    /// stalls.
+    ///
+    /// Incremental compression bounds itself on how much data it can look
+    /// up to compress and how much compression work it does before returning.
+    /// It is stateful (we maintain the state) and the return value tells callers
+    /// whether they should continue calling it in the future.
+    ///
+    /// Callers should schedule compression when it doesn't impact user
+    /// experience, for example during idle times.
+    pub fn compress(&mut self, mode: TerminalCompressionMode) -> TerminalCompressionResult {
+        // const pages = &self.screens.get(.primary).?.pages;
+        let primary: *mut Screen = self.screens.get(crate::screen_set::Key::Primary).unwrap();
+        let pages = unsafe { &mut (*primary).pages };
+        // const result = switch (mode) {
+        //     .incremental => pages.compress(.incremental),
+        //     .full => pages.compress(.full),
+        // };
+        let result = match mode {
+            TerminalCompressionMode::Incremental => {
+                pages.compress(pagelist::compress::CompressionMode::Incremental)
+            }
+            TerminalCompressionMode::Full => {
+                pages.compress(pagelist::compress::CompressionMode::Full)
+            }
+        };
+
+        // return switch (result) {
+        //     .unsupported => .unsupported,
+        //     .pending => .pending,
+        //     .complete => .complete,
+        // };
+        match result {
+            pagelist::compress::IncrementalCompressionResult::Unsupported => {
+                TerminalCompressionResult::Unsupported
+            }
+            pagelist::compress::IncrementalCompressionResult::Pending => {
+                TerminalCompressionResult::Pending
+            }
+            pagelist::compress::IncrementalCompressionResult::Complete => {
+                TerminalCompressionResult::Complete
+            }
+        }
     }
 
     /// To be called before shifting a row (as in insertLines and deleteLines)
@@ -17162,6 +17269,48 @@ mod tests {
         assert!(unsafe { (*t.screens.active).cursor.protected });
         t.set_protected_mode(ansi::ProtectedMode::Off);
         assert!(!unsafe { (*t.screens.active).cursor.protected });
+
+        t.deinit(alloc);
+    }
+
+    /// The activity token changes when the page list mutates, and does NOT
+    /// change merely because compression ran.
+    ///
+    /// PORT NOTE: this test has no reference counterpart; the compression API
+    /// is exercised upstream only through `PageList`. It pins the two
+    /// properties `Terminal::compression_activity` promises to its callers.
+    #[test]
+    fn terminal_compression_activity_tracks_pagelist_mutation_not_compression() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts_sb(80, 24, 10 * 1024 * 1024)).unwrap();
+        let initial = t.compression_activity();
+
+        let mut stream = t.vt_stream();
+        let line = b"repeated and compressible terminal history\r\n";
+        for _ in 0..4_000 {
+            stream.next_slice(line);
+        }
+        stream.deinit();
+        drop(stream);
+
+        let activity = t.compression_activity();
+        assert_ne!(activity, initial);
+
+        let mut result = TerminalCompressionResult::Pending;
+        for _ in 0..1_000 {
+            result = t.compress(TerminalCompressionMode::Incremental);
+            match result {
+                TerminalCompressionResult::Pending => continue,
+                TerminalCompressionResult::Complete => break,
+                TerminalCompressionResult::Unsupported => {
+                    panic!("test builds always support strict reclamation")
+                }
+            }
+        }
+        assert_eq!(result, TerminalCompressionResult::Complete);
+
+        // Compression changes storage representation, not the activity token.
+        assert_eq!(t.compression_activity(), activity);
 
         t.deinit(alloc);
     }
