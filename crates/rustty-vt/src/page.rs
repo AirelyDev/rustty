@@ -542,81 +542,13 @@ const CELL_HYPERLINK_SHIFT: u32 = CELL_PROTECTED_SHIFT + 1; // 45
 const CELL_SEMANTIC_CONTENT_SHIFT: u32 = CELL_HYPERLINK_SHIFT + 1; // 46
 const CELL_SEMANTIC_CONTENT_BITS: u32 = 2;
 
-/// A field of the packed `Cell`, naming it for `cell_field_mask`.
-//
-// PORT NOTE (WS10 T16, 47e26df60): the reference builds masks with a generic
-//   fn fieldMask(comptime T: type, comptime fields: []const []const u8)
-//       @typeInfo(T).@"struct".backing_integer.?
-// driven by `@bitOffsetOf`/`@bitSizeOf` field REFLECTION over the packed
-// struct. Rust has no equivalent reflection, and `Cell` is already a
-// `#[repr(transparent)] u64` whose field positions are the explicit
-// `CELL_*_SHIFT`/`CELL_*_BITS` constants above (pinned by the
-// `cell_field_bit_offsets` layout test). So the field NAMES the reference
-// passes as strings become this enum, and `fieldMask` becomes
-// `cell_field_mask` — same inputs, same output, resolved at const-eval time
-// exactly as the reference resolves it at comptime. `Cell` is the only type
-// the reference ever instantiates `fieldMask` for.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CellField {
-    ContentTag,
-    Content,
-    StyleId,
-    Wide,
-    Protected,
-    Hyperlink,
-    SemanticContent,
-}
-
-impl CellField {
-    const fn shift(self) -> u32 {
-        match self {
-            CellField::ContentTag => CELL_CONTENT_TAG_SHIFT,
-            CellField::Content => CELL_CONTENT_SHIFT,
-            CellField::StyleId => CELL_STYLE_ID_SHIFT,
-            CellField::Wide => CELL_WIDE_SHIFT,
-            CellField::Protected => CELL_PROTECTED_SHIFT,
-            CellField::Hyperlink => CELL_HYPERLINK_SHIFT,
-            CellField::SemanticContent => CELL_SEMANTIC_CONTENT_SHIFT,
-        }
-    }
-
-    const fn bits(self) -> u32 {
-        match self {
-            CellField::ContentTag => CELL_CONTENT_TAG_BITS,
-            CellField::Content => CELL_CONTENT_BITS,
-            CellField::StyleId => CELL_STYLE_ID_BITS,
-            CellField::Wide => CELL_WIDE_BITS,
-            CellField::Protected => 1,
-            CellField::Hyperlink => 1,
-            CellField::SemanticContent => CELL_SEMANTIC_CONTENT_BITS,
-        }
-    }
-}
-
-/// Returns a mask with all bits set for the given fields of the packed
-/// struct `Cell`, used for masked compares of raw backing-integer values.
-// fn fieldMask(comptime T: type, comptime fields: []const []const u8) Int
-pub const fn cell_field_mask(fields: &[CellField]) -> u64 {
-    // var mask: Int = 0;
-    let mut mask: u64 = 0;
-    // inline for (fields) |field| {
-    let mut i = 0;
-    while i < fields.len() {
-        let field = fields[i];
-        // The type that fits all the bits we need to set.
-        // const Ones = std.meta.Int(.unsigned, @bitSizeOf(@FieldType(T, field)));
-        // Mask out the ones
-        // mask |= @as(Int, std.math.maxInt(Ones)) << @bitOffsetOf(T, field);
-        let ones: u64 = if field.bits() >= 64 {
-            u64::MAX
-        } else {
-            (1u64 << field.bits()) - 1
-        };
-        mask |= ones << field.shift();
-        i += 1;
-    }
-    mask
-}
+// PORT NOTE (WS10 merge): `CellField` + `cell_field_mask` were ported
+// INDEPENDENTLY by two WS10 lanes (T16 for print_slice, T19 for `Mask`) and
+// collided here as duplicate definitions — git merged the text cleanly because
+// they landed at different offsets. The T19 definition below is the one kept:
+// `Mask` is generic over its output, so it needs `cell_field_mask -> Backing`.
+// Both ports were faithful and variant-identical; only the helper methods
+// differed (`shift()`/`bits()` vs `range()`).
 // `_padding: u16` occupies bits 48..63. The accessors never touch it; these
 // document the reference field's bit position and are asserted by the
 // `cell_field_bit_offsets` layout test.
