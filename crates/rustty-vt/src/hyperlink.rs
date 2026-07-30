@@ -54,7 +54,7 @@ pub type Id = size::HyperlinkCountInt;
 // The mapping of cell to hyperlink. We use an offset hash map to save space
 // since its very unlikely a cell is a hyperlink, so its a waste to store
 // the hyperlink ID in the cell itself.
-pub type Map = AutoOffsetHashMap<Offset<Cell>, Id>;
+pub type Map = AutoOffsetHashMap<Offset<Cell>, Id, 80>;
 
 /// A fully decoded hyperlink that may or may not have its
 /// memory within a page. The memory location of this is dependent

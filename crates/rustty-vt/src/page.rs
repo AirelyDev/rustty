@@ -112,7 +112,11 @@ const GRAPHEME_CHUNK: usize = GRAPHEME_CHUNK_LEN * core::mem::size_of::<u32>();
 type GraphemeAlloc = BitmapAllocator<GRAPHEME_CHUNK>;
 const GRAPHEME_COUNT_DEFAULT: usize = GraphemeAlloc::BITMAP_BIT_SIZE;
 pub const GRAPHEME_BYTES_DEFAULT: usize = GRAPHEME_COUNT_DEFAULT * GRAPHEME_CHUNK;
-type GraphemeMap = AutoOffsetHashMap<Offset<Cell>, OffsetSlice<u32>>;
+type GraphemeMap = AutoOffsetHashMap<
+    Offset<Cell>,
+    OffsetSlice<u32>,
+    { crate::hash_map::DEFAULT_MAX_LOAD_PERCENTAGE },
+>;
 
 /// The allocator used for shared utf8-encoded strings within a page.
 /// Note the chunk size below is the minimum size of a single allocation
