@@ -105,6 +105,22 @@ pub mod metal;
 #[cfg(target_os = "linux")]
 pub mod opengl;
 
+// PORT: the reference `renderer.zig`'s own module doc comment (`:1-8`). The crate
+// root above carries rustty's PORT STATUS narrative rather than the reference's
+// prose, so these eight lines had no home and were dropped — a scoped G3b RED that
+// predated WS14 and surfaced when T2 brought this file under a scoped run. They are
+// restored verbatim here, at the file's first `renderer.zig` decl (as quoted `//`
+// lines, not `//!` — an inner doc comment is only legal at the top of a module):
+//
+//     //! Renderer implementation and utilities. The renderer is responsible for
+//     //! taking the internal screen state and turning into some output format,
+//     //! usually for a screen.
+//     //!
+//     //! The renderer is closely tied to the windowing system which usually
+//     //! has to prepare the window for the given renderer using system-specific
+//     //! APIs. The renderers in this package assume that the renderer is already
+//     //! setup (OpenGL has a context, Vulkan has a surface, etc.)
+
 // PORT: `pub const WebGL = @import("renderer/WebGL.zig");` (renderer.zig:20).
 // NOT target-gated: the reference re-export is unconditional, and the type is a
 // zero-sized placeholder that names nothing target-specific (WS14 T2).

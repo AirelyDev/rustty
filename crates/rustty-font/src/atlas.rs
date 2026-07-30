@@ -1100,7 +1100,35 @@ pub mod wasm_exports {
         // performs.
 
         // Create an ImageData from our buffer and then write it to the canvas
-        // const image_data: js.Object = data: { ... };
+        // const image_data: js.Object = data: {
+        //     // Get our runtime memory
+        //     const mem = try js.runtime.get(js.Object, "memory");
+        //     defer mem.deinit();
+        //     const mem_buf = try mem.get(js.Object, "buffer");
+        //     defer mem_buf.deinit();
+        //
+        //     // Create an array that points to our buffer
+        //     const arr = arr: {
+        //         const Uint8ClampedArray = try js.global.get(js.Object, "Uint8ClampedArray");
+        //         defer Uint8ClampedArray.deinit();
+        //         const arr = try Uint8ClampedArray.new(.{ mem_buf, buf.ptr, buf.len });
+        //         if (!wasm.shared_mem) break :arr arr;
+        //
+        //         // If we're sharing memory then we have to copy the data since
+        //         // we can't set ImageData directly using a SharedArrayBuffer.
+        //         defer arr.deinit();
+        //         break :arr try arr.call(js.Object, "slice", .{});
+        //     };
+        //     defer arr.deinit();
+        //
+        //     // Create the image data from our array
+        //     const ImageData = try js.global.get(js.Object, "ImageData");
+        //     defer ImageData.deinit();
+        //     const data = try ImageData.new(.{ arr, self.size, self.size });
+        //     errdefer data.deinit();
+        //
+        //     break :data data;
+        // };
         // defer image_data.deinit();
         //
         // Draw it
