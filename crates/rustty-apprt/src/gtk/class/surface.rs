@@ -2352,9 +2352,9 @@ impl Surface {
     /// they don't leak to the child.
     ///
     /// PORT NOTE (deferred): the snap-path filtering (`:1621-1626`, comptime
-    /// `build_config.snap` — false in this build) and the `Window` winproto
-    /// `addSubprocessEnv` hook (`:1632-1638`, the `Window` class is unported) land
-    /// with their respective tiers; the load-bearing env is complete here.
+    /// `build_config.snap` — false in this build) lands with its own tier. The
+    /// winproto `addSubprocessEnv` hook and the quick-terminal env var
+    /// (`:1629-1638`) ARE ported below.
     #[must_use]
     pub fn default_termio_env(&self) -> std::collections::HashMap<String, String> {
         let app = Application::default();
@@ -2385,6 +2385,27 @@ impl Surface {
             "NOTIFY_SOCKET",
         ] {
             env.remove(key);
+        }
+
+        // `if (ext.getAncestor(Window, self.as(gtk.Widget))) |window| { try
+        // window.winproto().addSubprocessEnv(&env); if (window.isQuickTerminal())
+        // try env.put("GHOSTTY_QUICK_TERMINAL", "1"); }` (`surface.zig:1629-1638`).
+        //
+        // The reference's own comment calls this a hack that ties the Surface to the
+        // Window class, and says the right fix is a signal whose handler mutates the
+        // EnvMap; it punts because boxing the EnvMap is awkward. Ported as-is (R1).
+        if let Some(window) = crate::gtk::ext::ancestor::<crate::gtk::class::window::Window>(self) {
+            if let Err(_err) = window.winproto_mut().add_subprocess_env(&mut env) {
+                eprintln!("warn(gtk): winproto failed to add subprocess env");
+            }
+
+            if window.is_quick_terminal() {
+                // R2: product-namespaced, unlike `WINDOWID` above.
+                env.insert(
+                    format!("{}_QUICK_TERMINAL", rustty_identity::ENV_PREFIX),
+                    "1".to_string(),
+                );
+            }
         }
 
         env

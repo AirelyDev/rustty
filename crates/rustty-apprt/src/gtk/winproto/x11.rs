@@ -37,10 +37,6 @@
 //!   [`App::init_quick_terminal`] returns unsupported — matching the reference,
 //!   whose X11 `supportsQuickTerminal` is unconditionally `false` (`x11.zig:161-166`;
 //!   the quick terminal is a Wayland layer-shell feature).
-//! * **`addSubprocessEnv` (`WINDOWID`).** The reference exports `WINDOWID` into the
-//!   child env (`x11.zig:320-329`); that seam is threaded through the surface
-//!   subprocess spawn, which is out of scope for this arm and not on the
-//!   [`super::Window`] dispatch surface.
 
 use std::os::raw::{c_int, c_long, c_uchar, c_uint, c_ulong, c_void};
 use std::rc::Rc;
@@ -522,6 +518,20 @@ impl Window {
     /// `_NET_WM_STATE_DEMANDS_ATTENTION` client message.
     pub fn set_urgent(&mut self, urgent: bool) -> Result<(), WinprotoError> {
         self.x11_surface.set_urgency_hint(urgent);
+        Ok(())
+    }
+
+    /// PORTS: `x11.zig:320-329` `Window.addSubprocessEnv`. Publishes the window's
+    /// XID as `WINDOWID` — the long-standing X11 convention many terminal-aware
+    /// tools read. NOT product-namespaced (R2): the reference spells it `WINDOWID`
+    /// because that is the ecosystem's name, not Ghostty's.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn add_subprocess_env(
+        &mut self,
+        env: &mut std::collections::HashMap<String, String>,
+    ) -> Result<(), WinprotoError> {
+        // `bufPrint("{}", .{xid})` — DECIMAL (`x11.zig:322-326`).
+        env.insert("WINDOWID".to_string(), self.x11_surface.xid().to_string());
         Ok(())
     }
 

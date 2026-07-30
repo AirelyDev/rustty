@@ -343,6 +343,22 @@ impl Window {
         }
     }
 
+    /// PORTS: `winproto.zig:144-148` `Window.addSubprocessEnv`. Dispatch to the
+    /// active arm; only the X11 arm contributes anything (`WINDOWID`). Called from
+    /// `class::Surface::default_termio_env` (`surface.zig:1633`).
+    pub fn add_subprocess_env(
+        &mut self,
+        env: &mut std::collections::HashMap<String, String>,
+    ) -> Result<(), WinprotoError> {
+        match self {
+            Window::None(v) => v.add_subprocess_env(env),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(v) => v.add_subprocess_env(env),
+            #[cfg(feature = "x11")]
+            Window::X11(v) => v.add_subprocess_env(env),
+        }
+    }
+
     /// PORTS: `winproto.zig` `Window.setUrgent`. Dispatch to the active arm
     /// (`window.zig:884,2000`).
     pub fn set_urgent(&mut self, urgent: bool) -> Result<(), WinprotoError> {
