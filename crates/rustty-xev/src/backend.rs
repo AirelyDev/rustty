@@ -95,7 +95,8 @@ impl Backend {
     // PORT NOTE: returns a `&'static [Backend]` (the reference's
     // `[]const Backend`). On macOS/iOS this is the single-element `&[kqueue]` — the
     // len==1 that comptime-elides the Dynamic layer (§0). linux → `&[io_uring,
-    // epoll]`; the deferred targets return their single arm.
+    // epoll]`; the out-of-scope-by-platform targets (iocp/wasi_poll) return their
+    // single arm — the enum names every backend even where no body is built.
     pub fn candidates() -> &'static [Backend] {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
         {
@@ -110,7 +111,9 @@ impl Backend {
             &[Backend::Iocp]
         }
         // PORT NOTE: `.wasi => &.{.wasi_poll}` — the single-candidate wasi arm
-        // (mirrors the macOS single-candidate shape; WasiPoll body deferred).
+        // (mirrors the macOS single-candidate shape; the WasiPoll BODY is out of scope
+        // by platform — see `lib.rs`'s `unsupported_target_seam` and DEFERRALS.md's
+        // `# Justified R1 Divergences`).
         // WS14 T6: same cfg widening as `default()` above.
         #[cfg(all(target_family = "wasm", not(target_os = "emscripten")))]
         {
@@ -148,7 +151,8 @@ mod tests {
             assert_eq!(Backend::candidates(), &[Backend::Kqueue]);
             assert_eq!(Backend::candidates().len(), 1);
         }
-        // Off-macOS the enum still round-trips (whole backends deferred).
+        // Off-macOS the enum still round-trips (iocp/wasi_poll have no body: out of
+        // scope by platform).
         #[cfg(not(target_os = "macos"))]
         {
             let _ = Backend::default();

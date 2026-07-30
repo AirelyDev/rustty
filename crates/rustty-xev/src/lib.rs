@@ -482,49 +482,60 @@ mod api_tests {
 }
 
 // ---------------------------------------------------------------------------
-// Neither macOS nor Linux: the remaining backends (`wasi_poll`, `iocp`) are whole
-// follow-up ports (XEV_BLUEPRINT §1). Keep the D6 seam placeholder handle types so
-// the workspace still type-checks on those targets — notably the wasm32 build,
-// which runs the synchronous C-ABI with no event loop at all and never calls any
-// of these (backend.rs:60-69).
+// SCOPE BOUNDARY (not a deferral). Neither macOS nor Linux — i.e. the `iocp`
+// (Windows) and `wasi_poll` (WASI/wasm) backends. Both are OUT OF SCOPE BY
+// PLATFORM for this port, permanently: see `.port/phase-2/DEFERRALS.md`,
+// `# Justified R1 Divergences` → "libxev `iocp` / `wasi_poll` backends", for the
+// 4-criterion basis. This is the same scope class as the `#[cfg(windows)]` seams
+// in `rustty-vaxis`/`rustty-termio`, NOT the "whole follow-up port" class that
+// `epoll`/`io_uring` were in before they landed.
+//
+// Why the placeholder types still exist: `cargo check -p rustty-xev` for a wasm
+// target must still type-check (`backend.rs` selects `Backend::WasiPoll` there),
+// and these are the handle types the crate's public surface names. NOTHING
+// executes them: `rustty-xev` appears in NO wasm dependency graph — the three
+// wasm artifacts (`rustty-wasm`, `rustty-web-canvas`, `rustty-vt-c`) all run the
+// SYNCHRONOUS C-ABI with no event loop, and `rustty-os`'s only xev edge is
+// `#[cfg(target_os = "macos")]`. That reachability claim is a checked invariant,
+// not a comment: `.port/tools/gates/xev_scope_boundary_gate.sh`.
 //
 // PORT NOTE (LT8): this block used to be `#[cfg(not(target_os = "macos"))]` and
 // therefore stood in for LINUX too. Linux now has real backends (`epoll`/
 // `io_uring`) behind the real `Dynamic` surface re-exported above, so the
 // placeholder is narrowed to exclude it. The module was named `non_macos_seam`
-// while that was true; it is renamed to match the cfg it now carries, since a
-// stale name here is exactly what would let a future target quietly land on
-// `unimplemented!()` handles while believing it had a backend.
+// while that was true, then `deferred_backend_seam`; it is named for the cfg it
+// actually carries, since a stale name here is exactly what would let a future
+// target quietly land on panicking handles while believing it had a backend.
 // ---------------------------------------------------------------------------
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub use deferred_backend_seam::*;
+pub use unsupported_target_seam::*;
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-mod deferred_backend_seam {
+mod unsupported_target_seam {
     use super::Error;
 
-    /// PORT NOTE: `xev.Loop` placeholder (wasi_poll/iocp backends deferred).
+    /// PORT NOTE: `xev.Loop` placeholder (wasi_poll/iocp backends are out of scope by platform).
     pub struct Loop {}
-    /// PORT NOTE: `xev.Async` placeholder (wasi_poll/iocp backends deferred).
+    /// PORT NOTE: `xev.Async` placeholder (wasi_poll/iocp backends are out of scope by platform).
     #[derive(Clone, Copy)]
     pub struct Async {}
-    /// PORT NOTE: `xev.Completion` placeholder (wasi_poll/iocp backends deferred).
+    /// PORT NOTE: `xev.Completion` placeholder (wasi_poll/iocp backends are out of scope by platform).
     #[derive(Default)]
     pub struct Completion {}
-    /// PORT NOTE: `xev.Timer` placeholder (wasi_poll/iocp backends deferred).
+    /// PORT NOTE: `xev.Timer` placeholder (wasi_poll/iocp backends are out of scope by platform).
     pub struct Timer {}
-    /// PORT NOTE: `xev.Process` placeholder (wasi_poll/iocp backends deferred).
+    /// PORT NOTE: `xev.Process` placeholder (wasi_poll/iocp backends are out of scope by platform).
     #[derive(Clone, Copy)]
     pub struct Process {}
-    /// PORT NOTE: `xev.Stream` placeholder (wasi_poll/iocp backends deferred).
+    /// PORT NOTE: `xev.Stream` placeholder (wasi_poll/iocp backends are out of scope by platform).
     #[derive(Clone, Copy)]
     pub struct Stream {}
-    /// PORT NOTE: `xev.WriteRequest` placeholder (wasi_poll/iocp backends deferred) — Exec's
+    /// PORT NOTE: `xev.WriteRequest` placeholder (wasi_poll/iocp backends are out of scope by platform) — Exec's
     /// `SegmentedPool<xev::WriteRequest>` requires `Default`.
     #[derive(Default)]
     pub struct WriteRequest {}
-    /// PORT NOTE: `xev.WriteQueue` placeholder (wasi_poll/iocp backends deferred) — Exec's
+    /// PORT NOTE: `xev.WriteQueue` placeholder (wasi_poll/iocp backends are out of scope by platform) — Exec's
     /// `write_queue` field default-constructs it.
     #[derive(Default)]
     pub struct WriteQueue {}
@@ -532,7 +543,9 @@ mod deferred_backend_seam {
     impl Stream {
         pub fn deinit(&self) {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
     }
@@ -540,12 +553,16 @@ mod deferred_backend_seam {
     impl Loop {
         pub fn init() -> Result<Loop, Error> {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
         pub fn deinit(&mut self) {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
     }
@@ -553,17 +570,23 @@ mod deferred_backend_seam {
     impl Async {
         pub fn init() -> Result<Async, Error> {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
         pub fn deinit(&mut self) {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
         pub fn notify(&self) -> Result<(), super::NotifyError> {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
     }
@@ -571,12 +594,16 @@ mod deferred_backend_seam {
     impl Timer {
         pub fn init() -> Result<Timer, Error> {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
         pub fn deinit(&self) {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
     }
@@ -584,12 +611,16 @@ mod deferred_backend_seam {
     impl Process {
         pub fn init(_pid: i32) -> Result<Process, Error> {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
         pub fn deinit(&mut self) {
             unimplemented!(
-                "xev has no backend for this target (XEV_BLUEPRINT §1): wasi_poll/iocp deferred"
+                "rustty-xev: unsupported target — iocp (Windows) and wasi_poll are OUT OF \
+                 SCOPE BY PLATFORM, not deferred (see .port/phase-2/DEFERRALS.md, \
+                 # Justified R1 Divergences); no shipped rustty artifact links xev here"
             )
         }
     }
