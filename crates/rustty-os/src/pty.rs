@@ -506,11 +506,16 @@ fn sliceTo0(buf: &[u8]) -> usize {
 /// Windows PTY creation and management.
 #[cfg(windows)]
 pub struct WindowsPty {
-    out_pipe: crate::windows::HANDLE,
-    in_pipe: crate::windows::HANDLE,
-    out_pipe_pty: crate::windows::HANDLE,
-    in_pipe_pty: crate::windows::HANDLE,
-    pseudo_console: crate::windows::exp::HPCON,
+    // PORT NOTE (WS20): Zig struct fields are public by default and the reference
+    // `termio.Exec.Subprocess.start` reads `pty.out_pipe` / `pty.in_pipe` /
+    // `pty.pseudo_console` directly. These are `pub` for exactly that reason —
+    // the visibility now matches the reference, which is what the ported Windows
+    // spawn half needs.
+    pub out_pipe: crate::windows::HANDLE,
+    pub in_pipe: crate::windows::HANDLE,
+    pub out_pipe_pty: crate::windows::HANDLE,
+    pub in_pipe_pty: crate::windows::HANDLE,
+    pub pseudo_console: crate::windows::exp::HPCON,
     size: winsize,
 }
 
