@@ -370,6 +370,13 @@ rustty-termio = { workspace = true }
 # Integration tests reach only dev-dependencies, not the lib's `[dependencies]`
 # edge; this resolves to the SAME rustty-vt instance as the library's.
 rustty-vt = { workspace = true }
+# `rustty_os::cgroup::current` in scope for the cgroup-scope KAT
+# (`tests/gtk_cgroup_scope.rs`), which reads `/proc/<pid>/cgroup` to check that
+# `cgroup::create_scope` really moved the child — the same predicate
+# `post_fork.zig:104-115` polls. Same reason as the rows above: integration tests
+# reach only dev-dependencies, and this resolves to the SAME rustty-os instance
+# as the library's `[dependencies]` edge.
+rustty-os = { workspace = true }
 # `gdk4_x11::X11Surface` in scope for the same KATs, which read the realized
 # window's XID to check `WINDOWID`. Same version + features as the library's
 # Linux-gated optional edge so cargo unifies to ONE instance. Unconditional here

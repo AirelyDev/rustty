@@ -637,3 +637,119 @@ that closing the surface makes `Exec.threadExit`'s `CancelIoEx` break the read
 loop instead of hanging. **Negative control:** stub `threadMainWindows` to return
 immediately and confirm the surface shows NO output — a passing run with a dead
 read thread would prove nothing.
+
+---
+
+## V10. GTK `pre_exec`/`post_fork` are ported but NOT YET REACHED by `Command` — **OWNER: WS20**
+
+**Filed WS20, 2026-07-30.** `src/apprt/gtk/pre_exec.zig` and
+`src/apprt/gtk/post_fork.zig` are ported in full
+(`crates/rustty-apprt/src/gtk/{pre_exec,post_fork}.rs`, unit-tested and
+mutation-proved). What is NOT yet wired is the seam that makes
+`rustty_termio::command::Command` CALL them.
+
+**Why.** The oracle selects the hook payload type at comptime:
+`Command.zig:145-161` defines `RtPreExecInfo` / `RtPostForkInfo` as
+`if (@hasDecl(apprt.runtime, "pre_exec")) apprt.runtime.pre_exec.PreExecInfo else
+struct {}`. Rust has no comptime type selection, and
+`rustty_termio::command::{RtPreExecInfo, RtPostForkInfo}` are still the EMPTY
+growth-point structs (`command.rs:308-340`, marked "GROWTH POINT — GTK seam").
+A `PreExecFn`-shaped adapter therefore cannot read the config the hook needs, so
+the ported functions take their `PreExecInfo`/`PostForkInfo` explicitly. Filling
+the growth point is a `crates/rustty-termio` change, and that crate was owned by
+a sibling lane during WS20 — this is a lane boundary, NOT a scope exclusion.
+
+**Recipe.**
+1. In `rustty-termio`, replace the empty `RtPreExecInfo`/`RtPostForkInfo` with
+   the real payload (the five config fields: `gtk-single-instance`,
+   `linux-cgroup`, `linux-cgroup-hard-fail`, `linux-cgroup-memory-limit`,
+   `linux-cgroup-processes-limit`). `rustty-termio` already depends on
+   `rustty-config`, so no new edge is needed and the graph stays acyclic.
+2. Set `rt_pre_exec` / `rt_post_fork` in `termio::exec`'s `Command` construction
+   (`exec.rs:2593-2598,2627-2631`, currently `None` with the oracle lines quoted
+   above them) to thin adapters that forward to
+   `rustty_apprt::gtk::{pre_exec::pre_exec, post_fork::post_fork}`. The direction
+   apprt→termio must NOT be added; route it the way the oracle does, from the
+   apprt side via the existing `Config`→`PreExecInfo::init` constructors.
+3. Collapse `rustty_apprt::gtk::post_fork::PostForkError` into
+   `rustty_termio::command::PostForkError` (they are the same unit marker;
+   duplicated only to avoid the crate edge).
+4. End-to-end check on Linux with `linux-cgroup = always`: launch a surface and
+   confirm the SHELL process (not the app) is in
+   `app-rustty-surface-transient-<pid>.scope`. **Negative control:** set
+   `linux-cgroup = never` and confirm the shell is in the app's own scope.
+
+Runnable, on the Linux VM (`ssh gael@192.168.64.4`):
+```sh
+cd ~/projects/rustty
+cargo test  -p rustty-termio --lib
+cargo test  -p rustty-apprt  --features gtk --lib
+cargo build -p rustty --features gtk
+
+# end-to-end: cgroup ON
+printf 'linux-cgroup = always\n' > /tmp/rustty-cgroup-on.conf
+RUSTTY_CONFIG_PATH=/tmp/rustty-cgroup-on.conf ./target/debug/rustty &
+sleep 3
+cat /proc/$(pgrep -n bash)/cgroup   # expect: .../app-rustty-surface-transient-<pid>.scope
+kill %1
+
+# NEGATIVE CONTROL: cgroup OFF — the shell must NOT be in a transient scope
+printf 'linux-cgroup = never\n' > /tmp/rustty-cgroup-off.conf
+RUSTTY_CONFIG_PATH=/tmp/rustty-cgroup-off.conf ./target/debug/rustty &
+sleep 3
+cat /proc/$(pgrep -n bash)/cgroup   # expect: NO app-rustty-surface-transient-* segment
+kill %1
+```
+
+**Already discharged by WS20 (do not redo):** the D-Bus payload itself is
+verified end to end against real systemd —
+`crates/rustty-apprt/tests/gtk_cgroup_scope.rs` spawns a child, calls
+`cgroup::create_scope`, and asserts via `/proc/<pid>/cgroup` that the child
+landed in the scope `cgroup::fmt_scope` names (mutation-proved: renaming the
+`PIDs` property → RED).
+
+---
+
+## V11. The `gtk-v4_16` byte-dump is proved at the BINDING, not at the HANDLER — **OWNER: WS20**
+
+**Filed WS20, 2026-07-30.** `class/application.rs`'s
+`signal_css_parsing_error` now carries the `application.zig:1261-1274` byte-dump
+arm behind the opt-in `gtk-v4_16` feature. `tests/gtk_css_parse_error.rs` proves
+the ceiling is lifted and that a real `CssProvider::parsing-error` hands back a
+`CssSection` whose bytes are byte-for-byte the loaded source. It does NOT drive
+`signal_css_parsing_error` itself, which is `pub(super)` and unreachable from an
+integration test.
+
+**Recipe.** Add a `#[cfg(test)]` unit test inside `class/application.rs`'s `imp`
+module: build an `Application`, capture stderr, obtain a `CssSection` from a real
+`parsing-error` emission, call `signal_css_parsing_error`, and assert the logged
+line CONTAINS the offending source bytes under `--features gtk,gtk-v4_16` and
+does NOT under `--features gtk`. **Negative control:** the same assertion run
+without the feature must fail if it claims the bytes are present. Note the
+G-GTKINIT constraint: the lib-test binary already hosts headed tests, so the new
+test must reuse the existing init rather than calling `gtk4::init()` again.
+
+Runnable, on the Linux VM (`ssh gael@192.168.64.4`), once the unit test exists:
+```sh
+cd ~/projects/rustty
+export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
+
+# the byte-dump must be PRESENT with the opt-in feature
+cargo test -p rustty-apprt --features gtk,gtk-v4_16 --lib \
+  css_parsing_error -- --ignored --nocapture
+
+# NEGATIVE CONTROL: the same test must FAIL (or be cfg'd out) without it —
+# at the v4_14 ceiling `CssSection::bytes` does not exist at all
+cargo test -p rustty-apprt --features gtk --lib \
+  css_parsing_error -- --ignored --nocapture
+
+# the ceiling itself is A/B-provable at compile time: flip the arm's
+# `#[cfg(feature = "gtk-v4_16")]` to `#[cfg(all())]` and the plain-gtk build
+# must fail with `no method named 'bytes' found for reference '&CssSection'`
+cargo check -p rustty-apprt --features gtk
+```
+
+**Already discharged by WS20 (do not redo):** the ceiling A/B above was run —
+under `--features gtk` the unconditional arm fails to compile exactly as quoted,
+and under `--features gtk,gtk-v4_16` it compiles and the headed KAT passes on
+GTK 4.22.4.
