@@ -24,6 +24,23 @@ pub struct ResourcesDir {
 }
 
 impl ResourcesDir {
+    /// Build a `ResourcesDir` from its two paths.
+    ///
+    /// PORT NOTE (WS20): the Zig reference constructs `internal_os.ResourcesDir`
+    /// by struct literal from OUTSIDE this file — `src/apprt/gtk/flatpak.zig:8-10`
+    /// does `.{ .app_path = ... }` and then assigns `result.host_path`. Zig's
+    /// fields are public, Rust's are deliberately not ("Avoid accessing these
+    /// directly"), so that out-of-module construction needs this constructor.
+    /// It is the only way to express `flatpak.zig`'s literal without widening
+    /// the field visibility.
+    #[must_use]
+    pub fn from_paths(app_path: Option<String>, host_path: Option<String>) -> Self {
+        Self {
+            app_path,
+            host_path,
+        }
+    }
+
     /// Free resources held. Requires the same allocator as when resourcesDir()
     /// is called.
     //

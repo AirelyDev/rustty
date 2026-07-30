@@ -50,6 +50,7 @@ pub mod clipboard_confirmation_dialog;
 pub mod close_confirmation_dialog;
 pub mod command_palette;
 pub mod config;
+pub mod config_errors_dialog;
 pub mod debug_warning;
 pub mod dialog;
 pub mod global_shortcuts;
