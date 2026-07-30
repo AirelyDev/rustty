@@ -50,12 +50,16 @@
 //!     accessor trait (state.rs; the `RendererConfig`-precedent acyclic shape),
 //!     `state.inspector` being the `*mut dyn InspectorOverlay` fat pointer. No
 //!     `unimplemented!()` remains for this seam.
-//!   - OpenGL/WebGL backends (Linux/wasm) and GTK — out of the monomorphic Metal
-//!     scope (whole-backend follow-up ports).
+//!   - the OpenGL backend (Linux) and GTK — out of the monomorphic Metal scope
+//!     (whole-backend follow-up ports). The **WebGL** backend is NOT in this list
+//!     any more: WS14 established that the reference `src/renderer/WebGL.zig` is a
+//!     2-line placeholder (no fields, no methods, no shaders, no tests, identical
+//!     on the oracle's `origin/main`), and it is ported COMPLETE at
+//!     [`crate::webgl`].
 //!
 //! G3b comment-coverage SKIPS this crate while it is marked `in progress` (only a
 //! `done` status activates the whole-crate fuzzy match); it stays `in progress`
-//! while the GL/WebGL/GTK backends are unported (honest). R1 fidelity for the
+//! while the GL/GTK backends are unported (honest). R1 fidelity for the
 //! ported slices is backstopped by the adversary + verify panel + the golden gate
 //! (heavy-tier doctrine), and MAY be spot-checked with a scoped
 //! `check_comment_coverage.py --port-glob` run.
@@ -101,6 +105,12 @@ pub mod metal;
 #[cfg(target_os = "linux")]
 pub mod opengl;
 
+// PORT: `pub const WebGL = @import("renderer/WebGL.zig");` (renderer.zig:20).
+// NOT target-gated: the reference re-export is unconditional, and the type is a
+// zero-sized placeholder that names nothing target-specific (WS14 T2).
+pub mod webgl;
+pub use webgl::WebGL;
+
 // GPU R-d Chunk-3 prerequisites: the Kitty-graphics + overlay image render state
 // (`image.zig`) and the CPU/z2d debug overlay (`Overlay.zig`). Neither names
 // `GenericRenderer`, so both compile standalone before Chunk 3 (GPU_RD_P1_DESIGN.md
@@ -145,11 +155,10 @@ pub use message::Message;
 //         .webgl => WebGL,
 //     };
 //
-// Ported MONOMORPHICALLY (GPU_RD_TRAIT_DESIGN.md §D): a set of one — the concrete
-// `generic::Renderer` over the concrete `Metal` leaf types (OpenGL is
-// Linux-deferred, WebGL wasm-deferred). macOS-gated because `Renderer` names
-// `crate::metal::Metal`; the GPU draw path (the big CPU methods) lands in a later
-// chunk (GPU_RD_CHUNK3A_DESIGN §B).
+// Ported MONOMORPHICALLY (GPU_RD_TRAIT_DESIGN.md §D): a set of one per target —
+// the concrete `generic::Renderer` over the concrete `Metal` leaf types.
+// macOS-gated because `Renderer` names `crate::metal::Metal`; the GPU draw path
+// (the big CPU methods) lands in a later chunk (GPU_RD_CHUNK3A_DESIGN §B).
 #[cfg(target_os = "macos")]
 pub use generic::Renderer;
 
@@ -162,6 +171,15 @@ pub use generic::Renderer;
 // targets. Additive Linux `pub use` — the macOS export is unchanged.
 #[cfg(target_os = "linux")]
 pub use generic::Renderer;
+
+// PORT: `.webgl => WebGL` (renderer.zig:41) — the ONLY arm that is NOT
+// `GenericRenderer(Backend)`: the reference selects the bare `WebGL` type. With
+// this arm the port's switch is complete for all three reference arms
+// (`.metal` macOS, `.opengl` Linux, `.webgl` wasm32). `renderer/backend.zig`
+// returns `.webgl` for `wasm32` + `WasmTarget.browser`, which is why the cfg is
+// `target_arch = "wasm32"` (WS14 T2).
+#[cfg(target_arch = "wasm32")]
+pub use webgl::WebGL as Renderer;
 
 // The `renderer.Renderer.DerivedConfig` nested config, named by the cross-thread
 // message surface (`Message::ChangeConfig`). It names no Metal type (its 9
