@@ -86,3 +86,6 @@ macos/DerivedData/
 
 # CMake example build dirs (example/c-vt-cmake*/build)
 example/**/build/
+
+# Agent worktrees (transient; each is its own git checkout)
+.claude/worktrees/
