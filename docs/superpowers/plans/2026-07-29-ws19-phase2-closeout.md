@@ -120,7 +120,7 @@ for G1b. **WS19 records this verdict (T2); Phase 3 realizes it.** No code change
 | N10 `Terminal::compress(.incremental)` restart documentation | **WS19 T18** |
 | **Phase 2 closure gate (G-P2)** | **WS19 T19** |
 | O3 `cursor_scroll_region_up` (BL-4, beyond-pin) | **→ WS10** |
-| O17 `stb_image_resize` glyph resize | **→ WS11** |
+| O17 `stb_image_resize` glyph resize | **→ WS11** — routing was right, the STATUS was wrong: the port shipped 2026-06-30 (`2e82776`); WS11 closed the *vacuous-coverage* residual instead, 2026-07-29 |
 | O13a `main_wasm.zig`, O14 `Atlas.Wasm` test, O15 `App.zig` Wasm block, O16 WebGL backend | **→ WS14** |
 | O13b `main_build_data.zig` + `+gen-*` emit; N8 3 `.blp` msgids + 25 unwrapped call sites | **→ WS13** (already in its plan) |
 | O5 `PageList::Limits` | **→ Phase 3** (re-vet row) |
@@ -373,7 +373,7 @@ In `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md`:
 |---|---|---|---|
 | WS1–WS9 | authored | **merged** | DONE |
 | WS10 perf (BL-4) | **NOT authored** | no | open; inherits O3 |
-| WS11 font glyph resize | **NOT authored** | no | open; inherits O17 |
+| WS11 font glyph resize | **authored + LANDED** (`docs/superpowers/plans/2026-07-23-ws11-font-glyph-resize.md`) | yes | **CLOSED 2026-07-29** — O17's port shipped 2026-06-30; WS11 closed the vacuous-coverage residual (5 tests + gate D10) |
 | WS12 vaxis completion | authored (`c7c93f7`) | **no** | open; consumes T1's restore script |
 | WS13 i18n & docs | authored (`39355ff`) | **no** | open; owns N8, O13b |
 | WS14 wasm/WebGL | **NOT authored** | no | open; inherits O13a/O14/O15/O16 |
@@ -995,7 +995,7 @@ WS's plan (or, where no plan exists, to the ROADMAP row so the plan author inher
 
 | Row | New owner |
 |---|---|
-| `D:3741` `stb_image_resize` (O17) | **WS11** — ROADMAP row (no plan yet) |
+| `D:3741` `stb_image_resize` (O17) | **WS11** — plan `2026-07-23-ws11-font-glyph-resize.md`, **LANDED 2026-07-29**; the port itself shipped 2026-06-30, WS11 closed the vacuous-coverage residual |
 | `D:571` WebGL backend (O16) | **WS14** — ROADMAP row (no plan yet) |
 | `D:1894` `App.zig` Wasm block (O15) | **WS14** |
 | `D:4209` `Atlas.Wasm` test (O14) | **WS14** |

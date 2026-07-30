@@ -1360,3 +1360,174 @@ during plan authoring:
 The only environment-shaped caveat is that the `zig`-based arm of the D10 gate reports
 `exit 3` BLOCKED on a box without `zig` installed — that is the gate contract working
 as designed (never a silent green), not debt.
+
+---
+
+## Task 7 RECORDED EVIDENCE — Linux (Fedora 44 aarch64) verification
+
+Host: `gael@192.168.64.4` (`~/projects/rustty`), branch `ws11-verify` =
+`origin/ws11-font-glyph-resize`. Compilers: **gcc (GCC) 16.1.1 20260515 (Red Hat
+16.1.1-2)**, **clang version 22.1.8 (Fedora 22.1.8-1.fc44)**. `zig`: **ABSENT** — so
+the ghostty-recipe arm reports BLOCKED there, exactly as the plan's Step 3 anticipated.
+VM safety checked first: `uptime` load 0.45–0.56, no `cargo`/`rustty` process running.
+
+### The substantive claim — fixtures generated on macOS/Apple clang reproduce byte-for-byte on Fedora
+
+All four KAT fixtures, replayed through the D10 harness from the dumped pre-resize FT
+bitmaps, under **both** compiler families at **all five** optimization levels:
+
+```
+CC=gcc / CC=clang, -O0 -O1 -O2 -O3 -Os, every combination:
+  fixture stb_resize_terminus_i_gray_16x17.bin : 0/272 differ, maxdelta=0 [EXACT]
+  fixture stb_resize_terminus_i_gray_8x17.bin  : 0/136 differ, maxdelta=0 [EXACT]
+  fixture stb_resize_emoji_bgra_16x15.bin      : 0/960 differ, maxdelta=0 [EXACT]
+  fixture stb_resize_emoji_bgra_8x7.bin        : 0/224 differ, maxdelta=0 [EXACT]
+```
+
+### The runtime path (FreeType is Linux's default backend)
+
+```
+running 12 tests
+test face::freetype::tests::bitmap_glyph_pcf ... ok
+test face::freetype::tests::bitmap_glyph ... ok
+test face::freetype::tests::bitmap_glyph_bdf ... ok
+test face::freetype::tests::face_name ... ok
+test face::freetype::tests::bitmap_glyph_otb ... ok
+test face::freetype::tests::svg_font_table ... ok
+test face::freetype::tests::stb_resize_kat_bitmap_strike_grayscale ... ok
+test face::freetype::tests::mono_to_bgra ... ok
+test face::freetype::tests::color_emoji ... ok
+test face::freetype::tests::stb_resize_kat_rejects_nearest_and_bilinear ... ok
+test face::freetype::tests::render_and_resize ... ok
+test face::freetype::tests::stb_resize_kat_bitmap_strike_bgra ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 73 filtered out
+```
+
+```
+running 2 tests
+test stb::tests::stbir_resize_uint8_upsamples_a_known_ramp ... ok
+test stb::tests::stbir_resize_uint8_treats_channels_independently ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 83 filtered out
+```
+
+12 and 2 — the plan's predicted counts exactly (9 original + 3 new; 2 new).
+
+### What Linux verification FOUND — a genuine mis-specification in D10 arm 1
+
+The plan (and the gate as first written) required the host `cc`'s five optimization
+levels to be **byte-identical**, calling that value "the consensus". That is an Apple
+clang property, not a property of the C. Measured on Fedora, on the RAMP cases:
+
+```
+gcc   -O0  16x32=770a168dbeb3a54a75eb663cf017ed6e  8x17=4dc5c919ff484e653f5427a2503ed290
+gcc   -O1  16x32=770a168dbeb3a54a75eb663cf017ed6e  8x17=4dc5c919ff484e653f5427a2503ed290
+gcc   -O2  16x32=5f18d21d6d9d9c6f035bade776299e7c  8x17=0e2fb9f06dc7de62c1c28b5706bd918b
+gcc   -O3  16x32=5f18d21d6d9d9c6f035bade776299e7c  8x17=0e2fb9f06dc7de62c1c28b5706bd918b
+gcc   -Os  16x32=5f18d21d6d9d9c6f035bade776299e7c  8x17=0e2fb9f06dc7de62c1c28b5706bd918b
+clang -O0..-Os (all five) = 5f18d21d... / 0e2fb9f0...  (the consensus)
+```
+
+So **Fedora gcc -O0/-O1 form a third variant**, 9/512 and 3/136 bytes off the
+consensus at max delta 1 — the same ±1 codegen axis, third instance (after ghostty
+`ReleaseFast` and aarch64-vs-x86_64). Everything else — Apple clang at all five levels,
+Fedora clang at all five levels, Fedora gcc at -O2/-O3/-Os — produces the consensus
+MD5s the plan recorded (`5f18d21d…` / `0e2fb9f0…`).
+
+Consequences, applied in the T7 commit:
+
+1. **Arm 1 now holds the non-reference opt levels to the same ±1 envelope** as every
+   other codegen axis, instead of demanding byte-identity. Left as-authored, D10 would
+   be permanently and **falsely** RED on any Linux box whose `cc` is gcc — i.e. CI.
+2. **The fixture (`--expect`) comparison is now required EXACT at every opt level**,
+   not just at -O2. That is strictly stronger than the plan specified, and it holds on
+   both platforms and both compiler families (see the table above).
+3. **The fraction bound moved 2 % → 3 %.** 3/136 = 2.21 % exceeds a hard 2.00 % purely
+   because the buffer is small; 1.76 % and 2.21 % are the largest rates observed
+   anywhere, so 3 % is the smallest round bound above measurement. `negative_control.py`
+   and the in-crate KAT were updated to validate the SAME bound the gate enforces (so
+   the check can never validate a stricter envelope than the one in force), and the
+   discrimination margin is still ~18–20× (a wrong resampler moves 55–98 % of bytes).
+
+Post-fix, on Linux: `VM RESULT: fail=0`, every `run.sh` invocation
+`GREEN on the consensus arm; BLOCKED on the ghostty-recipe arm` (no zig), the two
+gcc-only deltas now reported as `[within the +/-1-on-3% codegen envelope]`.
+
+### Not run on the VM
+
+`cargo build --workspace` (plan Step 4) was **deliberately not run there**: the standing
+VM rule forbids a heavy build concurrently with a headed compositor session, and
+Xwayland was live. The crate-scoped build/test above covers the seam, and the
+whole-workspace build is verified on macOS (Task 8). This is a scope note, not a
+deferral of any WS11 check.
+
+---
+
+## Task 8 RECORDED EVIDENCE — R5, the macOS artifact is behaviour-identical
+
+**Binary hashing was deliberately NOT used.** A prior lane obtained three different
+hashes from rebuilds of byte-identical source; hashes measure build nondeterminism, not
+behaviour. R5 is discharged here by (a) proving no production line changed, (b) a
+feature-graph A/B with its own negative control, and (c) a behaviour A/B of every test
+outcome in the crate.
+
+### Step 1 — no production code changed
+
+`git diff 297afcf..HEAD --stat`: **1518 insertions, 0 deletions**, touching only
+`.port/tools/**`, `docs/superpowers/plans/2026-07-23-ws11-font-glyph-resize.md`,
+`crates/rustty-font-shaper/src/{stb.rs,face/freetype.rs}`, and
+`crates/rustty-font-shaper/src/testdata/**`.
+
+Machine-checked that every added `crates/` line is test-only:
+
+```
+crates/rustty-font-shaper/src/face/freetype.rs: mod tests at line 1455;
+    1 added hunk; hunks at/above `mod tests`: []; removed lines: 0
+crates/rustty-font-shaper/src/stb.rs:           mod tests at line 32;
+    1 added hunk (starts at the `#[cfg(test)]` attribute itself); removed lines: 0
+```
+
+Zero removed lines in either file, and no hunk touches anything above the
+`#[cfg(test)] mod tests` boundary. No `build.rs` flag changed (the locked Task-3
+decision), no `Cargo.toml` changed, no vendored C changed.
+
+### Step 2 — feature-graph A/B
+
+```
+cargo tree -e features -p rustty-font-shaper   (1193 lines)
+diff <297afcf> <HEAD>  ->  FEATURE GRAPH IDENTICAL
+```
+
+**Negative control for that claim** (proving the comparison can detect anything at
+all): temporarily adding `features = ["nightly"]` to `allocator-api2` in
+`crates/rustty-font-shaper/Cargo.toml` makes the same diff report
+
+```
+7a8,9
+> ├── allocator-api2 feature "nightly"
+> │   └── allocator-api2 v0.2.21
+```
+
+Reverted; `git status --porcelain` clean.
+
+### Step 3 — behaviour A/B on the whole crate
+
+Every `^test … \.\.\. ` result line, sorted, on both revisions:
+
+```
+$ diff tests_main.txt tests_ws11.txt
+39a40,42
+> test face::freetype::tests::stb_resize_kat_bitmap_strike_bgra ... ok
+> test face::freetype::tests::stb_resize_kat_bitmap_strike_grayscale ... ok
+> test face::freetype::tests::stb_resize_kat_rejects_nearest_and_bilinear ... ok
+106a110,111
+> test stb::tests::stbir_resize_uint8_treats_channels_independently ... ok
+> test stb::tests::stbir_resize_uint8_upsamples_a_known_ramp ... ok
+```
+
+**Additions only** — exactly the 5 new tests. No pre-existing line changed from `ok`,
+and none disappeared. 107 -> 112 tests, `test result: ok. 112 passed; 0 failed`.
+The macOS-facing suites (`face::coretext`, `shaper::coretext_tests`) are byte-identical
+in that listing, which is the R5 claim: the CoreText path — macOS's default backend —
+is untouched, and the FreeType/stb path that IS live on macOS gains only tests.

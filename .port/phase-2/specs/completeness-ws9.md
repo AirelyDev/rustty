@@ -43,7 +43,7 @@ recent touch). Verified line-by-line:
 | `apprt-gtk` subsystem (~52 files, ~22k LOC) | DEFERRALS.md:3496+ | "Sub-project #4 (gtk): the `apprt-gtk` subsystem (`src/apprt/gtk/**`)" — dedicated entry exists (not a full port, but the *deferral itself* is now ledgered, which is what §6 asked for). |
 | `ghostty_*`→`rustty_*` alias shim + signed `.xcframework` repackaging | DEFERRALS.md:3468-3494 | Two dedicated entries: "the `ghostty_*`→`rustty_*` C-ABI compatibility ALIAS layer" and "signed `.xcframework` repackaging xtask". |
 | `src/build/mdgen/**` + `src/build/webgen/**` | DEFERRALS.md:3440-3452 | Dedicated low-priority entry exists. |
-| `src/stb/stb_image_resize.h` | DEFERRALS.md:3453-3467 | Dedicated entry; confirms `rustty-font` does not yet cover it, gives the `cc` build.rs plan. |
+| `src/stb/stb_image_resize.h` | DEFERRALS.md (the `stb_image_resize` row, ~:3936) | ~~Dedicated entry; confirms `rustty-font` does not yet cover it, gives the `cc` build.rs plan.~~ **STALE [WS11, 2026-07-29]:** the port SHIPPED 2026-06-30 (`2e82776`) in the sibling crate `rustty-font-shaper` — the original row's grep was scoped to `crates/rustty-font/src`, which is why it read as unported. WS11 closed the real residual (vacuous scale-1.0 test coverage) with 5 tests + gate D10. |
 
 **Conclusion for (a) and (b): zero remaining edits needed.** GAP_ANALYSIS.md's
 own header (lines 1-14) already flags itself as superseded/stale relative to
@@ -126,8 +126,10 @@ headers (`sfnt.rs:5`, `head.rs:5`, `hhea.rs:5`, `os2.rs:5`, `post.rs:5`,
 header lists exactly these 7 files as if they were the still-open work items,
 but each is individually complete. This is lower severity than Edit 1 (the
 crate root `rustty-font/src/lib.rs:7` correctly says `in progress` for the
-*crate as a whole*, which remains true — fontconfig/stb_image_resize/wasm
-gaps are real and tracked — so no functional claim is broken), but the
+*crate as a whole*, which remains true — fontconfig/~~stb_image_resize~~/wasm
+gaps are real and tracked (**stb_image_resize is NOT a gap: shipped 2026-06-30 at
+`2e82776` in `rustty-font-shaper`, coverage closed by WS11 2026-07-29**) — so no
+functional claim is broken), but the
 submodule aggregator header itself is misleading in isolation.
 
 **Proposed edit:** change to `PORT STATUS: done (sfnt, head, glyf, hhea, os2,

@@ -187,7 +187,7 @@ Fully complete: **terminal-vt**, **config-input**, **os-platform**. Mostly done 
   - `crates/rustty-bench (12-file harness, benchmark_cli C-ABI)`
   - `src/extra/{bash,fish,zsh,vim,sublime}.zig (+gen-* CLI actions)`
   - ~~`crates/rustty-vt-c/src/terminal.rs (todo! get/set accessors)`~~ [CORRECTION 2026-07-10: STALE — landed; zero live todo!() in rustty-vt-c (VALIDATION_REPORT M3)]
-  - `z2d painter/stroke subset + wuffs swizzle.rs (unreached seams) + stb_image_resize verification`
+  - `z2d painter/stroke subset + wuffs swizzle.rs (unreached seams) + ~~stb_image_resize verification~~` [CORRECTION 2026-07-29: `stb_image_resize verification` is DONE — WS11 landed 5 discriminating tests (2 direct-FFI + 3 KATs on genuinely scaled bitmap strikes, grayscale and BGRA) and gate **D10** (`check_stb_resize_parity.sh`) diffing our vendored C against ghostty's own build recipe at all four zig optimize modes. The port itself had shipped 2026-06-30 at `2e82776`.]
 
 ### 9. misc-feasible-headless + ledger hygiene  ·  effort **S** · risk **low**
 
