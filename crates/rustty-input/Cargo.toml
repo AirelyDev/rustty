@@ -15,6 +15,19 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# WS14 T6 — `Link::oni_regex` is this crate's ONLY oniguruma consumer, and the
+# `rustty-oniguruma` edge transitively pulls the `oniguruma-sys` C build script,
+# which cannot target `wasm32-unknown-unknown` (no libc sysroot). DEFAULT-ON so
+# every native build is byte-identical (R5) and `oni_regex` is compiled exactly as
+# before; the wasm module builds with `--no-default-features`, where the method is
+# unreachable anyway (no renderer ⇒ no link highlighting). This mirrors the
+# precedent `rustty-config`/`rustty-vt` already set with their own `oniguruma`
+# features. The REFERENCE `Link.oniRegex` is unconditional — see the PORT NOTE at
+# the method itself.
+default = ["oniguruma"]
+oniguruma = ["dep:rustty-oniguruma"]
+
 [dependencies]
 rustty-vt = { workspace = true }
 # config's `RepeatableCommand.parseCLI` calls `cli.args.parseAutoStruct(Command, ...)`;
@@ -41,7 +54,7 @@ rustty-zigstd = { workspace = true }
 # so `rustty-oniguruma` (lib name `oni`) is a NON-optional dependency here and
 # `oni_regex` is always compiled (no cargo feature gate). This adds a transitive
 # C-FFI edge (oniguruma-sys), so rustty-input is an FFI crate for G6 (ASan).
-rustty-oniguruma = { workspace = true }
+rustty-oniguruma = { workspace = true, optional = true }
 
 # Build-time codegen of the `help_strings.KeybindAction` table (R1 port of
 # helpgen.genKeybindActions): build.rs scans binding.rs for each Action variant's

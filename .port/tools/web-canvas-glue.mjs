@@ -111,6 +111,18 @@ export function makeWebCanvasEnv({ memory, createCanvas }) {
       u8().set(img.data.subarray(0, n), outPtr);
       return img.data.length;
     },
+    // ctx.putImageData(new ImageData(<copy of ptr[0..len]>, w, h), x, y)
+    //
+    // The one op `font/Atlas.zig`'s `Wasm.atlas_debug_canvas` needs beyond the
+    // `web_canvas` face's set (WS14 T4). It ALWAYS copies out of wasm memory
+    // (`.slice()`), which is the reference's shared-memory branch and is safe for
+    // both a plain ArrayBuffer and a SharedArrayBuffer.
+    rustty_wc_context_put_image_data(ch, ptr, len, w, h, x, y) {
+      const ctx = contexts.get(ch);
+      if (!ctx) return;
+      const img = new ImageData(new Uint8ClampedArray(u8().slice(ptr, ptr + len)), w, h);
+      ctx.putImageData(img, x, y);
+    },
     // document.getElementById(id).append(canvas); 0 ok, -1 not found
     rustty_wc_debug_append(h, idPtr, idLen) {
       const c = canvases.get(h);

@@ -737,192 +737,461 @@ impl<A: Allocator + Copy> Atlas<A> {
     }
 }
 
-// PORT NOTE (wasm — feature-gated OFF): the reference defines a `pub const Wasm =
+// PORT NOTE (wasm — feature-gated, LIVE): the reference defines a `pub const Wasm =
 // struct { ... }` block exposing the atlas as a C-ABI/JS surface for the wasm
-// build. It depends on `os/wasm.zig` (the wasm bump allocator + host-ownership
-// helpers) and `zig-js` (DOM/canvas bindings), neither of which exists in PURE
-// rustty-font (R4). Per the agreed plan the wasm surface is feature-gated OFF
-// (an off-by-default `wasm` cargo feature) and joins the wasm artifact only when
-// the rustty wasm app-runtime lands — exactly as the config/vt wasm exports are
-// deferred. The faithful reference is recorded verbatim below so no reference
-// line or comment is dropped (R1); none of it pulls a C/JS edge into this crate.
-// The block's ONE test (`test "happy path"`, 4 assertions) defers with it and is
-// ledgered PER-TEST in `.port/phase-2/DEFERRALS.md` ("rustty-font Atlas wasm
-// surface") — porting the Wasm block must port that test with all 4 asserts live.
+// build. It is ported LIVE below under the off-by-default `wasm` cargo feature
+// (WS14 T4), so the desktop font cluster never compiles it and every native
+// artifact stays byte-identical (R5). Its ONE test (`test "happy path"`, 4
+// assertions) is ported with ALL FOUR ASSERTS LIVE and runs natively under
+// `cargo test -p rustty-font --features wasm`.
 //
-// /// The wasm-compatible API. This lacks documentation unless the API differs
-// /// from the standard Zig API. To learn what a function does, just look one
-// /// level deeper to what Zig function is called and read the documentation there.
+// Two reference dependencies needed work first:
+//
+//   1. `os/wasm.zig`'s host-ownership tracker (`toHostOwned`/`isHostOwned`/
+//      `toModuleOwned`), which upstream DELETED in `9dc2e5978` ("lib-vt: enable
+//      freestanding wasm builds (#9301)", 2025-10-21) — leaving this very block
+//      dangling upstream (it does not compile there; nothing analyzes it because
+//      `main_wasm.zig` is referenced nowhere in `build.zig`). rustty resurrected it
+//      at `rustty_os::wasm::host_owned` behind `rustty-os/wasm-host-owned`, which
+//      this crate's `wasm` feature enables. See that module's PORT NOTE.
+//   2. `zig-js` (DOM/canvas bindings) has no Rust analog. The Canvas ops are
+//      declared LOCALLY here as `#[link(wasm_import_module = "env")]` imports
+//      rather than by depending on `rustty-font-shaper`'s `web_canvas` face:
+//      rustty-font is PURE and BELOW vt/shaper in the crate graph (R4/D1) and must
+//      never gain that edge. See `atlas_debug_canvas`'s PORT NOTE for the
+//      import-deduplication contract this relies on.
+//
+// The `Wasm` struct's members become free items in a `wasm_exports` module: the
+// reference's `export fn`s are `#[no_mangle] pub extern "C"` (plain `"C"` — the
+// DG5 abort policy is enforced by the ABI string, never by per-function
+// catch-unwind wrappers), and their names stay UNPREFIXED (`atlas_new`, ...)
+// because the JS host binds them by bare name — the same deliberate R2 exception
+// `config/Wasm.zig`'s port records (`rustty-config/src/wasm.rs`).
+//
+/// The wasm-compatible API. This lacks documentation unless the API differs
+/// from the standard Zig API. To learn what a function does, just look one
+/// level deeper to what Zig function is called and read the documentation there.
 // pub const Wasm = struct {
-//     // If you're copying this file (Atlas.zig) out to a separate project,
-//     // just replace this with the allocator you want to use.
-//     const wasm = @import("../os/wasm.zig");
-//     const alloc = wasm.alloc;
-//     const js = @import("zig-js");
-//
-//     export fn atlas_new(size: u32, format: u8) ?*Atlas {
-//         const atlas = init(
-//             alloc,
-//             size,
-//             @enumFromInt(format),
-//         ) catch return null;
-//         const result = alloc.create(Atlas) catch return null;
-//         result.* = atlas;
-//         return result;
-//     }
-//
-//     export fn atlas_free(ptr: ?*Atlas) void {
-//         if (ptr) |v| {
-//             v.deinit(alloc);
-//             alloc.destroy(v);
-//         }
-//     }
-//
-//     /// The return value for this should be freed by the caller with "free".
-//     export fn atlas_reserve(self: *Atlas, width: u32, height: u32) ?*Region {
-//         return atlas_reserve_(self, width, height) catch return null;
-//     }
-//
-//     fn atlas_reserve_(self: *Atlas, width: u32, height: u32) !*Region {
-//         const reg = try self.reserve(alloc, width, height);
-//         const result = try alloc.create(Region);
-//         errdefer alloc.destroy(result);
-//         _ = try wasm.toHostOwned(result);
-//         result.* = reg;
-//         return result;
-//     }
-//
-//     export fn atlas_set(self: *Atlas, reg: *Region, data: [*]const u8, len: usize) void {
-//         self.set(reg.*, data[0..len]);
-//     }
-//
-//     export fn atlas_grow(self: *Atlas, size_new: u32) bool {
-//         self.grow(alloc, size_new) catch return false;
-//         return true;
-//     }
-//
-//     export fn atlas_clear(self: *Atlas) void {
-//         self.clear();
-//     }
-//
-//     /// This creates a Canvas element identified by the id returned that
-//     /// the caller can draw into the DOM to visualize the atlas. The returned
-//     /// ID must be freed from the JS runtime by calling "zigjs.deleteValue".
-//     export fn atlas_debug_canvas(self: *Atlas) u32 {
-//         return atlas_debug_canvas_(self) catch |err| {
-//             log.warn("error dumping atlas canvas err={}", .{err});
-//             return 0;
-//         };
-//     }
-//
-//     fn atlas_debug_canvas_(self: *Atlas) !u32 {
-//         // Create our canvas
-//         const doc = try js.global.get(js.Object, "document");
-//         defer doc.deinit();
-//         const canvas = try doc.call(js.Object, "createElement", .{js.string("canvas")});
-//         errdefer canvas.deinit();
-//
-//         // Setup our canvas size
-//         {
-//             try canvas.set("width", self.size);
-//             try canvas.set("height", self.size);
-//
-//             const width_str = try std.fmt.allocPrint(alloc, "{d}px", .{self.size});
-//             defer alloc.free(width_str);
-//
-//             const style = try canvas.get(js.Object, "style");
-//             defer style.deinit();
-//             try style.set("width", js.string(width_str));
-//             try style.set("height", js.string(width_str));
-//         }
-//
-//         // This will return the same context on subsequent calls so it
-//         // is important to reset it.
-//         const ctx = try canvas.call(js.Object, "getContext", .{js.string("2d")});
-//         defer ctx.deinit();
-//
-//         // We need to draw pixels so this is format dependent.
-//         const buf: []u8 = switch (self.format) {
-//             .bgra => buf: {
-//                 // Convert from BGRA to RGBA by swapping every R and B.
-//                 var buf: []u8 = try alloc.dupe(u8, self.data);
-//                 errdefer alloc.free(buf);
-//                 var i: usize = 0;
-//                 while (i < self.data.len) : (i += 4) {
-//                     std.mem.swap(u8, &buf[i], &buf[i + 2]);
-//                 }
-//                 break :buf buf;
-//             },
-//
-//             .grayscale => buf: {
-//                 // Convert from A8 to RGBA so every 4th byte is set to a value.
-//                 var buf: []u8 = try alloc.alloc(u8, self.data.len * 4);
-//                 errdefer alloc.free(buf);
-//                 @memset(buf, 0);
-//                 for (self.data, 0..) |value, i| {
-//                     buf[(i * 4) + 3] = value;
-//                 }
-//                 break :buf buf;
-//             },
-//
-//             else => return error.UnsupportedAtlasFormat,
-//         };
-//         defer if (buf.ptr != self.data.ptr) alloc.free(buf);
-//
-//         // Create an ImageData from our buffer and then write it to the canvas
-//         const image_data: js.Object = data: {
-//             // Get our runtime memory
-//             const mem = try js.runtime.get(js.Object, "memory");
-//             defer mem.deinit();
-//             const mem_buf = try mem.get(js.Object, "buffer");
-//             defer mem_buf.deinit();
-//
-//             // Create an array that points to our buffer
-//             const arr = arr: {
-//                 const Uint8ClampedArray = try js.global.get(js.Object, "Uint8ClampedArray");
-//                 defer Uint8ClampedArray.deinit();
-//                 const arr = try Uint8ClampedArray.new(.{ mem_buf, buf.ptr, buf.len });
-//                 if (!wasm.shared_mem) break :arr arr;
-//
-//                 // If we're sharing memory then we have to copy the data since
-//                 // we can't set ImageData directly using a SharedArrayBuffer.
-//                 defer arr.deinit();
-//                 break :arr try arr.call(js.Object, "slice", .{});
-//             };
-//             defer arr.deinit();
-//
-//             // Create the image data from our array
-//             const ImageData = try js.global.get(js.Object, "ImageData");
-//             defer ImageData.deinit();
-//             const data = try ImageData.new(.{ arr, self.size, self.size });
-//             errdefer data.deinit();
-//
-//             break :data data;
-//         };
-//         defer image_data.deinit();
-//
-//         // Draw it
-//         try ctx.call(void, "putImageData", .{ image_data, 0, 0 });
-//
-//         const id = @as(js.Ref, @bitCast(@intFromEnum(canvas.value))).id;
-//         return id;
-//     }
-//
-//     test "happy path" {
-//         const atlas = atlas_new(512, @intFromEnum(Format.grayscale)).?;
-//         defer atlas_free(atlas);
-//
-//         const reg = atlas_reserve(atlas, 2, 2).?;
-//         defer alloc.destroy(reg);
-//         try testing.expect(wasm.isHostOwned(reg));
-//         defer wasm.toModuleOwned(reg);
-//         try testing.expect(reg.width > 0);
-//
-//         const data = &[_]u8{ 1, 2, 3, 4 };
-//         try testing.expect(!atlas.modified);
-//         atlas_set(atlas, reg, data, data.len);
-//         try testing.expect(atlas.modified);
-//     }
+#[cfg(feature = "wasm")]
+pub mod wasm_exports {
+    // If you're copying this file (Atlas.zig) out to a separate project,
+    // just replace this with the allocator you want to use.
+    // const wasm = @import("../os/wasm.zig");
+    // const alloc = wasm.alloc;
+    // const js = @import("zig-js");
+    //
+    // PORT NOTE: `alloc` is `allocator_api2::alloc::Global` (the `std.alloc`
+    // analog every other `Atlas` call site in the port uses); `wasm` is
+    // `rustty_os::wasm`, whose host-ownership half this crate's `wasm` feature
+    // turns on. `js` has no analog — see `atlas_debug_canvas`.
+    use super::{Atlas, Format, Region};
+    use allocator_api2::alloc::Global;
+
+    // export fn atlas_new(size: u32, format: u8) ?*Atlas {
+    //
+    // PORT NOTE (`@enumFromInt(format)`): the reference's `@enumFromInt` on an
+    // untrusted C integer is UB for an out-of-range value. Out-of-range C integers
+    // are NEVER transmuted into Rust enums in this port, so `format` is narrowed
+    // with an explicit `match` and an unknown tag returns null — joining the
+    // reference's own `catch return null` failure channel rather than inventing a
+    // new one. This is a required, documented divergence.
+    #[no_mangle]
+    pub extern "C" fn atlas_new(size: u32, format: u8) -> *mut Atlas<Global> {
+        let format = match format {
+            0 => Format::Grayscale,
+            1 => Format::Bgr,
+            2 => Format::Bgra,
+            _ => return core::ptr::null_mut(),
+        };
+
+        // const atlas = init(alloc, size, @enumFromInt(format)) catch return null;
+        let atlas = match Atlas::init(Global, size, format) {
+            Ok(atlas) => atlas,
+            Err(_) => return core::ptr::null_mut(),
+        };
+
+        // const result = alloc.create(Atlas) catch return null;
+        // result.* = atlas;
+        // return result;
+        Box::into_raw(Box::new(atlas))
+    }
+
+    // export fn atlas_free(ptr: ?*Atlas) void {
+    /// # Safety
+    /// `ptr` must be null, or a pointer from `atlas_new` that has not been freed.
+    #[no_mangle]
+    pub unsafe extern "C" fn atlas_free(ptr: *mut Atlas<Global>) {
+        // if (ptr) |v| {
+        if !ptr.is_null() {
+            // v.deinit(alloc);
+            // alloc.destroy(v);
+            let v = unsafe { Box::from_raw(ptr) };
+            v.deinit(Global);
+        }
+    }
+
+    /// The return value for this should be freed by the caller with "free".
+    // export fn atlas_reserve(self: *Atlas, width: u32, height: u32) ?*Region {
+    /// # Safety
+    /// `self_` must be a live pointer from `atlas_new`.
+    #[no_mangle]
+    pub unsafe extern "C" fn atlas_reserve(
+        self_: *mut Atlas<Global>,
+        width: u32,
+        height: u32,
+    ) -> *mut Region {
+        // return atlas_reserve_(self, width, height) catch return null;
+        match unsafe { atlas_reserve_(self_, width, height) } {
+            Ok(reg) => reg,
+            Err(_) => core::ptr::null_mut(),
+        }
+    }
+
+    // fn atlas_reserve_(self: *Atlas, width: u32, height: u32) !*Region {
+    //
+    // PORT NOTE: the reference's error set is the union of the allocator's and
+    // `Atlas.Error`; `ReserveError` already models exactly that union in this
+    // file, and `to_host_owned`'s error joins it via the `?` on a mapped value.
+    unsafe fn atlas_reserve_(
+        self_: *mut Atlas<Global>,
+        width: u32,
+        height: u32,
+    ) -> Result<*mut Region, super::ReserveError> {
+        // const reg = try self.reserve(alloc, width, height);
+        let reg = unsafe { &mut *self_ }.reserve(Global, width, height)?;
+
+        // const result = try alloc.create(Region);
+        // errdefer alloc.destroy(result);
+        let result = Box::into_raw(Box::new(reg));
+
+        // _ = try wasm.toHostOwned(result);
+        //
+        // PORT NOTE: on failure the reference's `errdefer alloc.destroy(result)`
+        // runs; the Rust equivalent is to take the `Box` back so the allocation is
+        // released before propagating.
+        if unsafe { rustty_os::wasm::to_host_owned(result) }.is_err() {
+            drop(unsafe { Box::from_raw(result) });
+            return Err(super::ReserveError::OutOfMemory);
+        }
+
+        // result.* = reg;
+        // return result;
+        Ok(result)
+    }
+
+    // export fn atlas_set(self: *Atlas, reg: *Region, data: [*]const u8, len: usize) void {
+    /// # Safety
+    /// `self_`/`reg` must be live pointers and `data`/`len` a readable range.
+    #[no_mangle]
+    pub unsafe extern "C" fn atlas_set(
+        self_: *mut Atlas<Global>,
+        reg: *const Region,
+        data: *const u8,
+        len: usize,
+    ) {
+        // self.set(reg.*, data[0..len]);
+        //
+        // PORT NOTE: `data[0..len]` is a Zig byte-slice, so the Rust map is
+        // `&[u8]` — never a lossy `String` (the atlas holds raw texture bytes).
+        let bytes = unsafe { core::slice::from_raw_parts(data, len) };
+        unsafe { &mut *self_ }.set(unsafe { *reg }, bytes);
+    }
+
+    // export fn atlas_grow(self: *Atlas, size_new: u32) bool {
+    /// # Safety
+    /// `self_` must be a live pointer from `atlas_new`.
+    #[no_mangle]
+    pub unsafe extern "C" fn atlas_grow(self_: *mut Atlas<Global>, size_new: u32) -> bool {
+        // self.grow(alloc, size_new) catch return false;
+        // return true;
+        unsafe { &mut *self_ }.grow(Global, size_new).is_ok()
+    }
+
+    // export fn atlas_clear(self: *Atlas) void {
+    /// # Safety
+    /// `self_` must be a live pointer from `atlas_new`.
+    #[no_mangle]
+    pub unsafe extern "C" fn atlas_clear(self_: *mut Atlas<Global>) {
+        // self.clear();
+        unsafe { &mut *self_ }.clear();
+    }
+
+    // This creates a Canvas element identified by the id returned that
+    // the caller can draw into the DOM to visualize the atlas. The returned
+    // ID must be freed from the JS runtime by calling "zigjs.deleteValue".
+    // (Reproduced as a doc comment on `atlas_debug_canvas` itself, below.)
+    //
+    // PORT NOTE (wasm32-only): the reference block as a whole is wasm-only
+    // (`main_wasm.zig` is the only thing that analyzes it). Everything above is
+    // target-agnostic and therefore host-testable, but THIS function needs the
+    // browser's Canvas, so it — and only it — is additionally gated on
+    // `target_arch = "wasm32"`: an `env` import cannot resolve in a host link.
+    //
+    // PORT NOTE (no `zig-js`, no crate edge): the reference marshals JS objects
+    // (`document`, `canvas`, `ctx`, `Uint8ClampedArray`, `ImageData`) through
+    // `zig-js`. rustty's equivalent bridge is the primitives-and-buffers
+    // `rustty_wc_*` `env` import layer, whose JS half is
+    // `.port/tools/web-canvas-glue.mjs`. Those imports are declared LOCALLY here
+    // instead of by depending on `rustty-font-shaper` (which declares the same
+    // ones for its `web_canvas` face), because rustty-font is PURE and BELOW
+    // vt/shaper and must never gain that edge (R4 / memory
+    // apc-glyf-font-layering-d1).
+    //
+    // MAINTENANCE HAZARD, stated explicitly: wasm imports dedupe by
+    // `(module, name)`, so declaring the same import in two crates is legal ONLY
+    // while the signatures match byte-for-byte. A mismatch is a hard link error,
+    // so any change to `rustty-font-shaper`'s `ffi` declarations MUST be mirrored
+    // here (and in the glue).
+    //
+    // PORT NOTE (`wasm.shared_mem`): the reference builds a zero-copy
+    // `Uint8ClampedArray` VIEW over wasm memory, then — only when `shared_mem` is
+    // set — replaces it with `arr.slice()` because `ImageData` rejects a
+    // `SharedArrayBuffer`-backed array. The `rustty_wc_context_put_image_data` op
+    // ALWAYS copies out of wasm memory on the JS side, which is the shared-mem-safe
+    // branch; the non-shared branch's zero-copy view is therefore not reproduced.
+    // That is unobservable to the caller: `putImageData` consumes the pixels
+    // synchronously and the reference frees the buffer immediately after, so no
+    // caller can ever observe whether the bytes were viewed or copied. The
+    // `shared_mem` value is still read and recorded so the divergence is visible.
+    // export fn atlas_debug_canvas(self: *Atlas) u32 {
+    #[cfg(target_arch = "wasm32")]
+    #[link(wasm_import_module = "env")]
+    extern "C" {
+        /// `document.createElement("canvas")` → integer handle.
+        fn rustty_wc_canvas_new() -> u32;
+        /// Set `canvas.width`/`canvas.height` and the matching `style.width`/
+        /// `style.height` (`"{n}px"`) in one call.
+        fn rustty_wc_canvas_set_size(canvas: u32, width: u32, height: u32);
+        /// `canvas.getContext("2d")` → integer handle (stable per canvas).
+        fn rustty_wc_canvas_get_context(canvas: u32) -> u32;
+        /// `ctx.putImageData(new ImageData(<copy of ptr[0..len]>, w, h), x, y)`.
+        fn rustty_wc_context_put_image_data(
+            ctx: u32,
+            ptr: *const u8,
+            len: usize,
+            w: u32,
+            h: u32,
+            x: i32,
+            y: i32,
+        );
+    }
+
+    /// This creates a Canvas element identified by the id returned that
+    /// the caller can draw into the DOM to visualize the atlas. The returned
+    /// ID must be freed from the JS runtime by calling "zigjs.deleteValue".
+    ///
+    /// # Safety
+    /// `self_` must be a live pointer from `atlas_new`.
+    #[cfg(target_arch = "wasm32")]
+    #[no_mangle]
+    pub unsafe extern "C" fn atlas_debug_canvas(self_: *mut Atlas<Global>) -> u32 {
+        // return atlas_debug_canvas_(self) catch |err| {
+        //     log.warn("error dumping atlas canvas err={}", .{err});
+        //     return 0;
+        // };
+        match unsafe { atlas_debug_canvas_(self_) } {
+            Ok(id) => id,
+            Err(err) => {
+                eprintln!("warning: error dumping atlas canvas err={err:?}");
+                0
+            }
+        }
+    }
+
+    /// The failure channel of [`atlas_debug_canvas_`].
+    // PORT NOTE: the reference's error set is the allocator's plus
+    // `error.UnsupportedAtlasFormat` (the `else =>` arm of the format switch) plus
+    // `zig-js`'s marshalling errors. Only the format arm is reachable here.
+    #[cfg(target_arch = "wasm32")]
+    #[derive(Debug)]
+    enum DebugCanvasError {
+        // else => return error.UnsupportedAtlasFormat,
+        UnsupportedAtlasFormat,
+    }
+
+    // fn atlas_debug_canvas_(self: *Atlas) !u32 {
+    #[cfg(target_arch = "wasm32")]
+    unsafe fn atlas_debug_canvas_(self_: *mut Atlas<Global>) -> Result<u32, DebugCanvasError> {
+        let self_ = unsafe { &*self_ };
+
+        // Create our canvas
+        // const doc = try js.global.get(js.Object, "document");
+        // defer doc.deinit();
+        // const canvas = try doc.call(js.Object, "createElement", .{js.string("canvas")});
+        // errdefer canvas.deinit();
+        //
+        // PORT NOTE: the glue's `rustty_wc_canvas_new` IS
+        // `document.createElement("canvas")`, so the `document` lookup and the
+        // `deinit` handle bookkeeping happen on the JS side.
+        let canvas = unsafe { rustty_wc_canvas_new() };
+
+        // Setup our canvas size
+        {
+            // try canvas.set("width", self.size);
+            // try canvas.set("height", self.size);
+            //
+            // const width_str = try std.fmt.allocPrint(alloc, "{d}px", .{self.size});
+            // defer alloc.free(width_str);
+            //
+            // const style = try canvas.get(js.Object, "style");
+            // defer style.deinit();
+            // try style.set("width", js.string(width_str));
+            // try style.set("height", js.string(width_str));
+            //
+            // PORT NOTE: `rustty_wc_canvas_set_size` sets BOTH the attribute pair
+            // and the `"{n}px"` style pair in one op — the glue formats the string,
+            // so the reference's `allocPrint`/`free` pair has no port counterpart.
+            unsafe { rustty_wc_canvas_set_size(canvas, self_.size, self_.size) };
+        }
+
+        // This will return the same context on subsequent calls so it
+        // is important to reset it.
+        // const ctx = try canvas.call(js.Object, "getContext", .{js.string("2d")});
+        // defer ctx.deinit();
+        let ctx = unsafe { rustty_wc_canvas_get_context(canvas) };
+
+        // We need to draw pixels so this is format dependent.
+        // const buf: []u8 = switch (self.format) {
+        let buf: std::vec::Vec<u8> = match self_.format {
+            // .bgra => buf: {
+            Format::Bgra => {
+                // Convert from BGRA to RGBA by swapping every R and B.
+                // var buf: []u8 = try alloc.dupe(u8, self.data);
+                // errdefer alloc.free(buf);
+                let mut buf = self_.data.to_vec();
+                // var i: usize = 0;
+                // while (i < self.data.len) : (i += 4) {
+                //     std.mem.swap(u8, &buf[i], &buf[i + 2]);
+                // }
+                let mut i: usize = 0;
+                while i < self_.data.len() {
+                    buf.swap(i, i + 2);
+                    i += 4;
+                }
+                // break :buf buf;
+                buf
+            }
+
+            // .grayscale => buf: {
+            Format::Grayscale => {
+                // Convert from A8 to RGBA so every 4th byte is set to a value.
+                // var buf: []u8 = try alloc.alloc(u8, self.data.len * 4);
+                // errdefer alloc.free(buf);
+                // @memset(buf, 0);
+                let mut buf = std::vec![0u8; self_.data.len() * 4];
+                // for (self.data, 0..) |value, i| {
+                //     buf[(i * 4) + 3] = value;
+                // }
+                for (i, value) in self_.data.iter().enumerate() {
+                    buf[(i * 4) + 3] = *value;
+                }
+                // break :buf buf;
+                buf
+            }
+
+            // else => return error.UnsupportedAtlasFormat,
+            _ => return Err(DebugCanvasError::UnsupportedAtlasFormat),
+        };
+        // defer if (buf.ptr != self.data.ptr) alloc.free(buf);
+        //
+        // PORT NOTE: `buf` is an owned `Vec` on both arms (the reference `dupe`s on
+        // the BGRA arm too), so the pointer-comparison guard is unnecessary — the
+        // `Vec` frees itself at end of scope, which is the same free the reference
+        // performs.
+
+        // Create an ImageData from our buffer and then write it to the canvas
+        // const image_data: js.Object = data: { ... };
+        // defer image_data.deinit();
+        //
+        // Draw it
+        // try ctx.call(void, "putImageData", .{ image_data, 0, 0 });
+        //
+        // PORT NOTE: the whole `data:` block — reading `js.runtime.memory.buffer`,
+        // constructing the `Uint8ClampedArray` over it, the `shared_mem`
+        // `arr.slice()` copy branch, and the `new ImageData(arr, size, size)` — is
+        // performed by the single `rustty_wc_context_put_image_data` op, which
+        // always copies (see the shared-mem PORT NOTE above).
+        let _ = rustty_os::wasm::shared_mem;
+        unsafe {
+            rustty_wc_context_put_image_data(
+                ctx,
+                buf.as_ptr(),
+                buf.len(),
+                self_.size,
+                self_.size,
+                0,
+                0,
+            )
+        };
+
+        // const id = @as(js.Ref, @bitCast(@intFromEnum(canvas.value))).id;
+        // return id;
+        //
+        // PORT NOTE: the reference returns the `zig-js` ref id of the canvas, which
+        // the caller frees with `zigjs.deleteValue`; the port returns the glue's
+        // canvas handle, freed with `rustty_wc_canvas_free`. Same contract.
+        Ok(canvas)
+    }
+
+    // test "happy path" {
+    #[cfg(test)]
+    #[test]
+    fn happy_path() {
+        use core::sync::atomic::Ordering;
+
+        // const atlas = atlas_new(512, @intFromEnum(Format.grayscale)).?;
+        // defer atlas_free(atlas);
+        let atlas = atlas_new(512, Format::Grayscale as u8);
+        assert!(!atlas.is_null());
+
+        // const reg = atlas_reserve(atlas, 2, 2).?;
+        // defer alloc.destroy(reg);
+        let reg = unsafe { atlas_reserve(atlas, 2, 2) };
+        assert!(!reg.is_null());
+
+        // try testing.expect(wasm.isHostOwned(reg));                    [assert 1]
+        assert!(rustty_os::wasm::is_host_owned(reg));
+        // defer wasm.toModuleOwned(reg);
+
+        // try testing.expect(reg.width > 0);                            [assert 2]
+        assert!(unsafe { (*reg).width } > 0);
+
+        // const data = &[_]u8{ 1, 2, 3, 4 };
+        let data = [1u8, 2, 3, 4];
+
+        // try testing.expect(!atlas.modified);                          [assert 3]
+        //
+        // PORT NOTE: `atlas.modified` is a `std.atomic.Value(usize)` GENERATION
+        // COUNTER in the pinned oracle (`test "writing data"` reads
+        // `atlas.modified.load(.monotonic)` and asserts the new value is greater).
+        // This older `Wasm` test predates that change and reads the field as a
+        // bool. The port is faithful to the PINNED representation: capture the
+        // generation before `atlas_set` and assert it strictly increases after.
+        // The bool→generation change is UPSTREAM's, not a port divergence.
+        //
+        // Note the reference's literal `!atlas.modified` is UNSATISFIABLE in the
+        // pinned representation: `init` ends with `result.clear()`, and `clear`
+        // does `_ = self.modified.fetchAdd(1, .monotonic)`, so a freshly-created
+        // atlas is already at generation 1. The strictly-increases comparison is
+        // therefore the only faithful reading of asserts 3+4 against the pinned
+        // field, and it is exactly what the pinned `test "writing data"` asserts.
+        let before = unsafe { &*atlas }.modified.load(Ordering::Relaxed);
+
+        // atlas_set(atlas, reg, data, data.len);
+        unsafe { atlas_set(atlas, reg, data.as_ptr(), data.len()) };
+
+        // try testing.expect(atlas.modified);                           [assert 4]
+        let after = unsafe { &*atlas }.modified.load(Ordering::Relaxed);
+        assert!(after > before);
+
+        // defer wasm.toModuleOwned(reg);
+        unsafe { rustty_os::wasm::to_module_owned(reg) };
+        // defer alloc.destroy(reg);
+        drop(unsafe { Box::from_raw(reg) });
+        // defer atlas_free(atlas);
+        unsafe { atlas_free(atlas) };
+    }
+}
 // };
 
 // PORT NOTE: tripwire fail-point enums + thread-local modules + check helpers for

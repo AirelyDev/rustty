@@ -1776,28 +1776,40 @@ impl WorkingDirectory {
             return;
         }
 
+        // WS14 T6 (wasm32 arm): a browser has no home directory to expand `~/`
+        // against, so wasm returns exactly as the `expandHome` error arm below does.
+        // The reference never analyses this on wasm (Zig analyses `config.zig.Wasm`
+        // lazily, so it never forces `internal_os.expandHome`); Rust compiles whole
+        // crates, so the arm has to exist.
+        #[cfg(target_family = "wasm")]
+        return;
+
         // var buf: [std.fs.max_path_bytes]u8 = undefined;
         // PORT NOTE: `std.fs.max_path_bytes` is the platform max path length
         // (4096 on Linux/macOS); we size the stack buffer the same.
+        #[cfg(not(target_family = "wasm"))]
         let mut buf = [0u8; MAX_PATH_BYTES];
         // const expanded = internal_os.expandHome(path, &buf) catch |err| {
         //     log.warn(...);
         //     return;
         // };
-        let expanded = match rustty_os::homedir::expandHome(&path, &mut buf) {
-            Ok(v) => v,
-            Err(_err) => {
-                // log.warn("error expanding home directory for working-directory path={s}: {}", ...);
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let expanded = match rustty_os::homedir::expandHome(&path, &mut buf) {
+                Ok(v) => v,
+                Err(_err) => {
+                    // log.warn("error expanding home directory for working-directory path={s}: {}", ...);
+                    return;
+                }
+            };
+
+            // if (std.mem.eql(u8, expanded, path)) return;
+            if expanded == &path[..] {
                 return;
             }
-        };
-
-        // if (std.mem.eql(u8, expanded, path)) return;
-        if expanded == &path[..] {
-            return;
+            // self.* = .{ .path = try alloc.dupe(u8, expanded) };
+            *self = WorkingDirectory::Path(expanded.to_vec());
         }
-        // self.* = .{ .path = try alloc.dupe(u8, expanded) };
-        *self = WorkingDirectory::Path(expanded.to_vec());
     }
 
     // pub fn value(self: Self) ?[]const u8

@@ -52,3 +52,26 @@ mod wasm_impl {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_impl::{alloc, shared_mem};
+
+// PORT NOTE — RESURRECTED REFERENCE CODE. The pinned oracle's `src/os/wasm.zig`
+// no longer contains this block: commit `9dc2e5978` ("lib-vt: enable freestanding
+// wasm builds (#9301)", 2025-10-21) deleted 90 lines — the `allocs` tracker,
+// `malloc`, `free`, `toHostOwned`, `isHostOwned`, `toModuleOwned` and their two
+// `test {}` blocks — leaving `font/Atlas.zig`'s `Wasm` block and
+// `font/face/web_canvas.zig` referencing symbols that no longer exist (they are
+// not analyzed upstream because `main_wasm.zig` is referenced nowhere in
+// `build.zig`). rustty resurrects them, per the same user decision that
+// resurrected `web_canvas.zig` (DEFERRALS.md, WASM/web target RESIDUAL #1), so
+// that `Atlas.Wasm` and its 4-assert reference test can be ported LIVE.
+// Reference text: `git -C ../ghostty show 9dc2e5978^:src/os/wasm.zig` lines 27-115.
+//
+// NOT wasm-gated (unlike `wasm_impl` above): the tracker is a plain hash map with
+// no target-specific behavior, so gating it on `target_arch = "wasm32"` would make
+// the two reference tests unrunnable. The reference's `comptime` isWasm guard is
+// what forced wasm-only analysis there; here the `wasm-host-owned` cargo feature
+// carries the "only in the wasm build" intent while keeping the code host-testable.
+#[cfg(feature = "wasm-host-owned")]
+pub mod host_owned;
+
+#[cfg(feature = "wasm-host-owned")]
+pub use host_owned::{free, is_host_owned, malloc, to_host_owned, to_module_owned, HostOwnedError};

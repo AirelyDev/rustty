@@ -6,7 +6,9 @@
 //! Per `GPU_RD_TRAIT_DESIGN.md` §D + the committed monomorphic decision, the
 //! reference `pub fn Renderer(comptime GraphicsAPI: type) type` is ported as a
 //! CONCRETE `Renderer` over the concrete `Metal` leaf types (a set of one — no
-//! `GraphicsAPI` trait hierarchy; OpenGL is Linux-deferred, WebGL wasm-deferred).
+//! `GraphicsAPI` trait hierarchy; OpenGL is Linux-deferred). The `.webgl` arm does
+//! NOT come through here at all: the reference selects the bare `WebGL` type for it
+//! (renderer.zig:41), a 2-line placeholder ported COMPLETE at `crate::webgl`.
 //!
 //! PORT STATUS (GPU R-d OFFSCREEN slice — Chunks 3a–4, DONE):
 //!

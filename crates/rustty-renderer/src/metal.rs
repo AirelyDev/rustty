@@ -4,8 +4,9 @@
 //! Metal draw path that `GenericRenderer(Metal)` is monomorphized over. Per the
 //! GPU R-d sub-blueprint (`GPU_RD_TRAIT_DESIGN.md`), the port is MONOMORPHIC:
 //! the concrete `Metal` leaf types, no `GraphicsApi` trait hierarchy (a set of
-//! one — OpenGL is Linux-deferred, WebGL is wasm-deferred; the trait is a
-//! documented Goal-2 seam only).
+//! one — OpenGL is Linux-deferred; the trait is a documented Goal-2 seam only).
+//! WebGL is not a `GraphicsApi` at all: the reference's `.webgl` arm selects the
+//! bare 2-line `WebGL` placeholder, ported COMPLETE at `crate::webgl` (WS14).
 //!
 //! PORT STATUS (GPU R-d OFFSCREEN slice — Chunks 0–4, DONE):
 //!
@@ -29,7 +30,8 @@
 //! DEFERRED (a later tier, `GPU_RD_BLUEPRINT.md`): the Frame async
 //! `addCompletedHandler` present + the real windowed layer-present path
 //! (windowing-host seam); `Metal::init` (needs a live NSView/IOSurfaceLayer);
-//! Target's DisplayP3 `set_color_space`; and the OpenGL/WebGL/GTK backends.
+//! Target's DisplayP3 `set_color_space`; and the OpenGL/GTK backends (WebGL is
+//! ported complete — `crate::webgl`, a 2-line reference placeholder).
 
 pub mod api;
 pub mod buffer;
