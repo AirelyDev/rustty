@@ -1804,3 +1804,38 @@ the run boundaries fall), which is a logic property fully covered natively in
 both the `simd` and non-`simd` configurations.
 
 Owned by WS10 (OPEN).
+
+### The differential fuzz test — a THIRD exception, different reason
+
+`terminal_print_slice_differential_fuzz_vs_print` (`terminal.rs`) is the port of
+`47e26df60`'s own `test "Terminal: printSlice differential fuzz vs print"`. It is
+annotated `#[cfg_attr(miri, ignore)]` for the ordinary intractability reason, not
+the FFI one:
+
+| test | file | measured | annotation |
+|---|---|---|---|
+| `terminal_print_slice_differential_fuzz_vs_print` | `terminal.rs` | **>40 min, killed** (6-min bound) | `cfg_attr(miri, ignore)` |
+
+* **Criterion 1 (intractable) — MEASURED, not assumed.** 1 700 randomized ops
+  across four terminal geometries, each followed by two full-screen
+  `dump_string_alloc` walks and a cursor comparison, plus two `verify_integrity`
+  page walks. Native: 42s. Under Miri: still running at >40 min of interpreter
+  time when killed. The three sibling tests finish in ~10s each under Miri.
+* **Criterion 2 (passes natively).** Yes — `cargo test -p rustty-vt --lib
+  terminal_print_slice` -> 4 passed, in both the default and `--features simd`
+  lanes.
+* **Criterion 3 (no uncovered unsafe path) — the teeth.** The fuzz exercises no
+  unsafe code the other three do not. `terminal_print_slice_simple_ascii`,
+  `terminal_print_slice_wraps_and_scrolls` and
+  `terminal_print_slice_pending_wrap_state` all enter `print_slice` ->
+  `print_slice_fast` -> `print_slice_fill` -> `print_slice_fill_inner` and reach
+  `print_slice_store_run` (the raw-pointer cell-run store), the simple-cell scan,
+  the row-advance and the pending-wrap path. Miri: `cargo +nightly miri test -p
+  rustty-vt --lib terminal_print_slice` -> **3 passed, 0 failed, 1 ignored, clean,
+  15.64s.** The fuzz's extra value is BEHAVIOURAL breadth (does batched output
+  equal per-codepoint output across margins/modes/charsets/hyperlinks), which is
+  fully delivered natively.
+* **Criterion 4 (volume, not logic).** Op count x screen-dump cost, evidenced by
+  the linear relationship between the `ops` argument and native runtime.
+
+Owned by WS10 (OPEN).

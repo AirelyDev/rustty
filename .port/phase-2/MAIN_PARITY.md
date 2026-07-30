@@ -198,6 +198,72 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 
 ---
 
+## 3b. BL-4 rows ported by WS10 T11/T16/T17 (beyond-pin, 2026-07-30)
+
+These strike their §3 rows above. Every one is beyond the pin, so the fidelity
+target is the named commit read with `git -C ../ghostty show`, not the pinned
+working tree (`.port/ORACLE_SYNC.md`'s pin is unchanged).
+
+| upstream | subject | rustty commit | notes |
+|---|---|---|---|
+| `7e14347c1` | terminal: bound page map probe lengths | `f1730b2` + `b8d24a6` | `hash_map.zig` +472 (the real substance), `page.zig`/`hyperlink.zig`/`Screen.zig` hunks, and `benchmark/HyperlinkMap.zig` |
+| `47e26df60` | terminal: batch printed codepoint runs into direct row fills | `6cffd25` | |
+| `cb2d78587` | terminal: fill style-only cell runs in bulk in printSliceFill | `6cffd25` | fused with `47e26df60` — it rewrites that commit's loop interiors, see the commit message |
+| `f2a7652ab` | mitchell's touchups | `587e5ae` + `6cffd25` + `f1730b2` | IN SCOPE ONLY IN PART — see the hunk-by-hunk sweep below |
+| `f6f79acce` | terminal: dispatch APC string bytes in bulk slices | `f96957c` | incl. `synthetic/Kitty.zig`, `synthetic/cli/Kitty.zig`, `benchmark/ApcParser.zig` |
+| `8c523ed03` | terminal: vectorize APC payload scanning | `f96957c` | |
+
+### `f2a7652ab` hunk-by-hunk (35 files; its subject reads as pure cleanup and is NOT)
+
+PORTED:
+* `src/simd/main.zig` — `lanes(T)` -> `rustty_simd::lanes` (`587e5ae`).
+* `src/terminal/Terminal.zig` (+155) — the manual `@Vector` fill/scan loops
+  (`6cffd25`).
+* `src/terminal/stream.zig` — the lane-wise printable-run scan (`6cffd25`).
+* `src/terminal/hash_map.zig` — the force-inline of the auto context's hash.
+  Ported as `#[inline]` on `AutoContext::hash` (`f1730b2`+); the
+  `hasUniqueRepresentation` split selects between two Zig std hashers and has no
+  counterpart in a port with one.
+
+NOT APPLICABLE — each checked against the rustty source, not assumed:
+* `src/quirks_memset.zig` (+322) — **must NOT be ported**, see
+  `VERIFICATION_DEBT.md`'s `quirks_memset` caveat and the WS10 plan's PREMISE
+  CORRECTION §1.
+* `src/unicode/props.zig` + `src/unicode/grapheme.zig` — explicit `_padding` to
+  give the packed structs a power-of-two backing integer, a workaround for Zig
+  0.16 lowering loads/stores through exotic-width LLVM integers (`i9`/`i4`).
+  rustty's `Properties` (`crates/rustty-unicode/src/props.rs:41`) and
+  `Precompute::Value` (`grapheme.rs:220`) are ordinary Rust structs with natural
+  field layout; rustc never emits the exotic-width accesses, so the workaround has
+  nothing to work around.
+* `src/config/path.zig` — this is a real BUG FIX (`realPathFile(io, ".", &buf)`
+  -> `realPathFile(io, path, &buf)`, `dir_len` -> `abs_len`), but the bug was
+  INTRODUCED after the pin by upstream's `std.Io` migration. At `4749c4e93` the
+  line is already `dir.realpath(path, &buf)`, which is what rustty ported. No
+  rustty-side defect.
+* `src/benchmark/TerminalStream.zig` — "avoid buffers to avoid a memcpy"
+  (unbuffered `f.reader(io, &.{})`). rustty's `options::read_slice_short` already
+  reads straight from the `DataFile` with no intermediate reader buffer; the PORT
+  NOTE at `crates/rustty-bench/src/terminal_stream.rs` already records this.
+* `src/build/Config.zig` (`omitFramePointer`), `src/build/GhosttyExe.zig`,
+  `GhosttyLib.zig`, `GhosttyLibVt.zig`, `LibsystemOverrideStep.zig`,
+  `libsystem_override.sh` — Zig build-system. The frame-pointer half has no
+  rustty action: rustc's aarch64-apple-darwin target spec already sets
+  `frame-pointer = non-leaf` (Apple's ABI requires x29), which is exactly what
+  the hunk restores on the Zig side; no `-C force-frame-pointers` is needed and
+  none is added.
+* `src/global.zig` / `main.zig` / `main_bench.zig` / `main_c.zig` /
+  `main_gen.zig` / `lib_vt.zig` / `benchmark/cli.zig` / `synthetic/cli.zig` —
+  `InitOpts.tool` plus the `global.io()`-before-init UB fix. rustty-bench's
+  `main()` uses the process `Global` allocator with no `global.init` at all, and
+  rustty-synthetic writes through its own `StdoutWriter`; there is no
+  global-init ordering to get wrong.
+* `build.zig.zon`, `build.zig.zon.json/.nix/.txt`, `flatpak/zig-packages.json`,
+  `nix/build-support/update-mirror.nu`, `pkg/*/build.zig.zon` — Zig dependency
+  lockfiles.
+
+---
+
 ## 4. Standing ritual (R12)
 
 Re-run this triage per sub-project completion and at minimum whenever the pin conversation resumes:

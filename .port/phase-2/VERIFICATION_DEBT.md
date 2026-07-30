@@ -1157,3 +1157,57 @@ like-for-like once rustty has ported the BL-4 bench-corpus commits.
 Re-owned from WS10 to **Phase 3 (`BEYOND-PIN`)** under the scope decision above.
 Content merged into V17. Retained as a heading only so the id's history is
 traceable.
+
+---
+
+## V18. `f2a7652ab`'s two BL-4 perf configs have no paired oracle number — **OWNER: Phase 3 — `BEYOND-PIN`** [WS10 T11/T16/T17, 2026-07-30]
+
+WS10 T11 and T17 each add a rustty-bench config that the pinned oracle binary
+does not have, because both were introduced upstream AFTER the pin:
+
+| config | upstream commit | rustty commit |
+|---|---|---|
+| `hyperlink-map` (`--mode=lookup\|churn`) | `7e14347c1` | `b8d24a6` |
+| `apc-parser` | `f6f79acce` | `f96957c` |
+
+The only oracle bench binary on this host is
+`.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench`, built from the pin
+`4749c4e93` and byte-stable since 2026-06-21 (see V15). It has neither action.
+The pinned oracle needs Zig 0.15.2; this host has 0.16.0, so it cannot be
+rebuilt and `origin/main` cannot be built at all.
+
+**Both configs are therefore rustty-only, SELF-fenced, and neither counts toward
+the 14/14.** They are still worth running as self-fences (a rustty-vs-rustty A/B
+across a change) — that is what they are wired for today.
+
+### Recipe (once the pin advances and a modern Zig is present)
+
+```
+# oracle at or after the commit that adds the action
+git -C ../ghostty worktree add /tmp/oracle-bl4 7e14347c1   # or f6f79acce
+zig build -Doptimize=ReleaseFast --prefix /tmp/oracle-bl4-out  # in that worktree
+
+# hyperlink-map: no corpus needed
+/tmp/oracle-bl4-out/bin/ghostty-bench +hyperlink-map --mode=churn --entries=4096
+cargo run -p rustty-bench --profile release-fast -- +hyperlink-map --mode=churn --entries=4096
+
+# apc-parser: generate the corpus with EACH side's own generator
+/tmp/oracle-bl4-out/bin/ghostty-gen +kitty > /tmp/kitty-zig.bin
+cargo run -p rustty-synthetic --profile release-fast -- +kitty > /tmp/kitty-rs.bin
+# ... then +apc-parser --data=<corpus> on both, under
+# .port/tools/perf/ws10_suite.py's paired A/B methodology (same session,
+# back-to-back, N>=7, idle gate armed).
+```
+
+**Expected outcome, pre-stated so it is not misread:** these two configs measure
+paths upstream rewrote for exactly these numbers (`7e14347c1` reports 100x on map
+churn; `f6f79acce` reports ~25x on `apc-parser`, `8c523ed03` a further 1.69x).
+rustty has now ported all of that, so the two sides should be COMPARABLE. A large
+oracle win on either would mean a porting gap, not measurement noise; a large
+rustty win would most likely mean the corpus differs (the two generators are
+independently seeded — always compare each side against its own generator's
+output AND against the other's, and say which).
+
+**Not a deferral.** The implementation is complete and behaviourally tested (see
+the two commits above). Only the oracle-anchored NUMBER is outstanding, and only
+because of the toolchain gap V15 describes.

@@ -120,6 +120,17 @@ impl<K> Default for AutoContext<K> {
 }
 
 impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
+    // PORT NOTE (`f2a7652ab`'s `hash_map.zig` hunk, WS10 T16): upstream replaced
+    // `std.hash_map.getAutoHashFn` with an explicit body that force-inlines the
+    // hash for `hasUniqueRepresentation(K)` types, because "LLVM 21 (Zig 0.16)
+    // failed to inline this which resulted in a measurable almost 2x slowdown on
+    // our hyperlink map benchmark". This port's context is already an explicit
+    // body (see the note above), so the portable half of that change is the
+    // inlining hint — `#[inline]` is the Rust spelling of
+    // `@call(.always_inline, ...)` across the crate boundary. The
+    // `hasUniqueRepresentation` split has no counterpart: it selects between two
+    // Zig std hashers, and this port has one.
+    #[inline]
     fn hash(&self, key: K) -> u64 {
         use core::hash::Hasher;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

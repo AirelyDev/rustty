@@ -15749,6 +15749,14 @@ mod tests {
 
     // test "Terminal: printSlice differential fuzz vs print"
     #[test]
+    // MIRI: 1700 randomized ops across four terminal geometries, each op
+    // followed by two full-screen dumps and a cursor comparison, plus two
+    // `verify_integrity` page walks at the end. Measured: killed at >40 min of
+    // interpreter time against this repo's 6-minute hard bound (the three
+    // sibling `terminal_print_slice_*` tests finish in ~10s each and DO run
+    // under Miri, covering the same `print_slice_fill` raw-pointer writes).
+    // Registered in .port/phase-2/MIRI_EXCEPTIONS.md (WS10 T16).
+    #[cfg_attr(miri, ignore)]
     fn terminal_print_slice_differential_fuzz_vs_print() {
         // Multiple seeds and terminal sizes for coverage, including a
         // tiny terminal to stress wrap/scroll edge cases.
