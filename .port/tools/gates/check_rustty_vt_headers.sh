@@ -51,7 +51,60 @@ wasm=target/wasm32-unknown-unknown/release/rustty_vt_c.wasm
 grep -oE 'rustty_[a-z0-9_]+' include/rustty.h | sort -u > "$T/vt_cbindgen.txt"
 missing=$(comm -23 "$(comm -12 "$T/vt_decl.txt" "$T/vt_cbindgen.txt" > "$T/vt_both.txt"; echo "$T/vt_both.txt")" "$T/vt_exp.txt")
 if [ -n "$missing" ]; then echo "  MISMATCH — declared+cbindgen but NOT exported:"; echo "$missing" | sed 's/^/    /'; exit 1; fi
-echo "  OK ($(wc -l < "$T/vt_both.txt" | tr -d ' ') symbols cross-checked)"
+
+# --- (b') the vacuous-shrink guard (P3-W0 T2 step 3) ------------------------
+# Arm (b) asserts `(vt.h ∩ cbindgen) ⊆ exports`, and an INTERSECTION can be made
+# to shrink. Two ways: delete a declaration from a curated header, or let the
+# cbindgen header go stale. The second one was LIVE when this guard was written:
+# `include/rustty.h` was missing rustty_render_state_begin_update/_end_update
+# (WS10 T19 ported the exports but never re-ran `xtask header-gen`), so arm (b)
+# quietly cross-checked 183 symbols instead of 185 and reported OK. Regenerating
+# the header added exactly those two declarations and nothing else.
+#
+# So pin BOTH sides of the shrink:
+#   * a FLOOR on the intersection's cardinality, and
+#   * an EXACT identity for `vt_decl \ intersection` — the tokens the curated
+#     headers mention that are deliberately not cbindgen exports.
+# Neither can be satisfied by deleting anything.
+VT_BOTH_FLOOR=185
+both_n=$(wc -l < "$T/vt_both.txt" | tr -d ' ')
+if [ "$both_n" -lt "$VT_BOTH_FLOOR" ]; then
+  echo "  VACUOUS SHRINK — the (vt.h ∩ cbindgen) intersection is $both_n, below the"
+  echo "  recorded floor of $VT_BOTH_FLOOR. Either a declaration was deleted from a"
+  echo "  curated header, or include/rustty.h is stale (re-run"
+  echo "  \`cargo run -p xtask -- header-gen\`). Raising the floor is only correct"
+  echo "  when the surface genuinely grew."
+  exit 1
+fi
+# The 5 tokens in the curated headers that are NOT cbindgen exports:
+#   rustty_mode_new / rustty_mode_ansi / rustty_mode_value
+#     function-like MACROS (include/rustty/vt/modes.h), not symbols.
+#   rustty_osc_
+#     a prose fragment in a doc comment (include/rustty/vt/osc.h:88).
+#   rustty_vt_osc_free
+#     a doc TYPO inherited verbatim from upstream's `ghostty_vt_osc_free`
+#     (include/rustty/vt/osc.h:99). R1-FAITHFUL — do NOT "fix" it; the port
+#     reproduces the oracle's prose, typos included.
+cat > "$T/vt_nonabi.txt" <<'NONABI'
+rustty_mode_ansi
+rustty_mode_new
+rustty_mode_value
+rustty_osc_
+rustty_vt_osc_free
+NONABI
+sort -u "$T/vt_nonabi.txt" -o "$T/vt_nonabi.txt"
+comm -23 "$T/vt_decl.txt" "$T/vt_both.txt" > "$T/vt_declonly.txt"
+if ! diff -q "$T/vt_nonabi.txt" "$T/vt_declonly.txt" >/dev/null; then
+  echo "  MISMATCH — the set of curated-header tokens that are NOT cbindgen"
+  echo "  exports changed. Expected exactly the 5 documented non-ABI tokens."
+  echo "  '<' = expected but gone, '>' = unexpected new token:"
+  diff "$T/vt_nonabi.txt" "$T/vt_declonly.txt" | grep '^[<>]' | sed 's/^/    /'
+  echo "  A NEW '>' row usually means include/rustty.h is stale: re-run"
+  echo "  \`cargo run -p xtask -- header-gen\`. Do not delete a declaration."
+  exit 1
+fi
+echo "  OK ($both_n symbols cross-checked, floor $VT_BOTH_FLOOR; \
+$(wc -l < "$T/vt_nonabi.txt" | tr -d ' ') documented non-ABI tokens)"
 
 # WS19 T3. Arm (b) is ONE-DIRECTIONAL: it asserts
 #   (vt.h ∩ cbindgen) ⊆ exports
@@ -139,5 +192,13 @@ $(wc -l < "$T/a5_allow.txt" | tr -d ' ') documented residual(s), owner: Phase 3 
 
 echo "== (c) struct layouts match rustty_type_json() =="
 node .port/tools/check-vt-struct-layouts.mjs
+
+# P3-W0 T2 step 5. The missing analogue of upstream's `checkGhosttyHEnum`
+# (`src/lib/enum.zig`): nothing in this port compared a Rust enum's
+# discriminants to the header's enumerator values. Arm (b) compares symbol
+# NAMES; arm (c) compares struct LAYOUTS; neither looks at an enum's values, so
+# a header/Rust skew is a silent mis-dispatch rather than a compile error.
+echo "== (e) enum discriminants match the curated headers =="
+node .port/tools/check-vt-enum-discriminants.mjs
 
 echo "VT-HEADERS: GREEN"

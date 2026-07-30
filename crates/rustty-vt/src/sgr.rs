@@ -65,6 +65,7 @@ impl Default for SepList {
     }
 }
 
+/// C: RusttySgrUnderline (R2) — checked by the A5 enum-discriminant arm.
 /// Underline style (sub-parameter of SGR 4).
 // PORT NOTE: the reference `Attribute.Underline` is `enum(u3)`. Hoisted to a
 // top-level enum (Rust has no nested enum types); `#[repr(u8)]` since Rust has

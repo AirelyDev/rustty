@@ -8,6 +8,7 @@
 // `std.testing` usage inside the `ScrollMods` test; no runtime std use, so there
 // is no import to mirror here.
 
+/// C: RusttyMouseAction (R2) — checked by the A5 enum-discriminant arm.
 /// The type of action associated with a mouse event. This is different
 /// from ButtonState because button state is simply the current state
 /// of a mouse button but an action is something that triggers via
@@ -35,6 +36,7 @@ pub enum ButtonState {
     Press,
 }
 
+/// C: RusttyMouseButton (R2) — checked by the A5 enum-discriminant arm.
 /// Possible mouse buttons. We only track up to 11 because that's the maximum
 /// button input that terminal mouse tracking handles without becoming
 /// ambiguous.

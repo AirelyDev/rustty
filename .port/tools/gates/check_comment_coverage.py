@@ -31,7 +31,15 @@ GATES = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, GATES)
 import _gatelib as G  # noqa: E402
 
-GHOSTTY_SRC = os.environ.get("GHOSTTY_SRC", "/Users/gael/projects/ghostty/src")
+# NOT env-overridable, deliberately. This used to be
+# `os.environ.get("GHOSTTY_SRC", ...)`, which is a spoof hole of exactly the
+# shape `ci.sh:114-129` documents for the test-count gate: point the variable at
+# an empty or fake tree and every reference file is missing, so the gate finds
+# zero reference sentences everywhere and reports full coverage against nothing.
+# The oracle is an EXTERNAL read-only reference (R3) at one hard-coded path;
+# `P3-W10 T3` advances that real tree, which is the only supported way to change
+# what this gate reads.
+GHOSTTY_SRC = "/Users/gael/projects/ghostty/src"
 INV = os.path.join(G.RUSTTY_ROOT, ".port", "phase-0", "inventory")
 sys.path.insert(0, INV)
 import census_comments as CC  # noqa: E402  (reuse string-aware find_comment_start)

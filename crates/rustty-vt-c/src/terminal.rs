@@ -1509,6 +1509,7 @@ pub type DeviceAttributes = CDeviceAttributes;
 // for future expansion") and must NEVER change (ABI stability).
 pub type ScrollViewport = ScrollViewportC;
 
+/// C: RusttyTerminalScrollViewportTag (R2) — checked by the A5 enum-discriminant arm.
 /// The C ABI compatible tag for `ScrollViewport`.
 // PORT NOTE: `Tag = lib.Enum(lib.target, &.{ "top", "bottom", "delta", "row" })`;
 // for the `.c` target a fieldless `enum(c_int)` in key order. `Row` is appended

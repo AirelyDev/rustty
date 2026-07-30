@@ -480,6 +480,7 @@ impl CellList {
     }
 }
 
+/// C: RusttyRenderStateDirty (R2) — checked by the A5 enum-discriminant arm.
 // Dirty state.
 // PORT NOTE: `Dirty = lib.Enum(lib.target, &.{ "false", "partial", "full" })`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
