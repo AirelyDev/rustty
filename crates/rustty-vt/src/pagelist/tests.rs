@@ -2105,6 +2105,10 @@ fn pagelist_trailing_row_truncation_renews_page_generation() {
 }
 
 /// PORTS: the memoryStats assertions in oracle 0d015b2fc / 6d5dda40d.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.50s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2138,6 +2142,10 @@ fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
 
 /// Incremental compression converges: repeated steps eventually report
 /// `Complete`, having compressed the cold history.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (2.51s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_compress_incremental_converges_to_complete() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2165,6 +2173,10 @@ fn pagelist_compress_incremental_converges_to_complete() {
 
 /// `Drain` performs incremental steps until the pass and its verification pass
 /// finish, in one call.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (2.49s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_compress_drain_finishes_in_one_call() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2181,6 +2193,10 @@ fn pagelist_compress_drain_finishes_in_one_call() {
 }
 
 /// PageList mutations bump the activity token so schedulers know to recompress.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (0.50s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_mutations_mark_compression_activity() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2197,6 +2213,10 @@ fn pagelist_mutations_mark_compression_activity() {
 
 /// A node destroyed between steps must not strand the traversal cursor: the
 /// next step restarts safely rather than skipping newly allocated pages.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (4.48s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_compress_incremental_restarts_after_list_mutation() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2219,6 +2239,10 @@ fn pagelist_compress_incremental_restarts_after_list_mutation() {
 }
 
 /// Full mode compresses everything eligible and leaves no continuation state.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.49s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (361s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_compress_full_mode_leaves_no_continuation() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2240,6 +2264,10 @@ fn pagelist_compress_full_mode_leaves_no_continuation() {
 
 /// A cold history page compresses, its mapping is discarded, and reading it
 /// back restores identical bytes.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.00s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_compress_page_round_trips_a_cold_history_page() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2270,6 +2298,10 @@ fn pagelist_compress_page_round_trips_a_cold_history_page() {
 }
 
 /// Compressing twice is a no-op: `compress_page` only accepts resident nodes.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.00s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_compress_page_rejects_an_already_compressed_node() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
@@ -2290,6 +2322,10 @@ fn pagelist_compress_page_rejects_an_already_compressed_node() {
 #[cfg_attr(
     not(debug_assertions),
     ignore = "tripwire failure injection is disabled without debug_assertions"
+)]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.00s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
 )]
 #[test]
 fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
@@ -2328,6 +2364,10 @@ fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
 
 /// A full pass compresses every complete offscreen history page and leaves the
 /// viewport and active pages resident.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt page-compression intractable, .port/phase-2/MIRI_EXCEPTIONS.md 'WS7 Phase E'): LZ4-compresses and verifies whole std-capacity (215x215) page mappings, so it is the slowest class of PageList test natively (1.51s in debug vs ~0.00s for a typical PageList test) and TIMEOUT at a 6-min bound under Miri (360s), measured per-test in single-worker isolation, not assumed from the class; covered natively + by ASan"
+)]
 #[test]
 fn pagelist_compress_full_leaves_viewport_and_active_resident() {
     let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
