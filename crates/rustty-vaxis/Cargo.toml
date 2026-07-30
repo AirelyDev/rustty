@@ -8,14 +8,35 @@
 # absent from that crate_map. Its value-type semantics must nonetheless be
 # byte-faithful (the Key matchers rely on `std.meta.eql` over packed structs).
 #
-# CHUNK 1a ports the CORE VALUE TYPES only: Cell.zig (Style/Color/Segment/Cell +
-# SGR bits), Key.zig (Key + constants + matchers + Modifiers/KittyFlags packed
-# structs), Mouse.zig, GraphemeCache.zig, the Winsize struct (main.zig:38), and the
-# Image STRUCT SHAPE (zigimg/Window method bodies are R5 unimplemented!() seams).
-# gwidth.zig + unicode.zig are DEFERRED to Chunk 1b (uucode-0.1.0 width-table
-# blocker — DEFERRALS.md). Pure Rust, NO dependencies (R3/R4 acyclic leaf).
+# PORT STATUS: the chunk sequence 1a-4b is FINISHED and, as of WS12, the IMAGE TIER IS
+# LIVE. The only remaining seams are the `#[cfg(windows)]` family (`WindowsTty`, the
+# windows `tty_run` arm, `TestTty::next_event`) — see src/lib.rs and DEFERRALS.md
+# "rustty-vaxis Chunk 3b".
 #
-# The leak/UB gate is Miri (R6, pure-Rust crate, no FFI).
+# HISTORY (this block previously asserted two things that are now false; corrected in
+# WS12 T8 rather than left to rot):
+#   - "gwidth.zig + unicode.zig are DEFERRED to Chunk 1b (uucode-0.1.0 width-table
+#     blocker)" — FALSE since commit e0abb03 (2026-07-10). Chunk 1b LANDED: `build.rs`
+#     regenerates the uucode-0.1.0 stage1/stage2 tables from the vendored UCD 16.0.0
+#     corpus in `ucd/`, and `gwidth.rs`/`unicode.rs` are live. The uucode fork was
+#     decided as Option B and RATIFIED 2026-07-29 (.port/phase-2/VAXIS_C1B_DESIGN.md,
+#     "WS12 decisions"), with the non-vacuity of its table gate proven in WS12 T4.
+#   - "Pure Rust, NO dependencies (R3/R4 acyclic leaf)" — FALSE. This crate has TWO
+#     dependencies: `libc` (Chunk 3b's termios/ioctl/sigaction FFI, see below) and, since
+#     WS12, `rustty-zigimg`. It is still an acyclic near-leaf (R4): neither dep has an
+#     edge back here, and the new edge is `rustty-vaxis -> rustty-zigimg ->
+#     {rustty-wuffs, zlib-sys}` with no back-edge.
+#
+# CHUNK 1a ported the CORE VALUE TYPES: Cell.zig (Style/Color/Segment/Cell + SGR bits),
+# Key.zig (Key + constants + matchers + Modifiers/KittyFlags packed structs), Mouse.zig,
+# GraphemeCache.zig, the Winsize struct (main.zig:38), and the Image STRUCT SHAPE.
+#
+# The leak/UB gate is Miri (R6). The crate is Miri-PRIMARY except for three documented
+# exception classes, all in .port/phase-2/MIRI_EXCEPTIONS.md: the `tty.rs` libc FFI
+# (Chunk 3b), the `tests/ucd_provenance.rs` file reads (WS12 T4), and the PNG arms of
+# `tests/image_tier.rs`, which reach `rustty-zigimg`'s wuffs/zlib FFI (WS12 T8/T9). Every
+# pure test — including the whole `Image::draw`/`cell_size` geometry KAT set — stays
+# Miri-live.
 [package]
 name = "rustty-vaxis"
 version.workspace = true
@@ -39,7 +60,18 @@ workspace = true
 # rustty-vaxis stays acyclic (R4). No other new crate deps: queue is pure std; Loop
 # consumes intra-crate parser/event/grapheme_cache/key/mouse/Winsize + the Vaxis
 # placeholder. (It is otherwise a value-type/rendering/input crate, formerly dep-free.)
+#
+# WS12 adds the SECOND dependency: `rustty-zigimg`, the re-home of the six-operation
+# zigimg surface `Vaxis::transmit_image`/`load_image` need (WS12 Decision 2, Option Z-C).
+# It is a leaf over `rustty-wuffs` + `zlib-sys`, so `rustty-vaxis` stays acyclic (R4).
 [dependencies]
 libc = "0.2"
+rustty-zigimg = { workspace = true }
 
+# WS12: `tests/image_tier.rs` decodes the PNG payload it just watched
+# `transmit_image`/`load_image` emit, to prove the escape carries a REAL image rather than
+# plausible-looking bytes. That needs the decoder directly (and its allocator parameter).
+# Test-only: neither is on any runtime path of this crate.
 [dev-dependencies]
+rustty-wuffs = { workspace = true }
+allocator-api2 = { workspace = true }
