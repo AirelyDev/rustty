@@ -12,10 +12,20 @@
 //! write-back, so INV-3 is untouched) and `CellChooser` edits stack-local
 //! `lookup_*` fields only.
 //!
-//! INV-2 (dirty tracking is READ-ONLY): `trackedPinsTable` reads `pin.isDirty()`
-//! (pagelist.zig:324) purely to render a "dirty"/"clean" state cell — the widget
-//! OBSERVES the dirty state and NEVER clears it, so the renderer's dirty-clear
-//! contract (D5) is untouched.
+//! INV-2 (dirty tracking is READ-ONLY): `trackedPinsTable` reads the page and
+//! row dirty flags of a pin's RESIDENT page purely to render a
+//! "dirty"/"clean"/"compressed" state cell — the widget OBSERVES the dirty
+//! state and NEVER clears it, so the renderer's dirty-clear contract (D5) is
+//! untouched.
+//!
+//! WS7 (compression): nothing in this widget may restore a compressed page as a
+//! side effect of drawing. The page tree reads `Node::{rows, cols, storage,
+//! page_if_resident}` and copies an EXPANDED entry with
+//! `Node::page_preserving_state`; the tracked-pins table reads dirty flags only
+//! through `Node::page_if_resident`; and the "Page Compression" section is fed
+//! by the metadata-only `PageList::memory_stats`. `Node::page` and
+//! `Pin::is_dirty` both restore, and the `ws7_tests` source guards at the
+//! bottom of this file fail if either reappears in those loops.
 //!
 //! §3 comptime hand-expansion (PREPORT_INSPECTOR §3): Rust has no `inline for` /
 //! `comptime` block / `@tagName`, so the three reflection sites are
@@ -48,7 +58,9 @@
 // `Cell` (`cell.cell`) in `page`; the hyperlink `PageEntryId` in `hyperlink`;
 // `stylepkg.default_id` is `style::DEFAULT_ID`. `widgets.page.{treeNode,
 // inspector}` are the Task 12 sibling widget; `widgets.style.table` the Task 9
-// helper; `widgets.helpMarker` the Task 7 helper; `units.toKibiBytes` the leaf.
+// helper; `widgets.helpMarker` the Task 7 helper. (The reference's `units`
+// import was dropped in oracle 6d5dda40d together with the KiB-only byte rows;
+// the compression table formats its own units.)
 // The intrusive page linked-list is walked via the `rustty_datastruct` `Node`
 // trait's `prev()` accessor (rustty-vt keeps the `Node.prev`/`.next` fields
 // crate-private).
@@ -64,7 +76,6 @@ use rustty_vt::style as stylepkg;
 use rustty_vt::{PageList, Scrollbar};
 
 use super::helpMarker;
-use crate::units;
 
 /// Minimal `defer`-style scope guard — runs `f` on drop (mirrors the private
 /// `Defer` in `widgets.rs`/`page.rs`). Backs the ImGui `BeginTable`/`EndTable`,
@@ -137,6 +148,22 @@ impl Inspector {
             )
         } {
             summaryTable(pages);
+        }
+
+        // if (cimgui.c.ImGui_CollapsingHeader(
+        //     "Page Compression",
+        //     cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
+        // )) {
+        //     compressionTable(pages);
+        // }
+        if unsafe {
+            dcimgui_sys::ImGui_CollapsingHeader(
+                c"Page Compression".as_ptr(),
+                dcimgui_sys::ImGuiTreeNodeFlags__ImGuiTreeNodeFlags_DefaultOpen
+                    as dcimgui_sys::ImGuiTreeNodeFlags,
+            )
+        } {
+            compressionTable(pages);
         }
 
         // if (cimgui.c.ImGui_CollapsingHeader(
@@ -355,14 +382,18 @@ fn summaryTable(pages: &PageList) {
     // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
     // widgets.helpMarker("Total number of pages in the linked list.");
     // _ = cimgui.c.ImGui_TableSetColumnIndex(2);
-    // cimgui.c.ImGui_Text("%d", pages.totalPages());
+    // cimgui.c.ImGui_Text("%zu", pages.totalPages());
+    //
+    // PORT NOTE (WS7 D6): the count rows became `%zu` in oracle 70e788f06;
+    // `usize` IS `size_t`, so the value is passed to the variadic without the
+    // previous `c_int` narrowing.
     unsafe { dcimgui_sys::ImGui_TableNextRow() };
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(0) };
     unsafe { dcimgui_sys::ImGui_Text(c"Pages".as_ptr()) };
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
     helpMarker(c"Total number of pages in the linked list.");
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
-    unsafe { dcimgui_sys::ImGui_Text(c"%d".as_ptr(), pages.total_pages() as c_int) };
+    unsafe { dcimgui_sys::ImGui_Text(c"%zu".as_ptr(), pages.total_pages()) };
 
     // cimgui.c.ImGui_TableNextRow();
     // _ = cimgui.c.ImGui_TableSetColumnIndex(0);
@@ -370,61 +401,44 @@ fn summaryTable(pages: &PageList) {
     // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
     // widgets.helpMarker("Total rows represented by scrollback + active area.");
     // _ = cimgui.c.ImGui_TableSetColumnIndex(2);
-    // cimgui.c.ImGui_Text("%d", pages.total_rows);
+    // cimgui.c.ImGui_Text("%zu", pages.total_rows);
     unsafe { dcimgui_sys::ImGui_TableNextRow() };
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(0) };
     unsafe { dcimgui_sys::ImGui_Text(c"Total Rows".as_ptr()) };
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
     helpMarker(c"Total rows represented by scrollback + active area.");
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
-    unsafe { dcimgui_sys::ImGui_Text(c"%d".as_ptr(), pages.total_rows as c_int) };
+    unsafe { dcimgui_sys::ImGui_Text(c"%zu".as_ptr(), pages.total_rows) };
+
+    // PORT NOTE (WS7 D6, oracle 6d5dda40d): the "Page Bytes" row is gone. The
+    // overview now carries only grid and scrollback STRUCTURE; every byte
+    // counter moved to the dedicated `compressionTable` below, where the
+    // logical/raw/encoded distinction can be explained in one place.
 
     // cimgui.c.ImGui_TableNextRow();
     // _ = cimgui.c.ImGui_TableSetColumnIndex(0);
-    // cimgui.c.ImGui_Text("Page Bytes");
-    // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
-    // widgets.helpMarker("Total bytes allocated for active pages.");
-    // _ = cimgui.c.ImGui_TableSetColumnIndex(2);
-    // cimgui.c.ImGui_Text("%d KiB", units.toKibiBytes(pages.page_size));
-    unsafe { dcimgui_sys::ImGui_TableNextRow() };
-    let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(0) };
-    unsafe { dcimgui_sys::ImGui_Text(c"Page Bytes".as_ptr()) };
-    let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
-    helpMarker(c"Total bytes allocated for active pages.");
-    let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
-    unsafe {
-        dcimgui_sys::ImGui_Text(
-            c"%d KiB".as_ptr(),
-            units::toKibiBytes(pages.page_size) as c_int,
-        )
-    };
-
-    // cimgui.c.ImGui_TableNextRow();
-    // _ = cimgui.c.ImGui_TableSetColumnIndex(0);
-    // cimgui.c.ImGui_Text("Max Size");
+    // cimgui.c.ImGui_Text("Scrollback Limit");
     // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
     // widgets.helpMarker(
-    //     \\Maximum bytes before pages must be evicated. The total
-    //     \\used bytes may be higher due to minimum individual page
-    //     \\sizes but the next allocation that would exceed this limit
-    //     \\will evict pages from the front of the list to free up space.
+    //     \\Maximum uncompressed logical page memory before the oldest
+    //     \\history is evicted. Minimum page allocation sizes can make
+    //     \\current usage temporarily exceed this value.
     // );
     // _ = cimgui.c.ImGui_TableSetColumnIndex(2);
-    // cimgui.c.ImGui_Text("%d KiB", units.toKibiBytes(pages.maxSize()));
+    // var limit_buf: [64]u8 = undefined;
+    // const limit = formatBytes(&limit_buf, pages.maxSize());
+    // cimgui.c.ImGui_TextUnformatted(limit.ptr);
     unsafe { dcimgui_sys::ImGui_TableNextRow() };
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(0) };
-    unsafe { dcimgui_sys::ImGui_Text(c"Max Size".as_ptr()) };
+    unsafe { dcimgui_sys::ImGui_Text(c"Scrollback Limit".as_ptr()) };
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
     helpMarker(
-        c"Maximum bytes before pages must be evicated. The total\nused bytes may be higher due to minimum individual page\nsizes but the next allocation that would exceed this limit\nwill evict pages from the front of the list to free up space.",
+        c"Maximum uncompressed logical page memory before the oldest\nhistory is evicted. Minimum page allocation sizes can make\ncurrent usage temporarily exceed this value.",
     );
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
-    unsafe {
-        dcimgui_sys::ImGui_Text(
-            c"%d KiB".as_ptr(),
-            units::toKibiBytes(pages.max_size()) as c_int,
-        )
-    };
+    let mut limit_buf: [u8; 64] = [0; 64];
+    let limit = formatBytes(&mut limit_buf, pages.max_size());
+    unsafe { dcimgui_sys::ImGui_TextUnformatted(limit.as_ptr()) };
 
     // cimgui.c.ImGui_TableNextRow();
     // _ = cimgui.c.ImGui_TableSetColumnIndex(0);
@@ -449,20 +463,321 @@ fn summaryTable(pages: &PageList) {
     };
     unsafe { dcimgui_sys::ImGui_Text(c"%s".as_ptr(), viewport_name.as_ptr()) };
 
+    // PORT NOTE (WS7 D6, oracle 6d5dda40d): the "Tracked Pins" count row is
+    // gone from the overview. The dedicated "Tracked Pins" collapsing header
+    // already lists every pin, so the count was redundant.
+}
+
+// fn compressionTable(pages: *const PageList) void {
+//
+// PORT NOTE (WS7 D6): the whole memory view. `pages.memoryStats()` is the
+// METADATA-ONLY accounting walk (`PageList::memory_stats`) — it never restores
+// a compressed page, which is the entire point of showing these numbers here
+// rather than deriving them from page contents.
+#[allow(non_snake_case)] // faithful Zig name (R1)
+fn compressionTable(pages: &PageList) {
+    // const memory = pages.memoryStats();
+    let memory = pages.memory_stats();
+
+    // if (!cimgui.c.ImGui_BeginTable(
+    //     "pagelist_compression",
+    //     3,
+    //     cimgui.c.ImGuiTableFlags_BordersInnerV |
+    //         cimgui.c.ImGuiTableFlags_RowBg |
+    //         cimgui.c.ImGuiTableFlags_SizingFixedFit,
+    // )) return;
+    if !unsafe {
+        dcimgui_sys::ImGui_BeginTable(
+            c"pagelist_compression".as_ptr(),
+            3,
+            (dcimgui_sys::ImGuiTableFlags__ImGuiTableFlags_BordersInnerV
+                as dcimgui_sys::ImGuiTableFlags)
+                | (dcimgui_sys::ImGuiTableFlags__ImGuiTableFlags_RowBg
+                    as dcimgui_sys::ImGuiTableFlags)
+                | (dcimgui_sys::ImGuiTableFlags__ImGuiTableFlags_SizingFixedFit
+                    as dcimgui_sys::ImGuiTableFlags),
+        )
+    } {
+        return;
+    }
+    // defer cimgui.c.ImGui_EndTable();
+    let _end_table = Defer(|| unsafe { dcimgui_sys::ImGui_EndTable() });
+
+    // compressionTextRow(
+    //     "Platform Support",
+    //     "Whether this target can discard physical page memory while retaining " ++
+    //         "its virtual address range. The scrollback-compression setting may " ++
+    //         "still disable automatic compression on a supported platform.",
+    //     if (terminal.compression_enabled) "supported" else "unsupported",
+    // );
+    //
+    // PORT NOTE: `terminal.compression_enabled` is a comptime `bool` in the
+    // reference; in rustty it is the `cfg!`-chain function
+    // `rustty_vt::compression_enabled()` (see its PORT NOTE in lib.rs).
+    compressionTextRow(
+        c"Platform Support",
+        c"Whether this target can discard physical page memory while retaining its virtual address range. The scrollback-compression setting may still disable automatic compression on a supported platform.",
+        if rustty_vt::compression_enabled() {
+            c"supported"
+        } else {
+            c"unsupported"
+        },
+    );
+
+    // var state_buf: [96]u8 = undefined;
+    // const state = std.fmt.bufPrintZ(
+    //     &state_buf,
+    //     "{d} compressed, {d} resident",
+    //     .{ memory.compressed_pages, memory.resident_pages },
+    // ) catch unreachable;
+    let mut state_buf: [u8; 96] = [0; 96];
+    let state = buf_print_z(
+        &mut state_buf,
+        format_args!(
+            "{} compressed, {} resident",
+            memory.compressed_pages, memory.resident_pages
+        ),
+    );
+    // compressionTextRow(
+    //     "Page States",
+    //     ...
+    //     state,
+    // );
+    compressionTextRow(
+        c"Page States",
+        c"Compressed pages retain an encoded allocation while their raw mapping is decommitted. Resident pages still have physical raw backing. Active, visible, and recently changed pages are expected to be resident.",
+        state,
+    );
+
+    // var raw_buf: [64]u8 = undefined;
+    // compressionTextRow(
+    //     "Uncompressed Size",
+    //     ...
+    //     formatBytes(&raw_buf, memory.raw_bytes),
+    // );
+    let mut raw_buf: [u8; 64] = [0; 64];
+    compressionTextRow(
+        c"Uncompressed Size",
+        c"Total size of all raw page mappings. This is the approximate page backing memory required if no pages were compressed and is also the virtual address space retained across compression.",
+        formatBytes(&mut raw_buf, memory.raw_bytes),
+    );
+
+    // var encoded_buf: [64]u8 = undefined;
+    // var compressed_raw_buf: [64]u8 = undefined;
+    // var storage_buf: [160]u8 = undefined;
+    // const storage = if (memory.decommitted_raw_bytes > 0) storage: {
+    //     const ratio = percentage(
+    //         memory.encoded_bytes,
+    //         memory.decommitted_raw_bytes,
+    //     );
+    //     break :storage std.fmt.bufPrintZ(
+    //         &storage_buf,
+    //         "{s} encoded / {s} raw ({d:.1}%)",
+    //         .{
+    //             formatBytes(&encoded_buf, memory.encoded_bytes),
+    //             formatBytes(
+    //                 &compressed_raw_buf,
+    //                 memory.decommitted_raw_bytes,
+    //             ),
+    //             ratio,
+    //         },
+    //     ) catch unreachable;
+    // } else "none";
+    //
+    // PORT NOTE: the `{s}` of a sentinel-terminated buffer is spelled
+    // `cstr_str(..)` — a `&CStr` has no `Display`.
+    let mut encoded_buf: [u8; 64] = [0; 64];
+    let mut compressed_raw_buf: [u8; 64] = [0; 64];
+    let mut storage_buf: [u8; 160] = [0; 160];
+    let storage: &CStr = if memory.decommitted_raw_bytes > 0 {
+        let ratio = percentage(memory.encoded_bytes, memory.decommitted_raw_bytes);
+        let encoded = formatBytes(&mut encoded_buf, memory.encoded_bytes);
+        let compressed_raw = formatBytes(&mut compressed_raw_buf, memory.decommitted_raw_bytes);
+        buf_print_z(
+            &mut storage_buf,
+            format_args!(
+                "{} encoded / {} raw ({:.1}%)",
+                cstr_str(encoded),
+                cstr_str(compressed_raw),
+                ratio,
+            ),
+        )
+    } else {
+        c"none"
+    };
+    // compressionTextRow(
+    //     "Compressed Storage",
+    //     ...
+    //     storage,
+    // );
+    compressionTextRow(
+        c"Compressed Storage",
+        c"Encoded allocation size compared with the original raw size of only the compressed pages. The percentage is the compression ratio, so smaller is better. Raw physical pages have been discarded.",
+        storage,
+    );
+
+    // var resident_buf: [64]u8 = undefined;
+    // compressionTextRow(
+    //     "Estimated Resident",
+    //     ...
+    //     formatBytes(&resident_buf, memory.estimatedResidentBytes()),
+    // );
+    let mut resident_buf: [u8; 64] = [0; 64];
+    compressionTextRow(
+        c"Estimated Resident",
+        c"Physical page backing estimated to remain after compression: resident raw allocations, including unused pool tails, plus encoded storage. Node and allocator metadata and unrelated terminal memory are excluded.",
+        formatBytes(&mut resident_buf, memory.estimated_resident_bytes()),
+    );
+
+    // var savings_bytes_buf: [64]u8 = undefined;
+    // var savings_buf: [128]u8 = undefined;
+    // const savings = memory.estimatedSavings();
+    // const savings_text = std.fmt.bufPrintZ(
+    //     &savings_buf,
+    //     "{s} ({d:.1}% of raw page memory)",
+    //     .{
+    //         formatBytes(&savings_bytes_buf, savings),
+    //         percentage(savings, memory.raw_bytes),
+    //     },
+    // ) catch unreachable;
+    let mut savings_bytes_buf: [u8; 64] = [0; 64];
+    let mut savings_buf: [u8; 128] = [0; 128];
+    let savings = memory.estimated_savings();
+    let savings_text = {
+        let savings_bytes = formatBytes(&mut savings_bytes_buf, savings);
+        buf_print_z(
+            &mut savings_buf,
+            format_args!(
+                "{} ({:.1}% of raw page memory)",
+                cstr_str(savings_bytes),
+                percentage(savings, memory.raw_bytes),
+            ),
+        )
+    };
+    // compressionTextRow(
+    //     "Estimated Savings",
+    //     ...
+    //     savings_text,
+    // );
+    compressionTextRow(
+        c"Estimated Savings",
+        c"Physical page backing avoided across the complete PageList. This is decommitted raw memory minus replacement encoded storage and is not a measurement of total process RSS.",
+        savings_text,
+    );
+}
+
+// fn compressionTextRow(
+//     label: [:0]const u8,
+//     help: [:0]const u8,
+//     value: [:0]const u8,
+// ) void {
+//
+// PORT NOTE: Zig's `[:0]const u8` (a NUL-terminated slice) is `&CStr`; the
+// reference's `.ptr` is `as_ptr()`.
+#[allow(non_snake_case)] // faithful Zig name (R1)
+fn compressionTextRow(label: &CStr, help: &CStr, value: &CStr) {
     // cimgui.c.ImGui_TableNextRow();
     // _ = cimgui.c.ImGui_TableSetColumnIndex(0);
-    // cimgui.c.ImGui_Text("Tracked Pins");
+    // cimgui.c.ImGui_Text("%s", label.ptr);
     // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
-    // widgets.helpMarker("Number of pins tracked for automatic updates.");
+    // widgets.helpMarker(help);
     // _ = cimgui.c.ImGui_TableSetColumnIndex(2);
-    // cimgui.c.ImGui_Text("%d", pages.countTrackedPins());
+    // cimgui.c.ImGui_TextUnformatted(value.ptr);
     unsafe { dcimgui_sys::ImGui_TableNextRow() };
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(0) };
-    unsafe { dcimgui_sys::ImGui_Text(c"Tracked Pins".as_ptr()) };
+    unsafe { dcimgui_sys::ImGui_Text(c"%s".as_ptr(), label.as_ptr()) };
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
-    helpMarker(c"Number of pins tracked for automatic updates.");
+    helpMarker(help);
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
-    unsafe { dcimgui_sys::ImGui_Text(c"%d".as_ptr(), pages.count_tracked_pins() as c_int) };
+    unsafe { dcimgui_sys::ImGui_TextUnformatted(value.as_ptr()) };
+}
+
+/// `std.fmt.bufPrintZ` analogue: format `args` NUL-terminated into `buf` and
+/// return the result as a `&CStr` aliasing `buf`.
+///
+/// PORT NOTE: the reference writes `std.fmt.bufPrintZ(...) catch unreachable`
+/// at every call site in this file — the buffers are sized for their formats,
+/// so overflow is a programming error. This panics in the same situation
+/// (`unreachable!`), keeping the sizes and the contract identical.
+fn buf_print_z<'a>(buf: &'a mut [u8], args: core::fmt::Arguments<'_>) -> &'a CStr {
+    use core::fmt::Write as _;
+
+    struct W<'b> {
+        buf: &'b mut [u8],
+        pos: usize,
+    }
+    impl core::fmt::Write for W<'_> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let b = s.as_bytes();
+            let end = self.pos.checked_add(b.len()).ok_or(core::fmt::Error)?;
+            if end > self.buf.len() {
+                return Err(core::fmt::Error);
+            }
+            self.buf[self.pos..end].copy_from_slice(b);
+            self.pos = end;
+            Ok(())
+        }
+    }
+
+    // Reserve the final byte for the NUL terminator (bufPrintZ semantics).
+    let cap = buf.len() - 1;
+    let pos = {
+        let mut w = W {
+            buf: &mut buf[..cap],
+            pos: 0,
+        };
+        if w.write_fmt(args).is_err() {
+            unreachable!("inspector compression row exceeded its format buffer");
+        }
+        w.pos
+    };
+    buf[pos] = 0;
+    CStr::from_bytes_with_nul(&buf[..=pos]).expect("interior NUL in a formatted row")
+}
+
+/// The `{s}` of a `bufPrintZ` result: a `&CStr` has no `Display`, so its bytes
+/// are re-borrowed as `&str` for the composing format. Every producer above
+/// writes ASCII digits, units and punctuation only.
+fn cstr_str(s: &CStr) -> &str {
+    s.to_str()
+        .expect("inspector compression rows format ASCII only")
+}
+
+// fn formatBytes(buf: []u8, bytes: usize) [:0]const u8 {
+#[allow(non_snake_case)] // faithful Zig name (R1)
+fn formatBytes(buf: &mut [u8], bytes: usize) -> &CStr {
+    // if (bytes >= 1024 * 1024) {
+    //     const value: f64 = @as(f64, @floatFromInt(bytes)) / (1024 * 1024);
+    //     return std.fmt.bufPrintZ(buf, "{d:.2} MiB", .{value}) catch unreachable;
+    // }
+    if bytes >= 1024 * 1024 {
+        let value: f64 = bytes as f64 / (1024.0 * 1024.0);
+        return buf_print_z(buf, format_args!("{value:.2} MiB"));
+    }
+
+    // if (bytes >= 1024) {
+    //     const value: f64 = @as(f64, @floatFromInt(bytes)) / 1024;
+    //     return std.fmt.bufPrintZ(buf, "{d:.1} KiB", .{value}) catch unreachable;
+    // }
+    if bytes >= 1024 {
+        let value: f64 = bytes as f64 / 1024.0;
+        return buf_print_z(buf, format_args!("{value:.1} KiB"));
+    }
+
+    // return std.fmt.bufPrintZ(buf, "{d} B", .{bytes}) catch unreachable;
+    buf_print_z(buf, format_args!("{bytes} B"))
+}
+
+// fn percentage(numerator: usize, denominator: usize) f64 {
+fn percentage(numerator: usize, denominator: usize) -> f64 {
+    // if (denominator == 0) return 0;
+    if denominator == 0 {
+        return 0.0;
+    }
+    // return 100 *
+    //     @as(f64, @floatFromInt(numerator)) /
+    //     @as(f64, @floatFromInt(denominator));
+    100.0 * numerator as f64 / denominator as f64
 }
 
 // fn scrollbarInfo(pages: *PageList) void {
@@ -841,31 +1156,56 @@ fn trackedPinsTable(pages: &PageList) {
         }
 
         // _ = cimgui.c.ImGui_TableSetColumnIndex(3);
-        // const dirty = pin.isDirty();
-        // if (dirty) {
-        //     cimgui.c.ImGui_TextColored(.{ .x = 1.0, .y = 0.4, .z = 0.4, .w = 1.0 }, "dirty");
+        // if (pin.node.pageIfResident()) |page| {
+        //     const dirty = page.dirty or
+        //         page.getRowAndCell(pin.x, pin.y).row.dirty;
+        //     if (dirty) {
+        //         cimgui.c.ImGui_TextColored(.{ .x = 1.0, .y = 0.4, .z = 0.4, .w = 1.0 }, "dirty");
+        //     } else {
+        //         cimgui.c.ImGui_TextDisabled("clean");
+        //     }
         // } else {
-        //     cimgui.c.ImGui_TextDisabled("clean");
+        //     // Dirty state lives in the discarded mapping. Keep inspector
+        //     // traversal metadata-only rather than restoring this page.
+        //     cimgui.c.ImGui_TextDisabled("compressed");
         // }
         //
-        // PORT NOTE (INV-2): `pin.isDirty()` is a pure observation of the D5 dirty
-        // state — read to render the "dirty"/"clean" cell, NEVER cleared here.
+        // PORT NOTE (INV-2): the dirty read stays a pure observation of the D5
+        // dirty state — rendered as the "dirty"/"clean" cell, NEVER cleared.
+        //
+        // PORT NOTE (WS7 D6): the reference used to call `pin.isDirty()` here.
+        // That helper resolves its row through the RESTORING `Node::page`
+        // (rustty: `Pin::is_dirty` → `Node::page`), so one pin in cold history
+        // decompressed its page every frame the tab was open. The dirty flags
+        // are inlined off `pageIfResident()` instead, and a compressed page
+        // simply reports "compressed".
         let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(3) };
-        let dirty = pin.is_dirty();
-        if dirty {
-            unsafe {
-                dcimgui_sys::ImGui_TextColored(
-                    dcimgui_sys::ImVec4 {
-                        x: 1.0,
-                        y: 0.4,
-                        z: 0.4,
-                        w: 1.0,
-                    },
-                    c"dirty".as_ptr(),
-                )
+        let resident = unsafe { rustty_vt::pagelist::Node::page_if_resident(pin.node) };
+        if !resident.is_null() {
+            let dirty = unsafe {
+                (*resident).dirty
+                    || (*(*resident)
+                        .get_row_and_cell(pin.x as usize, pin.y as usize)
+                        .row)
+                        .dirty()
             };
+            if dirty {
+                unsafe {
+                    dcimgui_sys::ImGui_TextColored(
+                        dcimgui_sys::ImVec4 {
+                            x: 1.0,
+                            y: 0.4,
+                            z: 0.4,
+                            w: 1.0,
+                        },
+                        c"dirty".as_ptr(),
+                    )
+                };
+            } else {
+                unsafe { dcimgui_sys::ImGui_TextDisabled(c"clean".as_ptr()) };
+            }
         } else {
-            unsafe { dcimgui_sys::ImGui_TextDisabled(c"clean".as_ptr()) };
+            unsafe { dcimgui_sys::ImGui_TextDisabled(c"compressed".as_ptr()) };
         }
 
         // _ = cimgui.c.ImGui_TableSetColumnIndex(4);
@@ -2081,6 +2421,189 @@ mod ws7_tests {
                 && loop_src.contains("Node::page_preserving_state("),
             "the pagelist page-tree loop must read pages through the \
              non-restoring accessors"
+        );
+    }
+
+    /// The same guard for the tracked-pins table (WS7 D6, oracle 70e788f06).
+    ///
+    /// `Pin::is_dirty` resolves its row through the RESTORING `Node::page`, so
+    /// reading it per tracked pin decompresses every history page holding a
+    /// pin. The oracle reads the pin's node through `pageIfResident()` and
+    /// renders "compressed" when the mapping is gone.
+    #[test]
+    fn pagelist_widget_tracked_pins_never_restores() {
+        let src = include_str!("pagelist.rs");
+
+        let start = src
+            .find("for (idx, tracked) in pages.tracked_pins()")
+            .expect("tracked-pins loop start landmark");
+        // Bounded at the next function so the assertion strings below (which
+        // name the forbidden call) are not themselves part of the haystack.
+        let end = src[start..]
+            .find("fn scrollbarWidget(")
+            .expect("tracked-pins loop end landmark")
+            + start;
+        let loop_src = &src[start..end];
+
+        assert!(
+            !loop_src.contains("is_dirty()"),
+            "the tracked-pins table must not read dirty state through \
+             Pin::is_dirty, which restores the pin's page"
+        );
+        assert!(
+            loop_src.contains("Node::page_if_resident("),
+            "the tracked-pins table must read dirty state only from a \
+             resident page"
+        );
+    }
+
+    /// The compression memory view must be present and must be fed by the
+    /// metadata-only accounting (`PageList::memory_stats`), never by walking
+    /// pages.
+    ///
+    /// PORTS the deliverable of oracle 6d5dda40d "inspector: clarify page
+    /// compression memory".
+    #[test]
+    fn pagelist_widget_reports_compression_memory() {
+        let src = include_str!("pagelist.rs");
+
+        for needle in [
+            "c\"Page Compression\".as_ptr()",
+            "fn compressionTable(pages: &PageList)",
+            "pages.memory_stats()",
+            "compressed_pages",
+            "resident_pages",
+            "raw_bytes",
+            "encoded_bytes",
+            "estimated_resident_bytes()",
+            "estimated_savings()",
+        ] {
+            assert!(
+                src.contains(needle),
+                "the pagelist compression view must render {needle}"
+            );
+        }
+    }
+
+    /// Drive real compression and check the exact values/strings the
+    /// compression table renders.
+    ///
+    /// WHY A TEST AND NOT A LIVE RUN: nothing in the shipped app calls
+    /// `PageList::compress` yet — the idle-time renderer-thread scheduler is
+    /// WS7 Task D3, which is not merged. A live inspector session would
+    /// therefore always show "0 compressed" no matter how much scrollback is
+    /// generated, so the numbers are proven here instead.
+    #[test]
+    fn pagelist_compression_view_renders_live_numbers() {
+        use rustty_vt::pagelist::compress::CompressionMode;
+        use rustty_vt::PageList;
+
+        assert!(
+            rustty_vt::compression_enabled(),
+            "this target cannot reclaim page memory, so the compression view \
+             cannot be exercised here"
+        );
+
+        let mut pages = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+        while pages.total_pages() < 6 {
+            let _ = pages.grow().unwrap();
+        }
+
+        let before = pages.memory_stats();
+        assert_eq!(before.compressed_pages, 0);
+
+        let _ = pages.compress(CompressionMode::Drain);
+        let memory = pages.memory_stats();
+
+        // The two numbers the live check was meant to observe.
+        assert!(
+            memory.compressed_pages > 0,
+            "expected a non-zero compressed page count"
+        );
+        assert!(
+            memory.estimated_savings() > 0,
+            "expected a positive estimated saving"
+        );
+
+        // ... and the text the table would show for them.
+        let mut state_buf = [0u8; 96];
+        let state = super::buf_print_z(
+            &mut state_buf,
+            format_args!(
+                "{} compressed, {} resident",
+                memory.compressed_pages, memory.resident_pages
+            ),
+        );
+        assert_eq!(
+            state.to_str().unwrap(),
+            format!(
+                "{} compressed, {} resident",
+                memory.compressed_pages, memory.resident_pages
+            )
+        );
+        assert_eq!(
+            memory.compressed_pages + memory.resident_pages,
+            pages.total_pages()
+        );
+
+        let mut raw_buf = [0u8; 64];
+        let mut savings_buf = [0u8; 64];
+        let raw = super::formatBytes(&mut raw_buf, memory.raw_bytes);
+        let savings = super::formatBytes(&mut savings_buf, memory.estimated_savings());
+        assert!(
+            raw.to_str().unwrap().ends_with(" MiB") || raw.to_str().unwrap().ends_with(" KiB"),
+            "unexpected raw byte rendering: {raw:?}"
+        );
+        assert!(
+            !savings.to_str().unwrap().starts_with('0'),
+            "the savings row must not render as zero: {savings:?}"
+        );
+
+        // Compression ratio: encoded storage is smaller than what it replaced,
+        // and the savings share of raw page memory is a real percentage.
+        let ratio = super::percentage(memory.encoded_bytes, memory.decommitted_raw_bytes);
+        assert!(ratio > 0.0 && ratio < 100.0, "unexpected ratio {ratio}");
+        let share = super::percentage(memory.estimated_savings(), memory.raw_bytes);
+        assert!(share > 0.0 && share <= 100.0, "unexpected share {share}");
+        assert_eq!(super::percentage(1, 0), 0.0);
+
+        // Nothing above restored a page: the compressed count is unchanged.
+        assert_eq!(
+            pages.memory_stats().compressed_pages,
+            memory.compressed_pages
+        );
+
+        pages.deinit();
+    }
+
+    /// `formatBytes` unit boundaries (oracle `formatBytes`).
+    #[test]
+    fn format_bytes_matches_oracle_units() {
+        let mut buf = [0u8; 64];
+        assert_eq!(super::formatBytes(&mut buf, 0).to_str().unwrap(), "0 B");
+        assert_eq!(
+            super::formatBytes(&mut buf, 1023).to_str().unwrap(),
+            "1023 B"
+        );
+        assert_eq!(
+            super::formatBytes(&mut buf, 1024).to_str().unwrap(),
+            "1.0 KiB"
+        );
+        assert_eq!(
+            super::formatBytes(&mut buf, 1024 * 1024 - 1)
+                .to_str()
+                .unwrap(),
+            "1024.0 KiB"
+        );
+        assert_eq!(
+            super::formatBytes(&mut buf, 1024 * 1024).to_str().unwrap(),
+            "1.00 MiB"
+        );
+        assert_eq!(
+            super::formatBytes(&mut buf, 3 * 1024 * 1024 / 2)
+                .to_str()
+                .unwrap(),
+            "1.50 MiB"
         );
     }
 }
