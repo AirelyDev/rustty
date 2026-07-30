@@ -511,6 +511,12 @@ mod tests {
         }
     }
 
+    // D6-ALLOW(counting shim, not an allocator substitution): this lives inside
+    // `#[cfg(test)] mod tests`, so it exists only in the test binary of this one
+    // crate — it can never enter a shipped build. It also does not blind ASan/
+    // LSan the way oven-sh/bun#30875's mimalloc did: every arm forwards to
+    // `std::alloc::System`, i.e. plain `malloc`/`free`, which the sanitizer
+    // interceptors still see. It only increments a thread-local counter first.
     #[global_allocator]
     static COUNTING: CountingAlloc = CountingAlloc;
 

@@ -1230,12 +1230,12 @@ re-measurement belongs to V17 (`BEYOND-PIN`).
   the same command WITHOUT `-DHWY_COMPILE_ONLY_SCALAR` still compiles clean —
   which proves the arm is both selected by the define and skipped without it.
 
-### Two gates that are RED on `main`, independently of this work
+### Two gates that were RED on `main`, independently of this work — both now FIXED
 
 Both were checked by stashing and re-running on the unmodified tree:
 
 - `check_sanitizer_canary.sh` -> **exit 1 on `main`**, on `valgrind.supp`
-  entries 2433-2437 lacking per-entry WHY comments (rule c). Pre-existing.
+  entries lacking per-entry WHY comments (rule c). Pre-existing.
 - `.port/tools/build-vt-wasm.sh` + `wasm-vt-roundtrip.mjs` -> **exit 1 on
   `main`**: the roundtrip script looks for
   `target/wasm32-wasip1/release/rustty_vt_c.wasm`, which the build does not
@@ -1245,6 +1245,71 @@ Both were checked by stashing and re-running on the unmodified tree:
   not compile the C++ kernel at all (`crates/rustty-simd/src/vt.rs:14`
   `#[cfg(not(target_arch = "wasm32"))]`), so the wasm roundtrip could never have
   exercised `HWY_SCALAR` anyway.
+
+#### Resolution (WS10 gate-repair lane, 2026-07-30)
+
+**D6 / `check_sanitizer_canary.sh` — a checker bug, not 2048 bad suppressions.**
+The exit-1 was `d6_cfg_mapping_audit.py`'s rule (c) reporting **2050** findings.
+Diagnosis:
+
+1. `check_supp_files()` was written for the **LSan/TSan one-suppression-per-line**
+   `.supp` format and applied that per-LINE rule to `valgrind.supp`, which is the
+   **Valgrind BLOCK format**. Every `fun:g_malloc` frame and every `}` inside a
+   233-entry file was reported as an unexplained "entry" — 2048 findings for a
+   file with 233 entries. Rule (c) now detects the format and parses block files
+   as blocks.
+2. The two `[cfg-mapping]` findings on `crates/rustty-renderer/src/link.rs` were
+   (a) `#[global_allocator]` matched **inside a PORT NOTE comment** (now skipped —
+   prose is not an attribute), and (b) the real test-only counting allocator,
+   which now carries a `D6-ALLOW(…)` waiver via the mechanism the gate itself
+   provides. Its justification is substantive, not a mute: the shim lives in
+   `#[cfg(test)] mod tests`, and every arm forwards to `std::alloc::System`, so
+   unlike bun#30875's mimalloc it does **not** hide allocations from the ASan
+   interceptors. Waiver detection also now scans the whole contiguous comment
+   block above rather than a fixed 3-line window, which had been rejecting
+   justifications longer than three lines.
+3. **Residual, honestly recorded:** after the format fix, 148 of `valgrind.supp`'s
+   233 entries still have no WHY of their own. That file is an R1-verbatim port of
+   the oracle's (`git -C ../ghostty show 4749c4e93:valgrind.supp`: identical 233
+   entries / 126 comment lines), and upstream documents its suppressions in
+   *groups*. Inventing 148 rationales for third-party GTK/GLib frames nobody here
+   diagnosed would be fabrication, so those exact entries are **frozen by content
+   hash** in `.port/tools/gates/d6_supp_baseline.txt`. This is not a waiver of the
+   rule: the hash covers every frame, so a NEW entry or an EDIT to a frozen one is
+   not on the list and FAILS, and a hash that stops matching is reported as stale.
+   The debt can only shrink.
+4. FAIL arm proved: `check_sanitizer_canary.sh --self-test` now runs the ASan
+   canary **and** a new audit self-test that constructs five synthetic trees and
+   asserts each produces a finding (un-gated `#[global_allocator]`; a NEW
+   undocumented block entry; an EDITED frozen entry; an undocumented LSan line;
+   an un-WHY'd `detect_leaks=0`), plus a documented tree as the negative control
+   that must stay GREEN. All six arms behave as required.
+
+**The wasm roundtrip — a one-directory path typo.**
+`wasm-vt-roundtrip.mjs` loaded `target/wasm32-wasip1/release/rustty_vt_c.wasm`,
+the artifact of `build-wasm.sh` (the wasip1 variant needing zig as the C/C++
+cross-compiler). The script it is paired with everywhere is `build-vt-wasm.sh`,
+whose artifact is the pure-Rust zero-import **`wasm32-unknown-unknown`** build —
+a different directory. It now prefers the pure-Rust artifact, **builds it itself
+when absent** (it is a build product of this repo, not an external input), falls
+back to a wasip1 build if one exists, applies the WASI import object only when
+the module actually imports `wasi_*`, and exits **3** (never a silent pass) if
+the wasm32 target is unavailable. Runs green: `terminal_new` → `vt_write` (66
+bytes) → `format_alloc` (45 bytes) → read.
+
+It also gained the assertion it was missing: it previously checked only C-ABI
+**return codes**, so a module that parsed input into the wrong cells still
+printed `ROUNDTRIP OK`. It now asserts the formatted **content** and that the
+plain formatter leaks no ESC byte. Mutation proof: changing the expected second
+line to `Line two: MUTATED.` → **exit 1** with a content-mismatch diff; reverted
+→ exit 0.
+
+**`ws14_webgl_browser_gate.sh`** had the same latent shape — exit 3 whenever
+nobody had hand-run `build-main-wasm.sh`, which on a fresh clone or worktree is
+always. It now builds its own artifact too, with `--no-build` restoring the old
+behaviour for a CI stage that builds separately (verified: absent artifact +
+`--no-build` → exit 3; absent artifact alone → builds, then GREEN with both
+negative controls failing as required).
 
 ---
 

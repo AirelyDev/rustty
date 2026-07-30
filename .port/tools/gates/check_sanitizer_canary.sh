@@ -117,7 +117,13 @@ merge() { case "$1" in 1) worst=1;; 3) [ "$worst" -ne 1 ] && worst=3;; esac; }
 
 case "${1:-}" in
   --self-test)
-    run_canary 1; exit $? ;;
+    # BOTH proofs: (a) the canary makes ASan RED, and (b)+(c) every audit arm
+    # can still produce a finding (with a documented tree as the negative
+    # control). A gate whose FAIL arm is unreachable is worse than no gate.
+    run_canary 1; merge $?
+    echo "== D6 (b)+(c) audit self-test =="
+    "$PY" "$AUDIT" --self-test; merge $?
+    exit "$worst" ;;
   --canary)
     run_canary 0; merge $?; assert_compiled_out; merge $?
     exit "$worst" ;;
