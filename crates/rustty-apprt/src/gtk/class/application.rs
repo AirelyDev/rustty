@@ -1030,7 +1030,6 @@ mod imp {
         /// is what paints the `windowhandle` (headerbar) opaque on an RGBA
         /// window.
         fn load_runtime_css(&self) {
-            use gtk4::prelude::*;
             use std::fmt::Write as _;
 
             // Read the current config (`:870`); nothing to do without one

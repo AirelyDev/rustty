@@ -2620,7 +2620,12 @@ impl Async {
 
     /// Clean up the async. This will forcibly deinitialize any resources
     /// and may result in erroneous wait callbacks to be fired.
-    pub fn deinit(&self) {
+    //
+    // PORT NOTE: the reference receiver is `self: *Async`; ported as `&mut self`
+    // to match — the same choice the darwin `Async.deinit` records. Callers bind
+    // their handle `mut` for it (the `Thread.init` errdefer chains), and a `&self`
+    // receiver here would make those bindings warn `unused_mut` on Linux only.
+    pub fn deinit(&mut self) {
         self.ev.deinit();
     }
 

@@ -2567,6 +2567,12 @@ impl Inspector {
     // PORT NOTE (Task 3): the imgui frame delta-time setup (`io.DeltaTime`), ported
     // LIVE — pure dcimgui + `std::time` (no objc). A private helper called by
     // [`Inspector::renderMetal`]'s double-frame loop.
+    //
+    // PORT NOTE: carries `renderMetal`'s `#[cfg(target_os = "macos")]` (its sole
+    // caller, per the note there); the reference has no non-Darwin build of the
+    // Metal inspector path at all, so an unconditional definition would be dead
+    // code on every other target.
+    #[cfg(target_os = "macos")]
     fn newFrame(&mut self) -> Result<(), ApprtError> {
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
         let io = unsafe { dcimgui_sys::ImGui_GetIO() };

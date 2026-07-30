@@ -14,8 +14,10 @@
 //!     diagnostic on a deliberately-broken one.
 //!   * `+ssh-cache` (XDG_STATE_HOME -> tmp) -> exit 0; after `--add=…` the listing
 //!     shows the entry.
-//!   * `+new-window` -> exit 1 + stderr "not supported on this platform" (the
-//!     faithful `none`-backend IPC behavior — proves the seam is wired, ADV-FIX 4).
+//!   * `+new-window` -> exit 1; on the `none` backend also stderr "not supported
+//!     on this platform" (the faithful `none`-backend IPC behavior — proves the
+//!     seam is wired, ADV-FIX 4). A GUI build takes the real `perform_ipc`
+//!     branch and exits 1 via `error.IPCFailed` instead.
 //!   * `rustty` (no args) -> exit 0 + the headless usage banner (`.none` build).
 //!   * `+bogus` -> exit 1 + the "unknown CLI action" message.
 
@@ -218,16 +220,28 @@ fn ssh_cache_add_then_list() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// `rustty +new-window` -> exit 1 + stderr "not supported on this platform" (the
-// faithful headless `none`-backend IPC behavior — the seam is wired, not stubbed).
+// `rustty +new-window` -> exit 1. On the headless `none` backend that 1 comes
+// with stderr "not supported on this platform" (the faithful `none`-backend IPC
+// behavior — the seam is wired, not stubbed); on a GUI build `new_window.rs`
+// takes the real `apprt::App::perform_ipc` branch instead, which returns
+// `error.IPCFailed` when no instance is listening and `return 1`s BEFORE the
+// "not supported" tail (the apprt has already printed the specific D-Bus
+// diagnostic). Both are the reference behavior, so only the exit code is
+// asserted unconditionally.
 #[test]
 fn new_window_not_supported() {
     let out = run(&["+new-window"], &[]);
     assert_eq!(
         out.status.code(),
         Some(1),
-        "+new-window should exit 1 over the headless none backend",
+        "+new-window should exit 1 (none backend: unsupported; GUI backend: IPCFailed)",
     );
+    if rustty_build_config::app_runtime() != rustty_build_config::Runtime::None {
+        // GUI build: the IPC was attempted and failed; the "not supported"
+        // tail is unreachable.
+        return;
+    }
+
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("not supported on this platform"),

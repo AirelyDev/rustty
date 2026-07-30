@@ -11,13 +11,9 @@
 #![cfg(all(target_os = "linux", feature = "gtk"))]
 #![allow(non_snake_case)]
 
-use std::time::{Duration, Instant};
-
 use allocator_api2::alloc::Global;
 use gio::prelude::*;
-use glib::prelude::*;
 use gtk4::prelude::*;
-use libadwaita::prelude::*;
 
 use rustty_apprt::gtk::class::application::Application;
 use rustty_apprt::gtk::class::surface::{Surface, SurfaceOverrides};

@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use allocator_api2::alloc::Global;
 use gio::prelude::*;
-use glib::prelude::*;
 use gtk4::prelude::*;
 use libadwaita::prelude::*;
 

@@ -17,7 +17,6 @@ use std::time::Duration;
 
 use allocator_api2::alloc::Global;
 use gio::prelude::*;
-use glib::prelude::*;
 use libadwaita::prelude::*;
 
 use rustty_apprt::gtk::class::application::Application;

@@ -1104,7 +1104,7 @@ impl Async {
     // carries its own tag, which is strictly safer and observationally identical
     // whenever the global has not been changed under a live handle (which the
     // reference forbids anyway, dynamic.zig:32-33).
-    pub fn deinit(&self) {
+    pub fn deinit(&mut self) {
         match self {
             Async::IoUring(a) => a.deinit(),
             Async::Epoll(a) => a.deinit(),

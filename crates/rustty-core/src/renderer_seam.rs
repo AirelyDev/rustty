@@ -74,7 +74,11 @@ use rustty_xev as xev;
 // thread sets its crash metadata (`crash.sentry.thread_state`) in `threadMain_`.
 use rustty_crash as crash;
 // PORT NOTE (W3 E2): `const internal_os = @import("../os/main.zig");` — used by
-// `threadMain_` (pthread_setname_np) and `setQosClass`.
+// `threadMain_` (pthread_setname_np) and `setQosClass`. Both uses sit behind the
+// reference's `builtin.os.tag.isDarwin()` guards, which in Rust are real `cfg`s
+// rather than comptime-dead branches, so the import carries the same cfg (an
+// unconditional `use` is an unused-import warning on every non-Darwin target).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use rustty_os as internal_os;
 
 use crate::surface::SurfaceMailbox;

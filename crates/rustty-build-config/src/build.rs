@@ -121,13 +121,21 @@ impl Config {
     }
 }
 
+/// `target.result.isGnuLibC()` — whether the compilation target links glibc.
+/// Rust spells this as the `target_env = "gnu"` cfg; it is named here (rather
+/// than written inline in `i18n_default`'s switch arm below) because `cfg!`
+/// folds to a literal at expansion, which on glibc targets collapses that
+/// `switch` into three literal arms and trips `clippy::match_like_matches_macro`
+/// — a rewrite that would erase the reference's arm structure.
+const IS_GNU_LIBC: bool = cfg!(target_env = "gnu");
+
 /// `i18n` default selection, factored out so it stays `const`. Reference
 /// `init()`: `switch (target.result.os.tag) { .macos, .ios => true, .linux,
 /// .freebsd => target.result.isGnuLibC(), else => false }`.
 const fn i18n_default(target: Target) -> bool {
     match target.os {
         crate::os::Os::Macos | crate::os::Os::Ios => true,
-        crate::os::Os::Linux | crate::os::Os::Freebsd => cfg!(target_env = "gnu"),
+        crate::os::Os::Linux | crate::os::Os::Freebsd => IS_GNU_LIBC,
         _ => false,
     }
 }
