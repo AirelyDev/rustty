@@ -33,6 +33,11 @@
 #                                    ghostty's props/symbols_uucode "tables match
 #                                    uucode" tests whose live oracle R3 forbids
 #                                    in-crate. 0 diffs required.)
+#   G-BENCH check_bench_tests.sh     `rustty-bench` lib tests, debug  -> HARD-FAIL
+#                                    AND --release, plus a test-count floor.
+#                                    The workspace lanes already RUN the crate;
+#                                    what they cannot see is a test being
+#                                    DELETED. WS10 T4.
 #   G1  check_tests_ported.py        100% test{} ported (==3234)     -> PROGRESS*
 #   G1b check_test_counts.py         per-module rust #[test] >= zig  -> PROGRESS*
 #                                    test{} (minus documented apc-deferred) —
@@ -263,6 +268,18 @@ GATE_REGISTRY=(
   # are mutation-proven (the `--self-test` arm drives the real macOS `rustty-os`
   # edge through the same detection).
   "G-XEVREACH|HARD|sh $GATES/xev_scope_boundary_gate.sh"
+  # G-BENCH (WS10 T4) — the `rustty-bench` unit-test lane, debug AND --release.
+  # `B-compression.md` §4.5 records "`rustty-bench` is in NO gate". Half right:
+  # the crate is a workspace member, so a FAILING bench test already fails
+  # `cargo test --workspace` and the G-REL release lane. What was genuinely
+  # absent is (a) attribution — nothing in either aggregate lane names this
+  # crate, which is how it came to be believed ungated — and (b) a test-count
+  # FLOOR, so DELETING a bench test (or a whole module) was invisible. WS10
+  # Layer 2 rewrites what these benchmarks measure, so that second gap is the
+  # live one. HARD: green at landing (14 tests, both profiles, <1 s) and its
+  # count arm is mutation-proven both synthetically (`--self-test`, 4 arms) and
+  # live (floor raised to 15 against the real crate -> exit 1).
+  "G-BENCH|HARD|bash $GATES/check_bench_tests.sh"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"
