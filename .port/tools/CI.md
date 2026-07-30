@@ -233,13 +233,25 @@ only if the positive arm matches **and both negative controls fail**:
 | NC2 | fragment shader outputs black | FAIL |
 
 plus NC3 (structural): the third, deliberately undrawn cell column must be
-**exactly 0** ink; and four product-sensitivity assertions (P1 each glyph left ink;
-P2 the reserved regions are disjoint; P3 whole-atlas ink equals the sum of the
-per-region inks, i.e. `Atlas::set` wrote nothing outside its region; P4 the two
-distinct glyphs produce distinct counts). P3/P4 are what make the gate sensitive to
-the **ported product code** rather than only to its own injected mutations — both
-were demonstrated RED by mutating `Atlas::set`'s destination offset (`+1` column →
-P4 red; `+2` rows → P3 red), with the gate returning to GREEN on revert.
+**exactly 0** ink; and five product-sensitivity assertions:
+
+| # | asserts |
+| --- | --- |
+| P1 | each glyph actually left ink in the atlas (a no-op `set` cannot pass with `expect == [0,0]`) |
+| P2 | the two reserved regions are disjoint (`reserve` did not hand out the same rect twice) |
+| P3 | whole-atlas ink equals the sum of the per-region inks — `Atlas::set` wrote **nothing** outside the region it was given (wrong destination offset or row stride) |
+| P4 | the two distinct bitmaps produce distinct counts (a `set` that ignores its region is caught) |
+| P5 | `atlas_debug_canvas` — the **reference's own** readback path — agrees with the WebGL one: its canvas carries exactly `totalInk` alpha-channel ink (the grayscale arm writes A8 into `buf[(i*4)+3]`) |
+
+P1–P5 are what make the gate sensitive to the **ported product code** rather than
+only to its own injected mutations. Three product mutations were each demonstrated
+RED, and GREEN again on revert:
+
+| mutation (product code) | gate |
+| --- | --- |
+| `Atlas::set` `tex_offset` + 1 column | RED — P4 |
+| `Atlas::set` `tex_offset` + 2 rows | RED — P3 |
+| `atlas_debug_canvas_` grayscale writes `buf[(i*4)+2]` instead of `+3` | RED — P5 |
 
 **Why it is opt-in, not default.** It needs a second full target's artifacts plus a
 browser process, and two things a CI box may not have. Missing either is **exit 3

@@ -46,10 +46,20 @@
   let inst;
   const env = makeWebCanvasEnv({
     memory: () => inst.exports.memory,
-    createCanvas: () =>
-      typeof document !== "undefined"
-        ? document.createElement("canvas")
-        : new OffscreenCanvas(1, 1),
+    // `rustty_wc_canvas_new` — what `atlas_debug_canvas` calls. On the page the
+    // canvas is APPENDED to the `#atlas` section: a detached element is
+    // unreachable from `document.querySelectorAll`, so leaving it detached
+    // rendered that section blank while the handle still came back live.
+    // Headlessly (`Runtime.evaluate` in a page that has no `#atlas`, and the
+    // OffscreenCanvas branch when there is no document at all) nothing is shown
+    // and nothing needs to be.
+    createCanvas: () => {
+      if (typeof document === "undefined") return new OffscreenCanvas(1, 1);
+      const c = document.createElement("canvas");
+      const host = document.getElementById("atlas");
+      if (host) host.append(c);
+      return c;
+    },
   });
   inst = await WebAssembly.instantiate(mod, { env });
   const ex = inst.exports;
@@ -301,9 +311,16 @@ void main() { o = vec4(0.0, 0.0, 0.0, 1.0); }`;
   const matches = (counts) =>
     expect.every((e, i) => counts[i] === e) && counts[CELLS - 1] === 0;
 
-  const good = render(null);
+  // ORDER MATTERS FOR THE PAGE, NOT FOR THE ASSERTIONS. All three arms share the
+  // one `#gl` canvas and each fully re-creates its GL state, so the arms are
+  // independent — but whichever runs LAST is what a human sees. Run the two
+  // negative controls first and the positive arm last, so the page ends showing
+  // the glyphs it claims to show instead of NC2's all-black frame. (Observed:
+  // with `black` last, the on-page canvas read back 0 ink while the JSON said
+  // PASS — correct assertions, misleading picture.)
   const offset = render("offset");
   const black = render("black");
+  const good = render(null);
 
   say(`good   (WebGL readback): [${good.counts.join(", ")}]  glError=${good.glError}`);
   say(`NC1 offset: [${offset.counts.join(", ")}] -> ${matches(offset.counts) ? "MATCHES (BAD)" : "FAILS (good)"}`);
@@ -318,6 +335,27 @@ void main() { o = vec4(0.0, 0.0, 0.0, 1.0); }`;
     say("atlas_debug_canvas threw: " + e);
   }
   say(`atlas_debug_canvas handle = ${debugCanvas}`);
+
+  // P5: the reference's OWN readback path must agree with the WebGL one. A live
+  // handle alone asserts nothing, so read the canvas back. The grayscale arm of
+  // `atlas_debug_canvas_` writes A8 into the ALPHA byte and leaves RGB at zero
+  // (`buf[(i * 4) + 3] = value`), so the ink lives in the alpha channel — a
+  // wrong destination byte, a wrong `ImageData` stride, or a dropped
+  // `putImageData` all show up here as a count that no longer equals `totalInk`.
+  let debugCanvasInk = null;
+  const dbg = typeof document !== "undefined" ? document.querySelector("#atlas canvas") : null;
+  if (dbg) {
+    const scratch = document.createElement("canvas");
+    scratch.width = dbg.width;
+    scratch.height = dbg.height;
+    const sctx = scratch.getContext("2d");
+    sctx.drawImage(dbg, 0, 0);
+    const dd = sctx.getImageData(0, 0, scratch.width, scratch.height).data;
+    debugCanvasInk = 0;
+    for (let i = 0; i < dd.length; i += 4) if (dd[i + 3] > INK) debugCanvasInk++;
+    say(`atlas_debug_canvas ink (alpha) = ${debugCanvasInk} (atlas ink ${totalInk})`);
+  }
+  const p5_debug_canvas_agrees = debugCanvasInk === null ? null : debugCanvasInk === totalInk;
 
   ex.atlas_free(atlas);
 
@@ -336,6 +374,8 @@ void main() { o = vec4(0.0, 0.0, 0.0, 1.0); }`;
     wasiImports,
     badImportModules: badModules,
     debugCanvas,
+    debugCanvasInk,
+    p5_debug_canvas_agrees,
     log,
   };
 })();
