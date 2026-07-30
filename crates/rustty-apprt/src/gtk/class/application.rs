@@ -70,6 +70,7 @@ use rustty_config::Config as CoreConfig;
 
 use super::command_palette::ActionBoxed;
 use super::config::Config;
+use super::config_errors_dialog::ConfigErrorsDialog;
 use super::global_shortcuts::GlobalShortcuts;
 use super::tab::TabOverrides;
 use crate::gtk::portal::OpenUri;
@@ -153,11 +154,11 @@ mod imp {
 
         /// PORTS: `application.zig:203-205` `config_errors_dialog:
         /// WeakRef(ConfigErrorsDialog)` (SHARED / non-owning — the dialog may close
-        /// on its own outside our lifecycle, so a weak ref is correct). PORT NOTE:
-        /// `WeakRef<glib::Object>` in the skeleton (the base GObject type) — Task 9
-        /// (`showConfigErrorsDialog`) narrows it to `ConfigErrorsDialog` once that
-        /// class exists (Task 24). Weak, so narrowing the pointee is safe.
-        pub config_errors_dialog: WeakRef<glib::Object>,
+        /// on its own outside our lifecycle, so a weak ref is correct).
+        ///
+        /// PORT NOTE (WS20): narrowed from the skeleton's `WeakRef<glib::Object>`
+        /// to the real `WeakRef<ConfigErrorsDialog>` now that the class exists.
+        pub config_errors_dialog: WeakRef<ConfigErrorsDialog>,
 
         /// PORTS: `application.zig:208` `css_provider: *gtk.CssProvider` (OWNED —
         /// `.new()` here, `unref` at dispose). Invariant 12: manually held, never
@@ -350,12 +351,10 @@ mod imp {
             // Close + release the config-errors dialog (invariant 4,
             // PREPORT_GTK §1.1 / `:1477-1480`): `get()` hands back a strong ref,
             // which we would `close()` and then drop (unref).
-            if let Some(_diag) = self.config_errors_dialog.get() {
-                // PORT NOTE: `diag.close()` (`:1478`) lands with the
-                // `ConfigErrorsDialog` class (Task 24). The strong ref from
-                // `get()` is unref'd here by Rust's scope-end drop
-                // (`:1479`). Until Task 24, `show_config_errors_dialog` never
-                // populates this weak ref, so this arm is dormant.
+            if let Some(diag) = self.config_errors_dialog.get() {
+                // `diag.close()` (`:1478`). The strong ref from `get()` is
+                // unref'd here by Rust's scope-end drop (`:1479`).
+                diag.close();
             }
             self.config_errors_dialog.set(None);
 
@@ -528,7 +527,8 @@ mod imp {
         /// `CssProvider::parsing-error` handler that logs CSS parse errors,
         /// connected in `new` (`application.zig:416-422`).
         ///
-        /// **Task 9 fills this.** Placeholder-leaf no-op.
+        /// The reference's `{s}` of `err.f_message orelse "«unknown»"`
+        /// (`application.zig:1272,1279`).
         pub(super) fn signal_css_parsing_error(
             &self,
             section: &gtk4::CssSection,
@@ -537,12 +537,45 @@ mod imp {
             // `css_section.toString()` (`:1259`). gtk4-rs's `CssSection` renders
             // its location via `Display`.
             let location = section.to_str();
-            // PORT NOTE: the reference's `gtk_version.atLeast(4, 16, 0)` arm
-            // (`:1261-1274`) additionally dumps the offending CSS bytes via
-            // `css_section.getBytes()`. `CssSection::bytes` is `#[cfg(v4_16)]` in
-            // gtk4-rs and the pinned binding surface is `v4_14` (AD-3 / Cargo.toml),
-            // so the byte-dump is not reachable through the bindings here; the
-            // location + domain/code/message line (`:1275-1280`) is preserved.
+
+            // The GTK >= 4.16 byte-dump arm (`:1261-1274`). Ghostty writes it
+            // `if (comptime gtk_version.atLeast(4, 16, 0)) bytes: { ... }`, whose
+            // leading `comptime` fold collapses the branch away when built
+            // against a pre-4.16 header (`gtk_version.zig:58-62`). rustty mirrors
+            // that fold FAITHFULLY as the same two-part gate the `:1565`
+            // `prefers-color-scheme` push uses: `#[cfg(feature = "gtk-v4_16")]`
+            // is the comptime analog (`CssSection::bytes` is
+            // `#[cfg(feature = "v4_16")]` in gtk4-rs — gtk4-0.11.4
+            // `src/auto/css_section.rs:57`, outside the pinned `v4_14` ceiling,
+            // so the DEFAULT build simply omits the dump exactly like ghostty
+            // built on the 4.14 floor), and a live `at_least(4, 16, 0)` probe is
+            // the runtime analog (this port has no `comptime_version` header
+            // constant, so the runtime check is never folded out). See the AD-3
+            // BASELINE PIN note in `Cargo.toml` and the `L5 GTK baseline pin`
+            // DEFERRALS row.
+            #[cfg(feature = "gtk-v4_16")]
+            if crate::gtk::gtk_version::at_least(4, 16, 0) {
+                // `const bytes = css_section.getBytes() orelse break :bytes;`
+                // (`:1262`) — and `const ptr = bytes.getData(&len) orelse break
+                // :bytes; const data = ptr[0..len];` (`:1263-1265`). The
+                // reference logs the raw CSS BYTES; we keep them as `&[u8]` and
+                // render them with the byte-preserving `{:?}`-free lossy view
+                // only at the very last step, never converting the payload.
+                if let Some(bytes) = section.bytes() {
+                    let data: &[u8] = &bytes;
+                    eprintln!(
+                        "warn(gtk): css parsing failed at {location}: {:?} {} {}\n{}",
+                        error.domain(),
+                        error.code(),
+                        error.message(),
+                        String::from_utf8_lossy(data),
+                    );
+                    // `return;` (`:1274`).
+                    return;
+                }
+            }
+
+            // The fallback line (`:1275-1280`).
             eprintln!(
                 "warn(gtk): css parsing failed at {location}: {:?} {} {}",
                 error.domain(),
@@ -816,28 +849,85 @@ mod imp {
         /// PORTS: `application.zig:1608-1653` `showConfigErrorsDialog`. Presents (or
         /// refreshes) the config-diagnostics dialog when the config has diagnostics.
         fn show_config_errors_dialog(&self) {
-            let has_diagnostics = {
-                let config = self.config.borrow();
-                config
-                    .as_ref()
-                    .is_some_and(|c| c.property::<bool>("has-diagnostics"))
+            // `const priv = self.private();` (`:1609`). `priv.config` is the
+            // reference's non-null `*Config`; ours is an `Option<Config>` that is
+            // populated by `new`, so a `None` here means the app is not fully
+            // constructed and there is nothing to show.
+            let Some(config) = self.config.borrow().clone() else {
+                return;
             };
+            let has_diagnostics = config.property::<bool>("has-diagnostics");
+
+            // `if (priv.config_errors_dialog.get()) |diag| { ... return; }`
+            // (`:1612-1631`). The strong ref `get()` hands back (`:1613` `defer
+            // diag.unref()`) is dropped at the end of this block.
+            if let Some(diag) = self.config_errors_dialog.get() {
+                // `gobject.Object.setProperty(diag, "config", &value)`
+                // (`:1615-1622`).
+                diag.set_property("config", &config);
+
+                // `if (!priv.config.hasDiagnostics()) diag.close() else
+                // diag.present(null);` (`:1624-1628`).
+                if has_diagnostics {
+                    diag.present(None);
+                } else {
+                    diag.close();
+                }
+
+                return;
+            }
 
             // No diagnostics, do nothing (`:1634-1635`).
             if !has_diagnostics {
                 return;
             }
 
-            // PORT NOTE (placeholder-leaf): building/refreshing the dialog needs the
-            // `ConfigErrorsDialog` class (Task 24) — `.new(priv.config)`,
-            // `set_property("config", ...)`, `present`/`close`, and the
-            // `reload-config` signal connect (`:1614-1652`), plus the
-            // `config_errors_dialog` weak-ref narrowing (Task 8 PORT NOTE). Until
-            // then we surface the diagnostics on stderr so a bad config is not
-            // silent.
-            eprintln!(
-                "warn(gtk): configuration has diagnostics; errors dialog lands with the ConfigErrorsDialog class (Task 24)"
+            // "No dialog yet, initialize a new one. There's no need to unref here
+            // because the widget that it becomes a part of takes ownership."
+            // (`:1637-1640`).
+            let dialog = ConfigErrorsDialog::new(&config);
+            self.config_errors_dialog.set(Some(&dialog));
+
+            // "Connect to the reload signal so we know to reload our config."
+            // (`:1642-1649`) — `ConfigErrorsDialog.signals.@"reload-config"
+            // .connect(dialog, *Application, handleReloadConfig, self, .{})`.
+            dialog.connect_closure(
+                "reload-config",
+                false,
+                glib::closure_local!(
+                    #[watch(rename_to = app)]
+                    self.obj(),
+                    move |_dialog: &ConfigErrorsDialog| {
+                        app.imp().handle_reload_config();
+                    }
+                ),
             );
+
+            // "Show it" (`:1651-1652`).
+            dialog.present(None);
+        }
+
+        /// PORTS: `application.zig:1585-1606` `handleReloadConfig`. The
+        /// `reload-config` signal handler connected in
+        /// [`Self::show_config_errors_dialog`].
+        fn handle_reload_config(&self) {
+            // "We clear our dialog reference because its going to close after
+            // response handling and we don't want to reuse it." (`:1589-1592`).
+            self.config_errors_dialog.set(None);
+
+            // "Reload our config as if the app reloaded." — `Action.reloadConfig(
+            // self, .app, .{})` (`:1594-1605`). On failure "we want the user to
+            // know it. For now we log but we should show another GUI."
+            let app = self.obj();
+            if action::reload_config(
+                &app,
+                Target::<AppTargetHandle>::App,
+                rustty_apprt_api::action::ReloadConfig::default(),
+            )
+            .is_err()
+            {
+                eprintln!("warn(gtk): error reloading config");
+            }
         }
 
         /// PORTS: `application.zig:1145-1200` `syncActionAccelerators` /

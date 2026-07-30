@@ -4571,6 +4571,47 @@ Recording it here dissolves an earlier asymmetry in which `:1261` was treated as
 loss" — the `comptime` vs plain `if` spelling was never the discriminator; the
 `v4_14` **ceiling** is, and it bites both sites identically.
 
+**UPDATE [2026-07-30, WS20 — ghostty-mirrored opt-in, second and last arm].**
+`application.zig:1261` is now PORTED on exactly the terms the `:1565` UPDATE
+above established, closing the second of the two ceiling-forced legacy arms:
+* the ceiling was RE-VERIFIED, not assumed: `CssSection::bytes()` is still
+  `#[cfg(feature = "v4_16")]` in the resolved gtk4-0.11.4
+  (`src/auto/css_section.rs:57`; `v4_16` is a real Cargo feature there,
+  `Cargo.toml:119`), so the `v4_14` pin genuinely still hides the symbol and the
+  default build must still take the legacy arm. Nothing here was re-ledgered on
+  a stale premise.
+* a new **`gtk-v4_16`** Cargo feature (default OFF) is the comptime analog of
+  ghostty building against >= 4.16 headers; `#[cfg(feature = "gtk-v4_16")]` in
+  `class/application.rs` `signal_css_parsing_error` lights the byte-dump, and the
+  live `gtk_version::at_least(4, 16, 0)` probe INSIDE that cfg is the runtime
+  analog (rustty has no `comptime_version`, so the probe is never folded out).
+* `gtk-v4_20` now **implies** `gtk-v4_16` — a >= 4.20 build box also has the
+  >= 4.16 headers, so ghostty compiled there takes both modern arms.
+* the AD-3 floor is UNCHANGED: `gtk4` still pins `v4_14` by default, the minimum
+  system gtk is still 4.14, and the stock `--features gtk` build names no `v4_16`
+  symbol. The DEFAULT-build loss described above still holds verbatim for anyone
+  who does not opt in.
+* verified on the Linux VM against GTK 4.22.4: `cargo check -p rustty-apprt
+  --all-targets` green under each of `gtk`, `gtk,gtk-v4_16` and `gtk,gtk-v4_20`,
+  and a new headed KAT `tests/gtk_css_parse_error.rs` (ONE test, G-GTKINIT)
+  drives a real `CssProvider::parsing-error` and asserts the section's bytes are
+  byte-for-byte the source that was loaded. Mutation-proved (assert against the
+  wrong bytes -> RED, reverted -> green).
+* **Bounded verification debt, with a recipe.** The KAT proves the ceiling is
+  lifted and `CssSection::bytes()` yields the exact source; it does NOT drive
+  `Application::signal_css_parsing_error` itself, which is `pub(super)` and so
+  unreachable from an integration test. Recipe: add a `#[cfg(test)]` unit test
+  inside `class/application.rs`'s `imp` module that builds an `Application`,
+  installs a stderr capture, calls `signal_css_parsing_error` with a
+  `CssSection` obtained from a real `parsing-error` emission, and asserts the
+  logged line contains the source bytes under `gtk-v4_16` and does not without
+  it. This needs the one-headed-test-per-binary rule (G-GTKINIT) to be reconciled
+  with the lib-test binary, which already hosts headed tests.
+
+Both `v4_14`-ceiling arms are therefore now ported behind faithful, ghostty-
+mirrored opt-in features. Nothing in this row remains "deferred by platform"; it
+is a compatibility-floor DECISION with an opt-in escape hatch on both sites.
+
 **Related note for L5.0 T2 (not a deferral — a correctness warning):** the other
 two `gtk_version.atLeast` sites must NOT be deleted as "comptime branches".
 `window.zig:695` (`!gtk_version.atLeast(4, 16, 0)` gating the
