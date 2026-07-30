@@ -15,6 +15,14 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# WS20: `build_config.flatpak` — the real `-Dflatpak` ghostty build option. When ON,
+# `Exec.zig`'s `const FlatpakHostCommand = if (!build_config.flatpak) struct{...} else
+# internal_os.FlatpakHostCommand` selects the REAL `os/flatpak.zig` host-command type
+# and the flatpak spawn/wait/kill arms compile. OFF by default, exactly as ghostty's
+# `-Dflatpak` defaults to false.
+flatpak = ["rustty-os/flatpak"]
+
 [dependencies]
 rustty-vt = { workspace = true }
 rustty-crash = { workspace = true }

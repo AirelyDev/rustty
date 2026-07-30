@@ -94,18 +94,20 @@ pub fn get() -> Result<Entry, Error> {
                 // utilities properly until we get a login shell.
                 use crate::pty::Pty;
                 let mut pty = Pty::open(Default::default()).map_err(|_| Error::OutOfMemory)?;
-                let mut cmd = crate::flatpak::FlatpakHostCommand {
-                    argv: vec![
-                        "/bin/sh".to_string(),
-                        "-l".to_string(),
-                        "-c".to_string(),
-                        format!("getent passwd {}", slice_to_str(pw.pw_name),),
-                    ],
-                    stdin: pty.slave,
-                    stdout: pty.slave,
-                    stderr: pty.slave,
-                    ..Default::default()
-                };
+                // PORT NOTE: the reference is a struct literal with the remaining
+                // fields defaulted. `FlatpakHostCommand`'s state fields are private
+                // (they are the `state_mutex`-guarded internals), so the Rust map is
+                // `Default::default()` + field assignment — same resulting value.
+                let mut cmd = crate::flatpak::FlatpakHostCommand::default();
+                cmd.argv = vec![
+                    "/bin/sh".to_string(),
+                    "-l".to_string(),
+                    "-c".to_string(),
+                    format!("getent passwd {}", slice_to_str(pw.pw_name),),
+                ];
+                cmd.stdin = pty.slave;
+                cmd.stdout = pty.slave;
+                cmd.stderr = pty.slave;
                 cmd.spawn().map_err(|_| Error::OutOfMemory)?;
                 cmd.wait().map_err(|_| Error::OutOfMemory)?;
 

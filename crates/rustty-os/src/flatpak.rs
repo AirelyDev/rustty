@@ -55,12 +55,28 @@ pub fn isFlatpak() -> bool {
 #[cfg(feature = "flatpak")]
 pub use host_command::FlatpakHostCommand;
 
+/// PORT NOTE: the reference nests these inside `FlatpakHostCommand`
+/// (`FlatpakHostCommand.Completion`, `.WaitError`, `.Error`); Rust hoists nested
+/// types to module scope, so they are re-exported here under their reference names.
+/// `termio/Exec.zig` names `FlatpakHostCommand.Completion` + `.WaitError` directly.
+#[cfg(feature = "flatpak")]
+pub use host_command::{Completion, Error, WaitError};
+
 #[cfg(feature = "flatpak")]
 mod host_command {
+    // R1: the reference's Zig identifiers (`waitXev`, `updateState`, `threadMain`,
+    // `onExit`, `noopCallback`, `fd_t`) are preserved verbatim.
+    #![allow(non_snake_case)]
+
     use super::LOG_SCOPE;
-    use rustty_global::xev;
+    // PORT NOTE (WS20): `const xev = global.xev;` (flatpak.zig:6). The
+    // `rustty_global::xev` anchor is the `()` seam placeholder that `global.zig`'s
+    // `pub const xev` stands for; the CONCRETE package is `rustty-xev`, so this
+    // module binds it directly — the same substitution termio/core make.
+    use rustty_xev as xev;
     use std::os::raw::{c_int, c_uint, c_void};
 
+    #[allow(non_camel_case_types)]
     type fd_t = libc::c_int;
     type EnvMap = std::collections::HashMap<String, String>;
 
@@ -220,8 +236,15 @@ mod host_command {
 
         /// State of the process. This is updated by the dedicated thread it
         /// runs in and is protected by the given lock and condition variable.
-        state: State,
-        state_mutex: std::sync::Mutex<()>,
+        //
+        // PORT NOTE (WS20): the reference is three sibling fields (`state: State`,
+        // `state_mutex: std.Thread.Mutex`, `state_cv: std.Thread.Condition`) with
+        // the mutex guarding the plain `state` field by convention. Rust cannot
+        // express that convention soundly — a worker thread writing `state` while
+        // the owner holds `&mut Self` is a data race — so `state` lives INSIDE the
+        // `Mutex` it was already documented to be protected by. Same lock, same
+        // condition variable, same wake points; `state_mutex` IS the state.
+        state_mutex: std::sync::Mutex<State>,
         state_cv: std::sync::Condvar,
     }
 
@@ -234,8 +257,7 @@ mod host_command {
                 stdin: 0,
                 stdout: 0,
                 stderr: 0,
-                state: State::Init,
-                state_mutex: std::sync::Mutex::new(()),
+                state_mutex: std::sync::Mutex::new(State::Init),
                 state_cv: std::sync::Condvar::new(),
             }
         }
@@ -293,20 +315,42 @@ mod host_command {
         ///
         /// Precondition: The self pointer MUST be stable.
         pub fn spawn(&mut self) -> Result<u32, Error> {
-            // PORT NOTE: `std.Thread.spawn(.{}, threadMain, .{ self, alloc });`
-            // `thread.setName("flatpak-host-command")`; the thread is detached
-            // and terminates on its own on command exit.
-            let _ = threadMain;
+            // PORT NOTE: `const thread = try std.Thread.spawn(.{}, threadMain, .{ self, alloc });`
+            // `thread.setName("flatpak-host-command") catch {};`
+            //
+            // The `self` pointer is passed across the thread boundary as a RAW
+            // pointer (the documented precondition is that it is STABLE); a `&mut`
+            // could not be, and forming one on the worker while the spawning
+            // thread also holds one would be aliasing UB. `SendPtr` is the
+            // minimal `Send` shim for the raw pointer, matching Zig's untyped
+            // thread argument.
+            struct SendPtr(*mut FlatpakHostCommand);
+            // SAFETY: the pointee is `Sync`-guarded by `state_mutex`/`state_cv`
+            // for every field the worker touches, exactly as the reference relies
+            // on the same mutex across its spawned thread.
+            unsafe impl Send for SendPtr {}
+            let arg = SendPtr(self as *mut FlatpakHostCommand);
+            let builder = std::thread::Builder::new().name("flatpak-host-command".to_string());
+            let thread = builder
+                .spawn(move || {
+                    let arg = arg;
+                    // SAFETY: stable-pointer precondition (documented above).
+                    threadMain(unsafe { &mut *arg.0 });
+                })
+                .map_err(|_| Error::FlatpakSpawnFail)?;
             // We don't track this thread, it will terminate on its own on command exit
+            // (`thread.detach()` — dropping the `JoinHandle` detaches in Rust.)
+            drop(thread);
 
             // Wait for the process to start or error.
+            // `while (self.state == .init) self.state_cv.wait(&self.state_mutex);`
             let guard = self.state_mutex.lock().unwrap();
-            let _guard = self
+            let guard = self
                 .state_cv
-                .wait_while(guard, |_| matches!(self.state, State::Init))
+                .wait_while(guard, |s| matches!(s, State::Init))
                 .unwrap();
 
-            match &self.state {
+            match &*guard {
                 State::Init => unreachable!(),
                 State::Err => Err(Error::FlatpakSpawnFail),
                 State::Started { pid, .. } => Ok(*pid),
@@ -317,25 +361,24 @@ mod host_command {
         /// Wait for the process to end and return the exit status. This
         /// can only be called ONCE. Once this returns, the state is reset.
         pub fn wait(&mut self) -> Result<u8, Error> {
-            let _guard = self.state_mutex.lock().unwrap();
+            let mut guard = self.state_mutex.lock().unwrap();
 
+            // `while (true) { switch (self.state) {...}; self.state_cv.wait(...); }`
             loop {
-                match &self.state {
+                match &*guard {
                     State::Init => return Err(Error::FlatpakMustBeStarted),
                     State::Err => return Err(Error::FlatpakSpawnFail),
                     State::Started { .. } => {}
                     State::Exited { status, .. } => {
                         let status = *status;
-                        self.state = State::Init;
+                        *guard = State::Init;
                         self.state_cv.notify_all();
                         return Ok(status);
                     }
                 }
 
-                let _ = &self.state_cv;
-                break;
+                guard = self.state_cv.wait(guard).unwrap();
             }
-            unreachable!()
         }
 
         /// Wait for the process to end asynchronously via libxev. This
@@ -345,6 +388,7 @@ mod host_command {
         // feature like the rest of the GIO path. The body mirrors the reference's
         // completion setup and timer scheduling.
         #[allow(clippy::too_many_arguments)]
+        #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub fn waitXev(
             &mut self,
             loop_: *mut xev::Loop,
@@ -357,18 +401,20 @@ mod host_command {
                 r: Result<u8, WaitError>,
             ),
         ) {
-            let _guard = self.state_mutex.lock().unwrap();
+            let mut guard = self.state_mutex.lock().unwrap();
 
             unsafe {
                 (*completion) = Completion {
                     callback: cb,
                     c_xev: xev::Completion::default(),
                     userdata,
-                    timer: Some(xev::Timer::init()), // not great, but xev timer can't fail atm
+                    // `xev.Timer.init() catch unreachable` — "not great, but xev
+                    // timer can't fail atm".
+                    timer: Some(xev::Timer::init().unwrap()),
                     result: None,
                 };
 
-                match &mut self.state {
+                match &mut *guard {
                     State::Init => (*completion).result = Some(Err(Error::FlatpakMustBeStarted)),
                     State::Err => (*completion).result = Some(Err(Error::FlatpakSpawnFail)),
                     State::Started {
@@ -385,10 +431,10 @@ mod host_command {
                     }
                 }
 
-                if let Some(timer) = &mut (*completion).timer {
+                if let Some(timer) = (*completion).timer {
                     timer.run(
                         loop_,
-                        &mut (*completion).c_xev,
+                        core::ptr::addr_of_mut!((*completion).c_xev),
                         0,
                         (*completion).userdata,
                         xev_timer_callback,
@@ -401,8 +447,8 @@ mod host_command {
         /// command is not in the started state.
         pub fn signal(&mut self, sig: u8, pg: bool) -> Result<(), Error> {
             let pid = {
-                let _guard = self.state_mutex.lock().unwrap();
-                match &self.state {
+                let guard = self.state_mutex.lock().unwrap();
+                match &*guard {
                     State::Started { pid, .. } => *pid,
                     _ => return Ok(()),
                 }
@@ -450,9 +496,9 @@ mod host_command {
         }
 
         /// Helper to update the state and notify waiters via the cv.
-        fn updateState(&mut self, state: State) {
-            let _guard = self.state_mutex.lock().unwrap();
-            self.state = state;
+        fn updateState(&self, state: State) {
+            let mut guard = self.state_mutex.lock().unwrap();
+            *guard = state;
             self.state_cv.notify_all();
         }
     }
@@ -682,16 +728,21 @@ mod host_command {
         ud: *mut c_void,
     ) {
         unsafe {
-            let self_ = &mut *(ud as *mut FlatpakHostCommand);
-            let (state_pid, state_subscription, state_loop) = {
-                let _guard = self_.state_mutex.lock().unwrap();
-                match &self_.state {
+            let self_ = &*(ud as *const FlatpakHostCommand);
+            // `const state = state: { ...lock...; break :state self.state.started; };`
+            // — the whole `started` payload is COPIED OUT under the lock (the
+            // reference's `state` local), including the `completion`/`loop_xev`
+            // slots `waitXev` may have filled in.
+            let (state_pid, state_subscription, state_loop, state_completion, state_loop_xev) = {
+                let guard = self_.state_mutex.lock().unwrap();
+                match &*guard {
                     State::Started {
                         pid,
                         subscription,
                         loop_,
-                        ..
-                    } => (*pid, *subscription, *loop_),
+                        completion,
+                        loop_xev,
+                    } => (*pid, *subscription, *loop_, *completion, *loop_xev),
                     _ => return,
                 }
             };
@@ -710,6 +761,20 @@ mod host_command {
                 pid,
                 status: exit_status,
             });
+            // if (state.completion) |completion| { completion.result = exit_status;
+            //     completion.timer.?.run(state.loop_xev.?, &completion.c_xev, 0, ...); }
+            if let Some(completion) = state_completion {
+                (*completion).result = Some(Ok(exit_status));
+                if let Some(timer) = (*completion).timer {
+                    timer.run(
+                        state_loop_xev.expect("waitXev stores loop_xev with completion"),
+                        core::ptr::addr_of_mut!((*completion).c_xev),
+                        0,
+                        (*completion).userdata,
+                        xev_timer_callback,
+                    );
+                }
+            }
             log_debug(&format!(
                 "HostCommand exited pid={pid} status={exit_status}"
             ));
@@ -740,7 +805,13 @@ mod host_command {
         r: Result<(), xev::TimerRunError>,
     ) -> xev::CallbackAction {
         unsafe {
-            let c_outer = xev::completion_parent::<Completion>(c_inner);
+            // `const c_outer: *Completion = @fieldParentPtr("c_xev", c_inner);`
+            // Faithful container_of via `offset_of!` (the repo's @fieldParentPtr
+            // convention).
+            let c_outer = c_inner
+                .cast::<u8>()
+                .sub(core::mem::offset_of!(Completion, c_xev))
+                .cast::<Completion>();
             if let Some(t) = &mut (*c_outer).timer {
                 t.deinit();
             }
@@ -781,10 +852,18 @@ mod host_command {
         eprintln!("[debug] [{LOG_SCOPE}] {msg}");
     }
 
+    // PORT NOTE: `flatpak_wait_c: FlatpakHostCommand.Completion = .{}` in
+    // `termio/Exec.zig` default-constructs it, so the field defaults are a real
+    // `Default` impl (not just the private `new`).
+    impl Default for Completion {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl Completion {
         // PORT NOTE: the `Completion` struct default uses `noopCallback` and a default
         // `xev.Completion`. Surfaced so the parity image is complete.
-        #[allow(dead_code)]
         fn new() -> Self {
             Self {
                 callback: noopCallback,
