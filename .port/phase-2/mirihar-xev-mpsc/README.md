@@ -28,7 +28,9 @@ argv[1].
 
 ```sh
 for c in plain_naive plain_selfptr cell_selfptr inline_cached plain_rawtick boxq \
-         xthread_naive xthread_shipped xthread_boxq; do
+         xthread_naive xthread_shipped xthread_boxq \
+         wakeup_naive wakeup_copied wakeup_completion_cached \
+         taskloop_lineage_naive taskloop_lineage_rooted; do
   echo "== $c =="
   cargo +nightly miri run --quiet -- "$c"                            # Stacked Borrows
   MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c"   # Tree Borrows
@@ -48,6 +50,55 @@ done
 | `xthread_naive` | `thread_perform` forms `&mut (*task_loop).q` on the pool thread | **UB** | **UB** |
 | `xthread_shipped` | pool-thread push via raw `addr_of_mut!` through the shared raw | **CLEAN** | **CLEAN** |
 | **`xthread_boxq`** | **APPLIED FIX cross-thread**: pool thread reads the loop's cached raw handle + pushes through it; loop thread pops via the same cache | **CLEAN** | **CLEAN** |
+
+### Second pass — the worker-thread `&mut Loop`/`wakeup` + `task_loop`-lineage follow-up (WS19 T10)
+
+The queue candidates above sequence the two threads with a channel handshake, so
+the loop thread is **not** inside `tick(&mut self)` while the worker runs. The
+candidates below remove that concession: the loop thread deliberately HOLDS its
+function-entry (**protected**) `&mut Loop` across the worker's `thread_perform`,
+which is what actually happens (`tick_inner(&mut self)` submits to the pool and
+keeps ticking). Two spin flags make the interleaving deterministic.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `wakeup_naive` | shipped `kqueue.rs`: `(*(*c).task_loop).wakeup()` — autorefs `&mut Loop` on the worker | **UB** | **UB** |
+| `wakeup_copied` | shipped `epoll.rs` "fix": read the `Copy` wakeup handle out BY VALUE through `task_loop` | **UB** | CLEAN |
+| **`wakeup_completion_cached`** | **APPLIED FIX**: the handle is copied into the (caller-owned) `Completion` at schedule time; the worker touches `Loop` not at all | **CLEAN** | **CLEAN** |
+| `taskloop_lineage_naive` | shipped `(*c).task_loop = self` inside `&mut self`, deref'd after a later tick | **UB** | CLEAN |
+| `taskloop_lineage_rooted` | `task_loop` from one stable raw root; handles cached in the completion | **CLEAN** | **CLEAN** |
+
+**What this pass settled (and it contradicts the 2026-07-19 follow-up's own
+prescription).** "Mirror epoll's copied-fd notify" is **NOT sufficient**:
+`wakeup_copied` is still SB-UB. Forming no *reference* is not enough, because a
+by-value read is still a foreign **access** on the `Loop` allocation, and the loop
+thread's `&mut Loop` is *protected* (a function-entry argument) — protected tags may
+not be invalidated at all. By the same argument the ALREADY-APPLIED M1 fix's
+`(*(*c).task_loop).thread_pool_completions_ptr` read was also unsound; the
+`xthread_boxq` "CLEAN" verdict held only because that candidate had sequenced the
+concurrency away.
+
+The cure is therefore structural, and it is the same one for both handles: the
+worker must not touch the `Loop` allocation **at all**. Both are copied into the
+`Completion` — an allocation the CALLER owns, never inside `Loop`, hence immune to
+`Loop`'s per-tick reborrows — on the loop thread at schedule time. This also
+discharges the `task_loop` lineage hazard for free: `task_loop` is no longer
+dereferenced on the worker, so the fact that it is minted from one tick's `&mut
+self` (`taskloop_lineage_naive`: SB UB) stops mattering.
+
+**Fidelity note:** the reference's `Completion` HAS a `task_completions:
+*TaskCompletionQueue` field, which the Task-2 port had elided in favour of reaching
+the queue via `task_loop`. Restoring it is a fidelity GAIN; only `task_wakeup` is
+port-added.
+
+### Applied fix, second pass (`kqueue.rs` + `epoll.rs`)
+
+* `Completion` gains `task_completions: *mut TaskCompletionQueue` (the reference's
+  own field, restored) and `task_wakeup: Async` / `Eventfd` (port-added, `Copy`).
+* `Loop::start`'s threadpool arm / `thread_schedule` writes both from the loop
+  thread, before `schedule`.
+* `thread_perform` reads BOTH out of `(*c)` and never derefs `(*c).task_loop`.
+* `COMPLETION_SIZE` tripwires re-pinned: kqueue 248 → 264, epoll 208 → 224.
 
 ## What the harness SETTLED (the audit's open questions)
 

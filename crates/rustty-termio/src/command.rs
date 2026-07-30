@@ -1129,6 +1129,11 @@ pub(crate) struct WaitPidResult {
 /// PORT NOTE (Zig-std shim): `posix.waitpid` — loops on EINTR; ECHILD/EINVAL are
 /// unreachable per the Zig std contract (the process exists and is ours; the
 /// flags are valid).
+///
+/// Kept VERBATIM (`unreachable!`) for the `Command::wait` path, which reproduces
+/// the Zig-std contract this port models elsewhere. `killPid` uses
+/// [`posix_waitpid_checked`] instead — see its docs for why the two callers need
+/// different contracts.
 #[cfg(not(windows))]
 pub(crate) fn posix_waitpid(pid: libc::pid_t, flags: u32) -> WaitPidResult {
     loop {
@@ -1145,6 +1150,56 @@ pub(crate) fn posix_waitpid(pid: libc::pid_t, flags: u32) -> WaitPidResult {
             // .CHILD => unreachable, // The process specified does not exist.
             // .INVAL => unreachable, // Invalid flags.
             _ => unreachable!("waitpid: unexpected errno"),
+        }
+    }
+}
+
+/// `posix_waitpid`, but reporting rather than aborting when the child is already
+/// gone: `None` means the wait failed with a real errno (in practice `ECHILD` —
+/// somebody else reaped it).
+///
+/// **Why this exists (WS19 T17b).** rustty has a SECOND reaper:
+/// `crates/rustty-xev/src/process.rs` calls `waitpid(pid, &status, 0)` in the
+/// `.proc` completion trampoline. If that completion fires while `killPid` is in
+/// its SIGHUP/`waitpid(WNOHANG)` loop, the loop's next `waitpid` returns `ECHILD`
+/// — and the verbatim shim above turns that race into an unconditional Rust
+/// panic, on the teardown path.
+///
+/// **This is fidelity, not a divergence, against upstream head.** At the pin,
+/// ghostty's `killPid` went through Zig std's `posix.waitpid`, whose
+/// `.CHILD => unreachable` the shim above reproduces faithfully. Upstream has
+/// since dropped that wrapper for the raw syscall (`a77c706a1` / `e8525c0fd`):
+///
+/// ```zig
+/// const rc = posix.system.waitpid(pid, null, std.c.W.NOHANG);
+/// if (posix.errno(rc) == .INTR) continue;
+/// break rc;                  // any other error -> rc == -1
+/// ...
+/// if (res_pid != 0) break;   // -1 != 0, so the loop BREAKS
+/// ```
+///
+/// so an `ECHILD` now ends upstream's loop gracefully. Adopting it here therefore
+/// REMOVES a divergence (and a reachable panic) rather than adding one. See
+/// `.port/phase-3/assessments/E-os-termio-platform.md` §5.2.
+///
+/// `EINTR` still retries, exactly as before and as upstream still does.
+#[cfg(not(windows))]
+pub(crate) fn posix_waitpid_checked(pid: libc::pid_t, flags: u32) -> Option<WaitPidResult> {
+    loop {
+        let mut status: libc::c_int = 0;
+        let rc = unsafe { libc::waitpid(pid, &mut status, flags as libc::c_int) };
+        if rc >= 0 {
+            return Some(WaitPidResult {
+                pid: rc,
+                status: status as u32,
+            });
+        }
+        match errno() {
+            libc::EINTR => continue,
+            // ECHILD: the child is gone — which is what the caller was waiting
+            // for. EINVAL etc. are equally unrecoverable-by-retry; upstream's
+            // `rc == -1` break makes no distinction, so neither do we.
+            _ => return None,
         }
     }
 }

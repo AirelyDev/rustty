@@ -2727,8 +2727,9 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   STUBBED. ✅ RESOLVED (2026-07-23, WS3-B) for the renderer/libxev/toolchain
   lines — real values via build_config::renderer() type-name map,
   rustty_xev::backend(), and build_config::RUSTC_VERSION; the cli_smoke
-  `version_plus` KAT now ASSERTS their content. Still open: the OSC-8
-  commit-hash hyperlink (no `+BUILD` metadata / repo-URL identity constant).**
+  `version_plus` KAT now ASSERTS their content. The OSC-8 commit-hash hyperlink
+  is ✅ RESOLVED too (2026-07-29, WS19 T12, audit row O12) — see the RESOLUTION
+  note at the end of this entry. NOTHING in this entry is open.**
   `version.rs` emits documented STUB strings for the `- renderer` line
   (`RENDERER_STUB`; rustty-renderer's `Renderer` is a Phase-3 leaf, commented out)
   and the `- libxev` line (`LIBXEV_STUB`; rustty-xev unimplemented, D6). The
@@ -2744,6 +2745,47 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   preserved verbatim as commented reference (R1). **Target:** un-defer the
   renderer/libxev line content when R-d (renderer) / D6 (libxev) land; add a
   rustty repo-URL constant to `rustty-identity` for the hyperlink.
+
+  **RESOLUTION of the OSC-8 hyperlink half — IMPLEMENTED, not diverged (2026-07-29,
+  WS19 T12, audit row O12).** Weighed implement-vs-divergence honestly and
+  implemented: the repo URL already EXISTS as a first-class product-identity value
+  (the workspace `Cargo.toml` `repository = "https://github.com/AirelyDev/rustty"`),
+  and the hyperlink is user-observable R1 behavior, so there was no honest
+  4-criterion basis for making it permanent. Three pieces:
+  1. `rustty_identity::COMMIT_URL_PREFIX` — `https://github.com/AirelyDev/rustty/commit/`,
+     with the oracle spelling (`github.com/ghostty-org/ghostty/commit/`) under
+     `identity-oracle`, both arms asserted by the existing profile tests (R2).
+  2. `crates/rustty-cli/build.rs` gains a third generator baking
+     `RUSTTY_COMMIT_HASH` from `git rev-parse --short HEAD` — the `+BUILD`-metadata
+     channel Rust's `SemanticVersion` view lacks. **R3-clean:** the oracle tree is
+     not consulted; it reads *this* repo's git. **Reproducibility-clean:** the value
+     is a function of the source revision (same commit → same bytes), the
+     `RUSTTY_COMMIT_HASH` env var overrides it so a packager can pin or blank it
+     without git, and a non-checkout build (tarball / vendored crate / docs.rs)
+     degrades to EMPTY → `commit_hash() == None` → no hyperlink, which is exactly
+     the reference's own `build_config.version.build == null` behavior rather than a
+     build failure. `rerun-if-changed` is registered on the resolved HEAD + ref
+     files (via `git rev-parse --git-path`, so it is correct inside a git WORKTREE)
+     and ONLY when those paths exist, so a vanished worktree cannot force perpetual
+     rebuilds through the shared `target/`.
+  3. `version.rs`'s hyperlink branch is live, and `commit_url()` composes
+     prefix+hash. NOTE the old branch was ALSO WRONG, not merely dead: it wrote
+     `\x1b]8;;{hash}` — the bare hash as the URI, with no URL prefix at all.
+
+  **Gate.** `+version`'s hyperlink is tty-only, and `cli_smoke`'s stdout is a pipe,
+  so the binary-level KAT structurally cannot reach it. `run()` was therefore split
+  into `run()` (acquires stdout + `isTty`) and `write_version(sink, tty)` — a seam,
+  not a divergence: the reference already threads `stdout` and `tty` through this
+  code. Four `rustty-cli` unit tests: the commit hash is captured whenever the
+  source IS a git checkout (the assertion that was dead before), the URL is the
+  product repo's, the tty path emits `OSC 8 ;; <commit-url> ST <header> \n\n OSC 8
+  ;; ST`, and the non-tty path emits no OSC-8 at all. Mutation-verified (3
+  experiments, all RED then reverted): `commit_hash() -> None` (the pre-fix state),
+  a wrong URL prefix, and a suppressed hyperlink write.
+
+  Incidentally documented by the tty test: the CLOSING `OSC 8 ;; ST` is emitted on
+  a tty even when no link was opened — the reference guards it on `tty` alone, not
+  on the hash. Preserved verbatim (R1).
 
 - **`help_strings` / `Action::help_text` — the `+action --help` text. ✅ RESOLVED
   (help_strings doc-table generator landed).**
@@ -3216,8 +3258,10 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   'RENDERER_STUB\|LIBXEV_STUB\|TOOLCHAIN_VERSION_STUB' crates/` → **zero hits**.
   WS3-B replaced all three with real values and `crates/rustty/tests/cli_smoke.rs`'s
   `version_plus` KAT now asserts their CONTENT. The `D:2639` copy of this row already
-  recorded that; this C6 copy was never struck. The only `+version` residual left is
-  the OSC-8 commit hyperlink (audit row O12 → **WS19 T12**).
+  recorded that; this C6 copy was never struck. The last `+version` residual — the
+  OSC-8 commit hyperlink (audit row O12) — is ✅ RESOLVED by **WS19 T12** (2026-07-29;
+  implemented, not diverged: see the RESOLUTION note on the `version.zig is PARTIAL`
+  entry). `+version` now has NO residual.
 
 - **`explain_config` (1t DEFERRED) + `help_strings` codegen (continued, ADV-FIX 3).**
   The bin does not un-defer these; `Action::help_text` still returns "" (the
@@ -4866,13 +4910,46 @@ and proven, so when the §6 ThreadPool body lands it need only wire the queue (t
 SB/TB soundness of the completion-queue plumbing is already discharged); the
 harness `.port/phase-2/mirihar-xev-mpsc` remains the reproduction/regression proof.
 
-**Follow-up (open, low, [2026-07-19, `xev-libxev-completion` branch]):** worker-thread
-`&mut Loop`/`wakeup` aliasing — kqueue.rs twin + `task_loop` lineage audit. `epoll.rs`'s
-`thread_perform` no longer autorefs `Loop::wakeup(&mut self)` on a pool worker (it now
-notifies through a by-value `Copy` eventfd, forming no `&mut Loop`); `kqueue.rs` still
-carries the equivalent dead-path `self.wakeup()` idiom. Joint follow-up: apply the same
-copied-fd notify to the kqueue twin and audit the full `task_loop`-pointer lineage under
-SB/TB (mirihar) once the pool paths go live on both backends.
+**Follow-up — ✅ RESOLVED (2026-07-29, WS19 T10; audit row O9).** ~~worker-thread
+`&mut Loop`/`wakeup` aliasing — kqueue.rs twin + `task_loop` lineage audit.~~ Filed
+2026-07-19 as "open, low" INSIDE this RESOLVED entry, which is why it stayed invisible.
+
+The original prescription — "apply epoll's copied-fd notify to the kqueue twin" — was
+**disproven by the harness**, which is exactly why the doctrine forbids hand-reasoning
+SB. Five new `.port/phase-2/mirihar-xev-mpsc` candidates settle it (full 14-row matrix in
+that README; `bash run-all.sh` reproduces):
+
+| candidate | SB | TB |
+|---|---|---|
+| `wakeup_naive` — shipped kqueue `(*(*c).task_loop).wakeup()` | **UB** | **UB** |
+| `wakeup_copied` — shipped epoll "fix": by-value `Copy` handle read through `task_loop` | **UB** | CLEAN |
+| `wakeup_completion_cached` — **APPLIED FIX** | CLEAN | CLEAN |
+| `taskloop_lineage_naive` — shipped `(*c).task_loop = self`, deref'd after a later tick | **UB** | CLEAN |
+| `taskloop_lineage_rooted` | CLEAN | CLEAN |
+
+**Why "form no reference" is not enough.** The loop thread sits inside
+`tick(&mut self)`/`run(&mut self)` for the entire time a pool worker runs, so it holds a
+*function-entry, PROTECTED* `&mut Loop`. A by-value read of a `Copy` field is still a
+**foreign access** on the `Loop` allocation, and protected tags may not be invalidated at
+all — hence `wakeup_copied` is SB-UB. **This also corrects the M1 verdict above:** the
+already-applied `(*(*c).task_loop).thread_pool_completions_ptr` read had the same defect;
+`xthread_boxq` read CLEAN only because that candidate sequenced the two threads with a
+channel handshake, so the loop thread was NOT holding its `&mut Loop`. The new candidates
+deliberately remove that concession.
+
+**Applied fix (both backends).** The worker must not touch the `Loop` allocation at all,
+so `Loop::start`/`thread_schedule` copies the two handles it needs into the **caller-owned
+`Completion`** (never inside `Loop`, hence immune to `Loop`'s per-tick reborrows) before
+`schedule`, and `thread_perform` reads only from `(*c)`:
+`task_completions: *mut TaskCompletionQueue` — **the reference's OWN field, restored**
+after the Task-2 elision, so this half is a fidelity GAIN — and `task_wakeup`
+(`Async`/`Eventfd`, `Copy`) — port-added, ledgered as a `[R1-DIVERGENCE]` below. Because
+`task_loop` is no longer dereferenced on the worker, the lineage audit is discharged too:
+its provenance (`taskloop_lineage_naive`: SB-UB) stops mattering. `COMPLETION_SIZE`
+tripwires re-pinned (kqueue 248→264, epoll 208→224 — the `task_completions` half moves
+the Rust size *toward* Zig's 256). Verified: `cargo test -p rustty-xev` 47+2 green on
+macOS and on the Linux VM (epoll arm), `cargo +nightly miri test -p rustty-xev` no new
+findings.
 
 ### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity — ✅ RESOLVED (2026-07-23, WS3)
 
@@ -5481,7 +5558,48 @@ heading, restoring the 1–2–3–4 numbering. Not one word of their text is ch
    the Phase 2 Closure Audit below (owner: WS19 T6).**
 ---
 
-## `threadEnter` error arms should drain the pty master BEFORE `stop()` — residual cure for the teardown wedge [added 2026-07-29, WS-hang review I3]
+## ~~`threadEnter` error arms should drain the pty master BEFORE `stop()`~~ — ✅ RESOLVED (2026-07-29, WS19 T17a; audit row N9) [added 2026-07-29, WS-hang review I3]
+
+**RESOLVED — the fix is applied, and it is RECLASSIFIED as a `[R1-DIVERGENCE]`**
+(entry: "`threadEnter` error arms drain the pty master before `stop()`", in the
+Justified R1 Divergences section, next to the bounded `killPid` it shares its
+reasoning with). `crates/rustty-termio/src/exec.rs` gains
+`drain_pty_master_once(fd)` — a bounded, synchronous, discard-the-bytes drain (a
+`DRAIN_BUDGET` = 50 ms deadline re-checked every iteration, and a **zero-timeout
+`poll` gate before every `read`** so it can never park on the blocking master) —
+and all **six** live `self.subprocess.stop()` call sites in `threadEnter` call it
+first: `ProcessNotStarted`, `ProcessNoPid`, `xev::Process::init`, `pipe()`,
+`xev::Timer::init`, read-thread `spawn`. (The turnaround the deferral predicted —
+"a restructuring, not a local edit" — proved unnecessary: the drain does not need
+the read thread's machinery, only the master fd, which every arm already has as
+`pty_fds.read`.) `threadExit` is untouched: it already gets the invariant for
+free.
+
+Re-verified against upstream head before implementing
+(`.port/phase-3/assessments/E-os-termio-platform.md` §5.3): those `errdefer`s are
+**unchanged context lines** upstream, so the ordering defect really is shared and
+this really is a deliberate divergence we intend to upstream. Area E's §5.3
+recommended folding this into the E1 read-pipeline port instead; that advice is
+recorded and NOT followed, because (a) N9 blocks Phase-2 closure now, and (b) the
+implementation turned out to be ~40 lines with no dependency on E1's gather stage.
+**E1 still owes the two NEW no-reader windows** §5.1/§5.3 identify (`setNonblock`
+failure and `io-gather` spawn failure abort the reader from INSIDE the read thread,
+after `threadEnter` returned success) — those are not `threadEnter` arms and are
+NOT covered here; see the divergence entry's own note.
+
+**Guard:** `exec::tests::drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master`
+— a real `openpty`, asserting BOTH that the drain consumes what was already
+written AND that it returns promptly on a quiet master. Mutation-verified twice
+(each RED, then reverted): making the `poll` timeout blocking (5 s) fails the
+promptness assertion; making the `read` a no-op fails the consumption assertion.
+Deliberately NOT a reproduction of the wedge — see the `killPid` entry for why the
+previous such test was deleted. Out-of-suite evidence unchanged:
+`.port/tools/repro_subprocess_hang.sh` (6/6 runs, 0 hangs, no residual `?Es`
+child).
+
+The historical finding text is retained below for provenance.
+
+---
 
 **What is outstanding.** `Exec::threadEnter`
 (`crates/rustty-termio/src/exec.rs`) has several failure arms — `pipe()`,
@@ -5521,7 +5639,38 @@ the child in `?Es` and the parent spinning inside `killPid`.
 
 ---
 
-## `posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race [added 2026-07-29, WS-hang review M1]
+## ~~`posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race~~ — ✅ RESOLVED (2026-07-29, WS19 T17b; audit row N9) [added 2026-07-29, WS-hang review M1]
+
+**RESOLVED, and NOT as a divergence — the premise below went STALE.** The entry
+(and the WS19 plan) both said to record the fix as an `[R1-DIVERGENCE]` alongside
+the bounded `killPid`, on the grounds that the verbatim
+`unreachable!("waitpid: unexpected errno")` was FAITHFUL to Zig std's
+`.CHILD => unreachable`. That was true at the pin and is **no longer true at
+upstream head**: by dropping the std wrapper for the raw syscall (`a77c706a1` /
+`e8525c0fd`), upstream's `killPid` now breaks on `rc == -1`, so an `ECHILD` ends
+its loop **gracefully** — exactly the behavior this item proposed. Implementing it
+therefore **REMOVES a divergence instead of adding one**, and no divergence entry
+is warranted. (Established by `.port/phase-3/assessments/E-os-termio-platform.md`
+§5.2, which rates it the best cost/benefit item in area E, cost S, risk LOW.)
+
+**Applied.** `command.rs` gains `posix_waitpid_checked(pid, flags) ->
+Option<WaitPidResult>` — `EINTR` still retries, every other errno returns `None`
+(upstream's `rc == -1` makes no finer distinction either). `killPid` is its ONLY
+caller and treats `None` as "the child is gone" → `break`, which is what the loop
+was waiting for. The verbatim `posix_waitpid` is left untouched on the
+`Command::wait` path, so the Zig-std shim contract this port reproduces elsewhere
+is preserved.
+
+**Guard:** `exec::tests::posix_waitpid_checked_reports_echild_instead_of_aborting`
+— waits on pid 1 (never our child ⇒ deterministic `ECHILD`, no fork, nothing left
+behind). Mutation-verified: restoring the `unreachable!()` arm makes it RED with
+`internal error: entered unreachable code: waitpid: unexpected errno`, which is
+also the direct proof that the race really was a reachable panic on the teardown
+path.
+
+The historical finding text is retained below for provenance.
+
+---
 
 **What is outstanding.** `crates/rustty-termio/src/command.rs`'s
 `posix_waitpid` treats every non-`EINTR` errno as `unreachable!("waitpid:
@@ -5733,6 +5882,55 @@ consumers — has no rustty counterpart.
 
 ---
 
+## xev `Completion.task_wakeup` — the pool worker wakes the loop through a per-completion `Copy` handle, not `c.task_loop.wakeup()` [WS19 T10, 2026-07-29, audit row O9]
+
+**Oracle:** both `backend/kqueue.zig` and `backend/epoll.zig` end `thread_perform` with
+`c.task_loop.wakeup()` — the pool worker reaches back into the `Loop` to notify it.
+
+**Divergence:** `Completion` gains ONE port-added field, `task_wakeup` (`Async` on
+kqueue — a `Copy` `port: u32`; `Eventfd` on epoll — a `Copy` `fd: i32`), written on the
+loop thread in `Loop::start`/`thread_schedule` immediately after `(*c).task_loop = self`,
+and `thread_perform` notifies THAT copy. Nothing else changes: same handle, same
+`mach_msg`/`write(1u64)`, same ordering relative to the queue push. Note the companion
+field `task_completions` is NOT a divergence — it is the reference's own field, restored
+after a Task-2 elision, and it makes `Completion` a closer match to Zig's 256 bytes
+(kqueue 248→264).
+
+**Why fidelity is overruled (soundness > R1):**
+
+1. **The oracle's shape is UB in Rust, proven not argued.** The loop thread is inside
+   `tick(&mut self)` / `run(&mut self)` — a *function-entry, PROTECTED* `&mut Loop` — for
+   the entire time a pool worker runs. `.port/phase-2/mirihar-xev-mpsc` (`bash
+   run-all.sh`): `wakeup_naive`, the literal `(*(*c).task_loop).wakeup()` autoref, is UB
+   under **both** Stacked and Tree Borrows. Zig has no aliasing model, so the reference
+   incurs no such cost; this is a language-level obligation, not a behavior choice.
+2. **The obvious cheaper fix is insufficient — also proven.** `wakeup_copied` (read the
+   `Copy` handle out of the `Loop` by value, forming no reference — the shape `epoll.rs`
+   had already shipped) is **still SB-UB**: a by-value read is a foreign *access* on the
+   `Loop` allocation, and a protected tag may not be invalidated at all. Only
+   `wakeup_completion_cached` — the worker touching ONLY the caller-owned `Completion`
+   allocation — is CLEAN under both models. There is no faithful shape that is sound.
+3. **The divergence is invisible to every observer.** The handle notified is bit-identical
+   to `Loop`'s own, so the kernel-visible effect (`mach_msg` to the same port / `write` to
+   the same eventfd) is byte-identical; no caller, test or syscall trace can tell the two
+   apart. The only observable is `size_of::<Completion>()`, which is *already* a
+   documented Rust-vs-Zig divergence pinned by its own tripwire.
+4. **It is bounded and gate-pinned.** Two fields, two write sites (both on the loop
+   thread, both adjacent to the existing `task_loop` write), one read site per backend.
+   The `COMPLETION_SIZE` `const` assert trips on any drift, `tests/surface_parity.rs`
+   pins `Completion`'s public surface (`Sized`/`Default`/`Send`), and the mirihar matrix
+   is the standing regression proof. As a bonus the change removes ALL worker derefs of
+   `task_loop`, which discharges the separate `task_loop`-lineage hazard
+   (`taskloop_lineage_naive`: SB-UB) rather than merely relocating it.
+
+**Guard:** `.port/phase-2/mirihar-xev-mpsc` (`wakeup_naive` / `wakeup_copied` /
+`wakeup_completion_cached` / `taskloop_lineage_*`, SB + TB) — out-of-suite by necessity:
+the pool path is dead in-tree (`Loop::init` hardcodes `Options::default()`, so
+`thread_pool` is always `None`), so no in-suite test can reach it, and Miri only checks
+executed code.
+
+---
+
 ## `rustty-bench` macOS `os_signpost` Instruments interval [RECLASSIFIED — WS19 T13, 2026-07-29, audit row O19a]
 
 **What diverges.** `Benchmark.zig:44-65` opens an `os_signpost` interval so a benchmark
@@ -5927,6 +6125,70 @@ oracle and the port. It is left verbatim — it terminates as soon as the child
 `setsid`s or dies, and a wedged `?Es` child still reports a valid pgid, so it is
 not a hang site (confirmed by `sample`: the hang is inside `killPid`).
 
+**Related, NOT part of this divergence:** the `ECHILD` handling in this same loop
+is **NOT** a divergence — `killPid` now uses `posix_waitpid_checked` and breaks on
+`None`, which is what upstream head's raw-syscall `killPid` does. See the resolved
+`posix_waitpid`/`ECHILD` entry above (WS19 T17b). Do not fold it in here.
+
+---
+
+## `threadEnter` error arms drain the pty master before `stop()` (`crates/rustty-termio/src/exec.rs`) [WS19 T17a, 2026-07-29, audit row N9]
+
+**Oracle:** `ghostty/src/termio/Exec.zig`'s `threadEnter` registers
+`errdefer self.subprocess.stop();` right after `Subprocess.start`, and every later
+fallible step (`internal_os.pipe`, `xev.Timer.init`, `xev.Process.init`, the
+`std.Thread.spawn` of the read thread) unwinds through it. None of them drains the
+pty master first, because on those arms the io-reader thread does not exist yet.
+
+**Divergence:** each of the six corresponding rustty arms calls
+`drain_pty_master_once(pty_fds.read)` immediately before `self.subprocess.stop()`
+— a bounded, synchronous read-and-discard of whatever the child has already
+written. Nothing else changes: same signals, same cleanup order, same return
+values, and **no effect whatsoever on any path that succeeds**.
+
+**Why fidelity is overruled (liveness > R1) — the same trade the bounded `killPid`
+made, and a strictly weaker one:**
+
+1. **It cures a real, if narrow, unrecoverable hang.** On these arms the child is a
+   freshly-forked `login(1)` — a session leader — with output queued on the pty
+   slave and **nobody reading the master**. SIGHUP'ing it in that state wedges it
+   uninterruptibly in the macOS kernel exit path (state `?Es`): SIGKILL-immune,
+   never reapable. That is precisely the mechanism the bounded `killPid` entry
+   documents; draining the master is what un-wedges it, and it is exactly what the
+   *normal* close path gets for free (`threadExit` calls `stop()` while the reader
+   is still draining — upstream orders it that way deliberately).
+2. **Upstream has the same defect, verified twice.** The deferral said so at the
+   pin, and the Phase-3 area-E rebase check re-confirmed it at upstream head:
+   `.port/phase-3/assessments/E-os-termio-platform.md` §5.3 — those `errdefer`s are
+   **unchanged context lines**; the only nearby edits are cosmetic
+   (`posix.exit` → `std.process.exit`, `posix.close` → `posix.system.close`). So
+   this is a bug to fix and upstream, not a fidelity gap to close.
+3. **The behavior change is unobservable outside the failing arm.** The bytes
+   consumed were about to be discarded anyway (the arm is tearing the subprocess
+   down and returning an error), so nothing that could have read them still exists.
+   Contrast the bounded `killPid`, which DOES have an observable consequence (a slow
+   child is abandoned): this one has none.
+4. **It is bounded, so it cannot become the hang it prevents.** A `DRAIN_BUDGET`
+   (50 ms) deadline is re-checked every iteration, and every `read` is gated by a
+   **zero-timeout `poll`**, so a quiet master returns immediately instead of parking
+   on the blocking fd. The promptness property is the second half of the guard KAT,
+   and mutation-verified (a blocking poll timeout makes it RED).
+
+**Guard:** `exec::tests::drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master`
+(real `openpty`; both properties; 2 mutation experiments) plus the out-of-suite
+`.port/tools/repro_subprocess_hang.sh` (6/6 runs, 0 hangs, no residual `?Es`
+child). Deliberately NOT an in-suite reproduction of the wedge — see the `killPid`
+entry above for why the previous such test was deleted.
+
+**Known residual, owned by Phase 3 area E (E1), not by this entry.** Upstream's
+read-pipeline commits (`2f0e6659d`, `bb0ac4c72`) add TWO NEW no-reader windows that
+are *not* `threadEnter` arms: `setNonblock(fd)` failure and `io-gather` spawn
+failure abort the reader from INSIDE the read thread, after `threadEnter` has
+already returned success, so `threadExit`'s `stop()` then runs into the same
+wedging condition. When E1 is ported, those two arms need the same drain (and the
+bounded `killPid` entry's "Reachability in PRODUCTION" paragraph needs them added).
+See area E §5.1/§5.3.
+
 ---
 
 # PHASE 2 CLOSURE AUDIT (WS19) — every open item, verified against code [2026-07-29]
@@ -5971,10 +6233,10 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 | O6 | `D:4046` GTK portal `OpenURI` — call site INHABITED, body unported; marked **OPEN**, no owner | **OPEN, real.** No `portal` module under `crates/rustty-apprt/src/gtk/`; `startup` fetches the `gio::DBusConnection` for GlobalShortcuts only. WS15 explicitly split this out and did not take it. | **fix in WS19 T8** (reuses the WS15 request-path pattern + its live gate harness) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T8** (GTK portal `OpenURI`). Needs the port plus live D-Bus verification on the VM. |
 | O7 | `D:4858`/`:4904` wayland `Window` snapshots the decoration mode at init; a live decoration-mode change is now *cranked* but never *re-read* | **OPEN, real, no owner** — recorded twice, both as a "coupled follow-up" with no WS. | **fix in WS19 T9** | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T9** (wayland decoration-mode re-read). Needs a real compositor. |
 | O8 | `D:4905` wayland duplicate-global re-advertisement leaves a stale `name→tag` entry | **OPEN, LOW, no owner.** | **permanent divergence** — pathological input no compositor produces; 4-criterion basis written in WS19 T9 | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T9 (ledger half).** Duplicate-global nit is a **Justified R1 Divergence** with a 4-criterion basis. |
-| O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T10** (kqueue `thread_perform` `&mut Loop`). Requires the `mirihar-xev-mpsc` SB/TB proof first — SB conclusions must not be hand-reasoned. |
+| O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T10.** And the prescription it carried was WRONG: the harness proved "mirror epoll's copied-fd notify" INSUFFICIENT (`wakeup_copied`: still SB-UB — a by-value read is a foreign *access* against the loop thread's *protected* `&mut Loop`, and forming no reference is not enough). Cure applied to BOTH backends: the queue handle + the wakeup handle are copied into the caller-owned `Completion` at schedule time (`task_completions`, the reference's OWN field restored, + port-added `task_wakeup`), so `thread_perform` never accesses the `Loop` allocation and never derefs `task_loop` — which also discharges the lineage audit. 14-candidate SB/TB matrix in `.port/phase-2/mirihar-xev-mpsc/README.md`. |
 | O10 | `D:3273` macOS `xev.File`/`TCP`/`UDP` watcher instantiations still deferred (Linux ported them, Tasks 3–5); plus the macOS `kqueue: file IO on thread pool` skip-stub | **OPEN, real, no owner.** The two targets deliberately diverge, gate-pinned by `crates/rustty-xev/tests/surface_parity.rs`. | **permanent divergence** — already deliberate and gate-pinned; WS19 T11 moves it into the divergence section with its 4-criterion basis rather than leaving it in a "DEFERRED" list | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
 | O11 | `D:3274` xev `c_api.zig` (libxev's own C ABI) unported | **OPEN, no owner.** rustty consumers use the Rust API; nothing in ghostty consumes libxev's C ABI. | **permanent divergence** (outside the port's consumption surface; basis in WS19 T11) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
-| O12 | `D:2643` `+version`'s OSC-8 commit-hash hyperlink never emits (no `+BUILD` metadata, no repo-URL identity constant) | **OPEN, real, no owner.** The three STUB lines it is bundled with are GONE (see W8); only the hyperlink branch is still dead. | **fix in WS19 T12** (repo-URL constant in `rustty-identity` + a build-time commit hash) | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T12** (`+version` OSC-8 commit hyperlink). |
+| O12 | `D:2643` `+version`'s OSC-8 commit-hash hyperlink never emits (no `+BUILD` metadata, no repo-URL identity constant) | **OPEN, real, no owner.** The three STUB lines it is bundled with are GONE (see W8); only the hyperlink branch is still dead. | **fix in WS19 T12** (repo-URL constant in `rustty-identity` + a build-time commit hash) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T12. IMPLEMENTED, not diverged** — there was no honest 4-criterion basis for permanence (the repo URL already exists as workspace `Cargo.toml` `repository`, and the hyperlink is user-observable R1 behavior). `rustty_identity::COMMIT_URL_PREFIX` (both profile arms) + a `rustty-cli/build.rs` `RUSTTY_COMMIT_HASH` capture (env-overridable, degrades to `None` off a git checkout — R3-clean, reproducibility-clean) + a live `commit_url()`. Also fixed a latent BUG in the dead branch: it wrote the bare hash as the URI, with no URL prefix. Gated by 4 `rustty-cli` unit tests over a new `write_version(sink, tty)` seam (the tty-only branch is unreachable from `cli_smoke`, whose stdout is a pipe); 3 mutation experiments. |
 | O13 | `D:3065`/`:4067` `main_wasm.zig` + `main_build_data.zig` unported, "Target: the gen/wasm-artifact tooling milestone" | **OPEN.** `grep -rn 'main_wasm\|main_build_data' crates/ --include='*.rs'` → **zero hits**. (`main_gen.zig` **IS** ported at `crates/rustty-synthetic/src/main_gen.rs`, so that third of the row is stale.) | `main_wasm` → **route to WS14**; `main_build_data` + the `+gen-*` file-emit wiring (`D:3725`) → **route to WS13** | **M** each | **WS19 EXECUTION STATUS:** **DONE (split + routed) — WS19 T14/T19.** `main_gen` PORTED; `main_wasm` → WS14; `main_build_data` + `+gen-*` → WS13 (in WS13's plan). |
 | O14 | `D:4209` `Atlas.Wasm` `test "happy path"` (4 named assertions) deferred with the wasm atlas surface | **OPEN, correctly described**; target is an unscheduled milestone. | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
 | O15 | `D:1894` `App.zig` `Wasm` block preserved verbatim, "Target: the rustty wasm app-runtime" | **OPEN, correctly described** (the block is commented out in the *reference* too). | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
@@ -6019,7 +6281,7 @@ a vacuous gate means every "green" claim it ever made is unproven.**
 | **N6** | **G3b comment-coverage counts RISE as an ARTIFACT of porting beyond-pin commits** — the gate diffs against the pin, so a sentence upstream DELETED beyond the pin still exists at the pin and is reported "missing" | `.port/tools/gates/check_comment_coverage.py:34` reads `GHOSTTY_SRC`, defaulting to `/Users/gael/projects/ghostty/src` — the oracle **working tree, pinned at `4749c4e93`**. WS7 D2 saw the config lane go 5→9 for exactly this reason. **VERDICT (the question this audit was asked to settle): advancing the pin in Phase 3 resolves it WHOLESALE, and is the only correct fix.** Once `GHOSTTY_SRC` is the resynced tree, the deleted sentences are absent from the reference side and the counts drop by construction — no per-file exception list, no gate change, no R5 exposure. **Do NOT paper over it with a per-file `GHOSTTY_SRC` override**: that is precisely the spoof hole `ci.sh:114-129` killed for G1b (a probe redirected away from what the script actually reads yields a vacuous green). Until the pin advances, beyond-pin G3b deltas are EXPECTED and must be recorded per-lane. | **no code change; WS19 T2 records the verdict**, Phase 3 realizes it | **S** | **WS19 EXECUTION STATUS:** **DONE (verdict recorded) — WS19 T2.** G3b subsection in the gates README + Phase 3 **P3-RV2**; per-file `GHOSTTY_SRC` override explicitly FORBIDDEN. |
 | **N7** | **`example/*/build.sh` (all 23) link `target/release/librustty_vt_c.dylib` but build it only IF ABSENT, so a stale release dylib silently fails or mis-links** | `example/c-vt-colors/build.sh:11`: `[ -f "$lib" ] \|\| ( cd "$root" && cargo build … )`. Identical in all 23 (`ls example/*/build.sh \| wc -l` → 23). | **WS19 T16** — ~~open~~ **RESOLVED 2026-07-29**: guard replaced with an unconditional `cargo build` in all 23 (cargo is already incremental, so the avoid-rebuild motive was void). Hazard demonstrated concretely, not argued: with the old guard and a present-but-bogus dylib, `ld: unknown file type in .../librustty_vt_c.dylib`; with the new one the rebuild replaces it and the example runs. All 23 build+run green (`ok=23 fail=0`), including after `touch -t 200001010000` on the dylib. Repo-wide sweep for the same idiom: no other occurrence. | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T16.** All 23 `example/*/build.sh` rebuild unconditionally; hazard demonstrated (`ld: unknown file type`), all 23 build+run. |
 | **N8** | **3 `.blp` msgids still spell "Ghostty" and ZERO code-side i18n call sites are wrapped**, so `xgettext` extracts no msgid from any `.rs` file | `assets/ui/1.3/debug-warning.blp:6`, `assets/ui/1.5/inspector-window.blp:5`, `assets/ui/1.5/window.blp:307`. `grep -rn 'gettext_' crates/rustty-apprt/src crates/rustty-core/src` finds only the `i18n::init`/`initGlobalDomain` wiring, never a wrapped literal. **LEDGERED?** Yes — the WS13 plan documents both as findings F3/F4 with exact file:line tables and owns them in its T2/T3. This row is the `DEFERRALS.md` cross-reference so a ledger grep finds them too. | **WS13** (already planned) | **M** | **WS19 EXECUTION STATUS:** **DONE (routed) — already WS13's**; cross-referenced. |
-| **N9** | **`threadEnter` error arms should drain the pty master BEFORE `stop()`** (`D:5090`) and **`posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race** (`D:5130`) — both filed 2026-07-29 with **NO owner** | Both verified as described. `posix_waitpid`'s `unreachable!("waitpid: unexpected errno")` is FAITHFUL (Zig std does the same), so the exposure is inherited — but Rust's `unreachable!` always panics where Zig's is a no-op in `ReleaseFast`, so the *consequence* diverges. The second reaper is real: `crates/rustty-xev/src/process.rs` calls `waitpid` in the `.proc` completion trampoline. | **WS19 T17** (one teardown-ordering fix + one shim-signature change; BOTH must be recorded as `[R1-DIVERGENCE]` alongside the bounded `killPid`) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T17** (`threadEnter` drain ordering + `posix_waitpid` `ECHILD`). Two `[R1-DIVERGENCE]`s to record with the fix. |
+| **N9** | **`threadEnter` error arms should drain the pty master BEFORE `stop()`** (`D:5090`) and **`posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race** (`D:5130`) — both filed 2026-07-29 with **NO owner** | Both verified as described. `posix_waitpid`'s `unreachable!("waitpid: unexpected errno")` is FAITHFUL (Zig std does the same), so the exposure is inherited — but Rust's `unreachable!` always panics where Zig's is a no-op in `ReleaseFast`, so the *consequence* diverges. The second reaper is real: `crates/rustty-xev/src/process.rs` calls `waitpid` in the `.proc` completion trampoline. | **WS19 T17** (one teardown-ordering fix + one shim-signature change; BOTH must be recorded as `[R1-DIVERGENCE]` alongside the bounded `killPid`) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T17.** BOTH fixed, but the disposition is **ONE** `[R1-DIVERGENCE]`, not two — this row's own "`posix_waitpid` is FAITHFUL" premise went STALE. Upstream head dropped the Zig-std wrapper for the raw syscall (`a77c706a1`/`e8525c0fd`), so its `killPid` now breaks on `rc == -1`, i.e. an `ECHILD` ends the loop gracefully upstream too; the fix therefore REMOVES a divergence and warrants no divergence entry (`.port/phase-3/assessments/E-os-termio-platform.md` §5.2). (a) `drain_pty_master_once` + all **6** live `stop()` arms in `threadEnter` → recorded as a `[R1-DIVERGENCE]` next to the bounded `killPid`, with the E-§5.3 upstream-head re-verification. (b) `posix_waitpid_checked` used ONLY by `killPid`; the verbatim shim untouched on the `Command::wait` path. 2 new KATs, 3 mutation experiments; `repro_subprocess_hang.sh` 6/6 runs 0 hangs. The bounded `killPid` divergence itself is UNCHANGED (area E: KEEP). |
 | **N11** | **`ci.sh` STEPS 1 AND 2 — `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` — WERE BOTH RED ON `main`.** Not vacuous: genuinely FAILING, and evidently never run. Every lane that reported "gates green" reported it without these two. | Reproduced on the pristine `/Users/gael/projects/rustty` checkout at the pinned `rustc 1.93.1`: `cargo fmt --check` → **317 diffs across 76 files**; `cargo clippy --workspace --all-targets -- -D warnings` → **RED in 8 crates** (`rustty-z2d` 5, `gettext-sys` 1, `rustty-vt` 6, `rustty-vaxis` 1, `rustty-renderer` 4, `rustty-web-canvas` 6, `rustty-termio` 1, `xtask` 3). Found while running WS19 T7's per-crate clippy, not by looking for it. **Two root causes worth naming: (1) five of the "doc list item" failures share ONE bug — a doc-comment line beginning with `+ `, which markdown reads as a list bullet, making the lines after it lazy continuations (`rustty-z2d/src/lib.rs`, `rustty-renderer/src/generic.rs`, `rustty-termio/tests/subprocess_drop_repro.rs`); (2) the `not_unsafe_ptr_arg_deref` cluster in `rustty-web-canvas` is a REAL C-ABI signature gap — four `extern "C"` exports dereference caller-supplied pointers without being `unsafe fn`, unlike the `rustty-vt-c`/`rustty-apprt-c` convention. The rest are fidelity-preserving constructs (`(n + 7) / 8` ceil-div, reference-shaped large enum variants, ordering-marker `drop()` of a non-`Drop` value) now allowed AT THE SITE with a written reason, never crate-wide, and one genuinely useless assertion (`gettext-sys`'s `assert!(!(f as *const ()).is_null())` on a function pointer, replaced by `black_box` since only the linker reference was ever load-bearing). | **WS19 T7** (fixed in-line; both steps now green) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T7 (in-line).** `cargo fmt --check` 317 diffs → 0; `clippy --workspace --all-targets -D warnings` RED in 8 crates → clean. |
 | **N10** | **DOCUMENTATION finding (not a defect): a fresh `Terminal::compress(.incremental)` right after a COMPLETED pass returns `Pending`, not `Complete`**, because the incremental traversal restarts — this invalidates the obvious "work is done" probe | `crates/rustty-vt/src/terminal.rs:2861-2894` forwards straight to `PageList::compress(Incremental)` and maps the result 1:1; the doc comment (`:2847-2860`) says only "the return value tells callers whether they should continue calling it" and never states the restart. `renderer_seam.rs:1990-1997` already depends on the distinction (it schedules another tick on `Pending`, stops on `Complete`/`Unsupported`). Nothing anywhere records the gotcha, so the next test author will read `Pending` as "not finished". | **WS19 T18** — ~~open~~ **RESOLVED 2026-07-29.** Behavior CONFIRMED by scratch probe before documenting anything: driving `compress(Incremental)` to `Complete` and calling once more printed `WS19-T18-PROBE: after Complete, next incremental = Pending`. Landed as (a) a `PORT NOTE` on `Terminal::compress` stating that `Pending` means "call me again", never "work is outstanding", and that `Complete` is not a durable probe; (b) `terminal_compress_incremental_restarts_after_complete`, which also asserts the pass took >1 step so a one-call convergence cannot make it vacuous; (c) a cross-reference in `MIRI_EXCEPTIONS.md`'s compression-coverage argument, where the same misreading would corrupt a coverage claim. | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T18.** Restart CONFIRMED by probe, then documented in 3 places and pinned by a test that cannot go vacuous. |
 
@@ -6091,8 +6353,8 @@ opposite direction** — claiming open work that has shipped.
 | **O16** WebGL backend | repo-wide `grep -rni 'webgl'` → only `build_config::renderer::Backend::Webgl` (an enum variant) + prose "WebGL wasm-deferred"; no backend implementation | confirmed **OPEN** → WS14 |
 | **O5** `PageList::Limits` | repo-wide `grep -rn 'struct Limits'` → only `kitty/graphics_image.rs:126` (an unrelated struct); no `PageList::Limits` | confirmed **OPEN** → Phase 3 re-vet P3-RV1 |
 | **O6** GTK portal `OpenURI` | repo-wide `grep -rni 'openuri\|open_uri'` across `crates/` → **0 hits**; the only portal code is `gtk/class/global_shortcuts.rs` (GlobalShortcuts iface) | confirmed **OPEN** → WS19 T8 |
-| **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ends in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | confirmed **OPEN** → WS19 T10 |
-| **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returns `None` unconditionally; `:103` is the unreachable emit | confirmed **OPEN** → WS19 T12 |
+| **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ended in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | **CLOSED** by WS19 T10 (both backends; `thread_perform` no longer derefs `task_loop` at all) |
+| **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returned `None` unconditionally; `:103` was the unreachable emit (and wrote the bare hash, not a URL) | **CLOSED** by WS19 T12 (implemented) |
 | **O21** `shell_integration.rs` lossy path | `crates/rustty-termio/src/shell_integration.rs:1708` and `:1760` both `to_string_lossy()` | confirmed **OPEN** → WS19 T15 |
 | **O1** `style::Color` | `crates/rustty-vt/src/style.rs:143` is a plain `enum Color { None, Palette(u8), Rgb(RGB) }`, no `#[repr]` | confirmed **OPEN** → WS19 T5 |
 | **O3** `cursor_scroll_region_up` | already repo-wide in the original audit (`grep -rn … crates/` → 0 hits) | confirmed **OPEN** → WS10, pin-sequenced |

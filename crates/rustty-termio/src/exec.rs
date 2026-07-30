@@ -383,6 +383,11 @@ impl Exec {
         let mut process: Option<xev::Process> = match which {
             // } else return error.ProcessNotStarted;
             ProcessWhich::NotStarted => {
+                // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
+                // io-reader thread does not exist on this arm, so without this the
+                // SIGHUP'd child can wedge unreapably (`?Es`). See
+                // `drain_pty_master_once`.
+                let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
             }
@@ -391,12 +396,22 @@ impl Exec {
             // .fork_exec => |cmd| try xev.Process.init(cmd.pid orelse return error.ProcessNoPid)
             ProcessWhich::ForkExec(None) => {
                 // return error.ProcessNoPid (errdefer stop fires)
+                // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
+                // io-reader thread does not exist on this arm, so without this the
+                // SIGHUP'd child can wedge unreapably (`?Es`). See
+                // `drain_pty_master_once`.
+                let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
             }
             ProcessWhich::ForkExec(Some(pid)) => match xev::Process::init(pid) {
                 Ok(p) => Some(p),
                 Err(_) => {
+                    // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
+                    // io-reader thread does not exist on this arm, so without this the
+                    // SIGHUP'd child can wedge unreapably (`?Es`). See
+                    // `drain_pty_master_once`.
+                    let _ = drain_pty_master_once(pty_fds.read);
                     self.subprocess.stop();
                     return Err(crate::Error);
                 }
@@ -418,6 +433,11 @@ impl Exec {
                 if let Some(p) = &mut process {
                     p.deinit();
                 }
+                // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
+                // io-reader thread does not exist on this arm, so without this the
+                // SIGHUP'd child can wedge unreapably (`?Es`). See
+                // `drain_pty_master_once`.
+                let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
             }
@@ -447,6 +467,11 @@ impl Exec {
                 if let Some(p) = &mut process {
                     p.deinit();
                 }
+                // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
+                // io-reader thread does not exist on this arm, so without this the
+                // SIGHUP'd child can wedge unreapably (`?Es`). See
+                // `drain_pty_master_once`.
+                let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
             }
@@ -488,6 +513,11 @@ impl Exec {
                 if let Some(p) = &mut process {
                     p.deinit();
                 }
+                // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
+                // io-reader thread does not exist on this arm, so without this the
+                // SIGHUP'd child can wedge unreapably (`?Es`). See
+                // `drain_pty_master_once`.
+                let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
             }
@@ -2977,6 +3007,88 @@ pub enum KillError {
 #[cfg(not(windows))]
 const KILL_ABANDON: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Wall-clock budget for one synchronous pty-master drain
+/// ([`drain_pty_master_once`]). Generous enough to clear a shell's startup
+/// output, small enough that a `threadEnter` error arm cannot become a stall.
+#[cfg(not(windows))]
+const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Drain whatever the child has ALREADY written to the pty master, once,
+/// synchronously, discarding the bytes. Returns how many were consumed.
+///
+/// **Why (WS19 T17a, `[R1-DIVERGENCE]`).** `Exec::threadEnter`'s error arms —
+/// `ProcessNotStarted` / `ProcessNoPid` / `xev::Process::init` / `pipe()` /
+/// `xev::Timer::init` / read-thread `spawn` — all call `self.subprocess.stop()`
+/// BEFORE the io-reader thread exists. At that moment the child is a
+/// freshly-forked `login(1)` with output queued on the pty slave and NOBODY
+/// reading the master, which is exactly the condition under which a SIGHUP'd
+/// session leader wedges uninterruptibly in the macOS kernel exit path (state
+/// `?Es`) and becomes permanently unreapable. The normal close path gets the
+/// invariant for free — `threadExit` calls `stop()` while the reader is still
+/// draining, and upstream orders it that way deliberately — but these arms do
+/// not. Upstream Ghostty has the SAME ordering and therefore the same latent
+/// defect (re-verified against upstream head:
+/// `.port/phase-3/assessments/E-os-termio-platform.md` §5.3 — those `errdefer`s
+/// are unchanged context lines), so this is a deliberate divergence, and one we
+/// intend to upstream.
+///
+/// It is the same trade the bounded `killPid` already made: liveness over R1. It
+/// is also strictly weaker than that one — it changes no signal, no ordering
+/// observable to the child, and nothing at all on any path that succeeds; it only
+/// consumes bytes that were about to be discarded anyway (the arm is tearing the
+/// subprocess down).
+///
+/// **Bounded, so it can never become the hang it prevents:** every iteration
+/// re-checks a `DRAIN_BUDGET` deadline, and each read is gated by a
+/// zero-timeout `poll` so nothing ever blocks on a quiet master.
+#[cfg(not(windows))]
+fn drain_pty_master_once(fd: libc::c_int) -> usize {
+    let deadline = std::time::Instant::now() + DRAIN_BUDGET;
+    let mut buf = [0u8; 4096];
+    let mut total: usize = 0;
+
+    loop {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+
+        // Is anything readable RIGHT NOW? The master is blocking, so a bare
+        // `read` on a quiet fd would park us here.
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut pfd, 1, 0) };
+        if rc < 0 {
+            if errno() == libc::EINTR {
+                continue;
+            }
+            break;
+        }
+        if rc == 0 || (pfd.revents & libc::POLLIN) == 0 {
+            // Nothing pending (or HUP/ERR only) — drained.
+            break;
+        }
+
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        if n < 0 {
+            if errno() == libc::EINTR {
+                continue;
+            }
+            // EAGAIN / EIO (the slave closed) — done.
+            break;
+        }
+        if n == 0 {
+            // EOF.
+            break;
+        }
+        total += n as usize;
+    }
+
+    total
+}
+
 /// Kill the underlying subprocess. This sends a SIGHUP to the child
 /// process. This also waits for the command to exit and will return the
 /// exit code.
@@ -3073,7 +3185,19 @@ fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
         // are still alive without blocking so that we can
         // kill them again.
         // const res = posix.waitpid(pid, std.c.W.NOHANG);
-        let res = crate::command::posix_waitpid(pid, libc::WNOHANG as u32);
+        //
+        // WS19 T17b: `posix_waitpid_CHECKED`, not the verbatim shim. rustty's
+        // xev `.proc` completion is a SECOND reaper, so `ECHILD` is genuinely
+        // reachable here and the verbatim shim's `unreachable!` would turn that
+        // race into a panic on the teardown path. `None` means "gone" — which is
+        // what this loop is waiting for — so break, exactly as upstream head's
+        // raw-syscall `killPid` does (`rc == -1` -> `res_pid != 0` -> break).
+        // Fidelity against upstream head, NOT a divergence; see the shim's docs
+        // and `.port/phase-3/assessments/E-os-termio-platform.md` §5.2.
+        let Some(res) = crate::command::posix_waitpid_checked(pid, libc::WNOHANG as u32) else {
+            // log.debug("waitpid: child already reaped (ECHILD)", .{});
+            break;
+        };
         // log.debug("waitpid result={}", .{res.pid});
         // if (res.pid != 0) break;
         if res.pid != 0 {
@@ -3976,6 +4100,97 @@ mod tests {
     // `command::tests`' fork KATs share it — see the doc there.)
     #[cfg(target_os = "macos")]
     use crate::FORK_KAT_SERIAL;
+
+    // WS19 T17a: `drain_pty_master_once` — the helper the `threadEnter` error arms
+    // call before `stop()`. Two properties, both load-bearing:
+    //
+    //   1. It ACTUALLY CONSUMES what the child already wrote (that is the whole
+    //      point — an undrained master is what wedges a SIGHUP'd session leader).
+    //   2. It is BOUNDED: on a QUIET master it returns promptly instead of parking
+    //      in `read` on a blocking fd. (The master is blocking, so a naive
+    //      implementation hangs here forever — this assertion is what forbids it.)
+    //
+    // Deliberately NOT a reproduction of the wedge itself: see the `killPid`
+    // divergence entry in DEFERRALS.md for why the previous such test was deleted
+    // (it asserted nothing that could fail, its only failure mode was hanging, and
+    // it stranded `?Es` children). Real openpty/poll/read syscalls -> Miri-excluded
+    // (MIRI_EXCEPTIONS.md, "rustty-termio B3"); holds pty fds open while other
+    // in-process KATs may `fork()`, so it takes FORK_KAT_SERIAL.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master() {
+        use std::time::Instant;
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let pty = Pty::open(ptypkg::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        })
+        .expect("Pty::open");
+        let master = pty.master;
+        let slave = pty.slave;
+
+        // (2) A quiet master must return promptly and consume nothing. Do this
+        //     FIRST, while nothing has been written.
+        let t0 = Instant::now();
+        let drained = drain_pty_master_once(master);
+        let quiet_elapsed = t0.elapsed();
+        assert_eq!(drained, 0, "nothing was written, so nothing may be drained");
+        assert!(
+            quiet_elapsed < DRAIN_BUDGET * 4,
+            "drain on a QUIET master must return promptly (it would park in \
+             `read` on the blocking master without the zero-timeout poll gate); \
+             took {quiet_elapsed:?}"
+        );
+
+        // (1) Write to the slave (no newline -> no OPOST translation), so the bytes
+        //     appear on the master exactly as written, then drain them.
+        const PENDING: &[u8] = b"RUSTTY_T17A_UNDRAINED_OUTPUT";
+        let w = unsafe { libc::write(slave, PENDING.as_ptr().cast(), PENDING.len()) };
+        assert_eq!(w, PENDING.len() as isize, "write to the pty slave");
+
+        // The kernel may deliver in pieces; drain until we have them all (each
+        // call is itself bounded, and the loop has its own deadline).
+        let mut total = 0usize;
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while total < PENDING.len() && Instant::now() < deadline {
+            total += drain_pty_master_once(master);
+        }
+        assert_eq!(
+            total,
+            PENDING.len(),
+            "the drain must consume everything the child already wrote"
+        );
+
+        // And the master is quiet again.
+        assert_eq!(drain_pty_master_once(master), 0);
+
+        unsafe {
+            libc::close(slave);
+            libc::close(master);
+        }
+    }
+
+    // WS19 T17b: `posix_waitpid_checked` must REPORT (`None`), not panic, when the
+    // wait fails — the `ECHILD` race a concurrent reaper can win. `pid 1` is never
+    // our child, so `waitpid` returns `ECHILD` deterministically with no fork and
+    // no process left behind. The verbatim `posix_waitpid` shim would
+    // `unreachable!()` on exactly this input, which is what made the race a
+    // reachable panic on the teardown path.
+    #[test]
+    #[cfg(not(windows))]
+    fn posix_waitpid_checked_reports_echild_instead_of_aborting() {
+        // Not our child -> ECHILD.
+        let got = crate::command::posix_waitpid_checked(1, libc::WNOHANG as u32);
+        assert!(
+            got.is_none(),
+            "waiting on a pid that is not our child must report None (ECHILD), \
+             not a WaitPidResult"
+        );
+    }
 
     // test "execCommand darwin: shell command" {
     #[test]

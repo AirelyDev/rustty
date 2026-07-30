@@ -522,7 +522,13 @@ const _: () = assert!(offset_of!(Completion, value) == 0);
 // thread-pool `task`/`task_loop`/`task_result` fields, so the union — and this
 // pin — grew 160 → 216.) RE-MEASURE (and update) whenever either backend's
 // `Completion` grows — the assert is what forces that.
-const _: () = assert!(size_of::<Completion>() == 216);
+//
+// RE-MEASURED (WS19 T10): 216 → 232. `epoll::Completion` grew 208 → 224 (the
+// pool-worker aliasing fix's `task_completions` + `task_wakeup`; see epoll.rs's
+// `COMPLETION_SIZE` note), so the union is 224 and the tag word takes it to 232.
+// `io_uring::Completion` is unaffected — the io_uring backend has no thread-pool
+// path at all (`grep -n 'task_loop\|thread_perform' io_uring.rs` → 0 hits).
+const _: () = assert!(size_of::<Completion>() == 232);
 
 impl Default for Completion {
     /// PORT NOTE (dynamic.zig:251-255):
