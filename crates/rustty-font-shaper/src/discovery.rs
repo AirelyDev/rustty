@@ -2472,6 +2472,9 @@ mod tests {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn fontconfig() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `fc::FC_GLOBAL`).
+        let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
         //
         // PORT NOTE: the reference's `!= fontconfig_freetype` early-return skip is
@@ -2509,6 +2512,9 @@ mod tests {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn fontconfig_codepoint() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `fc::FC_GLOBAL`).
+        let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
         if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
             return;
@@ -2560,6 +2566,9 @@ mod tests {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn descriptor_to_fc_pattern_family_size_mono() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `fc::FC_GLOBAL`).
+        let _fc = crate::fc::global_shared();
         use crate::fc::{Property, Spacing, Value};
 
         let desc = Descriptor {
@@ -2594,6 +2603,9 @@ mod tests {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn descriptor_to_fc_pattern_codepoint() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `fc::FC_GLOBAL`).
+        let _fc = crate::fc::global_shared();
         use crate::fc::{Property, Value};
 
         let desc = Descriptor {

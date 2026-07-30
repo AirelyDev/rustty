@@ -67,6 +67,42 @@ pub fn fini() {
     unsafe { c::FcFini() }
 }
 
+// PORT NOTE (parallel-test correctness — DELIBERATE DIVERGENCE from the Zig
+// reference, the `rustty-oniguruma` `ensure_init` precedent): the reference's
+// `test "init"` (`init.zig:30-33`) calls `FcInit()` and then `FcFini()`.
+// `FcFini` tears down ALL of fontconfig's PROCESS-GLOBAL state — the default
+// config, the directory-cache list and its mutex, and the interned object-type
+// registry every `FcPattern` uses. Under Zig's `zig test`, which runs a file's
+// tests SERIALLY, that teardown can never overlap another fontconfig user.
+// Rust's `cargo test` runs `#[test]`s CONCURRENTLY, so that `FcFini` ran while
+// sibling tests were inside `FcInitLoadConfigAndFonts` / `FcFontSort` /
+// `FcDirCacheRead`. Observed on Linux/fontconfig 2.17: a deadlock parked in
+// fontconfig's own `FcDirCacheMapFd` cache mutex, plus SIGSEGV and SIGABRT —
+// 8 failures in 40 runs of the release test binary.
+//
+// This restores the reference's serialization exactly where it matters and
+// nowhere else: the teardown test takes the lock EXCLUSIVELY, every other
+// fontconfig-touching test takes it SHARED, so the suite still runs in
+// parallel. Test-only — no production code path takes it.
+#[cfg(test)]
+static FC_GLOBAL: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// Shared access to fontconfig's process-global state — held for the body of
+/// every test that calls into fontconfig. See [`FC_GLOBAL`].
+#[cfg(test)]
+pub(crate) fn global_shared() -> std::sync::RwLockReadGuard<'static, ()> {
+    // A panicking test poisons the lock; the state it guards is fontconfig's,
+    // not ours, so recover rather than cascade a second failure.
+    FC_GLOBAL.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Exclusive access to fontconfig's process-global state — held only by the
+/// `FcFini` teardown test. See [`FC_GLOBAL`].
+#[cfg(test)]
+pub(crate) fn global_exclusive() -> std::sync::RwLockWriteGuard<'static, ()> {
+    FC_GLOBAL.write().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Load the default configuration WITHOUT scanning fonts.
 // PORT NOTE: `init.zig:13-15` `initLoadConfig`.
 pub fn init_load_config() -> *mut Config {
@@ -688,6 +724,9 @@ mod tests {
     // PORT NOTE: init.zig:30-33 `test "init"`.
     #[test]
     fn fc_init() {
+        // `fini()` below tears down fontconfig's process-global state; see
+        // `FC_GLOBAL`. Exclusive: no other fontconfig test may be running.
+        let _fc = global_exclusive();
         assert!(init());
         fini();
     }
@@ -695,6 +734,9 @@ mod tests {
     // PORT NOTE: init.zig:35-38 `test "initLoadConfig"`.
     #[test]
     fn fc_init_load_config() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
         let config = init_load_config();
         unsafe { (*config).destroy() };
     }
@@ -702,6 +744,9 @@ mod tests {
     // PORT NOTE: init.zig:40-43 `test "initLoadConfigAndFonts"`.
     #[test]
     fn fc_init_load_config_and_fonts() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
         let config = init_load_config_and_fonts();
         unsafe { (*config).destroy() };
     }
@@ -709,6 +754,9 @@ mod tests {
     // PORT NOTE: pattern.zig:147-161 `test "create"`.
     #[test]
     fn pattern_create() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
         let pat = unsafe { &mut *Pattern::create() };
         assert!(pat.add(Property::Family, Value::String(c"monospace"), false));
         assert!(pat.add(Property::Weight, Value::Integer(Weight::Bold as i32), false));
@@ -726,6 +774,9 @@ mod tests {
     // PORT NOTE: pattern.zig:163-168 `test "name parse"`.
     #[test]
     fn pattern_name_parse() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
         let pat = unsafe { &mut *Pattern::parse(c":monospace") };
         pat.default_substitute();
         pat.destroy();
@@ -741,6 +792,9 @@ mod tests {
     // PORT NOTE: char_set.zig:31-40 `test "create"`.
     #[test]
     fn char_set_create() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
         let fs = unsafe { &mut *CharSet::create() };
         assert!(!fs.has_char(0x20));
         assert!(fs.add_char(0x20));
@@ -751,6 +805,9 @@ mod tests {
     // PORT NOTE: font_set.zig:37-44 `test "create"`.
     #[test]
     fn font_set_create() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
         let fs = unsafe { &mut *FontSet::create() };
         assert_eq!(fs.fonts().len(), 0);
         fs.destroy();
@@ -759,6 +816,9 @@ mod tests {
     // PORT NOTE: lang_set.zig:31-38 `test "create"`.
     #[test]
     fn lang_set_create() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
         let fs = unsafe { &mut *LangSet::create() };
         assert!(!fs.has_lang(c"und-zsye"));
         fs.destroy();
@@ -767,6 +827,9 @@ mod tests {
     // PORT NOTE: lang_set.zig:40-61 `test "hasLang exact match"`.
     #[test]
     fn lang_set_has_lang_exact_match() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
         // Exact match: langset with "en-US" returns true for "en-US".
         let fs = unsafe { &mut *LangSet::create() };
         assert!(fs.add_lang(c"en-US"));

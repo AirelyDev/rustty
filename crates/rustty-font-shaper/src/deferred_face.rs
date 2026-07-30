@@ -1141,6 +1141,9 @@ mod tests {
     ))]
     #[test]
     fn fontconfig() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `fc::FC_GLOBAL`).
+        let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
         if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
             return;
