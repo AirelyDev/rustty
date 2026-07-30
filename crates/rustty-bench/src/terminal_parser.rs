@@ -8,7 +8,7 @@
 // const Benchmark = @import("Benchmark.zig");
 // const options = @import("options.zig");
 use crate::benchmark::{Benchmark, Error, VTable};
-use crate::cli::BenchmarkAction;
+use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short, DataFile};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
@@ -175,8 +175,8 @@ fn terminal_parser() {
 
 impl BenchmarkAction for TerminalParser {
     type Options = Options;
-    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, OutOfMemory> {
-        TerminalParser::create(alloc, opts)
+    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, CreateError> {
+        Ok(TerminalParser::create(alloc, opts)?)
     }
     fn destroy(self: Box<Self>, alloc: Allocator) {
         TerminalParser::destroy(self, alloc)

@@ -2838,6 +2838,24 @@ mod tests {
         page.deinit();
     }
 
+    // `test "Page layout avoids double rounding hyperlink map capacity"`
+    #[test]
+    fn page_layout_avoids_double_rounding_hyperlink_map_capacity() {
+        let hyperlink_count = 3usize;
+        let layout = Page::layout(Capacity {
+            cols: 1,
+            rows: 1,
+            hyperlink_bytes: (hyperlink_count * hyperlink_set_item_size())
+                as size::HyperlinkCountInt,
+            ..std_capacity()
+        });
+
+        // Three set entries request 48 usable map entries. Scaling that for the
+        // 80% load factor needs 60 raw slots, which rounds once to 64. Rounding
+        // the request before applying the load factor would allocate 128 slots.
+        assert_eq!(64u32, layout.hyperlink_map_layout.capacity);
+    }
+
     /// A shallow copy aliases the SAME backing mapping and never owns it.
     ///
     /// PORT NOTE (WS7 B2): the oracle expresses this as a plain Zig struct copy

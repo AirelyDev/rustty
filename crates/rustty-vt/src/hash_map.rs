@@ -87,13 +87,21 @@ pub trait HashMapContext<K> {
     fn eql(&self, a: K, b: K) -> bool;
 }
 
-// pub fn AutoHashMapUnmanaged(comptime K, comptime V) -> HashMapUnmanaged(K, V, AutoContext(K))
-#[cfg(test)]
-type AutoHashMapUnmanaged<K, V> = HashMapUnmanaged<K, V, AutoContext<K>>;
+/// The default preserves the original behavior of allowing every raw slot to
+/// be occupied. Callers can choose a lower value to bound probe lengths.
+// `pub const default_max_load_percentage: u8 = 100;`
+pub const DEFAULT_MAX_LOAD_PERCENTAGE: u8 = 100;
 
-/// `pub fn AutoOffsetHashMap(comptime K, comptime V)` =
-/// `OffsetHashMap(K, V, AutoContext(K))`.
-pub type AutoOffsetHashMap<K, V> = OffsetHashMap<K, V, AutoContext<K>>;
+// pub fn AutoHashMapUnmanaged(comptime K, comptime V, comptime max_load_percentage)
+//     -> HashMapUnmanaged(K, V, AutoContext(K), max_load_percentage)
+#[cfg(test)]
+type AutoHashMapUnmanaged<K, V, const MAX_LOAD_PERCENTAGE: u8> =
+    HashMapUnmanaged<K, V, AutoContext<K>, MAX_LOAD_PERCENTAGE>;
+
+/// `pub fn AutoOffsetHashMap(comptime K, comptime V, comptime max_load_percentage)` =
+/// `OffsetHashMap(K, V, AutoContext(K), max_load_percentage)`.
+pub type AutoOffsetHashMap<K, V, const MAX_LOAD_PERCENTAGE: u8> =
+    OffsetHashMap<K, V, AutoContext<K>, MAX_LOAD_PERCENTAGE>;
 
 /// `fn AutoContext(comptime K: type) type` — the auto-generated context built
 /// from `std.hash_map.getAutoHashFn` / `getAutoEqlFn`.
@@ -112,6 +120,17 @@ impl<K> Default for AutoContext<K> {
 }
 
 impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
+    // PORT NOTE (`f2a7652ab`'s `hash_map.zig` hunk, WS10 T16): upstream replaced
+    // `std.hash_map.getAutoHashFn` with an explicit body that force-inlines the
+    // hash for `hasUniqueRepresentation(K)` types, because "LLVM 21 (Zig 0.16)
+    // failed to inline this which resulted in a measurable almost 2x slowdown on
+    // our hyperlink map benchmark". This port's context is already an explicit
+    // body (see the note above), so the portable half of that change is the
+    // inlining hint — `#[inline]` is the Rust spelling of
+    // `@call(.always_inline, ...)` across the crate boundary. The
+    // `hasUniqueRepresentation` split has no counterpart: it selects between two
+    // Zig std hashers, and this port has one.
+    #[inline]
     fn hash(&self, key: K) -> u64 {
         use core::hash::Hasher;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -127,7 +146,7 @@ impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
 /// A HashMap type that uses offsets rather than pointers, making it
 /// possible to efficiently move around the backing memory without
 /// invalidating the HashMap.
-pub struct OffsetHashMap<K, V, Context: HashMapContext<K>> {
+pub struct OffsetHashMap<K, V, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8> {
     pub metadata: Offset<Metadata>,
     _marker: PhantomData<(K, V, Context)>,
 }
@@ -136,12 +155,12 @@ pub struct OffsetHashMap<K, V, Context: HashMapContext<K>> {
 // `Offset` (a `u32`), so `var x = self.*` copies it trivially. We mirror that
 // with `Clone`/`Copy` (the only field is `Copy`); needed by `Page` clone, which
 // copies the whole struct (`var result = self.*`).
-impl<K, V, Context: HashMapContext<K>> Clone for OffsetHashMap<K, V, Context> {
+impl<K, V, Context: HashMapContext<K>, const P: u8> Clone for OffsetHashMap<K, V, Context, P> {
     fn clone(&self) -> Self {
         *self
     }
 }
-impl<K, V, Context: HashMapContext<K>> Copy for OffsetHashMap<K, V, Context> {}
+impl<K, V, Context: HashMapContext<K>, const P: u8> Copy for OffsetHashMap<K, V, Context, P> {}
 
 // PORT NOTE: the reference exposes two re-exports on `OffsetHashMap`:
 //   /// This is the pointer-based map that we're wrapping.
@@ -152,7 +171,7 @@ impl<K, V, Context: HashMapContext<K>> Copy for OffsetHashMap<K, V, Context> {}
 // "we're wrapping") and to the shared crate-level `Layout` type. The comments are
 // preserved here so nothing is lost.
 
-impl<K, V, Context: HashMapContext<K>> Default for OffsetHashMap<K, V, Context> {
+impl<K, V, Context: HashMapContext<K>, const P: u8> Default for OffsetHashMap<K, V, Context, P> {
     fn default() -> Self {
         OffsetHashMap {
             metadata: Offset::default(),
@@ -161,18 +180,18 @@ impl<K, V, Context: HashMapContext<K>> Default for OffsetHashMap<K, V, Context> 
     }
 }
 
-impl<K: Copy, V: Copy, Context: HashMapContext<K>> OffsetHashMap<K, V, Context> {
+impl<K: Copy, V: Copy, Context: HashMapContext<K>, const P: u8> OffsetHashMap<K, V, Context, P> {
     /// This is the alignment that the base pointer must have.
     // `pub const base_align = Unmanaged.base_align;`
     pub fn base_align() -> usize {
-        HashMapUnmanaged::<K, V, Context>::base_align()
+        HashMapUnmanaged::<K, V, Context, P>::base_align()
     }
 
     /// Returns the total size of the backing memory required for a
     /// HashMap with the given capacity. The base ptr must also be
     /// aligned to base_align.
     pub fn layout(cap: Size) -> Layout {
-        HashMapUnmanaged::<K, V, Context>::layout_for_capacity(cap)
+        HashMapUnmanaged::<K, V, Context, P>::layout_for_size(cap)
     }
 
     /// Initialize a new HashMap with the given capacity and backing
@@ -185,7 +204,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> OffsetHashMap<K, V, Context> 
     pub unsafe fn init(buf: OffsetBuf, l: Layout) -> Self {
         assert(unsafe { buf.start() } as usize % Self::base_align() == 0);
 
-        let m = unsafe { HashMapUnmanaged::<K, V, Context>::init(buf, l) };
+        let m = unsafe { HashMapUnmanaged::<K, V, Context, P>::init(buf, l) };
         OffsetHashMap {
             metadata: unsafe { get_offset(buf, m.metadata.unwrap() as *const Metadata) },
             _marker: PhantomData,
@@ -200,7 +219,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> OffsetHashMap<K, V, Context> 
     pub unsafe fn map<B: rustty_render_types::term_size::IntFromBase>(
         &self,
         base: B,
-    ) -> HashMapUnmanaged<K, V, Context> {
+    ) -> HashMapUnmanaged<K, V, Context, P> {
         HashMapUnmanaged {
             metadata: Some(unsafe { self.metadata.ptr(base) }),
             _marker: PhantomData,
@@ -271,6 +290,21 @@ impl Metadata {
         (self.0 >> 7) & 1
     }
 
+    /// `self.fingerprint = fp` — assigns the packed-struct field without
+    /// touching the `used` bit. Used by `rehash`, which relies on the two
+    /// fields being independently assignable exactly as in the reference.
+    #[inline]
+    fn set_fingerprint(&mut self, fp: u8) {
+        self.0 = (self.0 & 0x80) | (fp & 0x7F);
+    }
+
+    /// `self.used = <bit>` — assigns the packed-struct field without touching
+    /// the fingerprint.
+    #[inline]
+    fn set_used(&mut self, used: bool) {
+        self.0 = (self.0 & 0x7F) | (u8::from(used) << 7);
+    }
+
     pub fn is_used(self) -> bool {
         self.used_bit() == 1
     }
@@ -322,7 +356,7 @@ pub struct GetOrPutResult<K, V> {
     pub found_existing: bool,
 }
 
-/// `const Header = struct { values, keys, capacity, size };`
+/// `const Header = struct { values, keys, capacity, size, available };`
 //
 // PORT NOTE: the reference `Header` is a plain Zig struct laid out immediately
 // before the metadata. We reproduce the same field order and types. The keys/
@@ -334,6 +368,11 @@ struct Header<K, V> {
     keys: Offset<K>,
     capacity: Size,
     size: Size,
+
+    /// Number of insertions into free slots allowed before the map
+    /// must be rebuilt. Removing an entry creates a tombstone and
+    /// intentionally does not restore this count.
+    available: Size,
 }
 
 /// The memory layout for the underlying buffer for a given capacity.
@@ -357,7 +396,7 @@ pub struct Layout {
 /// the key/values pointer. The metadata is still a pointer to limit
 /// the amount of arithmetic required to access it. See the file comment
 /// for full details.
-pub struct HashMapUnmanaged<K, V, Context: HashMapContext<K>> {
+pub struct HashMapUnmanaged<K, V, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8> {
     // This is actually a midway pointer to the single buffer containing
     // a `Header` field, the `Metadata`s and `Entry`s.
     // At `-@sizeOf(Header)` is the Header field.
@@ -370,7 +409,7 @@ pub struct HashMapUnmanaged<K, V, Context: HashMapContext<K>> {
     _marker: PhantomData<(K, V, Context)>,
 }
 
-impl<K, V, Context: HashMapContext<K>> Default for HashMapUnmanaged<K, V, Context> {
+impl<K, V, Context: HashMapContext<K>, const P: u8> Default for HashMapUnmanaged<K, V, Context, P> {
     fn default() -> Self {
         HashMapUnmanaged {
             metadata: None,
@@ -379,9 +418,13 @@ impl<K, V, Context: HashMapContext<K>> Default for HashMapUnmanaged<K, V, Contex
     }
 }
 
-impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Context> {
+impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8>
+    HashMapUnmanaged<K, V, Context, MAX_LOAD_PERCENTAGE>
+{
     // comptime { assert(@alignOf(Metadata) == 1); }
     const _ASSERT_META_ALIGN: () = assert!(core::mem::align_of::<Metadata>() == 1);
+    // comptime { assert(max_load_percentage > 0); assert(max_load_percentage <= 100); }
+    const _ASSERT_MAX_LOAD: () = assert!(MAX_LOAD_PERCENTAGE > 0 && MAX_LOAD_PERCENTAGE <= 100);
 
     fn header_align() -> usize {
         core::mem::align_of::<Header<K, V>>()
@@ -429,6 +472,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
         let () = Self::_ASSERT_META_ALIGN;
         let () = Self::_ASSERT_META_SIZE;
         let () = Self::_ASSERT_META_ALIGN2;
+        let () = Self::_ASSERT_MAX_LOAD;
 
         assert(unsafe { buf.start() } as usize % Self::base_align() == 0);
 
@@ -445,6 +489,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
         unsafe {
             (*hdr).capacity = layout.capacity;
             (*hdr).size = 0;
+            (*hdr).available = Self::max_load_for_capacity(layout.capacity);
             // if (@sizeOf([*]K) != 0) hdr.keys = metadata_buf.member(K, layout.keys_start);
             (*hdr).keys = metadata_buf.member(layout.keys_start);
             // if (@sizeOf([*]V) != 0) hdr.values = metadata_buf.member(V, layout.vals_start);
@@ -471,6 +516,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
             unsafe {
                 self.init_metadatas();
                 (*self.header()).size = 0;
+                (*self.header()).available = self.max_load();
             }
         }
     }
@@ -504,7 +550,13 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
         unsafe { (*self.header()).capacity }
     }
 
-    pub fn iterator(&self) -> Iterator<'_, K, V, Context> {
+    /// Maximum number of occupied or tombstone slots before the map must
+    /// be rebuilt. This bounds unsuccessful probe lengths.
+    pub fn max_load(&self) -> Size {
+        Self::max_load_for_capacity(self.capacity())
+    }
+
+    pub fn iterator(&self) -> Iterator<'_, K, V, Context, MAX_LOAD_PERCENTAGE> {
         Iterator { hm: self, index: 0 }
     }
 
@@ -546,6 +598,10 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
         }
 
         let fingerprint = Metadata::take_fingerprint(hash);
+        // if (metadata[0].isFree()) self.header().available -= 1;
+        if unsafe { (*metadata).is_free() } {
+            unsafe { (*self.header()).available -= 1 };
+        }
         unsafe {
             (*metadata).fill(fingerprint);
             *self.keys().add(idx) = key;
@@ -733,6 +789,8 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
         None
     }
 
+    /// The get-or-put family may rehash a fragmented table. Any key or
+    /// value pointers previously returned by this map may be invalidated.
     pub fn get_or_put_context(
         &mut self,
         key: K,
@@ -752,6 +810,22 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
         match self.grow_if_needed(1) {
             Ok(()) => {}
             Err(err) => {
+                // Canonical lookups can rebuild resident keys in place. If
+                // live entries still fit, insertion headroom was consumed by
+                // tombstones rather than live load.
+                //
+                // PORT NOTE: the reference guards this with
+                //   if (comptime @TypeOf(key) == K and @TypeOf(key_ctx) == Context)
+                // to distinguish a canonical lookup from an `Adapted` one. This
+                // port has no adapted form — every `*_adapted` entry point takes
+                // `key: K` / `ctx: &Context` (see the aliases above) — so the
+                // comptime condition is statically TRUE here and the branch is
+                // unconditional.
+                if unsafe { (*self.header()).size } < self.max_load() {
+                    self.rehash(key_ctx);
+                    return Ok(self.get_or_put_assume_capacity_adapted(key, key_ctx));
+                }
+
                 // If allocation fails, try to do the lookup anyway.
                 // If we find an existing item, we can return it.
                 // Otherwise return the error, we could not add another.
@@ -800,6 +874,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
         let mut idx = (hash & (mask as u64)) as usize;
 
         let mut first_tombstone_idx: usize = self.capacity() as usize; // invalid index
+        let mut tombstones: Size = 0;
         let mut metadata = unsafe { self.metadata.unwrap().add(idx) };
         while !unsafe { (*metadata).is_free() } && limit != 0 {
             if unsafe { (*metadata).is_used() }
@@ -823,10 +898,26 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
                         found_existing: true,
                     };
                 }
-            } else if first_tombstone_idx == self.capacity() as usize
-                && unsafe { (*metadata).is_tombstone() }
-            {
-                first_tombstone_idx = idx;
+            } else if unsafe { (*metadata).is_tombstone() } {
+                if first_tombstone_idx == self.capacity() as usize {
+                    first_tombstone_idx = idx;
+                }
+
+                // Rehash once this probe demonstrates meaningful
+                // fragmentation. Only canonical lookups have the
+                // context required to rehash resident K values.
+                //
+                // PORT NOTE: the reference guards this with
+                //   if (comptime @TypeOf(key) == K and @TypeOf(ctx) == Context)
+                // — statically TRUE in this port, which has no adapted form.
+                tombstones += 1;
+                // Amortize the O(capacity) rebuild and avoid doing it
+                // for an otherwise healthy, nearly full table.
+                let threshold = core::cmp::max(self.capacity() / 8, 1);
+                if tombstones >= threshold {
+                    self.rehash(ctx);
+                    return self.get_or_put_assume_capacity_adapted(key, ctx);
+                }
             }
 
             limit -= 1;
@@ -838,6 +929,23 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
             // Cheap try to lower probing lengths after deletions. Recycle a tombstone.
             idx = first_tombstone_idx;
             metadata = unsafe { self.metadata.unwrap().add(idx) };
+        }
+
+        if unsafe { (*metadata).is_free() } {
+            // Assume-capacity callers can arrive here after a removal
+            // consumed all insertion headroom. Canonical lookups can
+            // rebuild resident keys before consuming another free slot.
+            if unsafe { (*self.header()).available } == 0 {
+                // PORT NOTE: the reference's adapted fallback here is
+                //   // Adapted contexts cannot hash resident keys to rehash.
+                //   // Their caller must honor the assume-capacity contract.
+                //   assert(self.header().available > 0);
+                // which is dead in this port (no adapted form — see above).
+                assert(unsafe { (*self.header()).size } < self.max_load());
+                self.rehash(ctx);
+                return self.get_or_put_assume_capacity_adapted(key, ctx);
+            }
+            unsafe { (*self.header()).available -= 1 };
         }
 
         unsafe {
@@ -938,12 +1046,108 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
         }
     }
 
+    /// Rebuild the map in place, removing all tombstones. This moves
+    /// entries and invalidates existing key and value pointers.
+    //
+    // PORT NOTE: `keys_ptr[curr] = undefined` / `values_ptr[curr] = undefined`
+    // in the reference are deinitialization hints for a `Copy` payload; there
+    // is no Rust equivalent (and no drop to run), so those statements are
+    // no-ops here, exactly as elsewhere in this file.
+    pub fn rehash(&mut self, ctx: &Context) {
+        let mask = self.capacity() - 1;
+
+        let metadata = self.metadata.unwrap();
+        let keys_ptr = unsafe { self.keys() };
+        let values_ptr = unsafe { self.values() };
+        let mut curr: Size = 0;
+
+        // Mark used buckets as awaiting rehash and clear tombstones.
+        while curr < self.capacity() {
+            unsafe { (*metadata.add(curr as usize)).set_fingerprint(Metadata::FREE) };
+            curr += 1;
+        }
+
+        curr = 0;
+        while curr < self.capacity() {
+            if !unsafe { (*metadata.add(curr as usize)).is_used() } {
+                assert(unsafe { (*metadata.add(curr as usize)).is_free() });
+                curr += 1;
+                continue;
+            }
+
+            let hash = ctx.hash(unsafe { *keys_ptr.add(curr as usize) });
+            let fingerprint = Metadata::take_fingerprint(hash);
+            let mut idx = (hash & (mask as u64)) as usize;
+
+            // For each bucket, rehash to an index:
+            // 1) before the cursor, probed into a free slot, or
+            // 2) equal to the cursor, no need to move, or
+            // 3) ahead of the cursor, probing over already rehashed.
+            while (idx < curr as usize && unsafe { (*metadata.add(idx)).is_used() })
+                || (idx > curr as usize
+                    && unsafe { (*metadata.add(idx)).fingerprint() } == Metadata::TOMBSTONE)
+            {
+                idx = (idx + 1) & (mask as usize);
+            }
+
+            if idx < curr as usize {
+                assert(unsafe { (*metadata.add(idx)).is_free() });
+                unsafe {
+                    (*metadata.add(idx)).fill(fingerprint);
+                    *keys_ptr.add(idx) = *keys_ptr.add(curr as usize);
+                    *values_ptr.add(idx) = *values_ptr.add(curr as usize);
+
+                    (*metadata.add(curr as usize)).set_used(false);
+                }
+                assert(unsafe { (*metadata.add(curr as usize)).is_free() });
+                // keys_ptr[curr] = undefined; values_ptr[curr] = undefined;
+
+                curr += 1;
+            } else if idx == curr as usize {
+                unsafe { (*metadata.add(idx)).set_fingerprint(fingerprint) };
+                curr += 1;
+            } else {
+                assert(unsafe { (*metadata.add(idx)).fingerprint() } != Metadata::TOMBSTONE);
+                let was_used = unsafe { (*metadata.add(idx)).is_used() };
+                unsafe { (*metadata.add(idx)).set_fingerprint(Metadata::TOMBSTONE) };
+                if was_used {
+                    unsafe {
+                        core::ptr::swap(keys_ptr.add(curr as usize), keys_ptr.add(idx));
+                        core::ptr::swap(values_ptr.add(curr as usize), values_ptr.add(idx));
+                    }
+                } else {
+                    unsafe {
+                        (*metadata.add(idx)).set_used(true);
+                        *keys_ptr.add(idx) = *keys_ptr.add(curr as usize);
+                        *values_ptr.add(idx) = *values_ptr.add(curr as usize);
+
+                        (*metadata.add(curr as usize)).set_fingerprint(Metadata::FREE);
+                        (*metadata.add(curr as usize)).set_used(false);
+                    }
+                    // keys_ptr[curr] = undefined; values_ptr[curr] = undefined;
+
+                    curr += 1;
+                }
+            }
+        }
+
+        // Rehashing removes every tombstone, so all unused load-factor
+        // headroom is available for insertions again.
+        unsafe { (*self.header()).available = self.max_load() - (*self.header()).size };
+    }
+
     fn grow_if_needed(&mut self, new_count: Size) -> Result<(), OutOfMemory> {
-        let available = self.capacity() - unsafe { (*self.header()).size };
-        if new_count > available {
+        if new_count > unsafe { (*self.header()).available } {
             return Err(OutOfMemory);
         }
         Ok(())
+    }
+
+    fn max_load_for_capacity(cap: Size) -> Size {
+        if cap == 0 {
+            return 0;
+        }
+        ((cap as u64 * MAX_LOAD_PERCENTAGE as u64) / 100) as Size
     }
 
     /// Returns the memory layout for the buffer for a given capacity.
@@ -983,15 +1187,42 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>> HashMapUnmanaged<K, V, Contex
             capacity: new_capacity,
         }
     }
+
+    /// Returns a layout with enough raw slots to hold `new_size` entries
+    /// at the configured maximum load factor.
+    pub fn layout_for_size(new_size: Size) -> Layout {
+        if new_size == 0 {
+            return Self::layout_for_capacity(0);
+        }
+
+        // Scale the requested number of entries up to the raw slot count
+        // required by the load factor. Widen first so `new_size * 100`
+        // cannot overflow Size.
+        // `std.math.divCeil(u64, new_size * 100, max_load_percentage)`
+        let minimum_capacity: u64 = (new_size as u64 * 100).div_ceil(MAX_LOAD_PERCENTAGE as u64);
+
+        // Capacities must be powers of two, so the largest capacity that
+        // fits in Size is the highest bit rather than maxInt(Size).
+        let max_capacity: u64 = 1u64 << (Size::BITS - 1);
+        if minimum_capacity > max_capacity {
+            return Self::layout_for_capacity(max_capacity as Size);
+        }
+
+        // Linear probing uses a mask for wraparound, which requires the
+        // final raw capacity to be rounded up to a power of two.
+        // `std.math.ceilPowerOfTwo(u64, minimum_capacity)`
+        let raw_capacity = minimum_capacity.next_power_of_two();
+        Self::layout_for_capacity(raw_capacity as Size)
+    }
 }
 
 /// `pub const Iterator = struct { hm, index };`
-pub struct Iterator<'a, K, V, Context: HashMapContext<K>> {
-    hm: &'a HashMapUnmanaged<K, V, Context>,
+pub struct Iterator<'a, K, V, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8> {
+    hm: &'a HashMapUnmanaged<K, V, Context, MAX_LOAD_PERCENTAGE>,
     index: Size,
 }
 
-impl<K: Copy, V: Copy, Context: HashMapContext<K>> Iterator<'_, K, V, Context> {
+impl<K: Copy, V: Copy, Context: HashMapContext<K>, const P: u8> Iterator<'_, K, V, Context, P> {
     pub fn next(&mut self) -> Option<Entry<K, V>> {
         assert(self.index <= self.hm.capacity());
         if unsafe { (*self.hm.header()).size } == 0 {
@@ -1067,7 +1298,7 @@ mod tests {
 
     #[test]
     fn HashMap_basic_usage() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
 
         let cap = 16;
         let layout = Map::layout_for_capacity(cap);
@@ -1104,7 +1335,7 @@ mod tests {
 
     #[test]
     fn HashMap_ensureTotalCapacity() {
-        type Map = AutoHashMapUnmanaged<i32, i32>;
+        type Map = AutoHashMapUnmanaged<i32, i32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1127,7 +1358,7 @@ mod tests {
 
     #[test]
     fn HashMap_ensureUnusedCapacity_with_tombstones() {
-        type Map = AutoHashMapUnmanaged<i32, i32>;
+        type Map = AutoHashMapUnmanaged<i32, i32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1146,7 +1377,7 @@ mod tests {
 
     #[test]
     fn HashMap_clearRetainingCapacity() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 16;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1177,7 +1408,7 @@ mod tests {
 
     #[test]
     fn HashMap_ensureTotalCapacity_with_existing_elements() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = Map::MINIMAL_CAPACITY;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1196,7 +1427,7 @@ mod tests {
 
     #[test]
     fn HashMap_remove() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1237,7 +1468,7 @@ mod tests {
 
     #[test]
     fn HashMap_reverse_removes() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1268,7 +1499,7 @@ mod tests {
 
     #[test]
     fn HashMap_multiple_removes_on_same_metadata() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1314,7 +1545,7 @@ mod tests {
 
     #[test]
     fn HashMap_put_and_remove_loop_in_random_order() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 64;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1371,7 +1602,7 @@ mod tests {
 
     #[test]
     fn HashMap_put() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1406,7 +1637,7 @@ mod tests {
 
     #[test]
     fn HashMap_put_full_load() {
-        type Map = AutoHashMapUnmanaged<usize, usize>;
+        type Map = AutoHashMapUnmanaged<usize, usize, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 16;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1429,7 +1660,7 @@ mod tests {
 
     #[test]
     fn HashMap_putAssumeCapacity() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1468,7 +1699,7 @@ mod tests {
 
     #[test]
     fn HashMap_repeat_putAssumeCapacity_remove() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1505,9 +1736,208 @@ mod tests {
         assert_eq!(map.count(), limit);
     }
 
+    // `test "HashMap clobber insert rehashes exhausted headroom"`
+    #[test]
+    fn HashMap_clobber_insert_rehashes_exhausted_headroom() {
+        // const Context = struct { hash(key) = key; eql(a, b) = a == b; };
+        struct Context;
+        impl HashMapContext<u32> for Context {
+            fn hash(&self, key: u32) -> u64 {
+                key as u64
+            }
+            fn eql(&self, a: u32, b: u32) -> bool {
+                a == b
+            }
+        }
+        type Map = HashMapUnmanaged<u32, u32, Context, 80>;
+        let cap = 16;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = Context;
+
+        let max_load = map.max_load();
+        for i in 0..max_load {
+            map.put_assume_capacity_no_clobber_context(i, i, &c);
+        }
+
+        assert!(map.remove_context(0, &c));
+        map.put_assume_capacity_context(15, 15, &c);
+
+        assert_eq!(max_load, map.count());
+        assert_eq!(15, map.get_context(15, &c).unwrap());
+        for i in 0..map.capacity() {
+            assert!(!unsafe { *map.metadata.unwrap().add(i as usize) }.is_tombstone());
+        }
+    }
+
+    // `test "HashMap getOrPut rehashes a fragmented probe"`
+    //
+    // PORT NOTE: the reference's third assertion block drives an `Adapted`
+    // lookup (`getOrPutAdapted("31", AdaptedContext{})` with a `[]const u8`
+    // key) to show that an adapted context leaves the tombstones in place.
+    // This port has no adapted form — `get_or_put_adapted` takes `key: K` /
+    // `ctx: &Context`, identical to the canonical entry point (see the
+    // `*_adapted` aliases above) — so that block is not expressible here and
+    // is omitted. The canonical assertions below are ported verbatim.
+    #[test]
+    fn HashMap_getOrPut_rehashes_a_fragmented_probe() {
+        // const Context = struct { hash(_) = 0; eql(a, b) = a == b; };
+        struct Context;
+        impl HashMapContext<u32> for Context {
+            fn hash(&self, _key: u32) -> u64 {
+                0
+            }
+            fn eql(&self, a: u32, b: u32) -> bool {
+                a == b
+            }
+        }
+        type Map = HashMapUnmanaged<u32, u32, Context, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let cap: u32 = 32;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = Context;
+
+        for i in 0..cap {
+            map.put_assume_capacity_no_clobber_context(i, i, &c);
+        }
+
+        // Rehashing preserves a table at the supported 100% live occupancy.
+        map.rehash(&c);
+        assert_eq!(cap, map.count());
+        for i in 0..cap {
+            assert_eq!(i, map.get_context(i, &c).unwrap());
+        }
+
+        for i in 0..cap / 2 {
+            assert!(map.remove_context(i, &c));
+        }
+
+        let count_tombstones = |m: &Map| -> u32 {
+            (0..m.capacity())
+                .filter(|i| unsafe { *m.metadata.unwrap().add(*i as usize) }.is_tombstone())
+                .count() as u32
+        };
+        assert_eq!(cap / 2, count_tombstones(&map));
+
+        // Looking up an existing key beyond the tombstones rehashes and retries
+        // before returning pointers into the map.
+        let gop = map.get_or_put_context(cap - 1, &c).unwrap();
+        assert!(gop.found_existing);
+        assert_eq!(cap - 1, unsafe { *gop.value_ptr });
+        assert_eq!(cap / 2, map.count());
+
+        assert_eq!(0, count_tombstones(&map));
+
+        for i in cap / 2..cap {
+            assert_eq!(i, map.get_context(i, &c).unwrap());
+        }
+    }
+
+    /// RUSTTY-SIDE COVERAGE (no upstream counterpart, WS10 T11): the
+    /// tombstone-count threshold inside `get_or_put_assume_capacity_adapted`
+    /// (`tombstones >= max(capacity / 8, 1)`) is NOT reached by
+    /// `HashMap_getOrPut_rehashes_a_fragmented_probe` — that test exhausts
+    /// `available` first, so the rehash it observes comes from the
+    /// `get_or_put_context_adapted` OutOfMemory branch instead. This test
+    /// keeps `available` positive and drives the in-probe threshold directly,
+    /// so the branch is not dead code we merely believe in.
+    #[test]
+    fn HashMap_getOrPut_rehashes_on_tombstone_threshold() {
+        // Every key collides at slot 0, so the probe walks the tombstones.
+        struct Context;
+        impl HashMapContext<u32> for Context {
+            fn hash(&self, _key: u32) -> u64 {
+                0
+            }
+            fn eql(&self, a: u32, b: u32) -> bool {
+                a == b
+            }
+        }
+        type Map = HashMapUnmanaged<u32, u32, Context, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let cap: u32 = 32;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = Context;
+
+        // 8 live entries then 8 tombstones: `available` is 32 - 8 = 24, well
+        // clear of zero, but the probe from slot 0 now crosses 8 tombstones.
+        for i in 0..8 {
+            map.put_assume_capacity_no_clobber_context(i, i, &c);
+        }
+        for i in 0..8 {
+            assert!(map.remove_context(i, &c));
+        }
+        let count_tombstones = |m: &Map| -> u32 {
+            (0..m.capacity())
+                .filter(|i| unsafe { *m.metadata.unwrap().add(*i as usize) }.is_tombstone())
+                .count() as u32
+        };
+        assert_eq!(8, count_tombstones(&map));
+
+        // threshold = max(32 / 8, 1) = 4, so the 4th tombstone triggers the
+        // in-place rebuild before the insert lands.
+        let gop = map.get_or_put_context(100, &c).unwrap();
+        assert!(!gop.found_existing);
+        unsafe { *gop.value_ptr = 100 };
+
+        assert_eq!(0, count_tombstones(&map));
+        assert_eq!(1, map.count());
+        assert_eq!(100, map.get_context(100, &c).unwrap());
+    }
+
+    // `test "HashMap rehash with real hashes"`
+    #[test]
+    fn HashMap_rehash_with_real_hashes() {
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let cap: u32 = 512;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = ctx::<u32>();
+
+        for i in 0..cap {
+            map.put_assume_capacity_no_clobber_context(i, i, &c);
+        }
+
+        map.rehash(&c);
+        assert_eq!(cap, map.count());
+        for i in 0..cap {
+            assert_eq!(i, map.get_context(i, &c).unwrap());
+        }
+
+        let mut expected_count = cap;
+        for i in 0..cap {
+            if i % 3 == 0 {
+                assert!(map.remove_context(i, &c));
+                expected_count -= 1;
+            }
+        }
+
+        map.rehash(&c);
+        assert_eq!(expected_count, map.count());
+        for i in 0..cap {
+            if i % 3 == 0 {
+                assert_eq!(None, map.get_context(i, &c));
+            } else {
+                assert_eq!(i, map.get_context(i, &c).unwrap());
+            }
+        }
+
+        for i in 0..map.capacity() {
+            assert!(!unsafe { *map.metadata.unwrap().add(i as usize) }.is_tombstone());
+        }
+    }
+
     #[test]
     fn HashMap_getOrPut() {
-        type Map = AutoHashMapUnmanaged<u32, u32>;
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1539,7 +1969,7 @@ mod tests {
 
     #[test]
     fn HashMap_basic_hash_map_usage() {
-        type Map = AutoHashMapUnmanaged<i32, i32>;
+        type Map = AutoHashMapUnmanaged<i32, i32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1590,7 +2020,7 @@ mod tests {
 
     #[test]
     fn HashMap_ensureUnusedCapacity() {
-        type Map = AutoHashMapUnmanaged<u64, u64>;
+        type Map = AutoHashMapUnmanaged<u64, u64, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 64;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1603,7 +2033,7 @@ mod tests {
 
     #[test]
     fn HashMap_removeByPtr() {
-        type Map = AutoHashMapUnmanaged<i32, u64>;
+        type Map = AutoHashMapUnmanaged<i32, u64, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 64;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1639,7 +2069,7 @@ mod tests {
         // PORT NOTE: despite the reference test's name "0 sized key", it uses
         // `AutoHashMapUnmanaged(i32, u64)` (a non-zero-sized key); the name
         // refers to exercising the `removeByPtr` path with a single element.
-        type Map = AutoHashMapUnmanaged<i32, u64>;
+        type Map = AutoHashMapUnmanaged<i32, u64, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 64;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1663,7 +2093,7 @@ mod tests {
 
     #[test]
     fn HashMap_repeat_fetchRemove() {
-        type Map = AutoHashMapUnmanaged<u64, ()>;
+        type Map = AutoHashMapUnmanaged<u64, (), DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 64;
 
         let layout = Map::layout_for_capacity(cap);
@@ -1692,7 +2122,7 @@ mod tests {
 
     #[test]
     fn OffsetHashMap_basic_usage() {
-        type OffsetMap = AutoOffsetHashMap<u32, u32>;
+        type OffsetMap = AutoOffsetHashMap<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 16;
 
         let layout = OffsetMap::layout(cap);
@@ -1729,7 +2159,7 @@ mod tests {
 
     #[test]
     fn OffsetHashMap_remake_map() {
-        type OffsetMap = AutoOffsetHashMap<u32, u32>;
+        type OffsetMap = AutoOffsetHashMap<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 16;
 
         let layout = OffsetMap::layout(cap);
@@ -1748,13 +2178,44 @@ mod tests {
         }
     }
 
+    // `test "OffsetHashMap maximum load leaves probe headroom"`
+    #[test]
+    fn OffsetHashMap_maximum_load_leaves_probe_headroom() {
+        type OffsetMap = AutoOffsetHashMap<u32, u32, 80>;
+        let requested_size: u32 = 16;
+        let layout = OffsetMap::layout(requested_size);
+        let buf = AlignedBuf::new(layout.total_size, OffsetMap::base_align());
+
+        let offset_map = unsafe { OffsetMap::init(buf.offset_buf(), layout) };
+        let mut map = unsafe { offset_map.map(buf.base() as *const u8) };
+        let c = ctx::<u32>();
+
+        assert!(map.capacity() > requested_size);
+        assert!(map.max_load() >= requested_size);
+        assert!(map.max_load() < map.capacity());
+
+        for i in 0..requested_size {
+            map.put_context(i, i, &c).unwrap();
+        }
+        for _ in 0..100 {
+            for i in 0..requested_size {
+                assert!(map.remove_context(i, &c));
+                map.put_context(i, i, &c).unwrap();
+            }
+        }
+
+        for i in 0..requested_size {
+            assert_eq!(i, map.get_context(i, &c).unwrap());
+        }
+    }
+
     #[test]
     fn layoutForCapacity_no_overflow_for_large_capacity() {
         // Test that layoutForCapacity correctly handles large capacities without overflow.
         // Prior to the fix, new_capacity (u32) was multiplied before widening to usize,
         // causing overflow when new_capacity * @sizeOf(K) exceeded 2^32.
         // See: https://github.com/ghostty-org/ghostty/issues/9862
-        type Map = AutoHashMapUnmanaged<u64, u64>;
+        type Map = AutoHashMapUnmanaged<u64, u64, DEFAULT_MAX_LOAD_PERCENTAGE>;
 
         // Use 2^30 capacity - this would overflow in u32 when multiplied by @sizeOf(u64)=8
         // 0x40000000 * 8 = 0x2_0000_0000 which wraps to 0 in u32

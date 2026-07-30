@@ -30,12 +30,14 @@ pub mod cli;
 pub mod enums;
 pub mod generator;
 pub mod io;
+pub mod kitty;
 pub mod osc;
 pub mod rand;
 pub mod utf8;
 
 pub use bytes::Bytes;
 pub use generator::Generator;
+pub use kitty::Kitty;
 pub use osc::Osc;
 pub use utf8::Utf8;
 
@@ -48,6 +50,7 @@ mod tests {
         let _ = core::mem::size_of::<crate::Bytes>();
         let _ = core::mem::size_of::<crate::Osc>();
         let _ = core::mem::size_of::<crate::Utf8>();
+        let _ = core::mem::size_of::<crate::Kitty>();
         let _ = core::mem::size_of::<crate::rand::DefaultPrng>();
         let _ = crate::cli::Action::Ascii;
     }

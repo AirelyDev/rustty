@@ -80,6 +80,19 @@ impl CommandParser {
         Ok(())
     }
 
+    /// Append a slice of APC payload bytes to the buffered command.
+    /// Equivalent to calling feed for each byte, but appends in bulk.
+    // pub fn feedSlice(self: *CommandParser, bytes: []const u8) Allocator.Error!void
+    pub fn feed_slice(&mut self, bytes: &[u8]) -> Result<(), CommandParserError> {
+        // if (self.data.items.len + bytes.len > self.max_bytes) return error.OutOfMemory;
+        if self.data.len() + bytes.len() > self.max_bytes {
+            return Err(CommandParserError::OutOfMemory);
+        }
+        // try self.data.appendSlice(self.alloc, bytes);
+        self.data.extend_from_slice(bytes);
+        Ok(())
+    }
+
     /// Finish parsing and return an owned request that can outlive the parser.
     pub fn complete(&mut self) -> Result<Request, CommandParserError> {
         // Normalize bare single-byte verbs like `s` into `s;` so the parsed

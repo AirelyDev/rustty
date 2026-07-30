@@ -112,7 +112,11 @@ const GRAPHEME_CHUNK: usize = GRAPHEME_CHUNK_LEN * core::mem::size_of::<u32>();
 type GraphemeAlloc = BitmapAllocator<GRAPHEME_CHUNK>;
 const GRAPHEME_COUNT_DEFAULT: usize = GraphemeAlloc::BITMAP_BIT_SIZE;
 pub const GRAPHEME_BYTES_DEFAULT: usize = GRAPHEME_COUNT_DEFAULT * GRAPHEME_CHUNK;
-type GraphemeMap = AutoOffsetHashMap<Offset<Cell>, OffsetSlice<u32>>;
+type GraphemeMap = AutoOffsetHashMap<
+    Offset<Cell>,
+    OffsetSlice<u32>,
+    { crate::hash_map::DEFAULT_MAX_LOAD_PERCENTAGE },
+>;
 
 /// The allocator used for shared utf8-encoded strings within a page.
 /// Note the chunk size below is the minimum size of a single allocation
@@ -138,7 +142,7 @@ pub const STRING_BYTES_DEFAULT: usize = STRING_COUNT_DEFAULT * STRING_CHUNK;
 /// we support. A hyperlink can be longer than this multiplier; the multiplier
 /// just sets the total capacity to simplify adjustable size metrics.
 const HYPERLINK_COUNT_DEFAULT: usize = 4;
-fn hyperlink_set_item_size() -> usize {
+pub fn hyperlink_set_item_size() -> usize {
     core::mem::size_of::<
         crate::ref_counted_set::Item<hyperlink::PageEntry, hyperlink::Id, size::CellCountInt>,
     >()
@@ -351,6 +355,31 @@ mod page_alloc {
     }
 }
 
+// PORT NOTE: the reference `Capacity` declares field DEFAULTS (`styles = 16`,
+// `hyperlink_bytes = hyperlink_bytes_default`, `grapheme_bytes =
+// grapheme_bytes_default`, `string_bytes = string_bytes_default`) so callers can
+// write `.{ .cols = c, .rows = r }`. Every rustty call site so far spelled all
+// six fields out, so the defaults had no Rust model; `Default` supplies them
+// verbatim for `..Default::default()` struct-update callers (WS10 T11's
+// HyperlinkMap benchmark is the first). `cols`/`rows` have no reference default;
+// 0 is the only inert choice and callers always override them.
+impl Default for Capacity {
+    fn default() -> Capacity {
+        Capacity {
+            cols: 0,
+            rows: 0,
+            // styles: size.StyleCountInt = 16,
+            styles: 16,
+            // hyperlink_bytes: size.HyperlinkCountInt = hyperlink_bytes_default,
+            hyperlink_bytes: hyperlink_bytes_default() as size::HyperlinkCountInt,
+            // grapheme_bytes: size.GraphemeBytesInt = grapheme_bytes_default,
+            grapheme_bytes: GRAPHEME_BYTES_DEFAULT as size::GraphemeBytesInt,
+            // string_bytes: size.StringBytesInt = string_bytes_default,
+            string_bytes: STRING_BYTES_DEFAULT as size::StringBytesInt,
+        }
+    }
+}
+
 /// The standard capacity for a page that doesn't have special
 /// requirements. This is enough to support a very large number of cells.
 /// The standard capacity is chosen as the fast-path for allocation since
@@ -502,9 +531,9 @@ pub struct Cell(u64);
 // Bit offsets/masks for Cell fields (see struct doc).
 const CELL_CONTENT_TAG_SHIFT: u32 = 0;
 const CELL_CONTENT_TAG_BITS: u32 = 2;
-const CELL_CONTENT_SHIFT: u32 = 2;
-const CELL_CONTENT_BITS: u32 = 24; // union sized to widest member RGB (u24)
-const CELL_STYLE_ID_SHIFT: u32 = CELL_CONTENT_SHIFT + CELL_CONTENT_BITS; // 26
+pub const CELL_CONTENT_SHIFT: u32 = 2;
+pub const CELL_CONTENT_BITS: u32 = 24; // union sized to widest member RGB (u24)
+pub const CELL_STYLE_ID_SHIFT: u32 = CELL_CONTENT_SHIFT + CELL_CONTENT_BITS; // 26
 const CELL_STYLE_ID_BITS: u32 = 16;
 const CELL_WIDE_SHIFT: u32 = CELL_STYLE_ID_SHIFT + CELL_STYLE_ID_BITS; // 42
 const CELL_WIDE_BITS: u32 = 2;
@@ -512,6 +541,82 @@ const CELL_PROTECTED_SHIFT: u32 = CELL_WIDE_SHIFT + CELL_WIDE_BITS; // 44
 const CELL_HYPERLINK_SHIFT: u32 = CELL_PROTECTED_SHIFT + 1; // 45
 const CELL_SEMANTIC_CONTENT_SHIFT: u32 = CELL_HYPERLINK_SHIFT + 1; // 46
 const CELL_SEMANTIC_CONTENT_BITS: u32 = 2;
+
+/// A field of the packed `Cell`, naming it for `cell_field_mask`.
+//
+// PORT NOTE (WS10 T16, 47e26df60): the reference builds masks with a generic
+//   fn fieldMask(comptime T: type, comptime fields: []const []const u8)
+//       @typeInfo(T).@"struct".backing_integer.?
+// driven by `@bitOffsetOf`/`@bitSizeOf` field REFLECTION over the packed
+// struct. Rust has no equivalent reflection, and `Cell` is already a
+// `#[repr(transparent)] u64` whose field positions are the explicit
+// `CELL_*_SHIFT`/`CELL_*_BITS` constants above (pinned by the
+// `cell_field_bit_offsets` layout test). So the field NAMES the reference
+// passes as strings become this enum, and `fieldMask` becomes
+// `cell_field_mask` — same inputs, same output, resolved at const-eval time
+// exactly as the reference resolves it at comptime. `Cell` is the only type
+// the reference ever instantiates `fieldMask` for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CellField {
+    ContentTag,
+    Content,
+    StyleId,
+    Wide,
+    Protected,
+    Hyperlink,
+    SemanticContent,
+}
+
+impl CellField {
+    const fn shift(self) -> u32 {
+        match self {
+            CellField::ContentTag => CELL_CONTENT_TAG_SHIFT,
+            CellField::Content => CELL_CONTENT_SHIFT,
+            CellField::StyleId => CELL_STYLE_ID_SHIFT,
+            CellField::Wide => CELL_WIDE_SHIFT,
+            CellField::Protected => CELL_PROTECTED_SHIFT,
+            CellField::Hyperlink => CELL_HYPERLINK_SHIFT,
+            CellField::SemanticContent => CELL_SEMANTIC_CONTENT_SHIFT,
+        }
+    }
+
+    const fn bits(self) -> u32 {
+        match self {
+            CellField::ContentTag => CELL_CONTENT_TAG_BITS,
+            CellField::Content => CELL_CONTENT_BITS,
+            CellField::StyleId => CELL_STYLE_ID_BITS,
+            CellField::Wide => CELL_WIDE_BITS,
+            CellField::Protected => 1,
+            CellField::Hyperlink => 1,
+            CellField::SemanticContent => CELL_SEMANTIC_CONTENT_BITS,
+        }
+    }
+}
+
+/// Returns a mask with all bits set for the given fields of the packed
+/// struct `Cell`, used for masked compares of raw backing-integer values.
+// fn fieldMask(comptime T: type, comptime fields: []const []const u8) Int
+pub const fn cell_field_mask(fields: &[CellField]) -> u64 {
+    // var mask: Int = 0;
+    let mut mask: u64 = 0;
+    // inline for (fields) |field| {
+    let mut i = 0;
+    while i < fields.len() {
+        let field = fields[i];
+        // The type that fits all the bits we need to set.
+        // const Ones = std.meta.Int(.unsigned, @bitSizeOf(@FieldType(T, field)));
+        // Mask out the ones
+        // mask |= @as(Int, std.math.maxInt(Ones)) << @bitOffsetOf(T, field);
+        let ones: u64 = if field.bits() >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << field.bits()) - 1
+        };
+        mask |= ones << field.shift();
+        i += 1;
+    }
+    mask
+}
 // `_padding: u16` occupies bits 48..63. The accessors never touch it; these
 // document the reference field's bit position and are asserted by the
 // `cell_field_bit_offsets` layout test.

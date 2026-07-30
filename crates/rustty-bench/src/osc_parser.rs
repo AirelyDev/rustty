@@ -10,7 +10,7 @@
 // const Parser = @import("../terminal/osc.zig").Parser;
 // const log = std.log.scoped(.@"osc-parser-bench");
 use crate::benchmark::{Benchmark, Error, VTable};
-use crate::cli::BenchmarkAction;
+use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, CacheLineBuf, DataFile};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
@@ -229,8 +229,8 @@ fn osc_parser() {
 
 impl BenchmarkAction for OscParser {
     type Options = Options;
-    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, OutOfMemory> {
-        OscParser::create(alloc, opts)
+    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, CreateError> {
+        Ok(OscParser::create(alloc, opts)?)
     }
     fn destroy(self: Box<Self>, alloc: Allocator) {
         OscParser::destroy(self, alloc)

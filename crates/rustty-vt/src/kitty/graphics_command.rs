@@ -193,6 +193,35 @@ impl Parser {
         Ok(())
     }
 
+    /// Feed a slice of bytes to the parser. This is equivalent to
+    /// calling feed for each byte in order, but once we're in the data
+    /// state the remainder of the slice is appended in bulk, avoiding
+    /// per-byte overhead for large payloads.
+    // pub fn feedSlice(self: *Parser, bytes: []const u8) !void
+    pub fn feed_slice(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        // var rem = bytes;
+        let mut rem = bytes;
+        // while (rem.len > 0) {
+        while !rem.is_empty() {
+            // if (self.state == .data) {
+            if self.state == State::Data {
+                // if (self.data.items.len + rem.len > self.max_bytes) return error.OutOfMemory;
+                if self.data.len() + rem.len() > self.max_bytes {
+                    return Err(Error::OutOfMemory);
+                }
+                // try self.data.appendSlice(self.arena.child_allocator, rem);
+                self.data.extend_from_slice(rem);
+                return Ok(());
+            }
+
+            // try self.feed(rem[0]);
+            self.feed(rem[0])?;
+            // rem = rem[1..];
+            rem = &rem[1..];
+        }
+        Ok(())
+    }
+
     /// Complete the parsing. This must be called after all the
     /// bytes have been fed to the parser.
     ///
@@ -1299,6 +1328,51 @@ mod tests {
         assert_eq!(Format::Rgb, v.format);
         assert_eq!(10u32, v.width);
         assert_eq!(20u32, v.height);
+    }
+
+    // test "feedSlice matches per-byte feed"
+    #[test]
+    fn feed_slice_matches_per_byte_feed() {
+        let input = b"f=24,s=10,v=20;aGVsbG8gd29ybGQ=";
+
+        let mut p1 = Parser::init(1024 * 1024);
+        for c in input.iter() {
+            p1.feed(*c).unwrap();
+        }
+        let c1 = p1.complete().unwrap();
+
+        let mut p2 = Parser::init(1024 * 1024);
+        p2.feed_slice(input).unwrap();
+        let c2 = p2.complete().unwrap();
+
+        assert!(matches!(c1.control, Control::Transmit(_)));
+        assert!(matches!(c2.control, Control::Transmit(_)));
+        assert_eq!(c1.data, c2.data);
+    }
+
+    // test "feedSlice across slice boundaries"
+    #[test]
+    fn feed_slice_across_slice_boundaries() {
+        let mut p = Parser::init(1024 * 1024);
+
+        p.feed_slice(b"f=24,s=10").unwrap();
+        p.feed_slice(b",v=20;aGVsbG8g").unwrap();
+        p.feed_slice(b"d29ybGQ=").unwrap();
+        let command = p.complete().unwrap();
+
+        assert!(matches!(command.control, Control::Transmit(_)));
+
+        // The payload is base64-decoded on completion.
+        assert_eq!(b"hello world".as_slice(), command.data.as_slice());
+    }
+
+    // test "feedSlice respects max_bytes"
+    #[test]
+    fn feed_slice_respects_max_bytes() {
+        let mut p = Parser::init(4);
+
+        p.feed_slice(b"f=24;ab").unwrap();
+        assert_eq!(Err(Error::OutOfMemory), p.feed_slice(b"cde"));
     }
 
     #[test]

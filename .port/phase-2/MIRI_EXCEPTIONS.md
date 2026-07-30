@@ -1765,3 +1765,77 @@ in UB is not a measurement of that test's cost**, and any exception table that h
 * **The 11 kitty-graphics annotations and the `search_thread` interpreter ICE were not
   re-measured.** Neither class is assertion-bound (real-OS temp files, zlib FFI, an upstream
   rustc bug), so the G6c lever cannot apply to them; they keep their existing entries.
+
+## WS10 T16 — the two `print_slice` STREAM tests (foreign SIMD decoder), 2026-07-30
+
+`47e26df60`'s printable-run batching is emitted from the ground-state loop in
+`Stream::next_slice_capped`, which calls
+`rustty_simd::vt::utf8DecodeUntilControlSeq`. That wrapper's `SIMD` const is
+`true` unconditionally in `rustty-simd` (it is not the `rustty-vt` `simd`
+feature), so it always invokes the cc-built C++/highway kernel
+`rustty_simd_decode_utf8_until_control_seq`. Miri reports:
+
+```
+error: unsupported operation: can't call foreign function
+  `rustty_simd_decode_utf8_until_control_seq` on OS `macos`
+ --> crates/rustty-simd/src/vt.rs:38:12
+```
+
+Same class as the existing kqueue / openpty / Metal / zlib entries above:
+structural interpreter limitation, not a soundness finding.
+
+| test | file | annotation |
+|---|---|---|
+| `stream_print_slice_matches_per_byte` | `stream.rs` | `cfg_attr(miri, ignore)` |
+| `stream_print_slice_batches_printable_runs` | `stream.rs` | `cfg_attr(miri, ignore)` |
+
+### Criterion 3 (no uncovered unsafe path) — the teeth
+
+Every line of `unsafe` T16 adds is in `Terminal::print_slice_fill_inner`,
+`print_slice_store_run` and `print_slice_store_pairs` (raw-pointer cell writes
+through `cursor.page_cell`). Those are reached with NO SIMD decode at all by
+`Terminal::print_slice`, and the four ported oracle tests
+(`terminal_print_slice_simple_ascii`, `terminal_print_slice_wraps_and_scrolls`,
+`terminal_print_slice_pending_wrap_state`, and the
+`terminal_print_slice_differential_fuzz_vs_print` fuzz) drive exactly that entry
+point and DO run under Miri. The two excepted tests add no unsafe of their own —
+they assert the stream's RUN STRUCTURE (that batching happens at all, and where
+the run boundaries fall), which is a logic property fully covered natively in
+both the `simd` and non-`simd` configurations.
+
+Owned by WS10 (OPEN).
+
+### The differential fuzz test — a THIRD exception, different reason
+
+`terminal_print_slice_differential_fuzz_vs_print` (`terminal.rs`) is the port of
+`47e26df60`'s own `test "Terminal: printSlice differential fuzz vs print"`. It is
+annotated `#[cfg_attr(miri, ignore)]` for the ordinary intractability reason, not
+the FFI one:
+
+| test | file | measured | annotation |
+|---|---|---|---|
+| `terminal_print_slice_differential_fuzz_vs_print` | `terminal.rs` | **>40 min, killed** (6-min bound) | `cfg_attr(miri, ignore)` |
+
+* **Criterion 1 (intractable) — MEASURED, not assumed.** 1 700 randomized ops
+  across four terminal geometries, each followed by two full-screen
+  `dump_string_alloc` walks and a cursor comparison, plus two `verify_integrity`
+  page walks. Native: 42s. Under Miri: still running at >40 min of interpreter
+  time when killed. The three sibling tests finish in ~10s each under Miri.
+* **Criterion 2 (passes natively).** Yes — `cargo test -p rustty-vt --lib
+  terminal_print_slice` -> 4 passed, in both the default and `--features simd`
+  lanes.
+* **Criterion 3 (no uncovered unsafe path) — the teeth.** The fuzz exercises no
+  unsafe code the other three do not. `terminal_print_slice_simple_ascii`,
+  `terminal_print_slice_wraps_and_scrolls` and
+  `terminal_print_slice_pending_wrap_state` all enter `print_slice` ->
+  `print_slice_fast` -> `print_slice_fill` -> `print_slice_fill_inner` and reach
+  `print_slice_store_run` (the raw-pointer cell-run store), the simple-cell scan,
+  the row-advance and the pending-wrap path. Miri: `cargo +nightly miri test -p
+  rustty-vt --lib terminal_print_slice` -> **3 passed, 0 failed, 1 ignored, clean,
+  15.64s.** The fuzz's extra value is BEHAVIOURAL breadth (does batched output
+  equal per-codepoint output across margins/modes/charsets/hyperlinks), which is
+  fully delivered natively.
+* **Criterion 4 (volume, not logic).** Op count x screen-dump cost, evidenced by
+  the linear relationship between the `ops` argument and native runtime.
+
+Owned by WS10 (OPEN).

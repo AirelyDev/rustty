@@ -1,6 +1,7 @@
 //! PORT NOTE: `synthetic/cli.zig`.
 
 pub mod ascii;
+pub mod kitty;
 pub mod osc;
 pub mod utf8;
 
@@ -19,6 +20,8 @@ pub enum Action {
     Ascii,
     Osc,
     Utf8,
+    // kitty (f6f79acce, WS10 T17)
+    Kitty,
 }
 
 impl Action {
@@ -29,6 +32,7 @@ impl Action {
             b"ascii" => Some(Action::Ascii),
             b"osc" => Some(Action::Osc),
             b"utf8" => Some(Action::Utf8),
+            b"kitty" => Some(Action::Kitty),
             _ => None,
         }
     }
@@ -149,6 +153,7 @@ pub fn main_action(action: Action, args: Args) -> Result<(), Error> {
         Action::Ascii => main_action_impl_ascii(args),
         Action::Osc => main_action_impl_osc(args),
         Action::Utf8 => main_action_impl_utf8(args),
+        Action::Kitty => main_action_impl_kitty(args),
     }
 }
 
@@ -294,6 +299,29 @@ fn main_action_impl_osc(args: Args) -> Result<(), Error> {
     Ok(())
 }
 
+fn main_action_impl_kitty(args: Args) -> Result<(), Error> {
+    // First, parse our CLI options.
+    let mut opts = kitty::Options::default();
+    parse_opts(&mut opts, args)?;
+
+    // TODO: Make this a command line option.
+    let rand_prng = time_seeded_prng();
+    let rand = rand_prng.random();
+
+    // Our output always goes to stdout.
+    let mut writer = StdoutWriter::new();
+
+    // Create our implementation
+    let mut impl_ = kitty::Kitty::create(opts).map_err(|_| Error::WriteFailed)?;
+    let run_result = impl_.run(&mut writer, rand);
+    impl_.destroy();
+    run_result.map_err(|_| Error::WriteFailed)?;
+
+    // Always flush
+    let _ = writer.flush();
+    Ok(())
+}
+
 fn main_action_impl_utf8(args: Args) -> Result<(), Error> {
     // First, parse our CLI options.
     let mut opts = utf8::Options::default();
@@ -384,8 +412,10 @@ mod tests {
         let _ = core::mem::size_of::<ascii::Ascii>();
         let _ = core::mem::size_of::<osc::Osc>();
         let _ = core::mem::size_of::<utf8::Utf8>();
+        let _ = core::mem::size_of::<kitty::Kitty>();
         let _ = Action::Ascii;
         let _ = Action::Osc;
         let _ = Action::Utf8;
+        let _ = Action::Kitty;
     }
 }

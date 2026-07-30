@@ -42,6 +42,10 @@ pub mod is_symbol;
 pub mod page_compression;
 // pub const ScrollbackCompression = @import("ScrollbackCompression.zig");
 pub mod scrollback_compression;
+// pub const HyperlinkMap = @import("HyperlinkMap.zig");
+pub mod hyperlink_map;
+// pub const ApcParser = @import("ApcParser.zig");
+pub mod apc_parser;
 
 // PORT NOTE: `main.zig` re-exports the decls above but omits `OscParser` and
 // `options` (they are reached only via `cli.Action.Struct`). They are declared
@@ -109,6 +113,10 @@ mod tests {
         let _ = core::any::type_name::<crate::page_compression::PageCompression>();
         // pub const ScrollbackCompression = @import("ScrollbackCompression.zig");
         let _ = core::any::type_name::<crate::scrollback_compression::ScrollbackCompression>();
+        // pub const HyperlinkMap = @import("HyperlinkMap.zig");
+        let _ = core::any::type_name::<crate::hyperlink_map::HyperlinkMap>();
+        // pub const ApcParser = @import("ApcParser.zig");
+        let _ = core::any::type_name::<crate::apc_parser::ApcParser>();
         // `options` / `osc_parser` are not re-exported by `main.zig` (see the
         // PORT NOTE above) but are pub mods of this hub, so touch them too.
         let _ = core::any::type_name::<crate::options::DataFile>();

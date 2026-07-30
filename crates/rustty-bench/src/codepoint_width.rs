@@ -15,7 +15,7 @@
 // const simd = @import("../simd/main.zig");
 // const table = @import("../unicode/main.zig").table;
 use crate::benchmark::{Benchmark, Error, VTable};
-use crate::cli::BenchmarkAction;
+use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short, CacheLineBuf, DataFile};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
@@ -379,8 +379,8 @@ fn codepoint_width() {
 // The `Action.Struct`-selected decls the CLI dispatch requires (§6).
 impl BenchmarkAction for CodepointWidth {
     type Options = Options;
-    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, OutOfMemory> {
-        CodepointWidth::create(alloc, opts)
+    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, CreateError> {
+        Ok(CodepointWidth::create(alloc, opts)?)
     }
     fn destroy(self: Box<Self>, alloc: Allocator) {
         CodepointWidth::destroy(self, alloc)

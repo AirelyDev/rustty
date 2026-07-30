@@ -87,7 +87,7 @@
 // const Terminal = terminalpkg.Terminal;
 // const global = @import("../global.zig");
 use crate::benchmark::{Benchmark, Error, VTable};
-use crate::cli::BenchmarkAction;
+use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short};
 use crate::terminal_options;
 use allocator_api2::alloc::Global as Allocator;
@@ -599,8 +599,8 @@ fn scrollback_compression_drains_incremental_compression_steps() {
 // The `Action.Struct`-selected decls the CLI dispatch requires (§6).
 impl BenchmarkAction for ScrollbackCompression {
     type Options = Options;
-    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, OutOfMemory> {
-        ScrollbackCompression::create(alloc, opts)
+    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, CreateError> {
+        Ok(ScrollbackCompression::create(alloc, opts)?)
     }
     fn destroy(self: Box<Self>, alloc: Allocator) {
         ScrollbackCompression::destroy(self, alloc)

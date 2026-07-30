@@ -969,11 +969,11 @@ impl Page {
             }
         }
 
-        // The hyperlink_map capacity in layout() is computed as:
-        //   hyperlink_count * hyperlink_cell_multiplier (rounded to power of 2)
-        // We need enough hyperlink_bytes so that when layout() computes
-        // the map capacity, it can accommodate all hyperlink cells. This
-        // is unit tested.
+        // layout() requests `hyperlink_count * hyperlink_cell_multiplier`
+        // usable map entries. The map layout adds load-factor headroom and
+        // rounds the raw slot count to a power of two. We need enough
+        // hyperlink_bytes for that requested entry count to accommodate all
+        // hyperlink cells. This is unit tested.
         let hyperlink_cap = {
             let hyperlink_count = id_set.count();
             let hyperlink_set_cap = hyperlink::Set::capacity_for_count(hyperlink_count);
@@ -2216,7 +2216,7 @@ impl Page {
     /// Returns the hyperlink capacity for the page. This isn't the byte
     /// size but the number of unique cells that can have hyperlink data.
     pub fn hyperlink_capacity(&self) -> usize {
-        unsafe { self.hyperlink_map.map(self.memory_ptr()) }.capacity() as usize
+        unsafe { self.hyperlink_map.map(self.memory_ptr()) }.max_load() as usize
     }
 
     /// Set the graphemes for the given cell. This asserts that the cell
@@ -2554,13 +2554,13 @@ impl Page {
                 0
             } else {
                 let mult = hyperlink_count * HYPERLINK_CELL_MULTIPLIER;
-                match u32::try_from(mult) {
-                    Ok(m) => {
-                        // std.math.ceilPowerOfTwoAssert(u32, mult)
-                        m.next_power_of_two()
-                    }
-                    Err(_) => u32::MAX,
-                }
+                // PORT NOTE: 7e14347c1 dropped the
+                // `std.math.ceilPowerOfTwoAssert(u32, mult)` rounding here:
+                // `hyperlink.Map.layout` (now `layoutForSize`) applies the
+                // load factor and rounds to a power of two itself, so
+                // rounding first would double-round. What remains is the
+                // reference's `std.math.cast(u32, ...) orelse maxInt(u32)`.
+                u32::try_from(mult).unwrap_or(u32::MAX)
             }
         };
         let hyperlink_map_layout = hyperlink::Map::layout(hyperlink_map_count);

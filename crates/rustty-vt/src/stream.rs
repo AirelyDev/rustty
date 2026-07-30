@@ -73,6 +73,19 @@ use crate::utf8_decoder::UTF8Decoder;
 // const debug = false;
 const DEBUG: bool = false;
 
+/// `std.simd.suggestVectorLength(u8)` for `8c523ed03`'s APC payload scan.
+/// NOTE this is the NATIVE width, not `simd.lanes` (= 2x native): `8c523ed03`
+/// predates `f2a7652ab`'s `lanes` helper and calls `suggestVectorLength`
+/// directly, so the ported scan uses the same width the reference does.
+const APC_SCAN_LANES: Option<usize> = match rustty_simd::native_vector_bits() {
+    Some(bits) => Some(bits / 8),
+    None => None,
+};
+
+/// `simd.lanes(u32)` for the printable-run scan in `next_slice_capped`
+/// (f2a7652ab). See `rustty_simd::lanes`.
+const PRINT_RUN_LANES: Option<usize> = rustty_simd::lanes(core::mem::size_of::<u32>());
+
 // The possible actions that can be emitted by the Stream
 // function for handling.
 // pub const Action = union(Key) { ... };
@@ -288,6 +301,36 @@ pub trait Handler {
     /// `print` — draw a unicode codepoint to the screen.
     // .print => self.handler.vt(.print, .{ .cp = c });
     fn print(&mut self, _cp: u32) {}
+
+    /// `print_slice` — a run of printable codepoints.
+    ///
+    /// A run of printable codepoints. This is emitted instead of
+    /// individual print actions when the stream can decode multiple
+    /// printable codepoints at once, so handlers can process them in
+    /// batch with per-run rather than per-codepoint overhead (see
+    /// Terminal.printSlice). A naive handler can simply loop and
+    /// handle each codepoint like a print action.
+    ///
+    /// The slice is only valid for the duration of the handler call.
+    //
+    // .print_slice => self.handler.vt(.print_slice, .{ .cps = cps[i..end] });
+    //
+    // PORT NOTE (47e26df60, WS10 T16): the reference adds `print_slice:
+    // PrintSlice` to the `Action` union, which is EXHAUSTIVE — every handler's
+    // `vt` switch must gain an arm or fail to compile, and the commit adds one
+    // to each of the three in-tree handlers. rustty models the union as this
+    // trait, whose methods have defaults, so a new method with an empty default
+    // would SILENTLY drop all printable text in every handler that only
+    // implements `print` (25+ of them in-tree, almost all tests). The default
+    // here is therefore the loop the reference's own doc comment prescribes for
+    // a naive handler, which makes `print_slice` exactly equivalent to the
+    // stream of `print` actions it replaces. Handlers that want the batch
+    // (`stream_terminal`, `termio`) override it.
+    fn print_slice(&mut self, cps: &[u32]) {
+        for &cp in cps {
+            self.print(cp);
+        }
+    }
 
     /// `print_repeat` (REP) — repeat the previous char N times.
     //
@@ -547,6 +590,24 @@ pub trait Handler {
     /// `apc_put`
     fn apc_put(&mut self, _code: u8) {}
 
+    /// `apc_put_slice` — a run of APC string payload bytes.
+    ///
+    /// `pub const ApcPutSlice = struct { bytes: []const u8 }` in the reference
+    /// `Action` union (whose `C`/`cval` extern form is mirrored in the
+    /// `rustty-vt-c` crate, per this module's Action PORT NOTE).
+    //
+    // PORT NOTE (f6f79acce, WS10 T17): as with `print_slice`, the reference's
+    // exhaustive union forces every handler to add an arm, while this trait's
+    // methods have defaults. An empty default would silently DROP APC payload
+    // for every handler that only implements `apc_put`, so the default is the
+    // per-byte fan-out the bulk path replaces — making `apc_put_slice` exactly
+    // equivalent to the `apc_put` stream it batches.
+    fn apc_put_slice(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.apc_put(b);
+        }
+    }
+
     /// `apc_end`
     fn apc_end(&mut self) {}
 
@@ -768,16 +829,66 @@ impl<'a, H: Handler> Stream<'a, H> {
         while self.parser.state == parser::State::Ground && offset < input.len() {
             // const res = simd.vt.utf8DecodeUntilControlSeq(input[offset..], cp_buf);
             let res = rustty_simd::vt::utf8DecodeUntilControlSeq(&input[offset..], cp_buf);
-            // for (cp_buf[0..res.decoded]) |cp| {
-            for &cp in &cp_buf[0..res.decoded] {
+            // const cps = cp_buf[0..res.decoded];
+            let cps = &cp_buf[0..res.decoded];
+
+            // Hand runs of printable codepoints to the handler as
+            // print_slice actions so it can process them with
+            // per-run rather than per-codepoint overhead.
+            // var i: usize = 0;
+            let mut i: usize = 0;
+            // while (i < cps.len) {
+            while i < cps.len() {
+                // const cp = cps[i];
+                let cp = cps[i];
                 // if (cp <= 0xF) {
                 if cp <= 0xF {
+                    // @branchHint(.unlikely);
+                    // PORT NOTE: `@branchHint(.unlikely)` has no stable Rust
+                    // equivalent (`core::intrinsics::likely` is nightly); the
+                    // branch structure is otherwise identical.
                     // self.execute(@intCast(cp));
                     self.execute(cp as u8);
-                } else {
-                    // self.print(@intCast(cp));
-                    self.print(cp);
+                    i += 1;
+                    continue;
                 }
+
+                // Find the end of the printable run. This is an
+                // early-exit search loop that LLVM won't
+                // auto-vectorize, and printable runs dominate real
+                // input, so scan several codepoints at a time
+                // manually (same idiom as the printSliceFill run
+                // scan).
+                // var end = i + 1;
+                let mut end = i + 1;
+                'scan: {
+                    if let Some(lanes) = PRINT_RUN_LANES {
+                        while end + lanes <= cps.len() {
+                            // const gt = v > threshold;
+                            // if (!@reduce(.And, gt)) { end += @ctz(~bits); break :scan; }
+                            let mut first_bad: Option<usize> = None;
+                            for j in 0..lanes {
+                                if cps[end + j] <= 0xF {
+                                    first_bad = Some(j);
+                                    break;
+                                }
+                            }
+                            if let Some(j) = first_bad {
+                                end += j;
+                                break 'scan;
+                            }
+                            end += lanes;
+                        }
+                    }
+                    // while (end < cps.len and cps[end] > 0xF) end += 1;
+                    while end < cps.len() && cps[end] > 0xF {
+                        end += 1;
+                    }
+                }
+                // self.handler.vt(.print_slice, .{ .cps = cps[i..end] });
+                self.handler.print_slice(&cps[i..end]);
+                // i = end;
+                i = end;
             }
             // Consume the bytes we just processed.
             // offset += res.consumed;
@@ -892,6 +1003,23 @@ impl<'a, H: Handler> Stream<'a, H> {
                         continue;
                     }
                 }
+
+                // Bulk-consume APC string bytes into a single slice.
+                // APC payloads (e.g. Kitty graphics) can be megabytes
+                // of base64 data, so per-byte dispatch is far too slow.
+                // This can't be used for handlers with a vtRaw hook
+                // because it dispatches the slice directly.
+                // if (self.parser.state == .sos_pm_apc_string) {
+                if self.parser.state == parser::State::SosPmApcString {
+                    // offset += self.consumeApcString(input[offset..]);
+                    offset += self.consume_apc_string(&input[offset..]);
+                    // if (offset >= input.len) return input.len;
+                    if offset >= input.len() {
+                        return input.len();
+                    }
+                    // The next byte exits the string state; let
+                    // nextNonUtf8 below handle it.
+                }
             }
 
             // self.nextNonUtf8(input[offset]);
@@ -901,6 +1029,75 @@ impl<'a, H: Handler> Stream<'a, H> {
         }
         // return offset;
         offset
+    }
+
+    /// Bulk-consume APC string bytes and dispatch them as a single
+    /// apc_put_slice action. Returns the number of bytes consumed.
+    /// Stops at the first byte that is not an apc_put byte in the
+    /// parse table, leaving it for the caller to process through
+    /// the state machine. CAN, SUB, ESC, and most C1 bytes exit
+    /// or abort the string state; 0xA0-0xFF are ignored by the
+    /// table (not payload), so they can't be bulk-consumed either.
+    ///
+    /// Must not be used by handlers with a vtRaw hook because it
+    /// dispatches the slice directly.
+    // fn consumeApcString(self: *Self, input: []const u8) usize
+    fn consume_apc_string(&mut self, input: &[u8]) -> usize {
+        // comptime assert(!@hasDecl(T, "vtRaw"));
+        //
+        // Same treatment as `csi_entry_byte`/`consume_csi_params`: Rust cannot
+        // assert an associated const inside a generic fn body (the fn is
+        // monomorphized for EVERY handler, including the hooked ones, even
+        // though only the unhooked ones reach the call), so this is a debug
+        // assertion and `stream_fast_paths_bypassed_when_vt_raw_hooked` is the
+        // real guard.
+        debug_assert!(!H::HAS_VT_RAW);
+        // assert(self.parser.state == .sos_pm_apc_string);
+        assert!(self.parser.state == parser::State::SosPmApcString);
+
+        // var end: usize = 0;
+        let mut end: usize = 0;
+
+        // `8c523ed03`: scan ordinary APC bytes a vector at a time, keeping the
+        // scalar loop below as the tail and as the whole scan on targets with
+        // no recommended vector width.
+        // if (comptime std.simd.suggestVectorLength(u8)) |vector_len| { ... }
+        if let Some(vector_len) = APC_SCAN_LANES {
+            while end + vector_len <= input.len() {
+                // const invalid = (bytes == 0x18) | (bytes == 0x1A)
+                //               | (bytes == 0x1B) | (bytes >= 0x80);
+                // if (@reduce(.Or, invalid)) break;
+                let mut invalid = false;
+                for j in 0..vector_len {
+                    let b = input[end + j];
+                    invalid |= b == 0x18 || b == 0x1A || b == 0x1B || b >= 0x80;
+                }
+                if invalid {
+                    break;
+                }
+                end += vector_len;
+            }
+        }
+
+        // while (end < input.len) {
+        while end < input.len() {
+            match input[end] {
+                // Not apc_put bytes: CAN/SUB/ESC and most C1 exit
+                // or abort the state; 0xA0-0xFF are ignored by it.
+                // 0x18, 0x1A, 0x1B, 0x80...0xFF => break,
+                0x18 | 0x1A | 0x1B | 0x80..=0xFF => break,
+                // Everything else is an apc_put byte.
+                // else => end += 1,
+                _ => end += 1,
+            }
+        }
+
+        // if (end > 0) self.handler.vt(.apc_put_slice, .{ .bytes = input[0..end] });
+        if end > 0 {
+            self.handler.apc_put_slice(&input[0..end]);
+        }
+        // return end;
+        end
     }
 
     /// Fast path for a byte in the csi_entry state, the state right
@@ -3824,6 +4021,28 @@ mod tests {
         s.handler
     }
 
+    /// `drive_bulk` for a stream that already exists, so a test can feed
+    /// several chunks through the bulk path with the parser state carried
+    /// across calls (the reference does this with repeated `nextSlice`).
+    fn drive_bulk_into<H: Handler>(s: &mut Stream<H>, input: &[u8]) {
+        let mut i = 0usize;
+        while i < input.len() {
+            if s.parser.state != parser::State::Ground {
+                i += s.consume_until_ground(&input[i..]);
+                continue;
+            }
+            let c = input[i];
+            if c == 0x1B {
+                s.parser.state = parser::State::Escape;
+                s.parser.clear();
+                i += 1;
+                continue;
+            }
+            s.next_utf8(c);
+            i += 1;
+        }
+    }
+
     /// The public `next_slice` entry point. Identical to `drive_bulk` when the
     /// `simd` feature is on; identical to `drive_per_byte` when it is off.
     /// Both configurations are asserted, so neither can rot.
@@ -3847,6 +4066,376 @@ mod tests {
     //
     // This is the falsifiable form of `253e4f9c3`'s "guaranteeing byte-for-byte
     // identical semantics with the per-byte fast path it hoists".
+    // ---------------------------------------------------------------------
+    // WS10 T16 (47e26df60 + f2a7652ab): print_slice run batching in the
+    // ground-state SIMD loop.
+    // ---------------------------------------------------------------------
+
+    /// Drive the input through the GROUND-STATE loop in `next_slice_capped`,
+    /// which is where `47e26df60`'s printable-run batching and `f2a7652ab`'s
+    /// vectorized run scan live.
+    ///
+    /// THIS IS NOT `next_slice`, AND THAT IS THE POINT — same vacuity trap
+    /// `drive_bulk` documents above: `next_slice` opens with
+    /// `if DEBUG || !crate::options::SIMD { per-byte; return; }`, and `simd` is
+    /// OFF by default, so a test written against `next_slice` would compare the
+    /// per-byte path with itself in a default `cargo test` build and never
+    /// reach a single `print_slice`. `next_slice_capped` has no such gate, so
+    /// calling it directly exercises the batching in BOTH feature
+    /// configurations.
+    fn drive_ground<H: Handler + Default>(input: &[u8]) -> H {
+        let mut s: Stream<H> = Stream::init(H::default());
+        let mut cp_buf: [u32; 4096] = [0; 4096];
+        assert!(input.len() <= cp_buf.len());
+        s.next_slice_capped(input, &mut cp_buf);
+        s.handler
+    }
+
+    /// Records the `print_slice` runs verbatim (rather than fanning them out
+    /// to `print` the way the trait default does), so a test can assert on the
+    /// RUN STRUCTURE and not just the resulting codepoints.
+    #[derive(Default)]
+    struct PrintSliceRecorder {
+        runs: Vec<Vec<u32>>,
+        singles: Vec<u32>,
+        bells: usize,
+    }
+
+    impl Handler for PrintSliceRecorder {
+        fn print(&mut self, cp: u32) {
+            self.singles.push(cp);
+        }
+        fn print_slice(&mut self, cps: &[u32]) {
+            self.runs.push(cps.to_vec());
+        }
+        fn bell(&mut self) {
+            // 0x07 is the control the tests below use as a run separator; the
+            // stream's `execute` routes it here.
+            self.bells += 1;
+        }
+    }
+
+    /// The printable-run batching must be observationally identical to the
+    /// per-byte `print` stream it replaces: `RecordingHandler` does NOT
+    /// override `print_slice`, so its trait default fans each run back out to
+    /// `print` and the two logs must be equal byte for byte.
+    ///
+    /// This is the falsifiable form of `47e26df60`'s "semantically identical
+    /// to calling `print` for each codepoint in order".
+    #[test]
+    // MIRI: `next_slice_capped` calls `rustty_simd_decode_utf8_until_control_seq`,
+    // a foreign (C++/highway) function Miri cannot execute ("unsupported
+    // operation: can't call foreign function"). Structural, not a soundness
+    // finding — no Rust unsafe code of this port goes unverified, because the
+    // raw-pointer cell writes these tests reach live in `print_slice_fill` and
+    // ARE Miri-covered by `terminal_print_slice_*`, which drive
+    // `Terminal::print_slice` directly with no SIMD decode. Registered in
+    // .port/phase-2/MIRI_EXCEPTIONS.md (WS10 T16).
+    #[cfg_attr(miri, ignore)]
+    fn stream_print_slice_matches_per_byte() {
+        const CORPUS: &[&[u8]] = &[
+            b"hello world",
+            b"",
+            b"a",
+            b"\x07",
+            b"hello\nworld\r\n",
+            b"one\x07two\x08three",
+            // Multi-byte UTF-8 mixed with ASCII and controls.
+            "caf\u{e9} \u{4e00}\u{4e01} \u{1f600}!".as_bytes(),
+            // Every C0 in range, interleaved with printables.
+            b"a\x00b\x01c\x02d\x03e\x04f\x05g\x06h\x07i\x08j\x09k\x0al\x0bm\x0cn\x0do\x0ep\x0fq",
+            // A run longer than any plausible vector width, then a control.
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\x07b",
+            // Control first.
+            b"\x0aabc",
+            // Escape sequences bracketing printable runs.
+            b"abc\x1b[31mdef\x1b[0mghi",
+        ];
+
+        for input in CORPUS {
+            let per_byte = drive_per_byte::<RecordingHandler>(input);
+            let ground = drive_ground::<RecordingHandler>(input);
+            assert_eq!(
+                per_byte.log,
+                ground.log,
+                "print_slice batching diverged from per-byte path on {:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
+    }
+
+    /// The run scan must actually BATCH: a contiguous printable run arrives as
+    /// ONE `print_slice` carrying every codepoint, and a C0 splits it into two
+    /// runs with the control executed in between. Without this, the previous
+    /// test still passes with a `print_slice` that emits one codepoint at a
+    /// time (which is what an off-by-one in the vectorized `end` scan would
+    /// produce), so this is the negative control for `f2a7652ab`'s lane loop.
+    #[test]
+    // MIRI: `next_slice_capped` calls `rustty_simd_decode_utf8_until_control_seq`,
+    // a foreign (C++/highway) function Miri cannot execute ("unsupported
+    // operation: can't call foreign function"). Structural, not a soundness
+    // finding — no Rust unsafe code of this port goes unverified, because the
+    // raw-pointer cell writes these tests reach live in `print_slice_fill` and
+    // ARE Miri-covered by `terminal_print_slice_*`, which drive
+    // `Terminal::print_slice` directly with no SIMD decode. Registered in
+    // .port/phase-2/MIRI_EXCEPTIONS.md (WS10 T16).
+    #[cfg_attr(miri, ignore)]
+    fn stream_print_slice_batches_printable_runs() {
+        // 70 'a's is longer than 2x any native vector width for u32, so the
+        // vector loop runs to completion and hands off to the scalar tail.
+        let mut input = vec![b'a'; 70];
+        input.push(0x07); // BEL, a C0 -> execute
+        input.extend_from_slice(b"bcd");
+
+        let h = drive_ground::<PrintSliceRecorder>(&input);
+        assert_eq!(2, h.runs.len(), "expected exactly two printable runs");
+        assert_eq!(70, h.runs[0].len());
+        assert!(h.runs[0].iter().all(|&c| c == 'a' as u32));
+        assert_eq!(
+            vec!['b' as u32, 'c' as u32, 'd' as u32],
+            h.runs[1],
+            "the run after the control must be batched too"
+        );
+        assert_eq!(1, h.bells);
+        assert!(
+            h.singles.is_empty(),
+            "the ground loop must emit print_slice, never bare print"
+        );
+
+        // Every lane boundary: a control at offset N for N across a full
+        // vector's worth of positions must split exactly there.
+        for n in 0..40usize {
+            let mut input: Vec<u8> = vec![b'x'; n];
+            input.push(0x07);
+            input.extend_from_slice(b"yz");
+            let h = drive_ground::<PrintSliceRecorder>(&input);
+            let expect_runs = if n == 0 { 1 } else { 2 };
+            assert_eq!(expect_runs, h.runs.len(), "n={n}");
+            if n > 0 {
+                assert_eq!(n, h.runs[0].len(), "n={n}");
+            }
+            assert_eq!(
+                vec!['y' as u32, 'z' as u32],
+                *h.runs.last().unwrap(),
+                "n={n}"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // WS10 T17 (f6f79acce + 8c523ed03): bulk APC slice dispatch.
+    // ---------------------------------------------------------------------
+
+    /// A test handler that accumulates APC bytes regardless of whether they
+    /// arrive per-byte (apc_put) or in bulk (apc_put_slice).
+    // const ApcTestHandler = struct { ... };
+    struct ApcTestHandler {
+        buf: [u8; 256],
+        len: usize,
+        slices: usize,
+        puts: usize,
+        started: usize,
+        ended: usize,
+    }
+
+    impl Default for ApcTestHandler {
+        fn default() -> ApcTestHandler {
+            ApcTestHandler {
+                buf: [0; 256],
+                len: 0,
+                slices: 0,
+                puts: 0,
+                started: 0,
+                ended: 0,
+            }
+        }
+    }
+
+    impl Handler for ApcTestHandler {
+        fn apc_start(&mut self) {
+            self.started += 1;
+        }
+        fn apc_end(&mut self) {
+            self.ended += 1;
+        }
+        fn apc_put(&mut self, code: u8) {
+            self.buf[self.len] = code;
+            self.len += 1;
+            self.puts += 1;
+        }
+        fn apc_put_slice(&mut self, bytes: &[u8]) {
+            self.buf[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+            self.len += bytes.len();
+            self.slices += 1;
+        }
+    }
+
+    /// Drive input through the bulk path (`consume_until_ground`, where
+    /// `consume_apc_string` lives), NOT through `next_slice` — see the vacuity
+    /// note on `drive_bulk`. `next_slice` is per-byte without `--features
+    /// simd`, so a test written against it would never reach a single
+    /// `apc_put_slice` in the default build.
+    fn drive_apc_bulk(input: &[u8]) -> ApcTestHandler {
+        drive_bulk::<ApcTestHandler>(input)
+    }
+
+    // test "stream: apc bulk slice"
+    #[test]
+    fn stream_apc_bulk_slice() {
+        let h = drive_apc_bulk(b"\x1b_Gf=24,s=10,v=20;aGVsbG8=\x1b\\");
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gf=24,s=10,v=20;aGVsbG8=".as_slice(), &h.buf[0..h.len]);
+
+        // With SIMD enabled the body must arrive as a single slice.
+        //
+        // PORT NOTE: the reference guards this with
+        // `if (comptime build_options.simd and !debug)`, because its `nextSlice`
+        // driver is the one that reaches the bulk path. This port drives
+        // `consume_until_ground` directly (see `drive_apc_bulk`), which is
+        // always the bulk path, so the assertion is UNCONDITIONAL here — and
+        // that is strictly stronger: it holds in both feature configurations.
+        assert_eq!(1, h.slices);
+        assert_eq!(0, h.puts);
+    }
+
+    // test "stream: apc bulk slice split across inputs"
+    #[test]
+    fn stream_apc_bulk_slice_split_across_inputs() {
+        let mut s: Stream<ApcTestHandler> = Stream::init(ApcTestHandler::default());
+        for chunk in [
+            b"\x1b_Gf=24,s=10".as_slice(),
+            b",v=20;aGVs".as_slice(),
+            b"bG8=\x1b\\".as_slice(),
+        ] {
+            drive_bulk_into(&mut s, chunk);
+        }
+        let h = s.handler;
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gf=24,s=10,v=20;aGVsbG8=".as_slice(), &h.buf[0..h.len]);
+    }
+
+    // test "stream: apc bulk slice keeps C0 bytes as data"
+    #[test]
+    fn stream_apc_bulk_slice_keeps_c0_bytes_as_data() {
+        // BEL does not terminate an APC string; it is payload data.
+        let h = drive_apc_bulk(b"\x1b_Gx\x07y\x1b\\");
+
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gx\x07y".as_slice(), &h.buf[0..h.len]);
+    }
+
+    // test "stream: apc aborted by CAN"  (text widened by 8c523ed03)
+    #[test]
+    fn stream_apc_aborted_by_can() {
+        // CAN (0x18) aborts the APC string via the anywhere => ground
+        // transition. Exiting the sos_pm_apc_string state emits apc_end,
+        // and the trailing bytes are printed, not treated as APC data.
+        let h = drive_apc_bulk(b"\x1b_Gabcdefghijklmnopqrstuvwxyz0123456789\x18def");
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(
+            b"Gabcdefghijklmnopqrstuvwxyz0123456789".as_slice(),
+            &h.buf[0..h.len]
+        );
+    }
+
+    // test "stream: apc scalar path matches"
+    #[test]
+    fn stream_apc_scalar_path_matches() {
+        let h = drive_per_byte::<ApcTestHandler>(b"\x1b_Gf=24;aGVsbG8=\x1b\\");
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gf=24;aGVsbG8=".as_slice(), &h.buf[0..h.len]);
+    }
+
+    // test "stream: apc vector boundaries match scalar path"
+    //
+    // This is the negative control for `8c523ed03`'s vectorization: it must
+    // FAIL if the lane boundary handling is off by one.
+    #[test]
+    fn stream_apc_vector_boundaries_match_scalar_path() {
+        let positions = [15usize, 16, 17, 31, 32, 33, 63, 64, 65];
+        let controls = [0x18u8, 0x1A, 0x1B, 0x80, 0xFF];
+
+        for position in positions {
+            for control in controls {
+                let mut input: Vec<u8> = Vec::with_capacity(96);
+                input.extend_from_slice(b"\x1b_G");
+                input.extend(core::iter::repeat_n(b'a', position));
+                input.push(control);
+                input.push(b'\\');
+                let bytes = &input[..];
+
+                let bulk = drive_apc_bulk(bytes);
+                let scalar = drive_per_byte::<ApcTestHandler>(bytes);
+
+                assert_eq!(
+                    scalar.started, bulk.started,
+                    "pos={position} ctl={control:#x}"
+                );
+                assert_eq!(scalar.ended, bulk.ended, "pos={position} ctl={control:#x}");
+                assert_eq!(
+                    &scalar.buf[0..scalar.len],
+                    &bulk.buf[0..bulk.len],
+                    "pos={position} ctl={control:#x}"
+                );
+            }
+        }
+    }
+
+    /// RUSTTY-SIDE (WS10 T17): the oracle's boundary test above NEVER reaches
+    /// `consume_apc_string`'s vector `invalid` branch.
+    ///
+    /// Its inputs end two bytes after the control, so with a 16-lane scan the
+    /// last FULL window always stops just short of the control and the scalar
+    /// tail finds it — the `if invalid { break }` arm is never taken. Proven by
+    /// mutation: making that arm `end += 1; break` left the oracle test GREEN.
+    ///
+    /// This variant pads the input after the control so the control lands
+    /// mid-window and the vector loop must detect it. Note 0x80..0xFF are
+    /// "ignored" by the parse table (still APC state), so the trailing bytes
+    /// after those controls are real payload that both paths must agree on —
+    /// which is exactly the differential this asserts.
+    #[test]
+    fn stream_apc_vector_invalid_branch_matches_scalar_path() {
+        let controls = [0x18u8, 0x1A, 0x1B, 0x80, 0xFF];
+
+        // Enough trailing bytes that the control is inside a full vector
+        // window for any plausible lane count (16 for NEON/SSE2 u8, 32 for
+        // AVX2).
+        for position in 0..40usize {
+            for control in controls {
+                let mut input: Vec<u8> = Vec::with_capacity(160);
+                input.extend_from_slice(b"\x1b_G");
+                input.extend(core::iter::repeat_n(b'a', position));
+                input.push(control);
+                input.extend(core::iter::repeat_n(b'z', 80));
+                input.extend_from_slice(b"\x1b\\");
+                let bytes = &input[..];
+
+                let bulk = drive_apc_bulk(bytes);
+                let scalar = drive_per_byte::<ApcTestHandler>(bytes);
+
+                assert_eq!(
+                    scalar.started, bulk.started,
+                    "pos={position} ctl={control:#x}"
+                );
+                assert_eq!(scalar.ended, bulk.ended, "pos={position} ctl={control:#x}");
+                assert_eq!(
+                    &scalar.buf[0..scalar.len],
+                    &bulk.buf[0..bulk.len],
+                    "pos={position} ctl={control:#x}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn stream_csi_bulk_params_match_per_byte() {
         for input in CSI_DIFFERENTIAL_CORPUS {
