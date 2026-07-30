@@ -223,4 +223,9 @@ impl RendererConfig for Config {
         // config.@"custom-shader-animation"
         map_custom_shader_animation(self.custom_shader_animation)
     }
+
+    fn scrollback_compression(&self) -> bool {
+        // config.@"scrollback-compression" (WS7 D3, oracle 0fb89f4ff)
+        self.scrollback_compression
+    }
 }

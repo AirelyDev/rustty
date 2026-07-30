@@ -61,22 +61,34 @@ pub enum CustomShaderAnimation {
 //
 // pub const DerivedConfig = struct {
 //     custom_shader_animation: configpkg.CustomShaderAnimation,
+//     scrollback_compression: bool,
 //
 //     pub fn init(config: *const configpkg.Config) DerivedConfig {
 //         return .{
 //             .custom_shader_animation = config.@"custom-shader-animation",
+//             .scrollback_compression = config.@"scrollback-compression",
 //         };
 //     }
 // };
 pub struct DerivedConfig {
     // custom_shader_animation: configpkg.CustomShaderAnimation,
     pub custom_shader_animation: CustomShaderAnimation,
+
+    /// Whether the renderer thread schedules idle scrollback compression.
+    ///
+    /// PORTS: oracle 0fb89f4ff (WS7 D3) — read by the renderer thread's
+    /// `Compression` scheduler (core's `renderer_seam.rs`) on every wake and
+    /// every timer step, and by `changeConfig` to restart a fresh idle pass on
+    /// a disabled -> enabled transition.
+    // scrollback_compression: bool,
+    pub scrollback_compression: bool,
 }
 
 impl DerivedConfig {
     // pub fn init(config: *const configpkg.Config) DerivedConfig {
     //     return .{
     //         .custom_shader_animation = config.@"custom-shader-animation",
+    //         .scrollback_compression = config.@"scrollback-compression",
     //     };
     // }
     //
@@ -89,6 +101,7 @@ impl DerivedConfig {
     pub fn init<C: RendererConfig>(config: &C) -> DerivedConfig {
         DerivedConfig {
             custom_shader_animation: config.custom_shader_animation(),
+            scrollback_compression: config.scrollback_compression(),
         }
     }
 }
@@ -110,5 +123,22 @@ mod derived_config_tests {
     fn derived_config_extracts_custom_shader_animation() {
         let d = DerivedConfig::init(&MockConfig::default());
         assert_eq!(d.custom_shader_animation, CustomShaderAnimation::True);
+    }
+
+    /// PORTS: oracle 0fb89f4ff (WS7 D3) — the renderer's derived config carries
+    /// `scrollback-compression`, so a config reload changes what the renderer
+    /// thread's idle scheduler does. BOTH arms are asserted: extracting only the
+    /// `true` default would pass against a hardcoded `true`.
+    #[test]
+    fn derived_config_extracts_scrollback_compression() {
+        // The mock mirrors the config default (`true`).
+        let d = DerivedConfig::init(&MockConfig::default());
+        assert!(d.scrollback_compression);
+
+        let d = DerivedConfig::init(&MockConfig {
+            scrollback_compression: false,
+            ..MockConfig::default()
+        });
+        assert!(!d.scrollback_compression);
     }
 }

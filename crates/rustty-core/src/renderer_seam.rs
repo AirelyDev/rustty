@@ -568,6 +568,14 @@ pub struct Thread<A: apprt::App + 'static> {
     // (reference default: `= .{}`)
     pub cursor_c_cancel: xev::Completion,
 
+    /// Incremental scrollback compression scheduling.
+    //
+    // PORT NOTE (WS7 D3): reference `compression: Compression = undefined` — see
+    // [`Compression`] for the `undefined`/gating deviation. `pub(crate)` (not
+    // `pub`) because `Compression` itself is crate-private, mirroring the
+    // reference's file-private `const Compression = struct`.
+    pub(crate) compression: Compression,
+
     /// The surface we're rendering to.
     //
     // PORT NOTE: `surface: *apprt.Surface` -> the backend surface pointer.
@@ -775,6 +783,41 @@ impl<A: apprt::App + 'static> Thread<A> {
         // the `*mut Mailbox` field. No `try`/errdefer — infallible.)
         let mailbox: *mut thread::Mailbox = Box::into_raw(thread::Mailbox::create());
 
+        // Only enable compression if we have it enabled... save some
+        // minor resources.
+        // if (comptime terminalpkg.compression_enabled) {
+        //     result.compression = try .init();
+        // }
+        //
+        // PORT NOTE (WS7 D3, the ONE deviation): the reference declares the field
+        // `compression: Compression = undefined` and assigns it only inside the
+        // comptime gate, leaving it UNDEFINED on unsupported targets. Rust has no
+        // `undefined`, and the honest analogue (`MaybeUninit` + `assume_init` at
+        // every touch) would trade a real UB hazard for nothing: `xev::Timer` is a
+        // zero-sized handle on every backend rustty supports (kqueue/epoll/
+        // io_uring all keep timer state in the loop, not the watcher), so
+        // `Compression::init()` allocates and syscalls nothing. So the field is
+        // built unconditionally here, and the `compression_enabled()` gate is
+        // preserved at every BEHAVIORAL site verbatim (`deinit`, `changeConfig`,
+        // `Compression::wake`) — nothing is scheduled or stepped on an unsupported
+        // target. The reference's ordering (construct `result`, then assign) is
+        // flattened into the struct literal below; the errdefer chain is the same.
+        let compression = match Compression::init() {
+            Ok(v) => v,
+            Err(e) => {
+                // (the still-live errdefers, LIFO — plus the mailbox's)
+                unsafe { thread::Mailbox::destroy(Box::from_raw(mailbox)) };
+                cursor_timer.deinit();
+                draw_now.deinit();
+                draw_h.deinit();
+                render_h.deinit();
+                stop_h.deinit();
+                wakeup_h.deinit();
+                loop_.deinit();
+                return Err(e);
+            }
+        };
+
         // return .{ ... };
         Ok(Thread {
             // .alloc = alloc,  (collapsed — Box ownership)
@@ -806,6 +849,9 @@ impl<A: apprt::App + 'static> Thread<A> {
             cursor_h: cursor_timer,
             cursor_c: xev::Completion::default(),
             cursor_c_cancel: xev::Completion::default(),
+            // (see the PORT NOTE above — the reference's post-construction
+            // `result.compression = try .init()` under the comptime gate)
+            compression,
             // .surface = surface,
             surface,
             // .renderer = renderer_impl,
@@ -839,6 +885,11 @@ impl<A: apprt::App + 'static> Thread<A> {
         self.draw_now.deinit();
         // self.cursor_h.deinit();
         self.cursor_h.deinit();
+        // if (comptime terminalpkg.compression_enabled)
+        //     self.compression.deinit();
+        if rustty_vt::compression_enabled() {
+            self.compression.deinit();
+        }
         // self.loop.deinit();
         self.loop_.deinit();
 
@@ -1355,6 +1406,22 @@ where
     // the port takes the value BY MOVE — the caller owns the `Box<DerivedConfig>`
     // and unboxes it. The `!void` is infallible.)
     fn changeConfig(self_: *mut Thread<A>, config: thread::DerivedConfig) {
+        // A newly enabled scheduler must reconsider existing history even when no
+        // terminal activity occurred while compression was disabled.
+        // if (comptime terminalpkg.compression_enabled) {
+        //     if (!self.config.scrollback_compression and
+        //         config.scrollback_compression)
+        //     {
+        //         self.compression.activity = null;
+        //     }
+        // }
+        if rustty_vt::compression_enabled()
+            && !unsafe { (*self_).config.scrollback_compression }
+            && config.scrollback_compression
+        {
+            unsafe { (*self_).compression.activity = None };
+        }
+
         // self.config = config.*;
         unsafe { (*self_).config = config };
     }
@@ -1438,6 +1505,15 @@ where
         // Render immediately
         // _ = renderCallback(t, undefined, undefined, {});
         let _ = Self::renderCallback(self_, core::ptr::null_mut(), core::ptr::null_mut(), Ok(()));
+
+        // PageList mutations maintain their own compression dirty state. Checking
+        // it here covers output, resize, and viewport scrolling uniformly.
+        // t.compression.wake(t);
+        //
+        // (PORT NOTE: the reference's `self`/`thread` pair — `self` IS
+        // `&thread.compression` — is two raw pointers into the SAME object here;
+        // see [`Compression`]'s aliasing note.)
+        Compression::wake(unsafe { &raw mut (*self_).compression }, self_);
 
         // The below is not used anymore but if we ever want to introduce a
         // configuration to introduce a delay to coalesce renders, we can use this.
@@ -1670,4 +1746,618 @@ fn cursorBlinkInterval() -> u64 {
 
     // return CURSOR_BLINK_INTERVAL;
     CURSOR_BLINK_INTERVAL
+}
+
+/// Schedules incremental terminal compression after renderer activity stops.
+///
+/// This owns all renderer-specific compression state. The terminal decides
+/// when compression-relevant activity changes and performs the actual work;
+/// the renderer only provides idle scheduling and avoids waiting for the
+/// terminal lock.
+//
+// PORTS: oracle@main renderer/Thread.zig `const Compression = struct` (WS7 D3).
+// The `scrollback-compression` gating is oracle 0fb89f4ff; the contended-wake
+// `else if` branch is oracle 25e624569.
+//
+// PORT NOTE (visibility): the reference declaration is file-private (`const
+// Compression`, not `pub const`); `pub(crate)` is the closest Rust analogue that
+// still lets the `pub struct Thread<A>` field name it.
+//
+// PORT NOTE (ALIASING, memory `rust-mut-args-strongly-protected`): every
+// reference method takes `self: *Compression` AND `thread: *Thread`, where `self`
+// IS `&thread.compression` — two live pointers into the same object, one nested in
+// the other. In Rust that is only sound with RAW pointers, so the methods below
+// are associated fns taking `self_: *mut Compression` + `thread: *mut Thread<A>`
+// and projecting narrowly (`(*self_).activity`, `(*thread).config.…`); no `&mut
+// Compression`/`&mut Thread` is ever minted, and the xev completions — which the
+// loop re-enters across ticks — stay raw (`&raw mut (*self_).completion`).
+// `deinit` is the one exception: it is called from `Thread::deinit(&mut self)`
+// post-join, where nothing else aliases.
+//
+// PORT NOTE (the activity token): `compression_activity()` is an OPAQUE change
+// token, not a sequence — its doc says "the direction of the change has no
+// meaning". Only `==`/`!=` is used here, exactly as the reference does; never `<`
+// or `>`.
+pub(crate) struct Compression {
+    // timer: xev.Timer,
+    timer: xev::Timer,
+    // completion: xev.Completion = .{},
+    completion: xev::Completion,
+    // reset_completion: xev.Completion = .{},
+    reset_completion: xev::Completion,
+    /// The last activity token we acted on. `None` (the reference `null`) forces
+    /// the next wake to schedule a pass.
+    // activity: ?u64 = null,
+    activity: Option<u64>,
+}
+
+impl Compression {
+    // const idle_interval = 250;
+    const IDLE_INTERVAL: u64 = 250;
+    // const step_interval = 1;
+    const STEP_INTERVAL: u64 = 1;
+
+    // fn init() !Compression {
+    fn init() -> Result<Compression, xev::Error> {
+        // return .{ .timer = try xev.Timer.init() };
+        Ok(Compression {
+            timer: xev::Timer::init()?,
+            // (reference field defaults)
+            completion: xev::Completion::default(),
+            reset_completion: xev::Completion::default(),
+            activity: None,
+        })
+    }
+
+    // fn deinit(self: *Compression) void {
+    fn deinit(&mut self) {
+        // self.timer.deinit();
+        self.timer.deinit();
+    }
+
+    /// Start or postpone compression after a renderer wake.
+    // fn wake(self: *Compression, thread: *Thread) void {
+    fn wake<A: apprt::App + 'static>(self_: *mut Compression, thread: *mut Thread<A>) {
+        // If we have no compression then don't do anything.
+        // if (comptime !terminalpkg.compression_enabled) return;
+        if !rustty_vt::compression_enabled() {
+            return;
+        }
+        // if (!thread.config.scrollback_compression) return;
+        if !unsafe { (*thread).config.scrollback_compression } {
+            return;
+        }
+
+        // PageList activity, rather than a generic renderer wake, restarts the
+        // idle interval. In particular, the inspector wakes the renderer every
+        // frame without changing terminal contents and must not starve this
+        // timer indefinitely.
+        //
+        // (PORT NOTE: `state`/`mutex`/`terminal` are raw pointers in the port —
+        // re-deref'd fresh at every use, never cached as a reference across the
+        // interleaving `&mut Terminal` below, the generic.rs `updateFrame`
+        // precedent.)
+        let state: *mut State = unsafe { (*thread).state };
+        // if (thread.state.mutex.tryLock()) {
+        if unsafe { (*(*state).mutex).try_lock() } {
+            // defer thread.state.mutex.unlock();
+            //
+            // (The `defer` runs AFTER the comparison and the early return, so the
+            // unlock is hoisted to cover both exits below.)
+
+            // const activity = thread.state.terminal.compressionActivity();
+            let activity = unsafe { (*(*state).terminal).compression_activity() };
+            // if (self.activity == activity) return;
+            let same = unsafe { (*self_).activity } == Some(activity);
+            // self.activity = activity;
+            if !same {
+                unsafe { (*self_).activity = Some(activity) };
+            }
+            unsafe { (*(*state).mutex).unlock() }; // `defer`
+            if same {
+                return;
+            }
+        }
+        // } else if (self.completion.state() == .active) {
+        else if xev::Completion::state_of(unsafe { &(*self_).completion })
+            == xev::CompletionState::Active
+        {
+            // Contention doesn't prove that compression-relevant activity
+            // changed. Keep an existing deadline so frequent inspector frames
+            // cannot postpone compression forever. The timer rechecks both the
+            // activity token and lock availability before doing any work.
+            return;
+        }
+
+        // Contention may mean parsing is active. Scheduling is a harmless
+        // false positive when no compression work is actually pending, but is
+        // necessary when no timer is already active.
+        // self.schedule(thread, idle_interval);
+        Self::schedule(self_, thread, Self::IDLE_INTERVAL);
+    }
+
+    /// Start the one-shot timer, or move its deadline if it is already active.
+    // fn schedule(self: *Compression, thread: *Thread, delay_ms: u64) void {
+    fn schedule<A: apprt::App + 'static>(
+        self_: *mut Compression,
+        thread: *mut Thread<A>,
+        delay_ms: u64,
+    ) {
+        // self.timer.reset(
+        //     &thread.loop,
+        //     &self.completion,
+        //     &self.reset_completion,
+        //     delay_ms,
+        //     Thread,
+        //     thread,
+        //     timerCallback,
+        // );
+        unsafe {
+            (*self_).timer.reset(
+                &raw mut (*thread).loop_,
+                &raw mut (*self_).completion,
+                &raw mut (*self_).reset_completion,
+                delay_ms,
+                thread,
+                Self::timerCallback::<A>,
+            );
+        }
+    }
+
+    // fn timerCallback(thread_: ?*Thread, _: *xev.Loop, _: *xev.Completion,
+    //     result: xev.Timer.RunError!void) xev.CallbackAction {
+    fn timerCallback<A: apprt::App + 'static>(
+        thread_: *mut Thread<A>,
+        _l: *mut xev::Loop,
+        _c: *mut xev::Completion,
+        result: Result<(), xev::TimerRunError>,
+    ) -> xev::CallbackAction {
+        // _ = result catch |err| switch (err) {
+        //     error.Canceled => return .disarm,
+        //     else => {
+        //         log.warn("error in compression timer err={}", .{err});
+        //         return .disarm;
+        //     },
+        // };
+        //
+        // (Both arms `.disarm`; the non-`Canceled` arm only differs by the log,
+        // which is a comment per this module's log convention.)
+        if let Err(_err) = result {
+            // log.warn("error in compression timer err={}", .{err});
+            return xev::CallbackAction::Disarm;
+        }
+
+        // const thread = thread_ orelse return .disarm;
+        if thread_.is_null() {
+            return xev::CallbackAction::Disarm;
+        }
+        let thread = thread_;
+        // const self = &thread.compression;
+        let self_: *mut Compression = unsafe { &raw mut (*thread).compression };
+
+        // if (self.step(thread)) |delay| self.schedule(thread, delay);
+        if let Some(delay) = Self::step(self_, thread) {
+            Self::schedule(self_, thread, delay);
+        }
+        // return .disarm;
+        xev::CallbackAction::Disarm
+    }
+
+    /// Try one bounded step without waiting for the terminal lock. The return
+    /// value is the delay before another attempt, or null when work is done.
+    // fn step(self: *Compression, thread: *Thread) ?u64 {
+    fn step<A: apprt::App + 'static>(
+        self_: *mut Compression,
+        thread: *mut Thread<A>,
+    ) -> Option<u64> {
+        // if (!thread.config.scrollback_compression) return null;
+        if !unsafe { (*thread).config.scrollback_compression } {
+            return None;
+        }
+
+        // const state = thread.state;
+        let state: *mut State = unsafe { (*thread).state };
+        // if (!state.mutex.tryLock()) return idle_interval;
+        if !unsafe { (*(*state).mutex).try_lock() } {
+            return Some(Self::IDLE_INTERVAL);
+        }
+        // defer state.mutex.unlock();
+        //
+        // (Hand-rolled: the guard-less `rustty_zigstd::thread::Mutex` has no RAII
+        // drop, and the lock is held across the two returns below. Neither arm can
+        // panic before its unlock — `compression_activity`/`compress` are the only
+        // calls and both are infallible.)
+
+        // const activity = state.terminal.compressionActivity();
+        let activity = unsafe { (*(*state).terminal).compression_activity() };
+        // if (self.activity != activity) {
+        if unsafe { (*self_).activity } != Some(activity) {
+            // self.activity = activity;
+            unsafe { (*self_).activity = Some(activity) };
+            // `defer state.mutex.unlock()`
+            unsafe { (*(*state).mutex).unlock() };
+            // return idle_interval;
+            return Some(Self::IDLE_INTERVAL);
+        }
+
+        // return switch (state.terminal.compress(.incremental)) {
+        //     .pending => step_interval,
+        //     .unsupported,
+        //     .complete,
+        //     => null,
+        // };
+        let result = unsafe {
+            (*(*state).terminal).compress(rustty_vt::terminal::TerminalCompressionMode::Incremental)
+        };
+        unsafe { (*(*state).mutex).unlock() }; // `defer`
+        match result {
+            rustty_vt::terminal::TerminalCompressionResult::Pending => Some(Self::STEP_INTERVAL),
+            rustty_vt::terminal::TerminalCompressionResult::Unsupported
+            | rustty_vt::terminal::TerminalCompressionResult::Complete => None,
+        }
+    }
+}
+
+// ===========================================================================
+// WS7 D3 — the renderer-thread idle compression scheduler, END TO END.
+// ===========================================================================
+//
+// These are rustty-only tests (the reference file has no `test{}` blocks), and
+// they are the FIRST place in the shipped app where `PageList::compress` actually
+// runs: before D3 the only callers were rustty-bench, vt-internal search, and vt
+// unit tests. Each test drives the REAL `Thread<A>` — a real `xev.Loop`, the real
+// `Compression` timer chain, a real `Terminal` with real scrollback and the real
+// guard-less render mutex — through the same entry point `wakeupCallback` uses,
+// then runs the loop `.until_done` (the compression timer is the only registered
+// completion, so the loop returns exactly when the idle pass finishes).
+#[cfg(test)]
+mod compression_tests {
+    use super::*;
+    use rustty_vt::terminal::{Options as TerminalOptions, Terminal};
+
+    /// The fake apprt runtime. Only `App::Surface` matters here: no method on it
+    /// is reachable from the compression paths.
+    struct TestApp;
+
+    /// The fake runtime surface. `Core = crate::surface::Surface<TestApp>` is what
+    /// satisfies the `changeConfig` impl block's bound.
+    struct TestSurface;
+
+    impl apprt::App for TestApp {
+        type Surface = TestSurface;
+
+        fn perform_action<C: apprt::CoreSurfaceHandle>(
+            &self,
+            _target: apprt::Target<'_, C>,
+            _action: apprt::Action<'_>,
+        ) -> Result<bool, apprt::ApprtError> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn perform_ipc(
+            &self,
+            _target: apprt::ipc::Target<'_>,
+            _action: apprt::ipc::Action<'_>,
+        ) -> Result<bool, apprt::ipc::Errors> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn wakeup(&self) {}
+
+        fn config(&self) -> &rustty_config::Config {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn keyboard_layout(&self) -> rustty_input::keyboard::Layout {
+            rustty_input::keyboard::Layout::Unknown
+        }
+    }
+
+    impl apprt::Surface for TestSurface {
+        type App = TestApp;
+        type Core = crate::surface::Surface<TestApp>;
+
+        fn core(&self) -> *mut crate::surface::Surface<TestApp> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn rt_app(&self) -> *mut TestApp {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn close(&self, _process_alive: bool) {}
+
+        fn deinit(&mut self) {}
+
+        fn get_content_scale(&self) -> Result<apprt::ContentScale, apprt::ApprtError> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn get_size(&self) -> Result<apprt::SurfaceSize, apprt::ApprtError> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn get_title(&self) -> Option<&std::ffi::CStr> {
+            None
+        }
+
+        fn supports_clipboard(&self, _clipboard_type: apprt::Clipboard) -> bool {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn clipboard_request(
+            &self,
+            _clipboard_type: apprt::Clipboard,
+            _state: apprt::ClipboardRequest,
+        ) -> Result<bool, apprt::ApprtError> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn set_clipboard(
+            &self,
+            _clipboard_type: apprt::Clipboard,
+            _contents: &[apprt::ClipboardContent<'_>],
+            _confirm: bool,
+        ) -> Result<(), apprt::ApprtError> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn get_cursor_pos(&self) -> Result<apprt::CursorPos, apprt::ApprtError> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+
+        fn default_termio_env(
+            &self,
+        ) -> Result<std::collections::HashMap<String, String>, apprt::ApprtError> {
+            unimplemented!("test runtime: not driven by the compression tests")
+        }
+    }
+
+    /// A heap-pinned `Thread<TestApp>` over a real render `State`/`Terminal`.
+    /// `surface`/`renderer` are null: no compression path dereferences them
+    /// (`Compression` only ever touches `thread.config`, `thread.state` and
+    /// `thread.loop_`).
+    struct Harness {
+        thread: *mut Thread<TestApp>,
+        state: *mut State,
+        mutex: *mut rustty_zigstd::thread::Mutex,
+        terminal: *mut Terminal,
+    }
+
+    impl Harness {
+        /// Build the harness with `scrollback-compression` set as given, and a
+        /// primary screen carrying enough compressible cold history that an
+        /// incremental pass has real work to do.
+        fn build(scrollback_compression: bool) -> Harness {
+            let mut terminal = Box::new(
+                Terminal::init(
+                    Allocator,
+                    TerminalOptions {
+                        cols: 80,
+                        rows: 24,
+                        max_scrollback: 10 * 1024 * 1024,
+                        colors: rustty_vt::terminal::Colors::default(),
+                        default_modes: rustty_vt::modes::ModePacked::default(),
+                        kitty_image_storage_limit: 0,
+                        kitty_image_loading_limits:
+                            rustty_vt::kitty::graphics_image::Limits::DIRECT,
+                    },
+                )
+                .expect("Terminal::init"),
+            );
+
+            // Real terminal output, so the primary PageList grows real cold pages.
+            {
+                let mut stream = terminal.vt_stream();
+                let line = b"repeated and compressible terminal history\r\n";
+                for _ in 0..2_000 {
+                    stream.next_slice(line);
+                }
+                stream.deinit();
+            }
+
+            let terminal: *mut Terminal = Box::into_raw(terminal);
+            let mutex: *mut rustty_zigstd::thread::Mutex =
+                Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+            let state: *mut State = Box::into_raw(Box::new(State {
+                mutex,
+                terminal,
+                inspector: None,
+                inspector_ptr: None,
+                preedit: None,
+                mouse: rustty_renderer::state::Mouse::default(),
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
+            }));
+
+            let config = rustty_config::Config {
+                scrollback_compression,
+                ..rustty_config::Config::default()
+            };
+
+            let thread = Box::into_raw(Box::new(
+                Thread::<TestApp>::init(
+                    Allocator,
+                    &config,
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                    state,
+                    crate::app::Mailbox::<TestApp> {
+                        rt_app: core::ptr::null_mut(),
+                        mailbox: core::ptr::null_mut(),
+                    },
+                )
+                .expect("Thread::init"),
+            ));
+
+            Harness {
+                thread,
+                state,
+                mutex,
+                terminal,
+            }
+        }
+
+        /// Exactly what `wakeupCallback` does for compression.
+        fn wake(&self) {
+            Compression::wake(unsafe { &raw mut (*self.thread).compression }, self.thread);
+        }
+
+        /// Run the loop until the compression timer chain disarms itself. The
+        /// compression timer is the ONLY completion this harness registers, so
+        /// `.until_done` returns precisely when the idle pass is over (or
+        /// immediately when nothing was scheduled).
+        fn run(&self) {
+            unsafe { (*self.thread).loop_.run(xev::RunMode::UntilDone) }.expect("loop.run");
+        }
+
+        /// How many primary-screen pages are currently encoded (compressed) —
+        /// the observable that proves compression really ran.
+        fn compressed_pages(&self) -> usize {
+            let primary = unsafe {
+                (*self.terminal)
+                    .screens
+                    .get(rustty_vt::screen_set::Key::Primary)
+            }
+            .expect("primary screen");
+            unsafe { (*primary).pages.memory_stats() }.compressed_pages
+        }
+
+        fn activity(&self) -> Option<u64> {
+            unsafe { (*self.thread).compression.activity }
+        }
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            unsafe {
+                (*self.thread).deinit();
+                drop(Box::from_raw(self.thread));
+                drop(Box::from_raw(self.state));
+                drop(Box::from_raw(self.mutex));
+                let mut t = Box::from_raw(self.terminal);
+                t.deinit(Allocator);
+            }
+        }
+    }
+
+    /// THE POSITIVE ARM: with `scrollback-compression = true`, an idle renderer
+    /// drives `Terminal::compress` all the way to `.complete` and real pages end
+    /// up encoded.
+    ///
+    /// PORTS (behavior): oracle@main renderer/Thread.zig `Compression` — the
+    /// reference has no test for this, so the assertions pin the observable
+    /// contract: the idle pass runs to completion (`step` returned `null`, which
+    /// is why `loop.run(.until_done)` returned at all) and it compressed pages.
+    #[test]
+    fn compression_idle_pass_compresses_scrollback() {
+        assert!(
+            rustty_vt::compression_enabled(),
+            "this target supports strict reclamation; the D3 scheduler needs it"
+        );
+
+        let h = Harness::build(true);
+        assert_eq!(
+            h.compressed_pages(),
+            0,
+            "nothing is compressed before the pass"
+        );
+
+        // First wake: the activity token differs from `None`, so a pass is armed.
+        h.wake();
+        assert!(
+            h.activity().is_some(),
+            "the wake latched the activity token"
+        );
+
+        h.run();
+
+        // The loop returned, so the timer chain disarmed: `step` returned `null`,
+        // i.e. `Terminal::compress` reported `.complete` (`.unsupported` is ruled
+        // out by the `compression_enabled` assert above).
+        assert!(
+            h.compressed_pages() > 0,
+            "the idle pass compressed cold scrollback pages"
+        );
+
+        // The scheduler's own timer is disarmed and was NOT rescheduled, which is
+        // exactly `step` having returned `null` — i.e. `Terminal::compress`
+        // reported `.complete`. (`.unsupported` cannot be the `null` reason here:
+        // it would also mean zero compressed pages, contradicting the assert
+        // above, and it is ruled out by `compression_enabled()`.)
+        assert_eq!(
+            xev::Completion::state_of(unsafe { &(*h.thread).compression.completion }),
+            xev::CompletionState::Dead,
+            "the idle pass reached `.complete` and stopped rescheduling"
+        );
+    }
+
+    /// THE NEGATIVE ARM (what makes the positive arm non-vacuous): with
+    /// `scrollback-compression = false` the very same harness schedules nothing,
+    /// never touches the terminal, and compresses nothing.
+    ///
+    /// PORTS: oracle 0fb89f4ff — the `wake`/`step` config guards.
+    #[test]
+    fn compression_is_inert_when_the_option_is_disabled() {
+        let h = Harness::build(false);
+
+        h.wake();
+        assert!(
+            h.activity().is_none(),
+            "a disabled scheduler must not even read the activity token"
+        );
+        assert_eq!(
+            xev::Completion::state_of(unsafe { &(*h.thread).compression.completion }),
+            xev::CompletionState::Dead,
+            "a disabled scheduler must not arm the idle timer"
+        );
+
+        // Nothing is registered, so this returns immediately; it would also give
+        // the timer chain a chance to run if one had been armed.
+        h.run();
+        assert_eq!(h.compressed_pages(), 0);
+
+        // `step`, called directly, is inert too (the second 0fb89f4ff guard).
+        assert_eq!(
+            Compression::step(unsafe { &raw mut (*h.thread).compression }, h.thread),
+            None
+        );
+        assert_eq!(h.compressed_pages(), 0);
+    }
+
+    /// `changeConfig` clears the latched activity token on a disabled -> enabled
+    /// transition so a fresh idle pass starts even though no terminal activity
+    /// occurred while compression was off — and does NOT clear it otherwise.
+    ///
+    /// PORTS: oracle 0fb89f4ff `changeConfig` (:513-518).
+    #[test]
+    fn change_config_restarts_the_pass_only_on_disabled_to_enabled() {
+        fn derived(scrollback_compression: bool) -> thread::DerivedConfig {
+            thread::DerivedConfig {
+                custom_shader_animation: rustty_renderer::thread::CustomShaderAnimation::True,
+                scrollback_compression,
+            }
+        }
+
+        // enabled -> enabled: the latched token survives (no needless restart).
+        let h = Harness::build(true);
+        h.wake();
+        let latched = h.activity();
+        assert!(latched.is_some());
+        Thread::<TestApp>::changeConfig(h.thread, derived(true));
+        assert_eq!(h.activity(), latched);
+
+        // enabled -> disabled: also no clear (the guard is one-directional).
+        Thread::<TestApp>::changeConfig(h.thread, derived(false));
+        assert_eq!(h.activity(), latched);
+
+        // disabled -> enabled: cleared, so the next wake arms a fresh pass.
+        Thread::<TestApp>::changeConfig(h.thread, derived(true));
+        assert_eq!(h.activity(), None);
+
+        // Drain the pass the first wake armed so the loop has no live completion
+        // when the harness tears down.
+        h.run();
+    }
 }

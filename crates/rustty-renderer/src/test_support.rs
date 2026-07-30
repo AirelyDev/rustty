@@ -33,11 +33,27 @@ use crate::config::RendererConfig;
 use crate::generic::{Color, Path, RepeatablePath, TerminalColor};
 use crate::thread::CustomShaderAnimation;
 
-#[derive(Default)]
 pub(crate) struct MockConfig {
     pub(crate) bg_image: Option<Path>,
     pub(crate) custom_shaders: Vec<Path>,
     pub(crate) links: Vec<InputLink>,
+    /// Configurable (defaults to the config default `true`, WS7 D3) so the
+    /// `thread::DerivedConfig` extraction test can assert BOTH arms.
+    pub(crate) scrollback_compression: bool,
+}
+
+// PORT NOTE: MANUAL `Default` — `scrollback_compression`'s config default is
+// `true`, so `#[derive(Default)]` (which would give `false`) would make the mock
+// disagree with the real `Config::default()`.
+impl Default for MockConfig {
+    fn default() -> MockConfig {
+        MockConfig {
+            bg_image: None,
+            custom_shaders: Vec::new(),
+            links: Vec::new(),
+            scrollback_compression: true,
+        }
+    }
 }
 
 impl RendererConfig for MockConfig {
@@ -177,5 +193,9 @@ impl RendererConfig for MockConfig {
     fn custom_shader_animation(&self) -> CustomShaderAnimation {
         // config default `.true`.
         CustomShaderAnimation::True
+    }
+    fn scrollback_compression(&self) -> bool {
+        // Configurable (defaults to the config default `true`).
+        self.scrollback_compression
     }
 }
