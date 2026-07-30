@@ -12,7 +12,7 @@
 // const options = @import("options.zig");
 // const Terminal = terminalpkg.Terminal;
 use crate::benchmark::{Benchmark, Error, VTable};
-use crate::cli::BenchmarkAction;
+use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short};
 use crate::terminal_options;
 use allocator_api2::alloc::Global as Allocator;
@@ -394,8 +394,8 @@ impl ScreenClone {
 
 impl BenchmarkAction for ScreenClone {
     type Options = Options;
-    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, OutOfMemory> {
-        ScreenClone::create(alloc, opts)
+    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, CreateError> {
+        Ok(ScreenClone::create(alloc, opts)?)
     }
     fn destroy(self: Box<Self>, alloc: Allocator) {
         ScreenClone::destroy(self, alloc)

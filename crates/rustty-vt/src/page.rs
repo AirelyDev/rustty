@@ -142,7 +142,7 @@ pub const STRING_BYTES_DEFAULT: usize = STRING_COUNT_DEFAULT * STRING_CHUNK;
 /// we support. A hyperlink can be longer than this multiplier; the multiplier
 /// just sets the total capacity to simplify adjustable size metrics.
 const HYPERLINK_COUNT_DEFAULT: usize = 4;
-fn hyperlink_set_item_size() -> usize {
+pub fn hyperlink_set_item_size() -> usize {
     core::mem::size_of::<
         crate::ref_counted_set::Item<hyperlink::PageEntry, hyperlink::Id, size::CellCountInt>,
     >()
@@ -352,6 +352,31 @@ mod page_alloc {
         // SAFETY: `b.ptr` came from `alloc_zeroed(backing_layout(b.len))`; the
         // reconstructed layout is identical, as `dealloc` requires.
         unsafe { std::alloc::dealloc(b.ptr, backing_layout(b.len)) }
+    }
+}
+
+// PORT NOTE: the reference `Capacity` declares field DEFAULTS (`styles = 16`,
+// `hyperlink_bytes = hyperlink_bytes_default`, `grapheme_bytes =
+// grapheme_bytes_default`, `string_bytes = string_bytes_default`) so callers can
+// write `.{ .cols = c, .rows = r }`. Every rustty call site so far spelled all
+// six fields out, so the defaults had no Rust model; `Default` supplies them
+// verbatim for `..Default::default()` struct-update callers (WS10 T11's
+// HyperlinkMap benchmark is the first). `cols`/`rows` have no reference default;
+// 0 is the only inert choice and callers always override them.
+impl Default for Capacity {
+    fn default() -> Capacity {
+        Capacity {
+            cols: 0,
+            rows: 0,
+            // styles: size.StyleCountInt = 16,
+            styles: 16,
+            // hyperlink_bytes: size.HyperlinkCountInt = hyperlink_bytes_default,
+            hyperlink_bytes: hyperlink_bytes_default() as size::HyperlinkCountInt,
+            // grapheme_bytes: size.GraphemeBytesInt = grapheme_bytes_default,
+            grapheme_bytes: GRAPHEME_BYTES_DEFAULT as size::GraphemeBytesInt,
+            // string_bytes: size.StringBytesInt = string_bytes_default,
+            string_bytes: STRING_BYTES_DEFAULT as size::StringBytesInt,
+        }
     }
 }
 

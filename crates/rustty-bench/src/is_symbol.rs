@@ -12,7 +12,7 @@
 // const uucode = @import("uucode");
 // const symbols_table = @import("../unicode/symbols_table.zig").table;
 use crate::benchmark::{Benchmark, Error, VTable};
-use crate::cli::BenchmarkAction;
+use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short, CacheLineBuf, DataFile};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
@@ -255,8 +255,8 @@ fn is_symbol() {
 
 impl BenchmarkAction for IsSymbol {
     type Options = Options;
-    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, OutOfMemory> {
-        IsSymbol::create(alloc, opts)
+    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, CreateError> {
+        Ok(IsSymbol::create(alloc, opts)?)
     }
     fn destroy(self: Box<Self>, alloc: Allocator) {
         IsSymbol::destroy(self, alloc)

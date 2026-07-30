@@ -20,7 +20,7 @@
 // const Terminal = terminalpkg.Terminal;
 // const Stream = terminalpkg.TerminalStream;
 use crate::benchmark::{Benchmark, Error, VTable};
-use crate::cli::BenchmarkAction;
+use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short, DataFile};
 use crate::terminal_options;
 use allocator_api2::alloc::Global as Allocator;
@@ -355,8 +355,8 @@ fn terminal_stream() {
 
 impl BenchmarkAction for TerminalStream {
     type Options = Options;
-    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, OutOfMemory> {
-        TerminalStream::create(alloc, opts)
+    fn create(alloc: Allocator, opts: Options) -> Result<Box<Self>, CreateError> {
+        Ok(TerminalStream::create(alloc, opts)?)
     }
     fn destroy(self: Box<Self>, alloc: Allocator) {
         TerminalStream::destroy(self, alloc)

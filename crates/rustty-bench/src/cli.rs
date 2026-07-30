@@ -4,6 +4,7 @@
 use crate::benchmark::{self, Benchmark, RunMode};
 use crate::codepoint_width::CodepointWidth;
 use crate::grapheme_break::GraphemeBreak;
+use crate::hyperlink_map::HyperlinkMap;
 use crate::is_symbol::IsSymbol;
 use crate::osc_parser::OscParser;
 use crate::page_compression::PageCompression;
@@ -38,6 +39,8 @@ pub enum Action {
     PageCompression,
     // @"scrollback-compression",
     ScrollbackCompression,
+    // @"hyperlink-map",
+    HyperlinkMap,
 }
 
 impl Action {
@@ -54,6 +57,7 @@ impl Action {
             b"osc-parser" => Some(Action::OscParser),
             b"page-compression" => Some(Action::PageCompression),
             b"scrollback-compression" => Some(Action::ScrollbackCompression),
+            b"hyperlink-map" => Some(Action::HyperlinkMap),
             _ => None,
         }
     }
@@ -86,11 +90,33 @@ pub trait BenchmarkAction: Sized {
     // const Options — the CLI options for the action.
     type Options: Default + rustty_args::args::Target;
     // fn create(alloc, opts) — create a new instance of the action from options.
-    fn create(alloc: Allocator, opts: Self::Options) -> Result<Box<Self>, OutOfMemory>;
+    fn create(alloc: Allocator, opts: Self::Options) -> Result<Box<Self>, CreateError>;
     // fn destroy(alloc) — free the instance.
     fn destroy(self: Box<Self>, alloc: Allocator);
     // fn benchmark() — returns a `Benchmark` instance for the action.
     fn benchmark(&mut self) -> Benchmark;
+}
+
+/// The error set of `BenchmarkImpl.create` (`!*T`). Zig infers a distinct error
+/// set per impl and `mainActionImpl`'s own inferred set absorbs all of them;
+/// Rust needs one named union, so this enum lists every variant any benchmark's
+/// `create` can return. `OutOfMemory` covers the eight allocation-only impls;
+/// `InvalidEntries`/`UnexpectedCapacity` are `HyperlinkMap.create`'s
+/// (`7e14347c1`).
+#[derive(Debug)]
+pub enum CreateError {
+    // error.OutOfMemory
+    OutOfMemory,
+    // return error.InvalidEntries;
+    InvalidEntries,
+    // return error.UnexpectedCapacity;
+    UnexpectedCapacity,
+}
+
+impl From<OutOfMemory> for CreateError {
+    fn from(_: OutOfMemory) -> CreateError {
+        CreateError::OutOfMemory
+    }
 }
 
 /// The error set of `main`/`mainAction`/`mainActionImpl` (Zig's inferred `!void`).
@@ -106,6 +132,8 @@ pub enum Error {
     Parse(rustty_args::args::ParseError),
     // try BenchmarkImpl.create(...)
     OutOfMemory,
+    // try BenchmarkImpl.create(...) — the non-allocation create failures.
+    Create(CreateError),
     // _ = try b.run(.once);
     Benchmark(benchmark::Error),
 }
@@ -119,6 +147,15 @@ impl From<rustty_args::args::ParseError> for Error {
 impl From<OutOfMemory> for Error {
     fn from(_: OutOfMemory) -> Error {
         Error::OutOfMemory
+    }
+}
+
+impl From<CreateError> for Error {
+    fn from(e: CreateError) -> Error {
+        match e {
+            CreateError::OutOfMemory => Error::OutOfMemory,
+            other => Error::Create(other),
+        }
     }
 }
 
@@ -216,6 +253,7 @@ pub fn main_action(alloc: Allocator, action: Action, args: Args) -> Result<(), E
         Action::OscParser => main_action_impl::<OscParser>(alloc, args),
         Action::PageCompression => main_action_impl::<PageCompression>(alloc, args),
         Action::ScrollbackCompression => main_action_impl::<ScrollbackCompression>(alloc, args),
+        Action::HyperlinkMap => main_action_impl::<HyperlinkMap>(alloc, args),
     }
 }
 
@@ -293,5 +331,35 @@ mod tests {
     fn bench_registers_compression_actions() {
         assert!(Action::from_name(b"page-compression").is_some());
         assert!(Action::from_name(b"scrollback-compression").is_some());
+    }
+
+    /// Every CLI token in `benchmark/cli.zig`'s `Action` round-trips through
+    /// `from_name`, and nothing else does. Named for what it checks rather
+    /// than extending the compression-only test above (WS10 T11).
+    ///
+    /// The list is the oracle's `Action` enum at `7e14347c1` minus the actions
+    /// whose upstream commits are not yet ported; `hyperlink-map` is the newest
+    /// member and is what this test was extended for.
+    #[test]
+    fn bench_every_action_round_trips_through_from_name() {
+        let names: &[(&[u8], Action)] = &[
+            (b"codepoint-width", Action::CodepointWidth),
+            (b"grapheme-break", Action::GraphemeBreak),
+            (b"screen-clone", Action::ScreenClone),
+            (b"terminal-parser", Action::TerminalParser),
+            (b"terminal-stream", Action::TerminalStream),
+            (b"is-symbol", Action::IsSymbol),
+            (b"osc-parser", Action::OscParser),
+            (b"page-compression", Action::PageCompression),
+            (b"scrollback-compression", Action::ScrollbackCompression),
+            (b"hyperlink-map", Action::HyperlinkMap),
+        ];
+        assert_eq!(10, names.len());
+        for (name, expected) in names {
+            assert_eq!(Some(*expected), Action::from_name(name), "{name:?}");
+        }
+        assert_eq!(None, Action::from_name(b"nope"));
+        // A near-miss must not resolve: `from_name` is an exact match.
+        assert_eq!(None, Action::from_name(b"hyperlink_map"));
     }
 }
