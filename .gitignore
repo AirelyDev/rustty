@@ -89,3 +89,6 @@ example/**/build/
 
 # Agent worktrees (transient; each is its own git checkout)
 .claude/worktrees/
+
+# WS10: stashed bench binaries for the paired self fence (large, regenerable).
+/.perf-bins/
