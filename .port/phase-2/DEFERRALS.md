@@ -5040,7 +5040,7 @@ count + in-window OSC7 observation re-queued to WS4 (blocked on
 From **WS7 Phase B review (I1)** — these need the final
 `oracle@main:src/inspector/widgets/pagelist.zig` (`70e788f06` + `6d5dda40d`):
 
-1. **`crates/rustty-inspector/src/widgets/pagelist.rs` cell-detail path still
+1. ~~**`crates/rustty-inspector/src/widgets/pagelist.rs` cell-detail path still
    restores.** The page-TREE loop was fixed in the Phase B review (it now uses
    `Node::rows`/`page_if_resident`/`storage`/`page_preserving_state`, guarded by
    `ws7_tests::pagelist_widget_page_tree_never_restores`). The CELL-detail path
@@ -5051,7 +5051,41 @@ From **WS7 Phase B review (I1)** — these need the final
    struct, and threads the resulting `page: *const Page` through
    `cell_info.draw`, `hyperlinkTable` and `graphemeTable`. D6 must port that end
    state and then tighten the guard test to the plan's stricter form
-   (`!src.contains("Node::page(")` over the WHOLE file).
+   (`!src.contains("Node::page(")` over the WHOLE file).~~
+
+   **RESOLVED — WS19 T7, 2026-07-29 (audit row O4).**
+
+   **This item was ORPHANED: WS7 D6 MERGED at `b8c40f9` without closing it**, and was
+   reported closed. It was not. Six restoring call sites were still live at
+   `pagelist.rs:1701, :1703, :1759, :1889, :2163, :2379`, so inspecting a single cell
+   in a compressed region silently decompressed that page — and **the guard test was
+   VACUOUS-IN-SCOPE**: `ws7_tests::pagelist_widget_page_tree_never_restores` asserts
+   over `loop_src`, the page-tree loop's substring only, so it stayed green while those
+   six calls sat elsewhere in the same file. That is precisely the weaker form this
+   deferral predicted, which is why the row said "tighten the guard to the WHOLE file".
+
+   **What landed.** The oracle's end state, ported in structure:
+   `pages.get_cell(pt)` → `pages.pin(pt)` + `Node::page_preserving_state(pin.node)`,
+   a node-free `InspectedCell { row, cell, row_idx, col_idx }`
+   (`oracle@main:pagelist.zig:14`), and the resulting `page: *const Page` **threaded**
+   through `CellInfo::draw`, `hyperlinkTable` and `graphemeTable` instead of
+   re-derived. Omitting the node from the aggregate makes the property **structural**:
+   there is no longer anything to call the restoring accessor on. `preserved.deinit()`
+   runs last, after every use of `page`, because for a compressed node `page` borrows
+   `preserved`'s owned buffer.
+
+   **The whole-file guard lives in a SIBLING file** —
+   `crates/rustty-inspector/tests/pagelist_never_restores.rs` — because a whole-file
+   assertion cannot live in the file it checks: its own string literal would appear in
+   that file and satisfy it. It builds the forbidden token at runtime, skips
+   comment-only lines (the PORT NOTES deliberately name the accessor to explain why it
+   is banned), and carries a second test that would FAIL if `include_str!` ever
+   resolved to the wrong file — so the guard cannot go vacuous either. The old in-file
+   loop-scoped guard is kept, with its literal de-literalised for the same reason.
+
+   **FAIL ARM PROVEN BY MUTATION, not asserted:** re-introducing one
+   `Node::page(pin.node)` call → `test result: FAILED`, naming
+   `src/widgets/pagelist.rs:1763`; reverted → `2 passed`.
 
 2. **`PageList::Limits` / `Limits::enforce` has no rustty counterpart.** The
    oracle's 11th `markActivity` call site (`oracle@main:PageList.zig:6312`, inside
