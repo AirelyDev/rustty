@@ -783,10 +783,7 @@ fn run_preview<'a>(
     // R2 IDENTITY NOTE (Task 16): window title carries the Rustty product
     // identity (user-visible terminal-window title, not oracle data).
     unsafe {
-        (*vx_ptr).set_title(
-            (*tty_ptr).writer(),
-            "👻 Rustty Theme Preview 👻".as_bytes(),
-        )
+        (*vx_ptr).set_title((*tty_ptr).writer(), "👻 Rustty Theme Preview 👻".as_bytes())
     }?;
     // try self.vx.queryTerminal(writer, 1 * std.time.ns_per_s);
     unsafe { (*vx_ptr).query_terminal((*tty_ptr).writer(), 1_000_000_000) }?;

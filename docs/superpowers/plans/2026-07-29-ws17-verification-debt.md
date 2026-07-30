@@ -2,7 +2,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn every open entry in `.port/phase-2/VERIFICATION_DEBT.md` (V2 real-GPU sign-off, V3 KDE/KWin, V4 mutter `set_urgent`, and WS6's V1b cross-DPI residual) into either a **confirmed discharge backed by committed evidence** or an **honest, precisely-worded residual** — with no entry claiming more than was actually executed.
+**Goal:** Turn every open entry in `.port/phase-2/VERIFICATION_DEBT.md` (V2 real-GPU sign-off, V3 KDE/KWin, V4 mutter `set_urgent`, WS6's V1b cross-DPI residual, **and V5 — the X11 winproto residuals**) into either a **confirmed discharge backed by committed evidence** or an **honest, precisely-worded residual** — with no entry claiming more than was actually executed.
+
+> **SCOPE ADDITION — V5 [WS19 T14, 2026-07-29].** V5 ("X11 winproto residuals: no native
+> X11 session, no KWin, and NO synthetic keyboard input on this VM") was filed by WS16 on
+> **2026-07-29**, six days AFTER this plan was authored (2026-07-23), so the Goal above
+> did not name it and **V5 was ORPHANED** — it is verification debt, its recipe is already
+> runnable, and no workstream owned it. WS17 owns it now.
+>
+> **The leverage: V5 costs WS17 almost nothing beyond V3.** V5's items **2 and 3** are
+> discharged by the very **KDE-Plasma-on-X11** box V3 already requires — that box provides
+> both a native X11 session AND KWin, which is exactly what those two items lack. Fold
+> them into the V3 task rather than standing up separate infrastructure. Only V5 **item 1**
+> needs something V3 does not supply: a **physical keypress** (this VM has no synthetic
+> keyboard-input path, so a KAT cannot generate one). Treat item 1 as its own residual with
+> the physical-hardware requirement stated plainly, and do not let it hold up items 2–3.
+>
+> Also update `VERIFICATION_DEBT.md` V4's recipe target if it is still stale: WS19 T4 split
+> the wayland KATs one-per-binary, so the `set_urgent` test now lives in
+> `--test gtk_wayland_set_urgent`, not `--test gtk_wayland_winproto`. Running the old
+> binary would exercise the wrong test. (WS19 T4 already retargeted the recipe; verify it
+> before relying on it.)
 
 **Architecture:** This workstream produces almost no product code. It produces (a) a turnkey, self-testing hardware-GL probe script so V2 becomes a one-command check on any future GPU box, (b) one new ignored KAT that asserts the KDE Wayland globals actually bind under a real KWin, (c) runtime evidence captured from a **nested/headless** compositor rather than the machine's primary session (this is the de-risking hinge for V4, whose earlier attempt correlated with two hard host crashes), (d) a macOS lldb-instrumented run that proves the cross-DPI content-scale re-stamp path fires, and (e) a rewritten `VERIFICATION_DEBT.md`. Every check in this plan carries an explicit **non-vacuity control**: a positive control that proves the PASS arm is reachable, or a negative control that proves the check can fail.
 
@@ -58,7 +78,7 @@ WS17-specific constraints:
 | `.port/tools/gates/fixtures/glxinfo-llvmpipe.txt` | Create | Negative-control fixture (software `glxinfo -B` output). |
 | `crates/rustty-apprt/tests/gtk_wayland_winproto.rs` | Modify (append one test) | New ignored KAT `kde_globals_bind_under_kwin` — asserts the KDE globals really bind under a live KWin, and prints the full globals dump for the ledger. |
 | `.port/phase-2/evidence/ws17/*.txt` / `*.png` | Create | Committed raw evidence (probe outputs, KAT stdout, kwin/mutter logs, lldb transcript, screenshots). |
-| `.port/phase-2/VERIFICATION_DEBT.md` | Modify | Final truthful state: V2/V3/V4/V1b each rewritten as discharged-with-evidence or residual-with-exact-reason. |
+| `.port/phase-2/VERIFICATION_DEBT.md` | Modify | Final truthful state: V2/V3/V4/V1b **and V5** each rewritten as discharged-with-evidence or residual-with-exact-reason. (V1 was DELETED by WS19 T14 — discharged 2026-07-23, and this file's header says verified items are deleted, not left marked.) |
 | `docs/manual-test-plan-gtk.md` | Modify (§W rows) | Record the KDE row outcomes with the date and the evidence path. |
 | `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md` | Modify (checklist + wave status) | Mark WS17 authored/executed. |
 
@@ -118,6 +138,9 @@ directory is hand-written prose about what "would" happen — it is captured out
 | `v4-primary-session-decision.md` | V4 | The reasoned decision NOT to run on the primary GNOME session |
 | `v4-crash-postmortem.txt` | V4 | Only present if the VM died during Task 9; `journalctl -b -1` tail |
 | `v1b-restamp-lldb.txt` | V1b | lldb transcript of `rustty_surface_set_content_scale` hits across a live DPI change |
+| `v5-x11-native-session.txt` | **V5 (new, WS19 T14)** | Proof the KDE box ran a NATIVE X11 session (not XWayland): `loginctl show-session $XDG_SESSION_ID -p Type` → `x11`, plus `xdpyinfo` / `$XDG_SESSION_TYPE`. Discharges V5 item 2 on the SAME box V3 requires. |
+| `v5-kwin-x11-residuals.txt` | **V5 (new, WS19 T14)** | The x11 winproto KATs (`gtk_x11_winproto`, `gtk_x11_xkb_init`, `gtk_x11_event_mods`, `gtk_x11_windowid`) under KWin-on-X11 — one binary per run, because GTK is thread-pinned (WS16 `a7fa3b7`, gate G-GTKINIT). Discharges V5 item 3. |
+| `v5-keypress-residual.md` | **V5 (new, WS19 T14)** | The one V5 item V3's box does NOT discharge: a PHYSICAL keypress. State plainly that this VM has no synthetic keyboard-input path, name the exact assertion a human with hardware must make, and do not let it block items 2–3. |
 | `v1b-display-modes.txt` | V1b | Pre/post `system_profiler` display mode — proof the host was restored |
 ```
 

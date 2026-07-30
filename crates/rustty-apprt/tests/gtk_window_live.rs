@@ -199,7 +199,10 @@ fn window_hosts_a_live_terminal() {
             }
             ancestor = w.parent();
         }
-        assert!(in_window, "the Surface's widget ancestry reaches the Window");
+        assert!(
+            in_window,
+            "the Surface's widget ancestry reaches the Window"
+        );
     }
 
     let gl_area = find_gl_area(surface.upcast_ref::<gtk4::Widget>())

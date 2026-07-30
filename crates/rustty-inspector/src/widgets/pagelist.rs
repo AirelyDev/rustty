@@ -68,7 +68,44 @@ use core::ffi::{c_char, c_int, c_uint, CStr};
 
 use rustty_datastruct::intrusive_linked_list::Node as _;
 use rustty_vt::hyperlink::PageEntryId;
-use rustty_vt::pagelist::access::Cell;
+// WS19 T7: `pagelist::access::Cell` is deliberately NO LONGER IMPORTED here. It
+// carries `node: *mut Node`, and having it in scope is what let the cell-detail path
+// reach the restoring `Node::page(cell.node)`. The widget uses the node-free
+// `InspectedCell` below instead; keeping the import out is a small structural barrier
+// against reintroducing the restoring path.
+
+// const InspectedCell = struct {
+//     row: *pagepkg.Row,
+//     cell: *pagepkg.Cell,
+//     row_idx: terminal.size.CellCountInt,
+//     col_idx: terminal.size.CellCountInt,
+// };
+/// Cell pointers resolved against a `Node::PreservedPage` rather than the
+/// PageList node.
+///
+/// Omitting the node makes it impossible for inspector helpers to accidentally
+/// restore the original compressed page.
+///
+/// PORTS: `oracle@main:src/inspector/widgets/pagelist.zig:14` `InspectedCell`.
+///
+/// PORT NOTE (WS19 T7, audit row O4): this type is the whole point of the WS7 D6
+/// end state, and it is a STRUCTURAL guarantee, not a convention.
+/// `pagelist::access::Cell` carries `node: *mut Node`, and every helper that had it
+/// reached the page through the RESTORING `Node::page(cell.node)` — six sites in this
+/// file — so inspecting one cell in a compressed region decompressed that page as a
+/// side effect of drawing a table. With the node absent from the aggregate there is
+/// nothing to call the restoring accessor ON: the page arrives as a `*const Page`
+/// borrowed from the caller's `PreservedPage`, which leaves the node's storage
+/// untouched. The whole-file source guard lives in
+/// `tests/pagelist_never_restores.rs` — a SIBLING file, so its own string literal
+/// cannot satisfy it (the previous in-file guard was scoped to the page-tree loop
+/// only, which is exactly why these six sites survived WS7 D6).
+pub struct InspectedCell {
+    pub row: *mut rustty_vt::page::Row,
+    pub cell: *mut rustty_vt::page::Cell,
+    pub row_idx: rustty_vt::size::CellCountInt,
+    pub col_idx: rustty_vt::size::CellCountInt,
+}
 use rustty_vt::pagelist::scroll::Scroll;
 use rustty_vt::pagelist::Pin;
 use rustty_vt::point::{Coordinate, Point, Tag};
@@ -1671,57 +1708,120 @@ impl CellChooser {
             Tag::History => Point::History(self.lookup_coord),
         };
 
-        // const cell = pages.getCell(pt) orelse {
+        // const pin = pages.pin(pt) orelse {
         //     cimgui.c.ImGui_TextDisabled("(cell out of range)");
         //     return;
         // };
-        let cell = match pages.get_cell(pt) {
-            Some(cell) => cell,
+        //
+        // PORT NOTE (WS19 T7, audit row O4): this was `pages.get_cell(pt)`, whose
+        // `Cell` carries the `*mut Node` — and every consumer below then reached the
+        // page through the RESTORING `Node::page(cell.node)`, so inspecting one cell
+        // in a compressed region DECOMPRESSED that page just to draw a table. The
+        // oracle's end state (`oracle@main:pagelist.zig:700-736`) takes a PIN, copies
+        // the page out with `pagePreservingState`, and hands the helpers an
+        // `InspectedCell` with no node at all. Ported verbatim in structure.
+        let pin = match pages.pin(pt) {
+            Some(pin) => pin,
             None => {
                 unsafe { dcimgui_sys::ImGui_TextDisabled(c"(cell out of range)".as_ptr()) };
                 return;
             }
         };
 
-        // self.cell_info.draw(cell, pt);
+        // Cell pointers must come from the same page whose auxiliary tables
+        // we inspect. For compressed nodes this is an independent preserved
+        // page, leaving the PageList node compressed across inspector frames.
         //
-        // PORT NOTE: the reference `PageList.Cell` is passed by value; the Rust
-        // `Cell` (raw-ptr aggregate, non-`Copy`) is a call-scoped borrow — passed
-        // as `&Cell` throughout this widget (display-only reads under the mutex).
-        self.cell_info.draw(&cell, pt);
+        // var preserved = pin.node.pagePreservingState(std.heap.page_allocator) catch {
+        //     cimgui.c.ImGui_TextDisabled("(unable to copy compressed page)");
+        //     return;
+        // };
+        // defer preserved.deinit();
+        //
+        // PORT NOTE: rustty's `page_preserving_state` panics on internal codec
+        // corruption instead of returning an error (see its doc comment), so there is
+        // no `catch` arm to port and the reference's "(unable to copy compressed
+        // page)" branch has no reachable analogue. The `defer preserved.deinit()` is
+        // the explicit call at the END of this function — it MUST outlive every use
+        // of `page`, because for a compressed node `page` points INTO `preserved`'s
+        // owned buffer.
+        //
+        // SAFETY: `pin.node` is a live node from `pages.pin`, and this widget holds
+        // exclusive access to the PageList for the duration (display-only reads under
+        // the renderer-state mutex), which is `page_preserving_state`'s contract.
+        let mut preserved = unsafe { rustty_vt::pagelist::Node::page_preserving_state(pin.node) };
+
+        // const page = preserved.page();
+        let page: *const rustty_vt::page::Page = preserved.page();
+
+        // const rac = page.getRowAndCell(pin.x, pin.y);
+        // const cell: InspectedCell = .{
+        //     .row = rac.row, .cell = rac.cell, .row_idx = pin.y, .col_idx = pin.x,
+        // };
+        //
+        // SAFETY: `page` is the live preserved page (borrowed from a resident node, or
+        // owned by `preserved` for a compressed one); it stays valid until
+        // `preserved.deinit()` below, and nothing in this scope mutates the PageList.
+        let rac = unsafe { (*page).get_row_and_cell(pin.x as usize, pin.y as usize) };
+        let cell = InspectedCell {
+            row: rac.row,
+            cell: rac.cell,
+            row_idx: pin.y,
+            col_idx: pin.x,
+        };
+
+        // self.cell_info.draw(cell, pt, page);
+        //
+        // PORT NOTE: the reference `InspectedCell` is passed by value; the Rust one
+        // (raw-ptr aggregate, non-`Copy`) is a call-scoped borrow — passed as
+        // `&InspectedCell` throughout this widget. `page` is threaded through rather
+        // than re-derived from a node, which is what makes the non-restoring property
+        // structural instead of a convention.
+        // SAFETY: `page` is `preserved.page()`, live until `preserved.deinit()` at the
+        // end of this function, and `cell` was resolved from that same page.
+        unsafe { self.cell_info.draw(&cell, pt, page) };
 
         // if (cell.cell.style_id != stylepkg.default_id) {
         //     cimgui.c.ImGui_SeparatorText("Style");
-        //     const style = cell.node.data.styles.get(cell.node.data.memory, cell.cell.style_id).*;
+        //     const style = page.styles.get(page.memory, cell.cell.style_id).*;
         //     widgets.style.table(style, null);
         // }
         if unsafe { (*cell.cell).style_id() } != stylepkg::DEFAULT_ID {
             unsafe { dcimgui_sys::ImGui_SeparatorText(c"Style".as_ptr()) };
             let style = unsafe {
-                *(*rustty_vt::pagelist::Node::page(cell.node))
+                *(*page)
                     .styles
-                    .get((*rustty_vt::pagelist::Node::page(cell.node)).memory_ptr(), (*cell.cell).style_id())
+                    .get((*page).memory_ptr(), (*cell.cell).style_id())
             };
             super::style::table(style, None);
         }
 
         // if (cell.cell.hyperlink) {
         //     cimgui.c.ImGui_SeparatorText("Hyperlink");
-        //     hyperlinkTable(cell);
+        //     hyperlinkTable(cell, page);
         // }
         if unsafe { (*cell.cell).hyperlink() } {
             unsafe { dcimgui_sys::ImGui_SeparatorText(c"Hyperlink".as_ptr()) };
-            hyperlinkTable(&cell);
+            hyperlinkTable(&cell, page);
         }
 
         // if (cell.cell.hasGrapheme()) {
         //     cimgui.c.ImGui_SeparatorText("Grapheme");
-        //     graphemeTable(cell);
+        //     graphemeTable(cell, page);
         // }
         if unsafe { (*cell.cell).has_grapheme() } {
             unsafe { dcimgui_sys::ImGui_SeparatorText(c"Grapheme".as_ptr()) };
-            graphemeTable(&cell);
+            graphemeTable(&cell, page);
         }
+
+        // defer preserved.deinit();
+        //
+        // Placed LAST on purpose: for a compressed node `page` borrows `preserved`'s
+        // owned buffer, so releasing it any earlier would dangle. The reference gets
+        // this ordering from `defer`; Rust gets it from statement order. It runs on
+        // every path that reaches here, and every early `return` above happens BEFORE
+        // `preserved` exists, so nothing leaks.
+        preserved.deinit();
     }
 }
 
@@ -1739,9 +1839,12 @@ fn maxCoord(pages: &PageList, tag: Tag) -> Option<Coordinate> {
     Some(br_point.coord())
 }
 
-// fn hyperlinkTable(cell: PageList.Cell) void {
+// fn hyperlinkTable(cell: InspectedCell, page: *const terminal.Page) void {
+//
+// PORT NOTE (WS19 T7): takes the page FROM THE CALLER instead of re-deriving it from
+// `cell.node` through the restoring accessor. `InspectedCell` has no node.
 #[allow(non_snake_case)] // faithful Zig name (R1)
-fn hyperlinkTable(cell: &Cell) {
+fn hyperlinkTable(cell: &InspectedCell, page: *const rustty_vt::page::Page) {
     // if (!cimgui.c.ImGui_BeginTable("cell_hyperlink", 2, cimgui.c.ImGuiTableFlags_None)) return;
     if !unsafe {
         dcimgui_sys::ImGui_BeginTable(
@@ -1755,8 +1858,9 @@ fn hyperlinkTable(cell: &Cell) {
     // defer cimgui.c.ImGui_EndTable();
     let _end_table = Defer(|| unsafe { dcimgui_sys::ImGui_EndTable() });
 
-    // const page = &cell.node.data;
-    let page = unsafe { &(*rustty_vt::pagelist::Node::page(cell.node)) };
+    // const page = &cell.node.data;  -> now the `page` PARAMETER (WS19 T7)
+    // SAFETY: `page` is the caller's live preserved page; it outlives this call.
+    let page = unsafe { &*page };
     let base = page.memory_ptr();
     // const link_id = page.lookupHyperlink(cell.cell) orelse {
     //     cimgui.c.ImGui_TableNextRow();
@@ -1863,7 +1967,7 @@ fn hyperlinkTable(cell: &Cell) {
 
 // fn graphemeTable(cell: PageList.Cell) void {
 #[allow(non_snake_case)] // faithful Zig name (R1)
-fn graphemeTable(cell: &Cell) {
+fn graphemeTable(cell: &InspectedCell, page: *const rustty_vt::page::Page) {
     // if (!cimgui.c.ImGui_BeginTable("cell_grapheme", 2, cimgui.c.ImGuiTableFlags_None)) return;
     if !unsafe {
         dcimgui_sys::ImGui_BeginTable(
@@ -1886,7 +1990,9 @@ fn graphemeTable(cell: &Cell) {
     //     cimgui.c.ImGui_TextDisabled("(missing grapheme data)");
     //     return;
     // };
-    let page = unsafe { &(*rustty_vt::pagelist::Node::page(cell.node)) };
+    // const page = &cell.node.data;  -> now the `page` PARAMETER (WS19 T7)
+    // SAFETY: `page` is the caller's live preserved page; it outlives this call.
+    let page = unsafe { &*page };
     let cps = match page.lookup_grapheme(cell.cell) {
         Some(cps) => cps,
         None => {
@@ -1996,13 +2102,30 @@ impl CellInfo {
 
     // pub fn draw(
     //     _: *const CellInfo,
-    //     cell: PageList.Cell,
+    //     cell: InspectedCell,
     //     point: terminal.Point,
+    //     page: *const terminal.Page,
     // ) void {
     //
-    // PORT NOTE: `cell` is the non-`Copy` raw-ptr aggregate → `&Cell`; `point`
-    // (`terminal.Point`, a `Copy` enum) is passed by value.
-    pub fn draw(&self, cell: &Cell, point: Point) {
+    // PORT NOTE: `cell` is the non-`Copy` raw-ptr aggregate → `&InspectedCell`;
+    // `point` (`terminal.Point`, a `Copy` enum) is passed by value. `page` is threaded
+    // in by the caller (WS19 T7) instead of being re-derived from `cell.node` through
+    // the restoring accessor.
+    ///
+    /// # Safety
+    /// `page` must point at a live page — in practice the caller's
+    /// `PreservedPage::page()`, valid until that value is `deinit`ed — and `cell`'s
+    /// `row`/`cell` pointers must be the ones resolved from THAT page (they are: the
+    /// caller builds `InspectedCell` from `page.get_row_and_cell`). Marked `unsafe`
+    /// rather than silencing `clippy::not_unsafe_ptr_arg_deref`, because the raw page
+    /// pointer IS the contract that keeps the compressed node from being restored, and
+    /// hiding it behind an `allow` would hide exactly the thing WS19 T7 made explicit.
+    pub unsafe fn draw(
+        &self,
+        cell: &InspectedCell,
+        point: Point,
+        page: *const rustty_vt::page::Page,
+    ) {
         // if (!cimgui.c.ImGui_BeginTable(
         //     "cell_info",
         //     3,
@@ -2160,7 +2283,8 @@ impl CellInfo {
                 )
             } {
                 let _end_list_box = Defer(|| unsafe { dcimgui_sys::ImGui_EndListBox() });
-                if let Some(cps) = unsafe { (*rustty_vt::pagelist::Node::page(cell.node)).lookup_grapheme(cell.cell) } {
+                // SAFETY: `page` is the caller's live preserved page (WS19 T7).
+                if let Some(cps) = unsafe { (*page).lookup_grapheme(cell.cell) } {
                     let mut buf: [u8; 96] = [0; 96];
                     for &cp in cps {
                         let label = cp_label(&mut buf, cp);
@@ -2376,7 +2500,8 @@ impl CellInfo {
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
             helpMarker(c"OSC8 hyperlink ID associated with this cell.");
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
-            let link_id = unsafe { (*rustty_vt::pagelist::Node::page(cell.node)).lookup_hyperlink(cell.cell) }.unwrap_or(0);
+            // SAFETY: `page` is the caller's live preserved page (WS19 T7).
+            let link_id = unsafe { (*page).lookup_hyperlink(cell.cell) }.unwrap_or(0);
             unsafe { dcimgui_sys::ImGui_Text(c"id=%d".as_ptr(), link_id as c_int) };
         }
     }
@@ -2410,8 +2535,16 @@ mod ws7_tests {
             + start;
         let loop_src = &src[start..end];
 
+        // WS19 T7: the forbidden token is ASSEMBLED, never written as a literal.
+        // While it was a literal here, this file CONTAINED the string it forbids —
+        // which is why the whole-file form of this guard could not live in this file
+        // at all, and why the six cell-detail call sites survived WS7 D6 behind a
+        // green loop-scoped guard. The whole-file guard now lives in
+        // `crates/rustty-inspector/tests/pagelist_never_restores.rs`; this one stays
+        // as the narrower loop-scoped check it always was.
+        let restoring = format!("{}::{}(", "Node", "page");
         assert!(
-            !loop_src.contains("Node::page("),
+            !loop_src.contains(&restoring),
             "the pagelist page-tree loop must not restore compressed pages"
         );
         assert!(

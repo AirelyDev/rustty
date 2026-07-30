@@ -236,10 +236,10 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal::tess::fill_plotter;
     use crate::internal::path_nodes::{PathClose, PathLineTo, PathMoveTo, PathNode};
     use crate::internal::point::Point;
     use crate::internal::raster::multisample;
+    use crate::internal::tess::fill_plotter;
     use crate::pattern::OpaquePattern;
     use crate::pixel::Rgb;
     use crate::surface::SUPERSAMPLE_SCALE;

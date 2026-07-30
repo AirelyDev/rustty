@@ -4,6 +4,19 @@ Hard tracker for code/tests/comments deferred from an earlier sub-batch because 
 dependency wasn't ported yet. Each MUST be completed by its target sub-batch — the
 target workflow consumes this file. Nothing here is "dropped" (R1); it is scheduled.
 
+> **READ THIS BEFORE GREPPING FOR "Phase-3" [WS19 T2, 2026-07-29 — audit row W10].**
+> The hyphenated token **`Phase-3`** in this file is the **pre-workstream CODENAME**
+> for the GPU-renderer / xev / inspector tiers — **all of which have since LANDED**
+> (windowing `W0`–`W5`, xev Milestones `A`/`B`, `WS6` for the inspector/dcimgui).
+> It is **NOT** `.port/phase-3/` (the upstream-resync phase), which is what "Phase 3"
+> means today. Grepping this file's `Phase-3` labels to build a Phase-3 worklist
+> yields ~40 **false positives**. WS19 T2 retargeted every tier-qualified label to the
+> owning tier with its landing evidence (`[LANDED: …]`); the bare narrative mentions
+> that remain are history, not open work. The authoritative index of what is actually
+> open, and who owns it, is the `# PHASE 2 CLOSURE AUDIT (WS19)` section at the end of
+> this file, and the standing invariant is gate **G-P2**
+> (`.port/tools/gates/check_phase2_closure.py`).
+
 ## Deferred to vt-12 (Terminal/Screen cluster)
 
 From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
@@ -163,6 +176,18 @@ untouched (2019). ScrollViewport + sgr-Attribute C-ABI surfaces are now RESOLVED
    resolved by Stage B): no `terminal/c/*.zig` file references `stream.Action`, so it
    is not part of the vt-c C export surface. Its `[16]u64`=128 size verification +
    const-assert land if/when an ABI-compatible `Action` is actually shipped.
+
+   > **OWNER [WS19 T19, 2026-07-29]: Phase 3** (upstream resync) — added because gate
+   > **G-P2** flagged this row as an open claim with a TRIGGER but NO OWNER, which is
+   > exactly the shape that produces orphans. It is **upstream-conditional, not
+   > deferred**: the reference itself carries "TODO: Before shipping an ABI-compatible
+   > libghostty, verify this" and "This was just arbitrarily chosen for now", so the
+   > `[16]u64`=128 verification cannot be written against a layout upstream has not
+   > committed to. **Phase 3 assertion:** if the resync range contains a commit that
+   > fixes `stream.Action`'s `c_union` layout, port the const-assert with it; if it does
+   > not, this row stays as-is and remains correct. No rustty-side work is possible
+   > before that.
+
 
 ## Pre-existing deferred seams (lower priority, noted)
 - `sgr.rs` local `SepList` — can be retargeted to re-export `parser::SepList` (vt-5
@@ -572,6 +597,9 @@ of the five tiers have since LANDED and the stale list was never resolved here):
   whole-backend follow-up port, no in-crate `unimplemented!()`. (Metal = macOS and
   OpenGL3 = GTK/Linux are both done.)
 
+  > **OWNER [WS19 T14, 2026-07-29 — audit row O16]: WS14 (wasm/WebGL).** This row previously named "out of the monomorphic Metal scope" with no owner, which is not a workstream, so it was ORPHANED. Gate **G-P2** (`.port/tools/gates/check_phase2_closure.py`) now FAILS on any open row without an owner in an OPEN workstream, so this attribution is enforced rather than aspirational. Re-derived repo-wide 2026-07-29 (not with the row's own scope — see §G): `grep -rni 'webgl'` finds only the `build_config::renderer::Backend::Webgl` enum variant and prose; there is no backend implementation, so the row is genuinely OPEN.
+
+
 ## rustty-crash (integration-tier stage 1) — `ThreadStateSurface` seam; concrete `ThreadState` impl deferred
 
 `src/crash/` is ported in full (dir.zig + main.zig + sentry.zig +
@@ -966,7 +994,7 @@ for provenance only.
 
 Chunk C1 of CORE_BLUEPRINT §6 (§4 "Inspector seam", [ADV-FIX 7]) carves ONLY
 the surface core's input hot path needs. Deferrals created (all 0 tests —
-R1-safe; owner: the Phase-3 inspector port):
+R1-safe; owner: the the inspector tier [LANDED: WS6] port):
 
 - **PARTIAL-FILE: `src/inspector/widgets/key.zig` ImGui section**
   (`Event.render`/`renderUtf8`/`renderPty`, `modsTooltip`, the `Stream`
@@ -1002,7 +1030,7 @@ map") lands `crates/rustty-core/src/renderer_seam.rs` — core-local
 DEPENDENCY PLACEHOLDERS (the termio `xev_seam` precedent: inhabited structs,
 faithful field/signature shapes, `unimplemented!()` bodies; NO reference
 logic stubbed), NOT verbatim-body deferrals. All 0 tests — R1-safe.
-Owner of the fill: the Phase-3 R-d GPU renderer tier + the D6 libxev port.
+Owner of the fill: the the R-d GPU/renderer tier [LANDED: windowing W0–W5] GPU renderer tier + the D6 libxev port.
 
 - **DEFERRED (dependency placeholder): `renderer.Renderer`**
   (src/renderer/generic.zig `GenericRenderer(Metal|OpenGL)`, comptime-chosen
@@ -1026,7 +1054,7 @@ Owner of the fill: the Phase-3 R-d GPU renderer tier + the D6 libxev port.
   and `init`/`threadMain`/`deinit` as `unimplemented!()` placeholders. The
   run loop (`threadMain_`, `drainMailbox`, render/draw/cursor callbacks,
   `DRAW_INTERVAL`/`CURSOR_BLINK_INTERVAL`, `must_draw_from_app_thread`) is
-  Phase-3 R-d + D6 work that lands WITH the real port (renderer/Thread.zig
+  the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6 work that lands WITH the real port (renderer/Thread.zig
   imports configpkg AND core's App.Mailbox — both edges cycle from
   rustty-renderer, which is WHY the shape lives core-local).
 - **Ported live (not deferred): `renderer.Options`** (renderer/Options.zig,
@@ -1509,7 +1537,7 @@ resolved. Ledger:
   `if (self.inspector) |insp| { insp.mouse.last_* = ..; }` block writes the
   Phase-3 `Inspector.mouse` state — the pointee is uninhabited, so the arm is
   preserved verbatim above `unreachable!()` (the C6 deinit teardown-arm
-  precedent). Resolved by the Phase-3 inspector fill.
+  precedent). Resolved by the the inspector tier [LANDED: WS6] fill.
 - **[ADV 6.1] completion:** mousePressureCallback/cursorPosCallback/
   colorSchemeCallback add the LAST three `crash.sentry.thread_state`
   guard sites — all 13 reference sites are now live (`ThreadStateGuard`).
@@ -1836,9 +1864,16 @@ NO stragglers.
 - `app.rs` — **8**, ALL inside `#[cfg(test)] mod test_runtime` (the §7
   TestSurface fake methods the C4 seam tests do not drive — honest test glue,
   NOT production leaves and NOT deferrals).
-- `renderer_seam.rs` — **15**, the C3 dependency-placeholder bodies (below).
+- ~~`renderer_seam.rs` — **15**, the C3 dependency-placeholder bodies (below).~~
+  **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W1]** All 15 sit inside
+  `#[cfg(test)] mod compression_tests` (`renderer_seam.rs:2013`), each reading
+  `unimplemented!("test runtime: not driven by the compression tests")` — test-runtime
+  fakes, the same honest test glue as `app.rs`'s 8. The production bodies are LIVE
+  (`Renderer::{surfaceInit,init,finalizeSurfaceInit,attachHostView,threadEnter,drawFrame,displayRealized,displayUnrealized,deinit}`
+  at `:242,:269,:321,:337,:361,:390,:415,:439,:454`; `Thread::{init,threadMain,deinit}`
+  at `:669,:875,:939`). **Zero production leaves.**
 
-**OPEN core deferrals (roll-up — targets: Phase-3 inspector tier / Phase-3 R-d
+**OPEN core deferrals (roll-up — targets: the inspector tier [LANDED: WS6] tier / the R-d GPU/renderer tier [LANDED: windowing W0–W5]
 GPU renderer / D6 libxev port):**
 
 1. **Inspector activate/deactivate — RESOLVED (WS6, 2026-07-28).**
@@ -1866,16 +1901,25 @@ GPU renderer / D6 libxev port):**
    `deinit` retrofit to the decoupled handles; `searchCallback_` retyped off
    `&mut Surface` to `*mut Surface`.
 
-3. **`renderer_seam.rs` dependency placeholders (C3, §5).** Inhabited structs
+3. ~~**`renderer_seam.rs` dependency placeholders (C3, §5).** Inhabited structs
    with `unimplemented!()` bodies (termio `xev_seam` precedent; no reference
-   logic stubbed):
-   - `Renderer` (generic.zig GenericRenderer) — `surfaceInit`/`init`/
+   logic stubbed):~~
+   ~~- `Renderer` (generic.zig GenericRenderer) — `surfaceInit`/`init`/
      `finalizeSurfaceInit`/`threadEnter`/`drawFrame`/`deinit` + the
-     `Renderer.DerivedConfig` placeholder. **Target: Phase-3 R-d GPU tier.**
-   - `Thread<A>` run loop — faithful renderer/Thread.zig field shape (rustty-xev
+     `Renderer.DerivedConfig` placeholder. **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5].**~~
+   ~~- `Thread<A>` run loop — faithful renderer/Thread.zig field shape (rustty-xev
      handles + REAL state/mailbox); `init`/`threadMain`/`deinit` unimplemented.
-     **Target: Phase-3 R-d + D6.**
+     **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6.**~~
    (`renderer_seam::Options<A>` is LIVE, not deferred.)
+
+   **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W1].** The GPU tier
+   (W0–W5) and the xev port (Milestones A/B) both landed; the production
+   `Renderer` and `Thread<A>` bodies listed above are LIVE at the line numbers
+   given in the struck bullet at `renderer_seam.rs`'s leaf roll-up above. The only
+   remaining `unimplemented!()` in the file are the 15 `#[cfg(test)] mod
+   compression_tests` fakes. NOTE the "Phase-3" in the struck **Target:** lines is
+   the pre-WS codename for the GPU/xev tiers, not `.port/phase-3/` (upstream
+   resync) — see the "Phase-3" note at the top of this file.
 
 4. **D6 xev leaves in surface.rs (live calls into the `rustty-xev`
    placeholder).** These are COMPILED, real logic — they panic only at runtime
@@ -1891,9 +1935,18 @@ GPU renderer / D6 libxev port):**
      (D6) — the runtime-panic leaves `init` is written LIVE against.
    **Target: the D6 libxev port** (fills `rustty-xev` in place).
 
+   > **RESOLVED / STALE [WS19 T19, 2026-07-29]** — flagged by gate G-P2 as an open claim
+   > with no owner. **D6 LANDED**: the libxev port completed as xev Milestones A/B
+   > (`crates/rustty-xev`; `thread_pool.rs` alone is 1630 lines with 0
+   > `unimplemented!()`, audit row W5), and `rustty-xev` is a real crate, not a
+   > placeholder. The struck **Target:** names "the D6 libxev port", which is the
+   > pre-WS codename for work that is complete — see the "READ THIS BEFORE GREPPING"
+   > note at the top of this file.
+
+
 5. **App.zig Wasm block (C4, in-file).** `App.zig:579 pub const Wasm` is
    wasm-target-gated and commented out IN the reference; preserved verbatim at
-   the bottom of app.rs. **Target: the rustty wasm app-runtime** (off-by-default
+   the bottom of app.rs. **Target: the rustty wasm app-runtime** — **OWNER [WS19 T14, 2026-07-29]: WS14 (wasm/WebGL)**; "the rustty wasm app-runtime" is a milestone name, not a workstream, so these rows were ORPHANED. Gate **G-P2** now FAILS on any open row whose owner is not an OPEN workstream (off-by-default
    `wasm` feature family).
 
 **Gate deltas (C-F): NONE** — no code changed; core stays **15** tests (R1-owed
@@ -1935,7 +1988,7 @@ The deferrals E0 CREATES (all scheduled, nothing dropped — R1):
    (event loop), and macOS objc/Metal/CGS (Platform messaging, Inspector Metal,
    quicklook, `set_window_background_blur`) `unimplemented!()` leaves are CREATED
    by E3/E4/E10 — **not by E0** (E0 creates no runtime leaf; `none`/`browser` are
-   inert stubs and `rustty_init` is runtime-live). **Targets: Phase-3 R-d (GPU) +
+   inert stubs and `rustty_init` is runtime-live). **Targets: the R-d GPU/renderer tier [LANDED: windowing W0–W5] (GPU) +
    D6 (xev) + E10 (macOS objc/CGS), per EMBEDDED_BLUEPRINT §1.**
 
 **Gate deltas (E0):** new crate `rustty-apprt-c` (cdylib/staticlib/rlib) —
@@ -1970,7 +2023,7 @@ backend). Deferred out of E1:
    GPU/xev/objc leaves — they are replaced wholesale by the faithful port in
    **E2** (Surface struct + `init`/`deinit` + `impl apprt_api::Surface`, the §2
    growth-point table), **E3** (surface event callbacks), and **E4**
-   (`queueInspectorRender` = Inspector, Phase-3 dcimgui/Metal). `App::newSurface`
+   (`queueInspectorRender` = Inspector, the dcimgui tier [LANDED: WS6]/Metal). `App::newSurface`
    reaches `Surface::init` (the stub), so it panics until E2 — no E1 gate exercises
    it. **Targets: E2/E3/E4, EMBEDDED_BLUEPRINT §7.** (This is a chunk-sequencing
    stub, per the constitution's "faithful sequencing stub" rule, not a Phase-3
@@ -2024,7 +2077,7 @@ rustty_core::Surface<embedded::App>` bound against a REAL backend (core's C0 gat
 used a dummy `A`). The E1 leaves at `core`/`rt_app`/… are now RESOLVED (real
 bodies). Deferred out of E2:
 
-1. **`Inspector` E2→E4 SEQUENCING STUB (Phase-3 dcimgui/Metal leaf).** `Surface`
+1. **`Inspector` E2→E4 SEQUENCING STUB (the dcimgui tier [LANDED: WS6]/Metal leaf).** `Surface`
    carries `inspector: Option<*mut Inspector>` and `deinit` calls `freeInspector`,
    so the `Inspector` type must exist NOW. E2 defines a MINIMAL opaque `Inspector`
    (`#[allow(dead_code)]`) whose `deinit` is an `unimplemented!()` leaf; `deinit`/
@@ -2044,7 +2097,7 @@ bodies). Deferred out of E2:
    and `deinit` calls the core `Surface::deinit` renderer/io-thread teardown. These
    **compile + link now** but PANIC at the renderer leaf the moment a LIVE surface
    is created — which requires `ghostty_surface_new` (**E7**) AND the renderer land
-   (**Phase-3 R-d + D6**). No E2 gate exercises a live surface (the smoke KAT, E11,
+   (**the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6**). No E2 gate exercises a live surface (the smoke KAT, E11,
    stays app-level per ADV-FIX 2/3). This is the milestone's documented honest line.
 
 4. **macOS objc / Platform messaging — NOT E2 (raw pointers only).** Per blueprint
@@ -2088,12 +2141,12 @@ leaves) EXCEPT `draw`/`refresh` (item 1). The E2 growth-point trait method
 `default_termio_env` (also inside the 610-990 range, at 953) was already landed in
 E2 — E3 does not re-port it. Deferred out of E3:
 
-1. **`draw`/`refresh` reach the Phase-3 GPU renderer leaf at RUNTIME.**
+1. **`draw`/`refresh` reach the the GPU tier [LANDED: W0–W5] renderer leaf at RUNTIME.**
    `Surface::draw`/`refresh` delegate to core `Surface::draw`/`refreshCallback`,
    which drive the `renderer_seam` Phase-3 `unimplemented!()` leaves (blueprint §1).
    The delegation is ported LIVE (byte-faithful) — the panic is in the leaf, not
    here; it fires only once a LIVE surface exists (`ghostty_surface_new`, **E7**) AND
-   the renderer lands (**Phase-3 R-d + D6**). Same honest line as E2 item 3 — E3
+   the renderer lands (**the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6**). Same honest line as E2 item 3 — E3
    introduces NO new leaf, only LIVE delegation to an already-tracked one.
 
 2. **`initInspector` (embedded.zig:611-623) — E4, NOT E3.** Although it falls inside
@@ -2299,14 +2352,14 @@ heap-boxes + pins the backend `Surface` via the backend `App::newSurface`
 **Runtime-live split (EMBEDDED_BLUEPRINT §1):** only `rustty_surface_config_new` (a
 pure defaulted `Surface.Options`) is runtime-live. **Every other E7 export needs a
 LIVE surface**, which only exists past `rustty_surface_new` → core `Surface::init` →
-`renderer_seam::{Renderer,Thread}` (surface.rs:324/333 — the Phase-3 R-d GPU + D6 xev
+`renderer_seam::{Renderer,Thread}` (surface.rs:324/333 — the the R-d GPU/renderer tier [LANDED: windowing W0–W5] GPU + D6 xev
 leaves, already in the core C3 deferral set above). So the whole E7 surface set
 **COMPILES + LINKS + header-generates NOW and PANICS when driven against a real
 surface**. E7 adds **NO new `unimplemented!()` leaf in apprt-c** — it is a pure FFI
 projection that REACHES the existing renderer/xev leaves at runtime:
 
 1. **`rustty_surface_new`** → `App::newSurface` → `Surface::init` → core
-   `Surface::init` constructs `renderer_seam::{Renderer,Thread}` (Phase-3 R-d/D6
+   `Surface::init` constructs `renderer_seam::{Renderer,Thread}` (the R-d GPU/renderer tier [LANDED: windowing W0–W5]/D6
    leaf). LINKS now; a live-surface call panics in the core init leaf.
 2. **`_refresh`/`_draw`/`_set_size`/`_set_content_scale`/`_set_focus`/`_set_occlusion`/
    `_set_color_scheme`** → the backend `Surface::{refresh,draw,updateSize,
@@ -2378,7 +2431,7 @@ reinterpreted as `input.Mods`; the `input.Mouse{ButtonState,Button,PressureStage
 straight to the core surface (`mouseCaptured`/`keyEventIsBinding`/`imePoint`).
 
 **Runtime split (EMBEDDED_BLUEPRINT §1):** every E8 export needs a **LIVE surface**
-(created via `rustty_surface_new`, the Phase-3 GPU-leaf boundary — core `Surface::init`
+(created via `rustty_surface_new`, the GPU-tier-leaf [LANDED: W0–W5] boundary — core `Surface::init`
 constructs `renderer_seam::{Renderer,Thread}`, the R-d/D6 leaves already in the core C3
 deferral set above). The wrappers LINK now; a live-surface call reaches the renderer
 leaf only when driven (key/mouse callbacks schedule a render). E8 adds **NO new
@@ -2442,7 +2495,7 @@ clipboard sink forwards to the backend `Surface::completeClipboardRequest` (E3);
 inspector sinks forward to the E4 `Inspector` methods.
 
 **Runtime split (EMBEDDED_BLUEPRINT §1):** every E9 export needs a **LIVE surface**
-(created via `rustty_surface_new`, the Phase-3 GPU-leaf boundary — the R-d/D6 leaves in
+(created via `rustty_surface_new`, the GPU-tier-leaf [LANDED: W0–W5] boundary — the R-d/D6 leaves in
 the core C3 deferral set). The surface-action + clipboard exports are pure FFI
 marshaling once a surface exists (the split exports reach the host `action` callback;
 `_binding_action` runs real core logic; `_complete_clipboard_request` runs the real E3
@@ -2450,7 +2503,7 @@ backend, reaching the host `confirm_read_clipboard` callback on the unsafe/unaut
 paste arm). The **inspector per-callback exports additionally reach the E4 `Inspector`
 `unimplemented!()` leaves** (dcimgui `ImGuiIO_Add*Event`, `Inspector::init`): a LIVE
 inspector cannot yet exist because `_surface_inspector` → `Surface::initInspector` →
-`Inspector::init` is a Phase-3 dcimgui leaf, so `_inspector_{mouse_button,mouse_pos,
+`Inspector::init` is a the dcimgui tier [LANDED: WS6] leaf, so `_inspector_{mouse_button,mouse_pos,
 mouse_scroll,key,text,set_focus}` are unreachable this milestone (their leaves are E4's,
 already documented above). E9 adds **NO new `unimplemented!()` leaf in apprt-c** — it is
 a pure FFI projection (the E6/E7/E8 precedent), so there is nothing to un-defer here
@@ -2524,20 +2577,20 @@ objc/CGS/Metal/coretext logic fabricated. Runtime split + targets:
    leaf (objc `msgSend(windowNumber)` + private CGS `CGSSetWindowBackgroundBlurRadius`).
    The two private CoreGraphics `extern "c"` decls (`CGSSetWindowBackgroundBlurRadius`/
    `CGSDefaultConnectionForThread`, embedded.zig:2128-2130) are preserved as comments
-   (they land as live `extern "C"` fns WITH the leaf in Phase-3). NOT in the runtime-safe
-   list; the E11 smoke KAT MUST NOT call it. **Target: Phase-3 (macOS objc/CGS glue).**
+   (they land as live `extern "C"` fns WITH the leaf). NOT in the runtime-safe
+   list; the E11 smoke KAT MUST NOT call it. ~~**Target: Phase-3 (macOS objc/CGS glue).**~~
 2. **`rustty_surface_set_display_id` — renderer/xev leaf.** Pushes a `.macos_display_id`
    message to `renderer_thread.mailbox` + `wakeup.notify()`; both the renderer thread
-   and its xev `wakeup` are placeholders. `unimplemented!()` leaf. **Target: Phase-3 R-d
+   and its xev `wakeup` are placeholders. `unimplemented!()` leaf. **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5]
    (renderer) + D6 (xev).**
 3. **`rustty_surface_quicklook_font` — objc/coretext + renderer leaf.** Reaches the
    renderer `font_grid` primary CoreText face + `copyAttribute`/`copyWithAttributes`
-   (coretext). `unimplemented!()` leaf. **Target: Phase-3 R-d (renderer) + coretext.**
+   (coretext). `unimplemented!()` leaf. **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5] (renderer) + coretext.**
 4. **`rustty_surface_quicklook_word` — renderer_state live-surface leaf.** Real terminal
    logic (`getCursorPos`/`posToViewport`/`pages.pin`/`selectWord` + the E7 `readTextLocked`
    helper) under `renderer_state.mutex` — grouped with the Darwin block per the blueprint,
    ported as an `unimplemented!()` leaf (reaches the live-surface renderer_state seam).
-   **Target: Phase-3 R-d (renderer_state).**
+   **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5] (renderer_state).**
 5. **`rustty_inspector_metal_init` / `_metal_render` / `_metal_shutdown` — delegate to
    the E4 backend leaves (NO new apprt-c leaf).** The reference bodies are pure
    delegations, so the wrappers forward to the already-landed E4 backend methods
@@ -2546,7 +2599,20 @@ objc/CGS/Metal/coretext logic fabricated. Runtime split + targets:
    + logs the error exactly as the reference `catch |err| { log.err(...); return; }`;
    `_metal_shutdown` is a faithful `if let Some(v) = ptr.backend { v.deinit(); ptr.backend
    = None }` (a no-op this milestone, since `initMetal` is a leaf so `backend == None`).
-   The panic is in the E4 backend leaf. **Target: Phase-3 R-d (objc/Metal + dcimgui).**
+   The panic is in the E4 backend leaf. **Target: the R-d GPU/renderer tier [LANDED: windowing W0–W5] (objc/Metal + dcimgui).**
+
+**ALL FIVE ITEMS ABOVE ARE RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row
+W2].** This is the second copy of the "apprt-c has exactly 4 `unimplemented!()`
+code-leaves" claim (the first is the struck E11 leaf-audit paragraph earlier in this
+file). Verified against code: `grep -rn 'unimplemented!' crates/rustty-apprt-c/src/`
+→ **6 hits, every one inside a comment**; zero live leaves. All five exports are live
+in `crates/rustty-apprt-c/src/lib.rs`: `rustty_set_window_background_blur` `:2515`
+(real `objc2` `msg_send!` + the two private CGS `extern "C"` decls, no longer
+comments), `rustty_surface_set_display_id` `:2629`, `rustty_surface_quicklook_font`
+`:2674`, `rustty_surface_quicklook_word` `:2811`, `rustty_inspector_metal_init`
+`:2929`. Closed by P2.1 / P2.2 / WS2 / WS6 plus the W0–W5 GPU tier. The struck
+**Target:** lines say "Phase-3", which in this file is the pre-WS codename for those
+tiers — see the note at the top of this file.
 
 **Darwin gating (§3/§7 + E5 `capi.rs` decision):** the six Darwin exports are
 `#[cfg(target_os = "macos")]`-gated free functions (the compiler pulls them into the C
@@ -2602,16 +2668,37 @@ generation + the C compile+link+run KAT and audits the completed 71-export surfa
    but not yet its own cbindgen header (a separate config-milestone deliverable), so
    `smoke.c` forward-declares the 3 config functions it uses (against the opaque `Config`
    from rustty-apprt.h). **Target: config C-ABI header (own milestone).**
+
+   > **RECLASSIFIED as a bounded TEST-SHIM accommodation, not open work
+   > [WS19 T19, 2026-07-29].** Flagged by gate G-P2: "config C-ABI header (own
+   > milestone)" is a milestone name, not an owner. What is actually being described is
+   > that `smoke.c` — a TEST fixture — forward-declares 3 config functions instead of
+   > including a generated `rustty-config.h`. The SHIPPED artifacts are unaffected:
+   > `rustty-config` already exports the `rustty_config_*` symbols, and every published
+   > header (`rustty.h`, `rustty-apprt.h`, `rustty-embed.h`) now compiles standalone as
+   > C11 and C++17 under gate A5 (WS19 T3). A forward declaration in a test that links
+   > the real library is a normal C practice, and the A4/A5 ABI gates bind the symbols
+   > regardless of which header declares them. **If a config header is ever wanted for
+   > its own sake, the trigger is a CONSUMER asking for one** — at which point it is a
+   > cbindgen invocation in `xtask` beside the existing two. No owner is needed for a
+   > test-fixture convenience.
+
 4. **Cross-crate ABI-pin const-asserts** (`capi.rs`, the E11 audit): `Options`==64,
    `SurfaceOptions`==88, `EnvVar`==16, `PlatformC`==8, `TargetC`==16, `ActionC`==32 +
    the enum-width pins — the drift gate that keeps the hand-pinned header honest.
 
-**Leaf audit (E11 item 5) — apprt-c has exactly 4 `unimplemented!()` code-leaves, ALL
+~~**Leaf audit (E11 item 5) — apprt-c has exactly 4 `unimplemented!()` code-leaves, ALL
 E10-created, ALL documented above:** `rustty_set_window_background_blur` (macOS
 objc/CGS), `rustty_surface_set_display_id` (renderer/xev), `rustty_surface_quicklook_font`
 (objc/coretext + renderer), `rustty_surface_quicklook_word` (renderer_state). The
 inspector `_metal_*` exports delegate to the E4 backend leaves (no apprt-c leaf). E11
-adds none.
+adds none.~~
+
+**RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W2].** `grep -rn
+'unimplemented!' crates/rustty-apprt-c/src/` → **6 hits, every one inside a comment**;
+zero live leaves. `rustty_set_window_background_blur` is LIVE at
+`crates/rustty-apprt-c/src/lib.rs:2515` (real `objc2` `msg_send!` + CGS). The other
+three were closed by P2.1 / P2.2 / WS2 / WS6. The inspector `_metal_*` note still holds.
 
 **Gate deltas (E11):** NO new `rustty-apprt-c` Cargo dep (uses apprt-api types already
 in the closure). `apprt_embedded`/`apprt_none`/`apprt_browser` MAP rows unchanged +
@@ -2932,7 +3019,7 @@ deferrals; two convention notes (NOT deferrals — no follow-up scheduled):
   seam (`record_replay_arg` → `_ssh_args`, `apply_e_command` → halt) — the
   aliasing-safe analogue of the `-e` path (memory `rust-mut-args-strongly-protected`).
 
-## rustty-cli C5 (Phase-2 CLI milestone) — vaxis/zf-touching actions [RECONCILED 2026-07-10, T14: TUI wiring landed; `boo.rs:22` is the crate's ONLY live seam]
+## rustty-cli C5 (Phase-2 CLI milestone) — vaxis/zf-touching actions [RECONCILED 2026-07-10, T14: TUI wiring landed; ~~`boo.rs:22` is the crate's ONLY live seam~~ **boo RESOLVED — WS19 T2 audit row W3, 2026-07-29**]
 
 C5 (CLI_BLUEPRINT.md §1/§7 + Risk 1/2) lands the four vaxis/zf-touching actions
 into `rustty-cli`: `list_colors.zig` (0t → `list_colors.rs`), `list_keybinds.zig`
@@ -2951,8 +3038,9 @@ GONE.** `vaxis` and `zf` are no longer "unported Zig-source dependencies" —
 and the TUI-CLI wiring commits (e55e39d — `list_colors`/`list_keybinds`
 `prettyPrint`; 1f88eec — the `list_themes` interactive vaxis+zf fuzzy picker,
 Miri-proven) FILLED three of the four deferred render leaves. Of the items
-below, only **`boo`** remains deferred: `boo.rs:22` `unimplemented!()` is the
-crate's ONLY live seam (it needs the vaxis `vxfw` widget framework tier — NOT
+below, only **`boo`** remains deferred: ~~`boo.rs:22` `unimplemented!()` is the
+crate's ONLY live seam~~ **(boo has since RESOLVED too — WS19 T2 audit row W3; see
+the struck bullet below)** (it needs the vaxis `vxfw` widget framework tier — NOT
 ported by chunks 1a–4b, which stop at the `widgets`/TextInput tier — plus the
 `framedata` compressed asset). Un-defer trigger: a vaxis vxfw follow-up chunk.
 The per-leaf notes below are kept for history with their outcomes marked:
@@ -2986,14 +3074,22 @@ The per-leaf notes below are kept for history with their outcomes marked:
     `color`, `ThemeListElement.toUri`) is a deferred leaf~~ **RESOLVED (1f88eec):
     the interactive fuzzy picker is LIVE over rustty-vaxis + rustty-zf
     (Miri-proven), `lorem_ipsum.txt` included.**
-  - **`boo` — STILL DEFERRED (the crate's ONLY live seam, `boo.rs:22`).** A 100%
+  - ~~**`boo` — STILL DEFERRED (the crate's ONLY live seam, `boo.rs:22`).** A 100%
     vaxis/**vxfw** ghost animation (needs the `framedata` compressed asset too);
     `run` is an `unimplemented!()` marker and the whole reference (`Boo` widget,
     span-parser, flate decompression) is preserved verbatim as comments
     (comment-fidelity, scoped-G3b missing=0). NOT unblocked by the vaxis port:
     chunks 1a–4b stop at the `widgets`/TextInput tier and do NOT port the `vxfw`
     widget framework `Boo` is built on. Un-defer trigger: a vaxis vxfw follow-up
-    chunk + the `framedata` asset (R3 copy).
+    chunk + the `framedata` asset (R3 copy).~~
+
+    **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W3].** This row was
+    already self-contradicted 240 lines earlier by the `boo` entry at the
+    "cli C5 finale" heading above, which records it ✅ RESOLVED.
+    `crates/rustty-cli/src/boo.rs` is a **525-line LIVE port** with a real
+    `pub fn run() -> Result<u8, Error>` at `:406`; `boo.rs:22` is a doc-comment
+    line, not an `unimplemented!()`. The vxfw tier and the `framedata` asset both
+    landed. Nothing here is open.
 
 - **`list_themes` resources-dir two-seam note (NOT a new deferral).** The reference
   reads `global_state.resources_dir.app()` (the process-global) for BOTH the
@@ -3035,16 +3131,28 @@ lib_vt 0/308→vt-c); scoped-G3b **missing=0** on the two ported `.zig` files
 bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
 `rustty-build-config`, `rustty-identity`. Deferrals introduced/continued:
 
-- **Phase-3 GUI launch leaf (`main_ghostty.rs`).** The reference `main()`'s GUI
+- ~~**Phase-3 GUI launch leaf (`main_ghostty.rs`).**~~ **[WS19 T2 audit, 2026-07-29 —
+  audit row W9: MOSTLY RESOLVED; the file is now `main_rustty.rs` (renamed 410c387),
+  and the GTK arm is LIVE.]** The reference `main()`'s GUI
   path (`App.create(alloc)` + `apprt.App.init/run` the event loop, `startQuitTimer`)
-  reaches the concrete embedded/GTK apprt backend + the xev event loop (D6). It is
+  reaches the concrete embedded/GTK apprt backend + the xev event loop (D6). ~~It is
   ported as a documented `unimplemented!()` leaf with the reference body preserved
-  verbatim as comments (the GPU/GTK/xev "deferred placeholder leaf" precedent). The
+  verbatim as comments (the GPU/GTK/xev "deferred placeholder leaf" precedent).~~ The
   reference reaches it only for a GUI build (`app_runtime != .none`); the headless
   `.none` bin (the current darwin/Windows default) never does — it runs the action
-  or prints the usage banner. **Target:** un-defer when the embedded/GTK apprt
-  backend + xev (D6) land (Phase-3). The no-args KAT is scoped to `.none`
+  or prints the usage banner. ~~**Target:** un-defer when the embedded/GTK apprt
+  backend + xev (D6) land (Phase-3).~~ The no-args KAT is scoped to `.none`
   (`app_runtime()` guard) so it stays honest on a future `.gtk` build.
+
+  **CURRENT STATE.** `crates/rustty/src/main_rustty.rs` has exactly ONE
+  `unimplemented!()`, at `:299`, and it is NOT the GUI-launch port: the GTK arm
+  `run_gtk(&state.logging)` at `:292` is LIVE and diverges (`-> !`, every arm ends in
+  `std::process::exit` after the reference's `terminate`/`destroy` teardown), so
+  control never reaches `:299` on a GTK build. `:299` is reachable only on a
+  configuration with **no compiled GUI backend** (e.g. a Linux
+  `--no-default-features` build with GTK off) — unreachable on both supported hosts
+  (macOS `app_runtime()` is `.none` and takes the banner path). It is therefore a
+  configuration-guard leaf, not a deferred port; no owner and no trigger are needed.
 
 - **`main_c.zig` (3t) re-homed to rustty-apprt-c; `lib_vt.zig` (1t) re-homed to
   rustty-vt-c [ADV-FIX 6].** The 3 `ghostty_string_s` tests are ported
@@ -3070,6 +3178,18 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   gen/wasm-artifact tooling milestone (the same milestone that builds the
   `help_strings` codegen — see below).
 
+  > **SPLIT AND OWNED [WS19 T14, 2026-07-29 — audit rows O13a / O13b].** This row bundled
+  > three files with one non-owner target; they have three different dispositions.
+  > * **`main_gen.zig` — STALE, it is PORTED** at `crates/rustty-synthetic/src/main_gen.rs`
+  >   (and registered as the `rustty-synthetic` bin, `Cargo.toml:26-28`). Strike it.
+  > * **`main_wasm.zig` → OWNER: WS14** (wasm/WebGL). Re-derived repo-wide:
+  >   `grep -rn 'main_wasm' crates/ --include='*.rs'` → 0 hits, so genuinely OPEN.
+  > * **`main_build_data.zig` + the `+gen-*` file-emit wiring → OWNER: WS13** (i18n &
+  >   docs), which already owns the generated-artifact tooling. Also 0 hits, genuinely OPEN.
+  >
+  > Gate **G-P2** FAILS on any open row without an owner in an OPEN workstream.
+
+
 - **`logFn` / `std_options` — the log-facade seam is a deferred seam (continued).**
   `main_ghostty.rs` ports `logFn` (the stderr branch is LIVE, gated on the bin's
   `GlobalState.logging.stderr` + the debug-only-in-Debug rule, exactly as the
@@ -3086,11 +3206,18 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   separately from that stderr noise. **Target:** un-defer with the unified log-facade
   follow-up.
 
-- **`version.zig` renderer/libxev/toolchain STUB lines (continued from C1, ADV-FIX
+- ~~**`version.zig` renderer/libxev/toolchain STUB lines (continued from C1, ADV-FIX
   1).** The `+version` KAT asserts ONLY exit 0 + stdout starts `rustty ` — it does
   NOT assert the `- renderer` (`RENDERER_STUB`), `- libxev` (`LIBXEV_STUB`), or
   `- Rust version` (`TOOLCHAIN_VERSION_STUB`) line CONTENT, which stay documented
-  stubs until R-d (renderer) / D6 (libxev) land. Unchanged by C6.
+  stubs until R-d (renderer) / D6 (libxev) land. Unchanged by C6.~~
+
+  **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W8].** `grep -rn
+  'RENDERER_STUB\|LIBXEV_STUB\|TOOLCHAIN_VERSION_STUB' crates/` → **zero hits**.
+  WS3-B replaced all three with real values and `crates/rustty/tests/cli_smoke.rs`'s
+  `version_plus` KAT now asserts their CONTENT. The `D:2639` copy of this row already
+  recorded that; this C6 copy was never struck. The only `+version` residual left is
+  the OSC-8 commit hyperlink (audit row O12 → **WS19 T12**).
 
 - **`explain_config` (1t DEFERRED) + `help_strings` codegen (continued, ADV-FIX 3).**
   The bin does not un-defer these; `Action::help_text` still returns "" (the
@@ -3255,25 +3382,44 @@ Every mapped module is rust ≥ zig.
 
 DEFERRED (documented; not needed to boot a shell on macOS — the permanent finale list):
 
-- **`ThreadPool.zig` work-stealing BODY** (§1/§6). Only the TYPE SURFACE
+- ~~**`ThreadPool.zig` work-stealing BODY** (§1/§6). Only the TYPE SURFACE
   (`Task`/`Batch`/`schedule`/`init`/`deinit`/`shutdown` sigs) is ported in
-  `thread_pool.rs` so `kqueue.rs` compiles; ghostty passes NO `thread_pool`
+  `thread_pool.rs` so `kqueue.rs` compiles~~; ghostty passes NO `thread_pool`
   (`Loop.init(.{})` with no pool), so the pool is unreachable on macOS. Consequence:
   the `kqueue: file IO on thread pool` test is a **SkipZigTest-style skip-stub
   `#[test]`** (`kqueue_file_io_on_thread_pool` — the count stays 12, honest R5-safe:
-  it defers genuinely-unused functionality, not a live path). G3b on `ThreadPool.zig`
+  it defers genuinely-unused functionality, not a live path). ~~G3b on `ThreadPool.zig`
   is intentionally NOT missing=0 (only the type surface is ported; the deferred body's
-  ~700 comments are the documented gap, this bullet).
+  ~700 comments are the documented gap, this bullet).~~
+
+  **BODY RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W5].**
+  `crates/rustty-xev/src/thread_pool.rs` is **1630 lines with 0 `unimplemented!()`** —
+  the full Zap work-stealing pool, shared by both targets, SB/TB-proven on
+  `.port/phase-2/mirihar-threadpool` (commits 89dde0f / e6885c0). Only the NARROW
+  residual survives: the macOS `kqueue: file IO on thread pool` skip-stub above, kept
+  as-is and **reclassified as a permanent Justified R1 Divergence by WS19 T11**
+  (audit row O10) — see the `# Justified R1 Divergences` section. Nothing in this
+  bullet is a Phase-2 deferral any more.
 - **`dynamic.zig`** (525 loc, 5 tests) — comptime-elided on single-candidate macOS
   (§0: `Backend::candidates()` is `&[Kqueue]`, so `Xev(bes)` collapses to
   `bes[0].Api()`); N/A, not weakened. The `Dynamic`/`DynamicXev`/`Sys`/`dynamic`/
   `backend`/`available` main.zig decls are noted (reference doc preserved, R3) but not
   re-exported.
-- **Other backends** (`backend/epoll` 12t, `io_uring` 13t, `iocp` 14t, `wasi_poll` 9t),
-  **`watcher/file`** (8t, `xev.File` — zero ghostty uses), **`watcher/tcp`** (5t),
-  **`watcher/udp`** (6t), **`c_api.zig`** (1t, libxev's C ABI — rustty consumers use the
-  Rust API) — whole follow-up ports (§1). Non-macOS handle types stay `lib.rs`
-  placeholders.
+- **Other backends** (`backend/epoll` 12t, `io_uring` 13t — **both since PORTED**;
+  `iocp` 14t, `wasi_poll` 9t — out-of-scope-by-platform per `ROADMAP:214`, not
+  deferrals), ~~**`watcher/file`** (8t, `xev.File` — zero ghostty uses),
+  **`watcher/tcp`** (5t), **`watcher/udp`** (6t), **`c_api.zig`** (1t, libxev's C ABI —
+  rustty consumers use the Rust API) — whole follow-up ports (§1). Non-macOS handle
+  types stay `lib.rs` placeholders.~~
+
+  **RECLASSIFIED [WS19 T11, 2026-07-29 — audit rows O10, O11].** `File`/`TCP`/`UDP` are
+  **PORTED on Linux** (per-backend in `epoll.rs`/`io_uring.rs`, wrapped as the Dynamic
+  enums). What remains is (a) the macOS export surface for those three plus the
+  `kqueue: file IO on thread pool` skip-stub, and (b) `c_api.zig`. Both are now
+  **permanent Justified R1 Divergences** with 4-criterion bases — see
+  "macOS `xev.File`/`TCP`/`UDP` watcher surface …" and "libxev `c_api.zig` …" in the
+  `# Justified R1 Divergences` section. Neither is open work; neither had an owner while
+  it sat in this list.
 - **[ADV-FIX F6] `os/flatpak.rs` + vt-search xev refs** — NOT resolved by making
   `rustty_global::xev` re-export `rustty-xev` (that would cycle
   `global → xev → global`). They resolve LATER via DIRECT edges: `os → xev` (flatpak)
@@ -3286,7 +3432,7 @@ DEFERRED (documented; not needed to boot a shell on macOS — the permanent fina
 - **Milestone B (NEXT — not this chunk):** un-defer TERMIO ONLY ([ADV-FIX F8]) —
   `Thread.run` loop + `Termio.init/threadEnter/processOutput` + `Exec`
   `Subprocess.start`/`ReadThread`/`queueWrite` + the core `Async::notify()` leaves —
-  capped with a live-shell KAT. `renderer.Thread` stays Phase-3 GPU tier (GPU-and-xev
+  capped with a live-shell KAT. `renderer.Thread` stays the GPU tier [LANDED: W0–W5] tier (GPU-and-xev
   blocked; landing rustty-xev does not unblock it). See NEXT_PHASE_PLAN.md.
 
 ## rustty-xev LINUX port L1 LT8 (per-target Dynamic re-export + gate wiring) — deferrals
@@ -3406,7 +3552,7 @@ follow-up, not a weakening of a live path):
   `Dynamic` has no such decl; `detect`/`prefer` (exported) consult each candidate's
   `available()` internally (dynamic.zig:98/113), so `epoll::available`/
   `io_uring::available` stay module-private.
-- **`Timer::cancel` on Linux** (timer.zig:369) — carried over from LT7 (see
+- ~~**`Timer::cancel` on Linux** (timer.zig:369) — carried over from LT7 (see
   dynamic.rs's PORT NOTE at the end of `impl Timer`). `TimerLoop.cancel` must WRITE a
   backend `Operation` (`epoll::Operation::Cancel` / `io_uring::Operation::TimerRemove`)
   into a completion, and neither backend exposes a `Completion::new_op` seam to
@@ -3418,7 +3564,15 @@ follow-up, not a weakening of a live path):
   epoll.rs/io_uring.rs and add the two arms. NOTE `rustty-core`'s renderer_seam
   (`cursor_h.cancel(...)`, renderer_seam.rs:1060) DOES call it — that is a
   core-tier/Phase-3 path, not termio's, but it means core will not build on Linux
-  until this is un-deferred.
+  until this is un-deferred.~~
+
+  **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W4].**
+  `crates/rustty-xev/src/dynamic.rs:1532` `Timer::cancel` is fully ported with BOTH
+  arms — `io_uring::Operation::TimerRemove` (`:1565`) and `epoll::Operation::Cancel`
+  (`:1578`) — through the `Completion::new_op` seam the struck text said did not
+  exist; its own PORT NOTE says "This un-defers the C7 gap". The "core will not build
+  on Linux" claim is therefore **false**: Linux `cargo build --workspace` is green
+  (ROADMAP flagged this; only the ledger row was never struck).
 - **`io_uring::available()`'s false path is untestable on this host** (carried over
   from LT5), and so is the `detect()` FALLBACK arm that depends on it: this host has
   io_uring enabled, so `detect()` always lands on the FIRST candidate and the
@@ -3665,22 +3819,38 @@ root, plus 3 net-new support modules `rand`/`enums`/`io`), PRNG bit-exact
 Zig `test{}` ported assertion-for-assertion (15 Rust tests), Miri-clean, G3b
 missing=0, `PORT STATUS: done`.
 
-**Residual (4 live `unimplemented!()` — the BINARY-ENTRY seams,
+~~**Residual (4 live `unimplemented!()` — the BINARY-ENTRY seams,
 `crates/rustty-synthetic/src/cli.rs`, previously tracked only in
-`SYNTHETIC_DESIGN.md`; each keeps its verbatim Zig body as comments):**
+`SYNTHETIC_DESIGN.md`; each keeps its verbatim Zig body as comments):**~~
 
-1. **`cli.rs:56` `main()`** — needs `cli.action.detectArgs` (generic `+action`
+1. ~~**`cli.rs:56` `main()`** — needs `cli.action.detectArgs` (generic `+action`
    detection), which lives ABOVE `synthetic` in the acyclic Rust split (a
-   synthetic→cli edge would cycle). No ported `test{}` exercises it.
-2. **`cli.rs:85/88/91` `main_action_impl_{ascii,osc,utf8}`** — the
+   synthetic→cli edge would cycle). No ported `test{}` exercises it.~~
+2. ~~**`cli.rs:85/88/91` `main_action_impl_{ascii,osc,utf8}`** — the
    option-parsing (`cli.args.parse` over argv/string iterators) + stdout wiring
    of `mainActionImpl`. The substantive dispatch (`main_action`) and every
-   generator body are LIVE; only the binary-entry glue defers.
+   generator body are LIVE; only the binary-entry glue defers.~~
 
-**Un-defer trigger:** the `rustty +synthetic`-style binary entry (the same
+~~**Un-defer trigger:** the `rustty +synthetic`-style binary entry (the same
 milestone that wires generator binaries into the differential-fuzz harness, G5).
 Placeholder-leaf doctrine: shapes fixed, bodies panic if called, no test reaches
-them.
+them.~~
+
+**RESOLVED / STALE [WS19 T13, 2026-07-29 — audit row O18].** These four seams **do not
+exist**. Verified repo-wide, not with the row's own scope (see §G for why that matters):
+`grep -rn 'unimplemented!\|todo!' crates/rustty-synthetic/` → **0 hits**. `main()` is
+LIVE at `cli.rs:97` and `main_action_impl_{ascii,osc,utf8}` at `:245`/`:274`/`:297`.
+`crates/rustty-synthetic/Cargo.toml:26-28` registers the `rustty-synthetic` bin at
+`src/main_gen.rs`, whose `fn main` calls `rustty_synthetic::cli::main()` — so the
+"un-defer trigger" (a binary entry) has ALSO already happened. The plan's T13 was
+therefore going to implement something that already shipped.
+
+**What actually remains** is the LOCAL replication of `detectArgs`, which is a
+**permanent Justified R1 Divergence** forced by the acyclic split (R4): the shared helper
+lives in the heavy `rustty-cli`, above this crate. See
+"`rustty-synthetic` / `rustty-bench` locally-replicated `detectArgs`" in the
+`# Justified R1 Divergences` section for the 4-criterion basis. **This is a decision, not
+a deferral** — no owner or trigger is needed beyond "if `detectArgs` changes".
 
 ## Sub-project #3 (unused-subset): `src/benchmark/**` + `main_bench.zig` + `ghostty_benchmark_cli`
 
@@ -3704,6 +3874,23 @@ main), a Phase-2 CLI-bin seam; (4) `cli.main`'s `detectArgs` replicated locally 
 shared helper lives in the heavy `rustty-cli`; `main()` is only reached by the deferred
 `main_bench.zig` bin). 0-test regression.
 
+**ALL FOUR RESIDUALS DISPOSED — WS19 T13/T14, 2026-07-29 (audit rows O19, O19a).** None
+is open work:
+* **(1) `os_signpost`** → **permanent Justified R1 Divergence** (pure Instruments
+  instrumentation, verbatim body preserved, unobserved by any test, and the binding tier
+  it needs is deferred tree-wide). 4-criterion basis in the divergence section.
+* **(2) the `ghostty_benchmark_cli` C-name alias** → **MOOT.** Upstream **deleted** the
+  `ghostty_*` alias layer at `e4cc852` (audit row W7), so there is no legacy name to be
+  compatible with. `rustty_benchmark_cli` is the whole surface. Do not re-add aliases.
+* **(3) `main_bench.zig` binary entry** → **SHIPPED.** `Cargo.toml:21-23` registers the
+  `rustty-bench` bin at `src/main_bench.rs`, whose `fn main() -> ExitCode` calls
+  `rustty_bench::cli::main()`. `grep -rn 'unimplemented!\|todo!' crates/rustty-bench/`
+  → 0 hits. The row was stale; the parenthetical "only reached by the deferred
+  `main_bench.zig` bin" in (4) is stale for the same reason.
+* **(4) local `detectArgs`** → **permanent Justified R1 Divergence**, forced by the
+  acyclic split (R4). 4-criterion basis in the divergence section, shared with
+  `rustty-synthetic`.
+
 ## Sub-project #3 (unused-subset): `src/extra/{bash,fish,zsh,vim,sublime}.zig` — shell-completion / editor-syntax generators
 
 **Ghostty source:** `src/extra/bash.zig`, `fish.zig`, `zsh.zig`, `vim.zig`,
@@ -3725,6 +3912,14 @@ macro; `PackedStruct::field_names()` mirroring `AutoStruct`; rustty-cli
 deferral:** the `+gen-*` CLI/build.rs file-emit wiring (writes the scripts to disk
 at packaging time) stays deferred with `main_build_data` (C6). 2 `test{}` ported.
 
+> **OWNER [WS19 T19, 2026-07-29 — audit row O13b]: WS13 (i18n & docs).** Flagged by gate
+> G-P2 as an open claim with no owner. This is the SAME item as the `main_build_data.zig`
+> + `+gen-*` file-emit wiring routed to WS13 above, seen from the shell-completion side:
+> the generators are ported and tested, only the write-to-disk-at-packaging-time wiring
+> is outstanding, and WS13 owns the generated-artifact/xtask emission axis. Added to
+> WS13's plan.
+
+
 ## `src/build/mdgen/**` + `src/build/webgen/**` — man-page + website doc generators (low priority)
 
 **Ghostty source:** `src/build/mdgen/**` (`mdgen.zig`, `main_ghostty_1.zig`,
@@ -3738,11 +3933,11 @@ codegen the CLI already defers (C6). **What unblocks it:** LOW priority; port wi
 the doc/codegen tooling milestone if/when man-page + website generation is wanted.
 0-test impact.
 
-## `src/stb/stb_image_resize.h` — glyph resize (`stbir_resize_uint8`); rustty-font does NOT yet cover it
+## ~~`src/stb/stb_image_resize.h` — glyph resize (`stbir_resize_uint8`); rustty-font does NOT yet cover it~~ **PORTED 2026-06-30 at `2e82776`; RECLASSIFIED to VACUOUS TEST COVERAGE → OWNER: WS11** [corrected WS19 T14, 2026-07-29 — audit row O17]
 
 **Ghostty source:** `src/stb/stb_image_resize.h` (single-header stb library),
 invoked as `stb.stbir_resize_uint8(...)` in the FreeType glyph-resize path
-(`src/font/face/freetype.zig:640`, "resizes the glyph"). **Rustty counterpart:**
+(`src/font/face/freetype.zig:640`, "resizes the glyph"). ~~**Rustty counterpart:**
 NOT covered — `grep -rn 'stbir|stb_image_resize' crates/rustty-font/src` finds
 only `Vec::resize`/`atlas.resized` (unrelated). The glyph/atlas resize seam has no
 Rust analogue yet. **Why deferred:** the live FreeType glyph-rasterization path
@@ -3751,26 +3946,79 @@ where this resize is called; the offscreen port did not need it. **What unblocks
 it:** when the live glyph-rasterization path lands, wire glyph resize — either a
 pure-Rust resize (e.g. an image-resize crate) or a `stb-sys` cc build compiling
 `stb_image_resize.h` (a `cc` build.rs, the -sys precedent). Note a **stb-sys cc
-build may be needed** if bit-exact parity with stb's resampler is required.
+build may be needed** if bit-exact parity with stb's resampler is required.~~
+
+**THE PORT SHIPPED — 2026-06-30, commit `2e82776`** [corrected WS19 T14,
+2026-07-29 — audit row O17]. Independently verified:
+* `crates/rustty-font-shaper/src/stb.rs:18` declares `stbir_resize_uint8`;
+* `crates/rustty-font-shaper/build.rs` compiles `vendor/stb_impl.c` via `cc::Build`;
+* `crates/rustty-font-shaper/vendor/stb_image_resize.h` is **byte-identical to the
+  oracle** — md5 `7381a7070120fd5a36d8fb9e3179dd7c` on both sides
+  (`git show origin/main:src/stb/stb_image_resize.h`);
+* call site `crates/rustty-font-shaper/src/face/freetype.rs:806`,
+  argument-for-argument identical to oracle `freetype.zig:639-652`.
+
+**WHY THIS ROW STAYED "OPEN" FOR A MONTH — a methodology finding, recorded so it
+does not recur.** The row's own evidence grep was **scoped to
+`crates/rustty-font/src`**, but the code lives in the **sibling** crate
+`rustty-font-shaper`, created afterwards by the **D1 three-tier split** (memory
+`apc-glyf-font-layering-d1`). *The grep scope WAS the bug.* Re-verifying the row by
+re-running the scope the row supplied could not possibly detect that — it is a
+self-confirming check. **Rule: never verify a ledger row with a search scope the row
+itself provides; use a repo-wide search.** The WS19 audit's own re-verification of
+this row fell into exactly that trap. Every other audit row verified with a
+row-supplied scope has been re-derived repo-wide (see the audit's §G).
+
+**ALSO CORRECTED: the gating is NOT platform-conditional.** The ROADMAP's "wired on
+the non-macOS path" is wrong — `build.rs` gates on
+`cfg(not(target_arch = "wasm32"))`, not `not(target_os = "macos")`. The stb build and
+the FreeType face are **live on macOS too** (`nm -g` shows `T _stbir_resize_uint8`
+in the macOS archive). Any reasoning that treats this seam as Linux-only is wrong.
+
+**WHAT IS ACTUALLY OPEN → OWNER: WS11** (which now has a 10-task plan and owns this).
+The **test coverage of the resize is VACUOUS**: every existing test that reaches the
+call does so at **scale 1.0** (`8x16→8x16`, `136x128→136x128`), and
+`render_and_resize` never enters the bitmap arm at all (Inconsolata is an outline
+font). Proof: substituting a nearest-neighbour loop for stb leaves **all 9 tests
+green** — so nothing in the suite would notice if the resampler were wrong. WS11 owns
+adding coverage that actually discriminates.
+
+**DO NOT "fix" the stb `build.rs` flags.** Bit-exactness against a single oracle
+build is unattainable: ghostty's own Debug and ReleaseFast builds of the identical C
+disagree (9/512 bytes, maxdelta 1 — ReleaseFast's loop vectorizer). rustty sits on
+the **consensus** side across 5 toolchain/optimization combinations on 2 OSes.
+Changing flags would *create* divergence, and since the seam is live on macOS it
+would violate R5.
 
 ## Sub-project #2 (macos-swift-app): the `ghostty_*`→`rustty_*` C-ABI compatibility ALIAS layer
 
-**Context:** the reused macOS Swift app hard-codes ~163 `ghostty_`-prefixed
+~~**Context:** the reused macOS Swift app hard-codes ~163 `ghostty_`-prefixed
 symbols, but the rustty C-ABI (rustty-apprt-c, the E-series) exports `rustty_`-
 prefixed symbols (R2 identity rename). **What's deferred:** a compatibility ALIAS
 layer that re-exports each `rustty_*` C export under its original `ghostty_*` name
 (so the unmodified Swift app links against `librustty_apprt_c`). No rustty crate
-provides this yet. **Locked decisions (per the critics):** identity is
-`io.airely.rustty`; **iOS is in scope** (the alias layer + xcframework must cover
-the iOS targets too). **Why deferred:** only needed when the Swift frontend is
+provides this yet.~~ **Locked decisions (per the critics):** identity is
+`io.airely.rustty`; **iOS is in scope** (the xcframework must cover the iOS targets
+too). ~~**Why deferred:** only needed when the Swift frontend is
 actually reused (Phase-3, after R-d windowed present + D6 land). **What unblocks
 it:** sub-project #2 (macos-swift-app, GAP_ANALYSIS §3.3) — generate the ~163
 `ghostty_*` = `rustty_*` alias exports (comptime/attribute export aliases) as part
-of the Swift-app reuse milestone.
+of the Swift-app reuse milestone.~~
+
+**SUPERSEDED — THE PREMISE IS MOOT [WS19 T2 audit, 2026-07-29 — audit row W7].**
+Upstream **deleted** the `ghostty_*` C-ABI forwarder layer at `e4cc852`, so there is
+no ~163-symbol legacy surface to be compatible with. `grep -rn 'export_name'
+crates/rustty-apprt-c/src/` → **0 hits**, and `crates/rustty-apprt-c/Cargo.toml:31-33`
+states the crate "no longer compiles any `ghostty_*` C-ABI alias layer … exports ONLY
+`rustty_*` (R2), always, in every profile"; `identity-oracle` now flips only the
+`rustty-identity` STRING identity for the differential harness. **Do not re-add
+aliases.** Consequence outside this file: the ROADMAP's global constraint
+"`ghostty_*` C-ABI aliases stay" (`ROADMAP:25`) was FALSE and is corrected by the same
+WS19 T2 commit.
 
 ## Sub-project #2 (macos-swift-app): signed `.xcframework` repackaging xtask (`GhosttyKit.xcframework`)
 
-**Context:** the Xcode project consumes a `GhosttyKit.xcframework`; the rustty
+~~**Context:** the Xcode project consumes a `GhosttyKit.xcframework`; the rustty
 build produces `librustty_apprt_c` (the apprt-c staticlib/dylib). **What's
 deferred:** an `xtask` (build-orchestration) subcommand that repackages
 `librustty_apprt_c` (+ the generated C header + the `ghostty_*` alias layer above)
@@ -3779,7 +4027,17 @@ iOS slices). No such xtask exists yet (the current `xtask` only does
 `header-gen-apprt` cbindgen, see E11/E-series). **Why deferred:** only needed for
 the Swift-app reuse build. **What unblocks it:** sub-project #2 (macos-swift-app,
 GAP_ANALYSIS §3.3) — add the `xtask xcframework` packaging + codesign step
-alongside the alias layer.
+alongside the alias layer.~~
+
+**RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W6].** The xtask exists:
+`xtask/src/main.rs:65` registers `xcframework` ("Package rustty-apprt-c into
+`dist/RusttyKit.xcframework` (macOS Swift-app tier)"), dispatched at `:103`, implemented
+at `:305` (staticlib under the `xcframework` profile, archive folding, then
+`xcodebuild -create-xcframework`). `xtask/src/` also carries `dist.rs`, `archives.rs`,
+`res_*`, `translations.rs`, `wasm_patch_growable_table.rs`. The R2 artifact name is
+`RusttyKit.xcframework`, not `GhosttyKit.xcframework`. **The `ghostty_*` alias-layer
+clause is moot**: upstream deleted that layer at `e4cc852` — see audit row W7 and the
+struck alias-layer entry.
 
 ## Sub-project #4 (gtk): the `apprt-gtk` subsystem (`src/apprt/gtk/**`)
 
@@ -4045,7 +4303,14 @@ heading.
 
 ## GTK portal OpenURI (L6) — call site INHABITED, body unported [split out of the WS15 GlobalShortcuts entry, 2026-07-29]
 
-**OPEN.** The sibling XDG portal call site to GlobalShortcuts: the reference's
+**OPEN. OWNER [WS19 T19, 2026-07-29]: WS19 T8** — WS15 split this out and did not take
+it, and WS15 has since MERGED, so the row was ORPHANED (audit row O6). WS19 T8 owns it;
+it is **NOT yet executed** (it needs the `portal.zig` + `portal/OpenURI.zig` port onto the
+WS15 `gio::DBusConnection` + self-computed-request-path pattern, plus live `dbus-monitor`
+verification on the VM against the installed `ghostty 1.3.1-2.fc44` handshake). Gate G-P2
+reports it RED until then.
+
+The sibling XDG portal call site to GlobalShortcuts: the reference's
 `portal.zig` / `portal/OpenURI.zig`, reached from `application.zig`'s `startup`.
 In the port, `crates/rustty-apprt/src/gtk/class/application.rs`'s `startup` is an
 INHABITED placeholder for this: the `gio::DBusConnection` is fetched (and handed
@@ -4068,6 +4333,14 @@ for the app-id/`.desktop` environment setup that any portal call needs.
 
 The gap-analysis app-core inventory marked `src/main_gen.zig`, `src/main_wasm.zig`,
 and `src/main_build_data.zig` as done. **They are NOT ported — they are DEFERRED.**
+
+> **SPLIT AND OWNED [WS19 T19, 2026-07-29 — audit rows O13a/O13b].** Flagged by gate
+> G-P2 as an open claim with no owner; this is the second copy of the three-file bundle.
+> Same disposition as the C6 copy: **`main_gen.zig` is PORTED** (
+> `crates/rustty-synthetic/src/main_gen.rs`, registered as a bin at
+> `Cargo.toml:26-28`) so that third is STALE; **`main_wasm.zig` → WS14**;
+> **`main_build_data.zig` + the `+gen-*` emit wiring → WS13** (added to WS13's plan).
+
 This is already correctly tracked in the **C6 ledger entry** (see "`main_gen.zig` /
 `main_wasm.zig` / `main_build_data.zig` (0t each) DEFERRED", above): they are
 standalone build-tool / WASM-module entrypoints, NOT on the `rustty` exe's
@@ -4139,6 +4412,11 @@ first confirm 0.2.0+Ghostty-config reproduces uucode-0.1.0's EAW/GC/emoji/graphe
 results for the 11 pinned tests.
 
 **Un-defer trigger:** the above decision is made AND the chosen data source reproduces
+> **OWNER [WS19 T19, 2026-07-29]: WS12 (vaxis completion).** Flagged by gate G-P2 as an
+> open claim carrying a trigger but NO owner. WS12 is the workstream that completes
+> `rustty-vaxis`, so the uucode/width-data decision and its consequences belong to it —
+> including making the decision itself, which is the trigger's precondition.
+
 the 11 `gwidth` tests + `unicode.zig` grapheme results byte-exact. Chunk 1b then adds
 `gwidth.rs` (`Method` enum unicode/wcwidth/no_zwj; `eawToWidth`; `gwidth`; 11 tests) +
 `unicode.rs` (`Grapheme`/`GraphemeIterator`/`graphemeIterator`) and the
@@ -4158,6 +4436,7 @@ preserved and the field/method surface is fixed so the later chunk FILLS them.
    `initial_*`/`buf`/`last_mouse_button_press`) + `unimplemented!()` method bodies; the
    non-windows (macOS/Linux) build never names it (which also sidesteps its latent Zig
    `self.fd` bug — its `read` references a field it lacks). **Target: a Windows-target
+   OUT-OF-SCOPE-BY-PLATFORM per `ROADMAP:214` — see the WS19 T19 note below.
    chunk.**
 
 2. ~~**`vaxis.rs` — the `Vaxis` INHABITED placeholder leaves.**~~ **RESOLVED by
@@ -4169,6 +4448,17 @@ preserved and the field/method surface is fixed so the later chunk FILLS them.
 3. **`tty.rs` — `TestTty::next_event`.** A Windows-API-compat stub (`unimplemented!()`) —
    Zig returns `error.SkipZigTest`; never reached on non-windows targets. Filled with the
    `WindowsTty` decode (item 1). **Target: a Windows-target chunk.**
+
+   > **OUT-OF-SCOPE-BY-PLATFORM, not a deferral [WS19 T19, 2026-07-29].** Both `tty.rs`
+   > Windows items were flagged by gate G-P2 as open claims with no owner, because
+   > "a Windows-target chunk" is not a workstream and never will be one:
+   > `ROADMAP:214` puts Windows out of the port's scope entirely, alongside every
+   > `#[cfg(windows)]` seam (`D:3155`, `D:4155`, `D:4169`), the `iocp`/`wasi_poll` xev
+   > backends and the iOS device runtime. Out-of-scope-by-platform items are explicitly
+   > NOT deferrals — there is no owner to name because there is no plan for the target.
+   > Recorded here so a closure sweep classifies them correctly instead of hunting for
+   > an owner that should not exist.
+
 
 4. ~~**`loop_.rs` — the `test Loop` lifecycle test (`#[ignore]`).**~~ **RESOLVED by
    Chunk 4a**: `loop_lifecycle` (loop_.rs:558) is UN-IGNORED — the filled
@@ -4194,6 +4484,7 @@ no entry):
    Zig-source dep `zigimg` (`img.convertToPixelFormat`, PNG decode) before the
    (LIVE) kitty transmit paths. Same dep class as libxev/z2d/vaxis itself: a
    vendored-dep port. **Un-defer trigger: a `rustty-zigimg` port (or an R3
+   OWNER: **WS12** — see the WS19 T19 note below.
    pure-Rust re-home of the two conversions), needed only when a TUI consumer
    transmits images.**
 2. **`image.rs:223` `Image::draw` + `image.rs:248` `Image::cell_size`.** The
@@ -4202,6 +4493,14 @@ no entry):
    until item 1 lands (a vaxis `Image` can only be constructed through
    `transmit_image`/`load_image`), so they defer WITH the zigimg tier.
    **Un-defer trigger: item 1.**
+
+  > **OWNER [WS19 T19, 2026-07-29]: WS12 (vaxis completion).** Flagged by gate G-P2 as an
+  > open claim with NO owner. Same class as `Vaxis::transmit_image`/`load_image` above:
+  > both depend on the image-decode tier (`rustty-zigimg` or an R3-acceptable
+  > substitute), and WS12 is the workstream that completes `rustty-vaxis`. Naming WS12
+  > here is what stops these two rows drifting back into ownerlessness — the gate now
+  > fails if they do.
+
 
 No other live seams exist in the crate outside the `#[cfg(windows)]` family +
 `TestTty::next_event` (Chunk 3b items 1/3 above).
@@ -4222,9 +4521,14 @@ and is tracked here PER-TEST so `check_test_counts`/G2 auditors can resolve it:
   4. `try testing.expect(atlas.modified);` (after `atlas_set`)
   It exercises `atlas_new`/`atlas_reserve`/`atlas_set`/`atlas_free` + the
   `os/wasm.zig` host-ownership helpers — none of which exist outside the wasm
-  artifact. **Target: the rustty wasm app-runtime** (the same milestone that
+  artifact. **Target: the rustty wasm app-runtime** — **OWNER [WS19 T14, 2026-07-29]: WS14 (wasm/WebGL)**; "the rustty wasm app-runtime" is a milestone name, not a workstream, so these rows were ORPHANED. Gate **G-P2** now FAILS on any open row whose owner is not an OPEN workstream (the same milestone that
   un-defers the config/vt wasm exports); porting the Wasm block MUST port this
   test with all 4 asserts live.
+
+  > **OWNER [WS19 T14, 2026-07-29 — audit row O14]: WS14 (wasm/WebGL).** The row targeted "the wasm-artifact milestone", which is not a workstream — it was ORPHANED. Re-derived repo-wide: `crates/rustty-font/src/atlas.rs:740` carries the block as `PORT NOTE (wasm — feature-gated OFF)` with the reference preserved as comments, so the row is genuinely OPEN and lands with the wasm atlas surface.
+>
+> Gate **G-P2** (`.port/tools/gates/check_phase2_closure.py`) FAILS on any open row without an owner in an OPEN workstream, so this attribution is enforced, not aspirational.
+
 
 ## W-ATTACH — windowed host-attach unwired in core `renderer_seam::Renderer::init` (M4 triage, 2026-07-10)
 
@@ -4592,15 +4896,35 @@ KATs: sys.rs `default_decoder_*` + stream_terminal.rs
 `--features wuffs`); graphics_image.rs `image_load_png_not_compressed_regular_file`
 no longer skips under the feature.
 
-### 3. rustty-termio `shell_integration.rs` — lossy path byte source (LOW, cleanup)
+### 3. ~~rustty-termio `shell_integration.rs` — lossy path byte source (LOW, cleanup)~~ **RESOLVED — WS19 T15, 2026-07-29 (audit row O21)**
 
-`TmpResourcesDir` (test-only helper) builds its owned `Vec<u8>` paths via
+~~`TmpResourcesDir` (test-only helper) builds its owned `Vec<u8>` paths via
 `to_string_lossy().into_owned().into_bytes()` (shell_integration.rs:1708, and
 the `realpath_bytes` helper :1753-1763), deviating from the
 zig-byteslice-to-rust-rawbytes rule (raw `OsStr` bytes, never lossy String).
 Behaviorally benign (macOS tmp paths are UTF-8 in practice); ownership/free
 discipline is faithful. **Fix:** `std::os::unix::ffi::OsStrExt::as_bytes` in a
-later cleanup pass.
+later cleanup pass.~~
+
+**RESOLVED.** Both sites now use `std::os::unix::ffi::OsStrExt::as_bytes` — the raw
+platform bytes, which is the exact analogue of the reference's `realpathAlloc`
+returning `[]u8` (POSIX paths are byte strings, not UTF-8). Owner was "a later cleanup
+pass", i.e. nobody.
+
+Landed with a **RED/GREEN discriminator, not a smoke test**:
+`non_utf8_path_bytes_survive_the_conversion_but_not_the_lossy_one` asserts BOTH that
+`OsStrExt::as_bytes` round-trips a `0xFF` byte exactly AND that
+`to_string_lossy().into_owned().into_bytes()` mangles it into U+FFFD (`EF BF BD`) — so
+the test fails if the fix is reverted, and also fails if the fixture ever stops being
+non-UTF-8 (which would make it vacuous).
+
+**Platform finding worth recording:** a filesystem-based fixture is IMPOSSIBLE on the
+primary host — APFS rejects non-UTF-8 filenames outright (`create_dir_all` on
+`b"ws19_\xffdir"` → `Os { code: 92, … "Illegal byte sequence" }`, observed). The
+property under test is the CONVERSION, which is host-independent, so the main test does
+not touch the filesystem; a sibling `#[cfg(target_os = "linux")]` test
+(`realpath_bytes_round_trips_a_non_utf8_directory_name`) exercises the real
+`realpath` round-trip on ext4/tmpfs, where such names are legal.
 
 ## rustty-apprt-c `rustty_cli_try_action` — CLI action from C (non-null path) [added 2026-07-12, Phase-A ghostty_* symbol closure]
 
@@ -4709,57 +5033,6 @@ Backend rasterization is additionally gated by the offscreen KAT
 `dcimgui-sys::metal_offscreen_render_writes_pixels`.
 
 ---
-
-## rustty-termio ReadThread — PRESERVED REFERENCE QUIRK: trailing pty output dropped on Linux POLLHUP (L1 LT9)
-
-**Status: preserved verbatim, NOT fixed. This is reference behavior, not a port bug.**
-
-`ReadThread.threadMainPosix` checks HUP *before* it re-drains the pty:
-
-```zig
-// ghostty src/termio/Exec.zig:1355-1358
-if (pollfds[0].revents & posix.POLL.HUP != 0) {
-    log.info("pty fd closed, read thread exiting", .{});
-    return;
-}
-```
-
-The read loop's shape is: tight `read()` until `EAGAIN` -> blocking `poll(-1)` ->
-quit check -> **HUP check -> return**. There is no final drain after the HUP check.
-
-**Why this is invisible on macOS but bites on Linux** (a kernel pty-semantics
-difference, verified empirically in L1 LT9, not inferred):
-
-* **Linux** raises `POLLHUP` on the pty *master* as soon as the last *slave* fd
-  closes — **even while unread bytes are still buffered** — so a child that writes
-  and immediately exits produces `POLLIN|POLLHUP` in the SAME `revents` word
-  (measured: `0x11`). The reference returns on the HUP check and the buffered bytes
-  are never read. Measured directly: at that HUP return the pty still held the
-  unread `"RUSTTY_OK\r\n"`.
-* **macOS** does not surface the dying child as HUP here; it surfaces as
-  `read() == 0`, which the loop already handles (`if (n == 0) break;` — and the
-  reference's own comment there says *"This happens on macOS instead of WouldBlock
-  when the child process dies"*). So macOS drains first and loses nothing.
-
-**Consequence:** on Linux, output written by a child in the same instant it exits
-can be dropped by the read thread. For a real interactive shell this is a
-shutdown-time edge (the shell is long-lived; the HUP only arrives at exit), which
-is presumably why it is unfixed upstream.
-
-**Why we do NOT fix it:** R1 — port faithfully, preserve reference quirks. Adding a
-post-HUP drain would be a real behavioral divergence from ghostty on the hot read
-path. If upstream fixes it, port the fix.
-
-**Impact on the KAT:** `crates/rustty-termio/tests/live_shell.rs` therefore spells
-its command `/bin/sh -c 'echo RUSTTY_OK; /bin/sleep 1'` rather than a bare `echo`:
-the trailing sleep keeps a slave fd open for a beat after the write, decoupling
-`POLLIN` from `POLLHUP` so the read thread drains on a HUP-free wakeup exactly as
-it does on macOS. This removes only the exit RACE — the KAT still spawns a real
-`/bin/sh` in a real pty and asserts the echo round-trips into the terminal
-`Screen`. (`/bin/sleep` is absolute because that harness's `Config.env` is an empty
-`EnvMap` — there is no PATH to search.)
-
-**Un-defer trigger:** an upstream ghostty fix to the `threadMainPosix` HUP path.
 
 ---
 
@@ -4907,28 +5180,6 @@ Two known residuals (grounding-review):
   `name→tag` map entry, so a later `global_remove(old_name)` would unbind the live proxy. Compositors
   don't re-advertise these singletons in practice. (globals.rs bind_global/remove_global.)
 
-### xev ThreadPool `Event` shutdown wake — DELIBERATE DEVIATION (controller-approved) [2026-07-19, Task 1]
-`crates/rustty-xev/src/thread_pool.rs` `Event::wake` deviates from the oracle
-(`ThreadPool.zig:508-518`, kprotty's Zap pool) in two ways, both confined to `wake`:
-**(1)** the terminal SHUTDOWN transition's `futex_wake` is UNCONDITIONAL (the oracle skips it when
-the pre-swap state is not WAITING, which strands remaining parked sleepers when a trailing run-loop
-`notify()` left the event NOTIFIED — `join()` then hangs); **(2)** SHUTDOWN is STICKY (the NOTIFIED
-transition is a CAS loop that no-ops on a shutdown event, because the oracle's unconditional swap
-lets a late `notifySlow` event-write resurrect the dead event and re-park a woken sleeper forever).
-Rationale: SHUTDOWN is terminal/unrepeatable, so the extra wake is sound (sleepers re-check state;
-late arrivals fail the futex value-check) and notifying a shutdown event is already a no-op by
-`Event::wait`'s own contract; cost = one extra syscall at pool shutdown. Both oracle holes are
-ANALYTIC windows (the originally-observed 100% teardown deadlock was root-caused to a rustty port
-bug — the `futex_wake` shim passed `u32::MAX` unclamped through FUTEX_WAKE's C-int slot = `-1` =
-wake at most ONE; fixed with the oracle's own `min(i32::MAX)` clamp semantics, after which the
-VERBATIM oracle Event passed 400/400 multi-worker lifecycles). ghostty never instantiates the pool
-(all 4 xev loops are `Loop.init(.{})`), and upstream libxev `1c80766` (Dec 2024) fixed a DIFFERENT
-join race already in our pin — upstream HEAD still carries these two windows. rustty's Task-5 epoll
-File watcher WILL multi-worker-join, hence the defensive close. Full interleavings + soundness
-argument: the DELIBERATE DEVIATION note on `Event::wake`; RED/GREEN evidence + regression gate
-(`thread_pool::tests::multi_worker_quiesce_then_join_50x`, 50 lifecycles under a 60s watchdog):
-`.superpowers/sdd/task-1-report.md` addendum 2.
-
 ### `share/{APP}` resource root — shell-integration + themes SHIPPED ✅ RESOLVED [2026-07-23, WS1]
 The R5 placeholder (`share/{APP}/DEFERRALS.md`, written by
 `xtask/src/res_terminfo.rs::gen_app_root`) that stood in for the
@@ -4957,7 +5208,7 @@ count + in-window OSC7 observation re-queued to WS4 (blocked on
 From **WS7 Phase B review (I1)** — these need the final
 `oracle@main:src/inspector/widgets/pagelist.zig` (`70e788f06` + `6d5dda40d`):
 
-1. **`crates/rustty-inspector/src/widgets/pagelist.rs` cell-detail path still
+1. ~~**`crates/rustty-inspector/src/widgets/pagelist.rs` cell-detail path still
    restores.** The page-TREE loop was fixed in the Phase B review (it now uses
    `Node::rows`/`page_if_resident`/`storage`/`page_preserving_state`, guarded by
    `ws7_tests::pagelist_widget_page_tree_never_restores`). The CELL-detail path
@@ -4968,17 +5219,59 @@ From **WS7 Phase B review (I1)** — these need the final
    struct, and threads the resulting `page: *const Page` through
    `cell_info.draw`, `hyperlinkTable` and `graphemeTable`. D6 must port that end
    state and then tighten the guard test to the plan's stricter form
-   (`!src.contains("Node::page(")` over the WHOLE file).
+   (`!src.contains("Node::page(")` over the WHOLE file).~~
+
+   **RESOLVED — WS19 T7, 2026-07-29 (audit row O4).**
+
+   **This item was ORPHANED: WS7 D6 MERGED at `b8c40f9` without closing it**, and was
+   reported closed. It was not. Six restoring call sites were still live at
+   `pagelist.rs:1701, :1703, :1759, :1889, :2163, :2379`, so inspecting a single cell
+   in a compressed region silently decompressed that page — and **the guard test was
+   VACUOUS-IN-SCOPE**: `ws7_tests::pagelist_widget_page_tree_never_restores` asserts
+   over `loop_src`, the page-tree loop's substring only, so it stayed green while those
+   six calls sat elsewhere in the same file. That is precisely the weaker form this
+   deferral predicted, which is why the row said "tighten the guard to the WHOLE file".
+
+   **What landed.** The oracle's end state, ported in structure:
+   `pages.get_cell(pt)` → `pages.pin(pt)` + `Node::page_preserving_state(pin.node)`,
+   a node-free `InspectedCell { row, cell, row_idx, col_idx }`
+   (`oracle@main:pagelist.zig:14`), and the resulting `page: *const Page` **threaded**
+   through `CellInfo::draw`, `hyperlinkTable` and `graphemeTable` instead of
+   re-derived. Omitting the node from the aggregate makes the property **structural**:
+   there is no longer anything to call the restoring accessor on. `preserved.deinit()`
+   runs last, after every use of `page`, because for a compressed node `page` borrows
+   `preserved`'s owned buffer.
+
+   **The whole-file guard lives in a SIBLING file** —
+   `crates/rustty-inspector/tests/pagelist_never_restores.rs` — because a whole-file
+   assertion cannot live in the file it checks: its own string literal would appear in
+   that file and satisfy it. It builds the forbidden token at runtime, skips
+   comment-only lines (the PORT NOTES deliberately name the accessor to explain why it
+   is banned), and carries a second test that would FAIL if `include_str!` ever
+   resolved to the wrong file — so the guard cannot go vacuous either. The old in-file
+   loop-scoped guard is kept, with its literal de-literalised for the same reason.
+
+   **FAIL ARM PROVEN BY MUTATION, not asserted:** re-introducing one
+   `Node::page(pin.node)` call → `test result: FAILED`, naming
+   `src/widgets/pagelist.rs:1763`; reverted → `2 passed`.
 
 2. **`PageList::Limits` / `Limits::enforce` has no rustty counterpart.** The
    oracle's 11th `markActivity` call site (`oracle@main:PageList.zig:6312`, inside
    `Limits.enforce`) therefore has nothing to port onto. rustty's PageList carries
    its byte limit as a plain field with no `Limits` struct, so there are 10
    `mark_activity` sites, not 11. See the PORT NOTE next to `mark_activity` in
-   `crates/rustty-vt/src/pagelist/compress.rs`. If a `Limits` struct is ever
-   introduced, `enforce` must `mark_activity` on entry.
+   `crates/rustty-vt/src/pagelist/compress.rs`.
 
-## Deferred to WS8 upstream sweep — WS7 Phase C divergence #11 (`Screen::cursor_scroll_region_up` unported)
+   **RESTATED AS A PHASE 3 RE-VET ROW [WS19 T2, 2026-07-29 — audit row O5].** This is
+   not a Phase-2 deferral: there is nothing in the pinned tree to port. `Limits` is a
+   **beyond-pin** struct, so the item is **pin-conditional** and its owner is
+   **Phase 3** (`.port/phase-3/`, upstream resync), whose re-vet list carries the exact
+   assertion to make: *"if the resync introduces a `PageList::Limits` struct, then
+   `Limits::enforce` must call `mark_activity` on entry, taking rustty's
+   `mark_activity` site count from 10 to 11."* If the resync does **not** introduce it,
+   the row closes with no work. **Owner: Phase 3. Trigger: the resync.**
+
+## ~~Deferred to WS8 upstream sweep~~ **→ OWNER: WS10 (BL-4 perf series), pin-sequenced** — WS7 Phase C divergence #11 (`Screen::cursor_scroll_region_up` unported) [re-owned WS19 T2, 2026-07-29 — audit row O3]
 
 From **WS7 Phase C review (I2)**. The Phase C plan
 (`docs/superpowers/plans/2026-07-23-ws7-scrollback-compression.md:3790,3830`)
@@ -5008,10 +5301,22 @@ cursor-page rotation) and all 3 Screen tests the oracle commit added (grep
 `cursor_scroll_above` / `cursor_scroll_above_rotate` regression tests around
 lines 11634, 11731, 11946).
 
-**Disposition:** belongs to the **WS8 upstream-sweep backlog** (BL-4). When
-`77190bd02` is ported, its `invalidateNodeLayout` site and
-`screen_cursor_scroll_region_up_renews_page_generation` test should be added
-alongside it — not retrofitted into WS7.
+**Disposition [REWRITTEN — WS19 T2, 2026-07-29, audit row O3].** ~~belongs to the
+**WS8 upstream-sweep backlog** (BL-4)~~ — that was wrong **twice over**: WS8 is
+`[x]` AUTHORED + EXECUTED + **MERGED** (a closed workstream, so the row was
+ORPHANED), **and** BL-4 is the `stream`/`terminal`/`termio` **performance series**,
+which has never been WS8's scope — it is **WS10**'s.
+
+**OWNER: WS10 (BL-4 perf series).**
+
+**Sequencing (a stated decision, NOT a deferral — the owner AND the trigger are both
+named).** `77190bd02` is **beyond the pin** (`../ghostty` working tree is pinned at
+`4749c4e93`). Porting a beyond-pin function into the pinned tree means
+hand-transcribing a commit that Phase 3's upstream re-vet will revisit anyway, so it
+is **cheaper AFTER Phase 3 advances the pin**, and WS10 should sequence it that way.
+When `77190bd02` is ported, its `invalidateNodeLayout` call site and the
+`screen_cursor_scroll_region_up_renews_page_generation` test land **alongside it** —
+not retrofitted into WS7.
 
 ## Deferred to WS7 Phase E (Miri / gates)
 
@@ -5085,6 +5390,95 @@ into a page's style set no longer leaves uninitialized bytes in the mapping that
 committed `mapinit_styled` harness scenario (seconds); 4-criterion acceptance basis is in
 `MIRI_EXCEPTIONS.md`'s WS7 Phase E section.
 
+
+**[WS19 T2, 2026-07-29 — audit §E.1] Items 3 and 4 below were physically MIS-FILED:**
+they had been appended AFTER the `# Justified R1 Divergences` heading and had come to
+sit *inside* the `killPid` divergence entry, which made item 4's open work (the
+`-C debug-assertions=off` vt Miri lane, audit row O2) invisible to anyone grepping for
+open items — it read as part of a permanent divergence. Moved back here under their own
+heading, restoring the 1–2–3–4 numbering. Not one word of their text is changed.
+
+3. **`pagelist_decommit_pool_item_zeroes_the_dirty_region` has a real Stacked-Borrows
+   violation under Miri (OPEN, discovered while proving WS7 Phase C's I1).** Confirmed
+   deterministic in isolation — full backtrace and root cause in
+   `.port/phase-2/MIRI_EXCEPTIONS.md`'s Category 2 correction note. **Pre-existing (WS7
+   B1, commit `39cd6b8`; last touched at `0413d2b`), NOT introduced by Phase C** — no
+   Phase C commit touches `mem.rs` or this test. It is a test-code bug (holds a `&mut
+   [u8]` across a call that mutates the same bytes through a separate raw pointer, then
+   reads through the stale reference), not a production-code bug; native `cargo test`
+   and ASan both stay green. The claim in `MIRI_EXCEPTIONS.md`'s Category 2 table that
+   this test "IS Miri-provable" was asserted without having actually been run under Miri
+   — now corrected in-place. Phase E must either fix the test (re-derive the slice fresh
+   after each `decommit_pool_item` call) or record a formal exception; it must NOT be
+   left silently claimed-clean.
+   **RESOLVED — WS7 Phase E (2026-07-29).** Fixed exactly as sketched: every slice is now
+   derived fresh from `ptr` and none is live across `decommit_pool_item`. Assertions
+   unchanged (both the fully-dirty and the partially-dirty item must still read back
+   all-zero across the whole buffer). Measured under Miri: was the retag UB above, now
+   `1 passed` in 13.28s. Before/after output recorded in `MIRI_EXCEPTIONS.md`'s Category 2
+   correction note, which no longer claims anything unverified.
+4. **Several WS7 Phase B compression tests are ALSO Miri-intractable and undocumented
+   (OPEN, discovered the same pass).** Attempting a bounded full-module pagelist Miri
+   sweep (beyond I1's specific ask) found `pagelist_compress_incremental_converges_to_complete`,
+   `pagelist_compress_full_leaves_viewport_and_active_resident`,
+   `pagelist_compress_drain_finishes_in_one_call`, and
+   `pagelist_compress_full_mode_leaves_no_continuation` all TIMEOUT at a 2–3 min bound —
+   confirmed in single-worker isolation (not a parallel-contention artifact), and
+   `…_leaves_no_continuation` reproduces identically on **pre-Phase-C** commit `098fc63`,
+   proving this is a **pre-existing WS7 Phase B gap** (these tests were apparently never
+   run under a bounded Miri harness before), not a Phase C regression. `MIRI_EXCEPTIONS.md`
+   had cited two of these as "lighter, passing" coverage for a Phase C exception row; that
+   citation is now corrected (see the row's inline correction). Out of scope for the Phase
+   C review response — Phase E should measure the rest of the `compress`/`pagelist_compress`
+   family the same way (`bash .port/tools/miri-run.sh rustty-vt pagelist_compress 8 3 5`)
+   and either annotate the genuinely-intractable ones or investigate why compression state
+   machines are this expensive under Miri interpretation.
+   **RESOLVED — WS7 Phase E (2026-07-29).** Whole family measured, per test, with every
+   candidate re-verified in single-worker ISOLATION before being excepted (a parallel
+   TIMEOUT is a candidate, never a verdict). Full table in `MIRI_EXCEPTIONS.md`
+   ("WS7 Phase E — the page-compression test family"). Of **12** measured:
+   * **10 annotated** — the 4 named above plus the 4 other `pagelist_compress_*` tests,
+     plus **2 that this pass discovered and the earlier one had not named**
+     (`pagelist_mutations_mark_compression_activity`,
+     `pagelist_memory_stats_accounts_compressed_and_resident_bytes`). All 10 TIMEOUT at a
+     6-min bound in isolation.
+   * **1 TRACTABLE and deliberately left un-annotated** —
+     `pagelist_page_preserving_state_leaves_a_compressed_node_compressed`, ok in **77s**.
+     Blanket-annotating the family would have hidden a working check, exactly as the
+     Phase C pass warned.
+   * **1 already excepted** —
+     `search::pagelist::…::compressed_history_match_spanning_page_boundary_remains_compressed`.
+     `miri-run.sh` scored it `res=FAIL` / `VERDICT: PROBLEM`; the per-test output file
+     reads `ignored, MIRI EXCEPTION …`. Worked example of the harness's known
+     ignored-test-as-FAIL misclassification.
+
+   **Root cause, measured (this was the "investigate why" half of the ask).** Not hangs and
+   not a logic difference from the tractable siblings — pure volume, on two independent
+   measurements. (a) Natively these are the slowest PageList tests by two to three orders
+   of magnitude (0.50–4.48s debug vs ~0.00s typical): `fill_compressible_history` calls
+   `grow()` once per row until N std-capacity 215x215 pages exist, then `compress()`
+   LZ4-compresses AND verify-decompresses every byte of each mapping. (b) Two of them were
+   run to COMPLETION under Miri — `pagelist_compress_drain_finishes_in_one_call` **ok in
+   1631s**, `pagelist_compress_page_round_trips_a_cold_history_page` **ok in 194s**, both
+   with ZERO UB and ZERO leaks. That is direct positive criterion-3 evidence, not an
+   argument from a lighter sibling.
+
+   **One lever found, and a follow-up for WS8 rather than a change here.** Those completion
+   runs used `-C debug-assertions=off`, which disables `Page::assert_integrity` (O(page),
+   runs on nearly every PageList mutation; the `mirihar-pagelist-compress` harness already
+   uses this accommodation on the documented grounds that it adds no SB/TB or leak
+   coverage). With it, `pagelist_compress_page_round_trips_a_cold_history_page` goes from
+   TIMEOUT(360s) to **ok in 194s** — so the page-level tests are dominated by
+   `assert_integrity` and would be tractable in a `RUSTFLAGS=-Cdebug-assertions=off` Miri
+   lane, while the multi-page ones are dominated by LZ4 volume and stay out of budget
+   (1631s). The annotations are therefore correct for the lane as it runs today
+   (`check_leaks.sh`: `cargo +nightly miri test -p rustty-vt --lib`, debug assertions ON —
+   without them the rustty-vt G6 lane cannot complete at all). **NEW WS8 item:** add a
+   `-C debug-assertions=off` variant of the vt Miri lane and re-measure the whole
+   `cfg_attr(miri, ignore)` inventory against it; changing G6's flags is a cross-crate
+   change to a shared gate and would re-classify far more than the compression family.
+   **[WS19 AUDIT 2026-07-29] WS8 IS CLOSED — this item was ORPHANED. Re-owned as O2 of
+   the Phase 2 Closure Audit below (owner: WS19 T6).**
 ---
 
 ## `threadEnter` error arms should drain the pty master BEFORE `stop()` — residual cure for the teardown wedge [added 2026-07-29, WS-hang review I3]
@@ -5169,6 +5563,259 @@ Divergences from the oracle that are intentional and will NOT be "completed"
 later. Each records what diverges, why fidelity was overruled, and how the
 divergence is bounded. Anything here must be a conscious decision with a
 rationale — never an accident.
+
+## rustty-termio ReadThread — PRESERVED REFERENCE QUIRK: trailing pty output dropped on Linux POLLHUP (L1 LT9)
+
+**[RECLASSIFIED — WS19 T2, 2026-07-29, audit §E.2.]** This entry was filed among the
+DEFERRALS even though its own first line says "preserved verbatim, NOT fixed … reference
+behavior, not a port bug". It is a permanent Justified R1 Divergence and is moved here so
+no closure sweep reads it as open work. **4-criterion basis:**
+1. **It is FIDELITY, not a gap.** Rustty reproduces `threadMainPosix`'s HUP-before-drain
+   ordering byte-for-byte; "fixing" it would be a *divergence from* the oracle, which is
+   the opposite of R1.
+2. **Bounded.** It costs at most the trailing output of a process that exits in the same
+   `revents` word that raised `POLLHUP`, on Linux only (macOS's kqueue does not coalesce
+   this way). No state corruption, no hang.
+3. **Gate/KAT-pinned.** The KAT spawns a real `/bin/sh` in a real pty and asserts the echo
+   round-trips into the terminal `Screen`, with the exit RACE (not the quirk) removed, so
+   the behavior cannot drift silently.
+4. **The only correct trigger is upstream.** Un-diverging means upstream changes
+   `threadMainPosix`; Phase 3's resync is where that would arrive. Keeping a rustty-local
+   fix would put the port permanently ahead of its reference on a path with a live KAT.
+
+
+**Status: preserved verbatim, NOT fixed. This is reference behavior, not a port bug.**
+
+`ReadThread.threadMainPosix` checks HUP *before* it re-drains the pty:
+
+```zig
+// ghostty src/termio/Exec.zig:1355-1358
+if (pollfds[0].revents & posix.POLL.HUP != 0) {
+    log.info("pty fd closed, read thread exiting", .{});
+    return;
+}
+```
+
+The read loop's shape is: tight `read()` until `EAGAIN` -> blocking `poll(-1)` ->
+quit check -> **HUP check -> return**. There is no final drain after the HUP check.
+
+**Why this is invisible on macOS but bites on Linux** (a kernel pty-semantics
+difference, verified empirically in L1 LT9, not inferred):
+
+* **Linux** raises `POLLHUP` on the pty *master* as soon as the last *slave* fd
+  closes — **even while unread bytes are still buffered** — so a child that writes
+  and immediately exits produces `POLLIN|POLLHUP` in the SAME `revents` word
+  (measured: `0x11`). The reference returns on the HUP check and the buffered bytes
+  are never read. Measured directly: at that HUP return the pty still held the
+  unread `"RUSTTY_OK\r\n"`.
+* **macOS** does not surface the dying child as HUP here; it surfaces as
+  `read() == 0`, which the loop already handles (`if (n == 0) break;` — and the
+  reference's own comment there says *"This happens on macOS instead of WouldBlock
+  when the child process dies"*). So macOS drains first and loses nothing.
+
+**Consequence:** on Linux, output written by a child in the same instant it exits
+can be dropped by the read thread. For a real interactive shell this is a
+shutdown-time edge (the shell is long-lived; the HUP only arrives at exit), which
+is presumably why it is unfixed upstream.
+
+**Why we do NOT fix it:** R1 — port faithfully, preserve reference quirks. Adding a
+post-HUP drain would be a real behavioral divergence from ghostty on the hot read
+path. If upstream fixes it, port the fix.
+
+**Impact on the KAT:** `crates/rustty-termio/tests/live_shell.rs` therefore spells
+its command `/bin/sh -c 'echo RUSTTY_OK; /bin/sleep 1'` rather than a bare `echo`:
+the trailing sleep keeps a slave fd open for a beat after the write, decoupling
+`POLLIN` from `POLLHUP` so the read thread drains on a HUP-free wakeup exactly as
+it does on macOS. This removes only the exit RACE — the KAT still spawns a real
+`/bin/sh` in a real pty and asserts the echo round-trips into the terminal
+`Screen`. (`/bin/sleep` is absolute because that harness's `Config.env` is an empty
+`EnvMap` — there is no PATH to search.)
+
+**Un-defer trigger:** an upstream ghostty fix to the `threadMainPosix` HUP path.
+
+
+---
+
+### xev ThreadPool `Event` shutdown wake — DELIBERATE DEVIATION (controller-approved) [2026-07-19, Task 1]
+
+**[RECLASSIFIED — WS19 T2, 2026-07-29, audit §E.2.]** Filed among the deferrals despite
+being labelled a controller-approved DELIBERATE DEVIATION in its own heading. Moved here.
+**4-criterion basis** (the detail below is the original rationale, unchanged):
+1. **Conscious and approved** — the deviation was decided, reviewed and recorded, not
+   discovered; it is not an unported remainder.
+2. **Bounded to `wake`'s shutdown transition** — both changes are confined to the terminal
+   SHUTDOWN edge; the steady-state notify path is byte-faithful to `ThreadPool.zig:508-518`.
+3. **The failure mode it removes is a lost-wakeup HANG**, i.e. liveness beats byte-fidelity
+   here — the same trade the bounded `killPid` wait already made and recorded.
+4. **Regression-gated** — RED/GREEN evidence plus a regression gate accompany it (see the
+   argument recorded in the entry), so it cannot silently widen.
+
+`crates/rustty-xev/src/thread_pool.rs` `Event::wake` deviates from the oracle
+(`ThreadPool.zig:508-518`, kprotty's Zap pool) in two ways, both confined to `wake`:
+**(1)** the terminal SHUTDOWN transition's `futex_wake` is UNCONDITIONAL (the oracle skips it when
+the pre-swap state is not WAITING, which strands remaining parked sleepers when a trailing run-loop
+`notify()` left the event NOTIFIED — `join()` then hangs); **(2)** SHUTDOWN is STICKY (the NOTIFIED
+transition is a CAS loop that no-ops on a shutdown event, because the oracle's unconditional swap
+lets a late `notifySlow` event-write resurrect the dead event and re-park a woken sleeper forever).
+Rationale: SHUTDOWN is terminal/unrepeatable, so the extra wake is sound (sleepers re-check state;
+late arrivals fail the futex value-check) and notifying a shutdown event is already a no-op by
+`Event::wait`'s own contract; cost = one extra syscall at pool shutdown. Both oracle holes are
+ANALYTIC windows (the originally-observed 100% teardown deadlock was root-caused to a rustty port
+bug — the `futex_wake` shim passed `u32::MAX` unclamped through FUTEX_WAKE's C-int slot = `-1` =
+wake at most ONE; fixed with the oracle's own `min(i32::MAX)` clamp semantics, after which the
+VERBATIM oracle Event passed 400/400 multi-worker lifecycles). ghostty never instantiates the pool
+(all 4 xev loops are `Loop.init(.{})`), and upstream libxev `1c80766` (Dec 2024) fixed a DIFFERENT
+join race already in our pin — upstream HEAD still carries these two windows. rustty's Task-5 epoll
+File watcher WILL multi-worker-join, hence the defensive close. Full interleavings + soundness
+argument: the DELIBERATE DEVIATION note on `Event::wake`; RED/GREEN evidence + regression gate
+(`thread_pool::tests::multi_worker_quiesce_then_join_50x`, 50 lifecycles under a 60s watchdog):
+`.superpowers/sdd/task-1-report.md` addendum 2.
+
+
+---
+
+## macOS `xev.File`/`TCP`/`UDP` watcher surface + the `kqueue: file IO on thread pool` skip-stub [RECLASSIFIED — WS19 T11, 2026-07-29, audit row O10]
+
+**Was** filed among the xev DEFERRALS, which made a closure sweep read it as open work.
+It is neither open nor a deferral of choice: it is a deliberate, gate-pinned
+cross-target surface difference. Moved here.
+
+**What diverges.** On macOS, `xev.File` / `xev.TCP` / `xev.UDP` are not instantiated
+(the kqueue backend exports no `File`/`TCP`/`UDP` handle types), and the reference's
+`kqueue: file IO on thread pool` test is a **SkipZigTest-style skip-stub `#[test]`**
+(`kqueue_file_io_on_thread_pool`), keeping the mapped count at 12. On Linux they ARE
+fully ported per-backend (`epoll.rs` + `io_uring.rs`) and wrapped as the Dynamic
+`File`/`TCP`/`UDP` enums.
+
+**4-criterion basis.**
+1. **Zero consumers.** ghostty makes no use of `xev.File`/`TCP`/`UDP` on macOS
+   (`watcher/file` is annotated "zero ghostty uses" in the reference-surface notes
+   above), and rustty's only thread-pool consumer is the Linux epoll `File` watcher. No
+   caller — in the reference or the port — can observe the difference.
+2. **Gate-pinned, not hidden.** `crates/rustty-xev/tests/surface_parity.rs` asserts each
+   target's ACTUAL exported surface, so neither side can drift silently: adding or
+   removing an export fails that test.
+3. **The capability EXISTS in the tree.** The Linux side is ported, and the work-stealing
+   `ThreadPool` body is 1630 lines with zero `unimplemented!()` (audit row W5). The macOS
+   gap is an EXPORT decision on an unexercised surface, not missing logic — so there is
+   no unported reference behavior hiding behind it.
+4. **The skip-stub is honest.** `kqueue_file_io_on_thread_pool` is a real `#[test]` that
+   declares what it skips and why, keeping the R1 test count intact rather than quietly
+   dropping a reference test. It defers genuinely-unused functionality, never a live path.
+
+**If a consumer ever appears** (a macOS caller that needs pool-routed file IO), the arms
+to fill are named in the xev surface notes above; the trigger is that consumer, and the
+`surface_parity.rs` expectations are what must change first.
+
+---
+
+## libxev `c_api.zig` — libxev's own C ABI [RECLASSIFIED — WS19 T11, 2026-07-29, audit row O11]
+
+**What diverges.** libxev's `c_api.zig` (1 test) — the C ABI libxev exposes for C
+consumers — has no rustty counterpart.
+
+**4-criterion basis.**
+1. **Outside the port's consumption surface.** Every rustty consumer of `rustty-xev`
+   uses the RUST API. The C ABI is a libxev-to-C boundary, not a ghostty-to-libxev one.
+2. **ghostty does not consume it either.** ghostty links libxev as a Zig package and
+   calls its Zig API, so there is no reference behavior any caller observes through
+   `c_api.zig`. R1 is a fidelity obligation about observable behavior; nothing observes
+   this.
+3. **Porting it would create an UNGATEABLE surface.** A C ABI with no consumer cannot be
+   bound by any existing gate — not the differential harness (no driver), not
+   `surface_parity.rs` (which asserts the RUST surface), not the header gates (which
+   cover `rustty-vt-c`/`rustty-apprt-c`). It would be new unexercised `unsafe` whose
+   correctness no test could assert, which is strictly worse than its absence.
+4. **The trigger is named.** If a C consumer of `rustty-xev` ever appears, the port is
+   `c_api.zig` plus a cbindgen header and a smoke KAT modelled on
+   `rustty-vt-c`'s — at which point it becomes gateable, which is exactly the condition
+   that makes it worth doing.
+
+---
+
+## `rustty-bench` macOS `os_signpost` Instruments interval [RECLASSIFIED — WS19 T13, 2026-07-29, audit row O19a]
+
+**What diverges.** `Benchmark.zig:44-65` opens an `os_signpost` interval so a benchmark
+run shows up as a named region in Instruments. `crates/rustty-bench/src/benchmark.rs:81`
+is a `#[cfg(target_os = "macos")]` **no-op**, with the reference body preserved verbatim
+as comments.
+
+**4-criterion basis.**
+1. **Pure instrumentation.** An Instruments trace interval has zero effect on measured
+   behavior, on benchmark timings as reported by the port's own harness, or on any
+   output. It changes what a profiler DISPLAYS, nothing the program computes.
+2. **R1 no-loss.** The verbatim Zig body is preserved at the site, so nothing is dropped;
+   the reference logic is readable in place and comment-fidelity gates count it.
+3. **Unobserved.** No test in the reference or the port asserts anything about the
+   signpost.
+4. **Filling it here would be an isolated one-off.** It needs the `macos.os.Log` /
+   `macos.os.signpost` binding tier, which the tree defers TREE-WIDE (the log-facade
+   seam). Binding that family for one profiler annotation — while every other consumer
+   of the same tier stays deferred — buys nothing and creates a lone unexercised FFI
+   surface. The trigger is the log-facade tier landing, not this call site.
+
+---
+
+## `rustty-synthetic` / `rustty-bench` locally-replicated `detectArgs` [JUSTIFIED — WS19 T13, 2026-07-29, audit row O18/O19]
+
+**Context, and a correction.** The ledger claimed these two crates had unfilled
+BINARY-ENTRY seams. **They do not** — see the strike on those rows: `cli.rs:97` `main()`,
+`:245`/`:274`/`:297` `main_action_impl_{ascii,osc,utf8}` are all LIVE, both crates
+register real `[[bin]]` targets (`src/main_gen.rs`, `src/main_bench.rs`) whose `fn main`
+calls `cli::main()`, and `grep -rn 'unimplemented!\|todo!'` over both crates returns
+**zero hits**. What remains is one real, permanent structural divergence.
+
+**What diverges.** Each crate replicates the `+action` detection logic locally
+(`detect_args`, mirroring `cli.action.detectArgs(Action, alloc)`) instead of calling the
+shared generic helper.
+
+**4-criterion basis.**
+1. **The shared helper is ABOVE these crates in the acyclic graph (R4).**
+   `cli.action.detectArgs` lives in `rustty-cli`, which is a heavy crate depending on
+   config/vaxis/zf; a `rustty-synthetic → rustty-cli` or `rustty-bench → rustty-cli` edge
+   would invert the graph. `check_acyclic.sh` (G7) is the binding constraint, and it is
+   invariant (R5).
+2. **The replication is FAITHFUL and small.** Each local `detect_args` reproduces the
+   reference's detect logic — find the single `+name` argument, `stringToEnum` — over
+   `std::env::args_os`. The synthetic `Action` declares no `detectSpecialCase`, so the
+   special-case arm of `detectIter` is correctly elided rather than stubbed; that
+   elision is documented at the site.
+3. **Behavior is identical where it is observable.** Both binaries dispatch the same
+   actions from the same argv shapes as the reference; no caller can distinguish a local
+   detector from the shared one.
+4. **The alternative is worse than the divergence.** Hoisting `detectArgs` into a new
+   leaf crate purely to de-duplicate ~30 lines adds a crate to the graph and a new
+   published surface for no behavioral gain; hosting the entries in the `rustty` bin
+   (the plan's suggested alternative) is moot now that both crates have working bins of
+   their own. If `detectArgs` ever needs to change, the trigger is that change, and the
+   two replicas are named here.
+
+---
+
+## terminfo SOURCE + termcap files never emitted (Debug builds only) [RECLASSIFIED — WS19 T14, 2026-07-29, audit row O20]
+
+**Was** `INTEGRATION_PARITY.md §2.8`, with fix-list item 8 marked "(Optional)".
+"Optional" is not a disposition, and the row had no owner. Moved here as permanent.
+
+**What diverges.** `xtask` does not emit the terminfo **source** file or the **termcap**
+file that `GhosttyResources.zig` emits.
+
+**4-criterion basis.**
+1. **In the SHIPPED configuration, rustty matches the oracle EXACTLY.** The reference's
+   `emit_terminfo_source` / `emit_termcap` options default **FALSE for Release**
+   (`Config.zig:410-429`), and the shipping app IS a Release build. There is no
+   divergence at all in what users get — only in a Debug-build convenience.
+2. **Confined to informational files; the functional artifact IS produced.** The
+   COMPILED terminfo database — which is what TERM resolution actually reads — is
+   generated (`xtask/src/res_terminfo.rs:50-90`). The source and termcap files are
+   human-readable/legacy conveniences, not inputs to any runtime path.
+3. **Unobserved.** No test in the reference or the port asserts these two files exist.
+4. **Named trigger, bounded cost.** If a Debug-parity need appears, the work is
+   mirroring the two `GhosttyResources.zig` hunks into `res_terminfo.rs`; the trigger is
+   that need, and the hunks are named. Deleting the "(Optional)" fix-list row removes the
+   pretence that this is scheduled work.
+
+---
 
 ## `killPid` bounded wait (`crates/rustty-termio/src/exec.rs`) — WS-hang
 
@@ -5279,87 +5926,6 @@ child. The deterministic evidence lives out-of-suite in
 oracle and the port. It is left verbatim — it terminates as soon as the child
 `setsid`s or dies, and a wedged `?Es` child still reports a valid pgid, so it is
 not a hang site (confirmed by `sample`: the hang is inside `killPid`).
-3. **`pagelist_decommit_pool_item_zeroes_the_dirty_region` has a real Stacked-Borrows
-   violation under Miri (OPEN, discovered while proving WS7 Phase C's I1).** Confirmed
-   deterministic in isolation — full backtrace and root cause in
-   `.port/phase-2/MIRI_EXCEPTIONS.md`'s Category 2 correction note. **Pre-existing (WS7
-   B1, commit `39cd6b8`; last touched at `0413d2b`), NOT introduced by Phase C** — no
-   Phase C commit touches `mem.rs` or this test. It is a test-code bug (holds a `&mut
-   [u8]` across a call that mutates the same bytes through a separate raw pointer, then
-   reads through the stale reference), not a production-code bug; native `cargo test`
-   and ASan both stay green. The claim in `MIRI_EXCEPTIONS.md`'s Category 2 table that
-   this test "IS Miri-provable" was asserted without having actually been run under Miri
-   — now corrected in-place. Phase E must either fix the test (re-derive the slice fresh
-   after each `decommit_pool_item` call) or record a formal exception; it must NOT be
-   left silently claimed-clean.
-   **RESOLVED — WS7 Phase E (2026-07-29).** Fixed exactly as sketched: every slice is now
-   derived fresh from `ptr` and none is live across `decommit_pool_item`. Assertions
-   unchanged (both the fully-dirty and the partially-dirty item must still read back
-   all-zero across the whole buffer). Measured under Miri: was the retag UB above, now
-   `1 passed` in 13.28s. Before/after output recorded in `MIRI_EXCEPTIONS.md`'s Category 2
-   correction note, which no longer claims anything unverified.
-4. **Several WS7 Phase B compression tests are ALSO Miri-intractable and undocumented
-   (OPEN, discovered the same pass).** Attempting a bounded full-module pagelist Miri
-   sweep (beyond I1's specific ask) found `pagelist_compress_incremental_converges_to_complete`,
-   `pagelist_compress_full_leaves_viewport_and_active_resident`,
-   `pagelist_compress_drain_finishes_in_one_call`, and
-   `pagelist_compress_full_mode_leaves_no_continuation` all TIMEOUT at a 2–3 min bound —
-   confirmed in single-worker isolation (not a parallel-contention artifact), and
-   `…_leaves_no_continuation` reproduces identically on **pre-Phase-C** commit `098fc63`,
-   proving this is a **pre-existing WS7 Phase B gap** (these tests were apparently never
-   run under a bounded Miri harness before), not a Phase C regression. `MIRI_EXCEPTIONS.md`
-   had cited two of these as "lighter, passing" coverage for a Phase C exception row; that
-   citation is now corrected (see the row's inline correction). Out of scope for the Phase
-   C review response — Phase E should measure the rest of the `compress`/`pagelist_compress`
-   family the same way (`bash .port/tools/miri-run.sh rustty-vt pagelist_compress 8 3 5`)
-   and either annotate the genuinely-intractable ones or investigate why compression state
-   machines are this expensive under Miri interpretation.
-   **RESOLVED — WS7 Phase E (2026-07-29).** Whole family measured, per test, with every
-   candidate re-verified in single-worker ISOLATION before being excepted (a parallel
-   TIMEOUT is a candidate, never a verdict). Full table in `MIRI_EXCEPTIONS.md`
-   ("WS7 Phase E — the page-compression test family"). Of **12** measured:
-   * **10 annotated** — the 4 named above plus the 4 other `pagelist_compress_*` tests,
-     plus **2 that this pass discovered and the earlier one had not named**
-     (`pagelist_mutations_mark_compression_activity`,
-     `pagelist_memory_stats_accounts_compressed_and_resident_bytes`). All 10 TIMEOUT at a
-     6-min bound in isolation.
-   * **1 TRACTABLE and deliberately left un-annotated** —
-     `pagelist_page_preserving_state_leaves_a_compressed_node_compressed`, ok in **77s**.
-     Blanket-annotating the family would have hidden a working check, exactly as the
-     Phase C pass warned.
-   * **1 already excepted** —
-     `search::pagelist::…::compressed_history_match_spanning_page_boundary_remains_compressed`.
-     `miri-run.sh` scored it `res=FAIL` / `VERDICT: PROBLEM`; the per-test output file
-     reads `ignored, MIRI EXCEPTION …`. Worked example of the harness's known
-     ignored-test-as-FAIL misclassification.
-
-   **Root cause, measured (this was the "investigate why" half of the ask).** Not hangs and
-   not a logic difference from the tractable siblings — pure volume, on two independent
-   measurements. (a) Natively these are the slowest PageList tests by two to three orders
-   of magnitude (0.50–4.48s debug vs ~0.00s typical): `fill_compressible_history` calls
-   `grow()` once per row until N std-capacity 215x215 pages exist, then `compress()`
-   LZ4-compresses AND verify-decompresses every byte of each mapping. (b) Two of them were
-   run to COMPLETION under Miri — `pagelist_compress_drain_finishes_in_one_call` **ok in
-   1631s**, `pagelist_compress_page_round_trips_a_cold_history_page` **ok in 194s**, both
-   with ZERO UB and ZERO leaks. That is direct positive criterion-3 evidence, not an
-   argument from a lighter sibling.
-
-   **One lever found, and a follow-up for WS8 rather than a change here.** Those completion
-   runs used `-C debug-assertions=off`, which disables `Page::assert_integrity` (O(page),
-   runs on nearly every PageList mutation; the `mirihar-pagelist-compress` harness already
-   uses this accommodation on the documented grounds that it adds no SB/TB or leak
-   coverage). With it, `pagelist_compress_page_round_trips_a_cold_history_page` goes from
-   TIMEOUT(360s) to **ok in 194s** — so the page-level tests are dominated by
-   `assert_integrity` and would be tractable in a `RUSTFLAGS=-Cdebug-assertions=off` Miri
-   lane, while the multi-page ones are dominated by LZ4 volume and stay out of budget
-   (1631s). The annotations are therefore correct for the lane as it runs today
-   (`check_leaks.sh`: `cargo +nightly miri test -p rustty-vt --lib`, debug assertions ON —
-   without them the rustty-vt G6 lane cannot complete at all). **NEW WS8 item:** add a
-   `-C debug-assertions=off` variant of the vt Miri lane and re-measure the whole
-   `cfg_attr(miri, ignore)` inventory against it; changing G6's flags is a cross-crate
-   change to a shared gate and would re-classify far more than the compression family.
-   **[WS19 AUDIT 2026-07-29] WS8 IS CLOSED — this item was ORPHANED. Re-owned as O2 of
-   the Phase 2 Closure Audit below (owner: WS19 T6).**
 
 ---
 
@@ -5397,27 +5963,27 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 
 | # | Ledger row | Verified state (evidence) | Disposition | Cost |
 |---|---|---|---|---|
-| O1 | `D:5080` make `style::Color` padding-free, "listed for WS8" | **OPEN, real.** `crates/rustty-vt/src/style.rs:143` is a plain Rust `enum Color { None, Palette(u8), Rgb(RGB) }` — no `#[repr]`, payload-sized, so a typed write leaves the inactive payload uninit. Site count re-measured: **160** `Color::{None,Palette,Rgb}` occurrences across **18** files (ledger said 163/17 — mildly stale). Reproduction is the committed `mapinit_styled` harness scenario (seconds). | **fix in WS19 T5** — no other open WS touches vt style | **L** |
-| O2 | `D:5357` add a `-C debug-assertions=off` vt Miri lane, "NEW WS8 item" | **OPEN, real.** `check_leaks.sh` runs `cargo +nightly miri test -p rustty-vt --lib` with debug assertions ON; no second lane exists (`grep -rn 'debug-assertions' .port/tools/` → only `check_release_lane.sh` prose and this ledger). The 10 `cfg_attr(miri, ignore)` annotations are correct only *for the lane as it runs today*. | **fix in WS19 T6** | **M** |
-| O3 | `D:4981`/`:5011` WS7 Phase C divergence #11 — `Screen::cursor_scroll_region_up` unported; "belongs to the WS8 upstream-sweep backlog (BL-4)" | **OPEN, real, and DOUBLY mis-filed.** `grep -rn 'cursor_scroll_region_up\|cursorScrollRegionUp' crates/` → **zero hits**. But BL-4 is the **perf series**, which is **WS10**'s scope, not WS8's — so the row names a closed WS *and* the wrong backlog. The blocking commit `77190bd02` is beyond the pin. | **route to WS10** (BL-4). Because `77190bd02` is beyond-pin, the port is **cheaper AFTER Phase 3 advances the pin** — WS19 T2 rewrites the row to say exactly that instead of leaving it in a closed WS. | **S** (row) / **M** (port, in WS10) |
-| O4 | `D:4960` inspector `pagelist.rs` CELL-detail path still restores compressed pages; "D6 must port that end state" | **OPEN — and WS7 D6 MERGED (`b8c40f9`) without closing it.** `crates/rustty-inspector/src/widgets/pagelist.rs` still calls `Node::page(cell.node)` at **6** sites (`:1701,:1703,:1759,:1889,:2163,:2379`). The guard at `:2414` asserts `!loop_src.contains("Node::page(")` over the **page-tree loop source only** — exactly the weaker form the deferral predicted — so the file-wide property is still unproven. | **fix in WS19 T7** (port the oracle `pages.pin` + `InspectedCell` restructure; tighten the guard to whole-file) | **M** |
-| O5 | `D:4973` `PageList::Limits`/`Limits::enforce` has no rustty counterpart, so the oracle's 11th `mark_activity` site has nothing to port onto | **OPEN, correctly described.** Depends on a struct beyond the pin. | **route to Phase 3 as a re-vet row**, not a Phase-2 deferral: WS19 T2 restates it as pin-conditional with the exact assertion Phase 3 must make (`Limits::enforce` must `mark_activity` on entry) | **S** |
-| O6 | `D:4046` GTK portal `OpenURI` — call site INHABITED, body unported; marked **OPEN**, no owner | **OPEN, real.** No `portal` module under `crates/rustty-apprt/src/gtk/`; `startup` fetches the `gio::DBusConnection` for GlobalShortcuts only. WS15 explicitly split this out and did not take it. | **fix in WS19 T8** (reuses the WS15 request-path pattern + its live gate harness) | **M** |
-| O7 | `D:4858`/`:4904` wayland `Window` snapshots the decoration mode at init; a live decoration-mode change is now *cranked* but never *re-read* | **OPEN, real, no owner** — recorded twice, both as a "coupled follow-up" with no WS. | **fix in WS19 T9** | **S** |
-| O8 | `D:4905` wayland duplicate-global re-advertisement leaves a stale `name→tag` entry | **OPEN, LOW, no owner.** | **permanent divergence** — pathological input no compositor produces; 4-criterion basis written in WS19 T9 | **S** |
-| O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** |
-| O10 | `D:3273` macOS `xev.File`/`TCP`/`UDP` watcher instantiations still deferred (Linux ported them, Tasks 3–5); plus the macOS `kqueue: file IO on thread pool` skip-stub | **OPEN, real, no owner.** The two targets deliberately diverge, gate-pinned by `crates/rustty-xev/tests/surface_parity.rs`. | **permanent divergence** — already deliberate and gate-pinned; WS19 T11 moves it into the divergence section with its 4-criterion basis rather than leaving it in a "DEFERRED" list | **S** |
-| O11 | `D:3274` xev `c_api.zig` (libxev's own C ABI) unported | **OPEN, no owner.** rustty consumers use the Rust API; nothing in ghostty consumes libxev's C ABI. | **permanent divergence** (outside the port's consumption surface; basis in WS19 T11) | **S** |
-| O12 | `D:2643` `+version`'s OSC-8 commit-hash hyperlink never emits (no `+BUILD` metadata, no repo-URL identity constant) | **OPEN, real, no owner.** The three STUB lines it is bundled with are GONE (see W8); only the hyperlink branch is still dead. | **fix in WS19 T12** (repo-URL constant in `rustty-identity` + a build-time commit hash) | **S** |
-| O13 | `D:3065`/`:4067` `main_wasm.zig` + `main_build_data.zig` unported, "Target: the gen/wasm-artifact tooling milestone" | **OPEN.** `grep -rn 'main_wasm\|main_build_data' crates/ --include='*.rs'` → **zero hits**. (`main_gen.zig` **IS** ported at `crates/rustty-synthetic/src/main_gen.rs`, so that third of the row is stale.) | `main_wasm` → **route to WS14**; `main_build_data` + the `+gen-*` file-emit wiring (`D:3725`) → **route to WS13** | **M** each |
-| O14 | `D:4209` `Atlas.Wasm` `test "happy path"` (4 named assertions) deferred with the wasm atlas surface | **OPEN, correctly described**; target is an unscheduled milestone. | **route to WS14** | **S** |
-| O15 | `D:1894` `App.zig` `Wasm` block preserved verbatim, "Target: the rustty wasm app-runtime" | **OPEN, correctly described** (the block is commented out in the *reference* too). | **route to WS14** | **S** |
-| O16 | `D:571` the **WebGL** renderer backend | **OPEN, correctly described.** | **route to WS14** | **L** |
-| O17 | `D:3741` `stb_image_resize.h` glyph resize has no rustty counterpart | **OPEN, correctly described.** | **route to WS11** | **M** |
-| O18 | `D:3668` `rustty-synthetic` `cli.rs` 4 binary-entry seams (`main`, `main_action_impl_{ascii,osc,utf8}`) | **OPEN**; un-defer trigger is "the `rustty +synthetic` binary entry", which no WS owns. | **fix in WS19 T13** — wire the entries through the existing `rustty-cli` detection, **or** record as permanent if the acyclic split forbids it. Decide in-plan; do not defer. | **M** |
-| O19 | `D:3697` `rustty-bench` residuals: macOS `os_signpost` interval; `main_bench.zig` binary entry; locally-replicated `detectArgs` | **OPEN, no owner.** | `os_signpost` → **permanent divergence** (Instruments-only instrumentation, zero behavior); the binary entry + local `detectArgs` → **fix in WS19 T13** with O18 (same class) | **S** |
-| O20 | `INTEGRATION_PARITY §2.8` terminfo SOURCE + termcap never emitted (diverges only in Debug builds); fix-list item 8 is marked "(Optional)" | **OPEN, no owner — and "optional" is not a disposition.** | **permanent divergence** — the shipping app is Release, where rustty MATCHES the oracle exactly; WS19 T14 writes the basis and deletes the fix-list row | **S** |
-| O21 | `D:4595` `rustty-termio` `shell_integration.rs` `TmpResourcesDir` builds paths via `to_string_lossy()` (violates zig-byteslice-to-rust-rawbytes) | **OPEN, LOW, no owner.** Test-only helper. | **fix in WS19 T15** (`OsStrExt::as_bytes`) | **S** |
+| O1 | `D:5080` make `style::Color` padding-free, "listed for WS8" | **OPEN, real.** `crates/rustty-vt/src/style.rs:143` is a plain Rust `enum Color { None, Palette(u8), Rgb(RGB) }` — no `#[repr]`, payload-sized, so a typed write leaves the inactive payload uninit. Site count re-measured: **160** `Color::{None,Palette,Rgb}` occurrences across **18** files (ledger said 163/17 — mildly stale). Reproduction is the committed `mapinit_styled` harness scenario (seconds). | **fix in WS19 T5** — no other open WS touches vt style | **L** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T5** (`style::Color` padding-free). The `mapinit_styled` uninit read is still reproducible; this is the row `MIRI_EXCEPTIONS.md`'s WS7-Phase-B OPEN FINDING points at. |
+| O2 | `D:5357` add a `-C debug-assertions=off` vt Miri lane, "NEW WS8 item" | **OPEN, real.** `check_leaks.sh` runs `cargo +nightly miri test -p rustty-vt --lib` with debug assertions ON; no second lane exists (`grep -rn 'debug-assertions' .port/tools/` → only `check_release_lane.sh` prose and this ledger). The 10 `cfg_attr(miri, ignore)` annotations are correct only *for the lane as it runs today*. | **fix in WS19 T6** | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T6** (the `-C debug-assertions=off` vt Miri lane). Blocked on T5 by design: T6 re-measures the `cfg_attr(miri, ignore)` inventory that T5 changes. |
+| O3 | `D:4981`/`:5011` WS7 Phase C divergence #11 — `Screen::cursor_scroll_region_up` unported; "belongs to the WS8 upstream-sweep backlog (BL-4)" | **OPEN, real, and DOUBLY mis-filed.** `grep -rn 'cursor_scroll_region_up\|cursorScrollRegionUp' crates/` → **zero hits**. But BL-4 is the **perf series**, which is **WS10**'s scope, not WS8's — so the row names a closed WS *and* the wrong backlog. The blocking commit `77190bd02` is beyond the pin. | **route to WS10** (BL-4). Because `77190bd02` is beyond-pin, the port is **cheaper AFTER Phase 3 advances the pin** — WS19 T2 rewrites the row to say exactly that instead of leaving it in a closed WS. | **S** (row) / **M** (port, in WS10) | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** Owner is now **WS10** (BL-4), pin-sequenced; `77190bd02` is beyond-pin. |
+| O4 | `D:4960` inspector `pagelist.rs` CELL-detail path still restores compressed pages; "D6 must port that end state" | **OPEN — and WS7 D6 MERGED (`b8c40f9`) without closing it.** `crates/rustty-inspector/src/widgets/pagelist.rs` still calls `Node::page(cell.node)` at **6** sites (`:1701,:1703,:1759,:1889,:2163,:2379`). The guard at `:2414` asserts `!loop_src.contains("Node::page(")` over the **page-tree loop source only** — exactly the weaker form the deferral predicted — so the file-wide property is still unproven. | **fix in WS19 T7** (port the oracle `pages.pin` + `InspectedCell` restructure; tighten the guard to whole-file) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T7.** Ported the oracle `pin` + `InspectedCell` restructure; whole-file guard in a SIBLING file; FAIL arm mutation-proven. |
+| O5 | `D:4973` `PageList::Limits`/`Limits::enforce` has no rustty counterpart, so the oracle's 11th `mark_activity` site has nothing to port onto | **OPEN, correctly described.** Depends on a struct beyond the pin. | **route to Phase 3 as a re-vet row**, not a Phase-2 deferral: WS19 T2 restates it as pin-conditional with the exact assertion Phase 3 must make (`Limits::enforce` must `mark_activity` on entry) | **S** | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** Phase 3 re-vet assertion **P3-RV1**. |
+| O6 | `D:4046` GTK portal `OpenURI` — call site INHABITED, body unported; marked **OPEN**, no owner | **OPEN, real.** No `portal` module under `crates/rustty-apprt/src/gtk/`; `startup` fetches the `gio::DBusConnection` for GlobalShortcuts only. WS15 explicitly split this out and did not take it. | **fix in WS19 T8** (reuses the WS15 request-path pattern + its live gate harness) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T8** (GTK portal `OpenURI`). Needs the port plus live D-Bus verification on the VM. |
+| O7 | `D:4858`/`:4904` wayland `Window` snapshots the decoration mode at init; a live decoration-mode change is now *cranked* but never *re-read* | **OPEN, real, no owner** — recorded twice, both as a "coupled follow-up" with no WS. | **fix in WS19 T9** | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T9** (wayland decoration-mode re-read). Needs a real compositor. |
+| O8 | `D:4905` wayland duplicate-global re-advertisement leaves a stale `name→tag` entry | **OPEN, LOW, no owner.** | **permanent divergence** — pathological input no compositor produces; 4-criterion basis written in WS19 T9 | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T9 (ledger half).** Duplicate-global nit is a **Justified R1 Divergence** with a 4-criterion basis. |
+| O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T10** (kqueue `thread_perform` `&mut Loop`). Requires the `mirihar-xev-mpsc` SB/TB proof first — SB conclusions must not be hand-reasoned. |
+| O10 | `D:3273` macOS `xev.File`/`TCP`/`UDP` watcher instantiations still deferred (Linux ported them, Tasks 3–5); plus the macOS `kqueue: file IO on thread pool` skip-stub | **OPEN, real, no owner.** The two targets deliberately diverge, gate-pinned by `crates/rustty-xev/tests/surface_parity.rs`. | **permanent divergence** — already deliberate and gate-pinned; WS19 T11 moves it into the divergence section with its 4-criterion basis rather than leaving it in a "DEFERRED" list | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
+| O11 | `D:3274` xev `c_api.zig` (libxev's own C ABI) unported | **OPEN, no owner.** rustty consumers use the Rust API; nothing in ghostty consumes libxev's C ABI. | **permanent divergence** (outside the port's consumption surface; basis in WS19 T11) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
+| O12 | `D:2643` `+version`'s OSC-8 commit-hash hyperlink never emits (no `+BUILD` metadata, no repo-URL identity constant) | **OPEN, real, no owner.** The three STUB lines it is bundled with are GONE (see W8); only the hyperlink branch is still dead. | **fix in WS19 T12** (repo-URL constant in `rustty-identity` + a build-time commit hash) | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T12** (`+version` OSC-8 commit hyperlink). |
+| O13 | `D:3065`/`:4067` `main_wasm.zig` + `main_build_data.zig` unported, "Target: the gen/wasm-artifact tooling milestone" | **OPEN.** `grep -rn 'main_wasm\|main_build_data' crates/ --include='*.rs'` → **zero hits**. (`main_gen.zig` **IS** ported at `crates/rustty-synthetic/src/main_gen.rs`, so that third of the row is stale.) | `main_wasm` → **route to WS14**; `main_build_data` + the `+gen-*` file-emit wiring (`D:3725`) → **route to WS13** | **M** each | **WS19 EXECUTION STATUS:** **DONE (split + routed) — WS19 T14/T19.** `main_gen` PORTED; `main_wasm` → WS14; `main_build_data` + `+gen-*` → WS13 (in WS13's plan). |
+| O14 | `D:4209` `Atlas.Wasm` `test "happy path"` (4 named assertions) deferred with the wasm atlas surface | **OPEN, correctly described**; target is an unscheduled milestone. | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
+| O15 | `D:1894` `App.zig` `Wasm` block preserved verbatim, "Target: the rustty wasm app-runtime" | **OPEN, correctly described** (the block is commented out in the *reference* too). | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
+| O16 | `D:571` the **WebGL** renderer backend | **OPEN, correctly described.** | **route to WS14** | **L** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
+| O17 | `D:3741` `stb_image_resize.h` glyph resize has no rustty counterpart | ~~**OPEN, correctly described.**~~ **THIS AUDIT VERDICT WAS WRONG — corrected 2026-07-29 by the WS11 plan-authoring lane.** The port **SHIPPED at `2e82776` (2026-06-30)**: `rustty-font-shaper/src/stb.rs:18` declares `stbir_resize_uint8`, `build.rs` compiles `vendor/stb_impl.c` via `cc::Build`, `vendor/stb_image_resize.h` is byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806` is argument-for-argument identical to `freetype.zig:639-652`. **Root cause of the miss:** the row's evidence grep was scoped to `crates/rustty-font/src`, but the code lives in the sibling crate `rustty-font-shaper` created by the D1 three-tier split — *the grep scope WAS the bug*, so re-running it could not detect the error (see §G). | **RECLASSIFIED, not closed:** the port is done; what is open is that its test coverage is **VACUOUS** (all reaching tests run at scale 1.0; `render_and_resize` never enters the bitmap arm; swapping stb for nearest-neighbour leaves all 9 tests green). **Route to WS11**, which owns it with a 10-task plan. | **S** (row) / **M** (coverage, in WS11) | **WS19 EXECUTION STATUS:** **DONE (row CORRECTED) — WS19 T14.** The audit verdict was WRONG: the port SHIPPED at `2e82776`. Reclassified to vacuous test coverage → **WS11**. |
+| O18 | `D:3668` `rustty-synthetic` `cli.rs` 4 binary-entry seams (`main`, `main_action_impl_{ascii,osc,utf8}`) | **OPEN**; un-defer trigger is "the `rustty +synthetic` binary entry", which no WS owns. | **fix in WS19 T13** — wire the entries through the existing `rustty-cli` detection, **or** record as permanent if the acyclic split forbids it. Decide in-plan; do not defer. | **M** | **WS19 EXECUTION STATUS:** **DONE (row was STALE) — WS19 T13.** The 4 seams do not exist; only the local `detectArgs` remains, as a **Justified R1 Divergence** (R4). |
+| O19 | `D:3697` `rustty-bench` residuals: macOS `os_signpost` interval; `main_bench.zig` binary entry; locally-replicated `detectArgs` | **OPEN, no owner.** | `os_signpost` → **permanent divergence** (Instruments-only instrumentation, zero behavior); the binary entry + local `detectArgs` → **fix in WS19 T13** with O18 (same class) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T13/T14.** All four residuals disposed: `os_signpost` + local `detectArgs` are divergences; the bin entry SHIPPED; the alias clause is MOOT. |
+| O20 | `INTEGRATION_PARITY §2.8` terminfo SOURCE + termcap never emitted (diverges only in Debug builds); fix-list item 8 is marked "(Optional)" | **OPEN, no owner — and "optional" is not a disposition.** | **permanent divergence** — the shipping app is Release, where rustty MATCHES the oracle exactly; WS19 T14 writes the basis and deletes the fix-list row | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T14.** Permanent **Justified R1 Divergence**; `INTEGRATION_PARITY` fix-list item 8 DELETED. |
+| O21 | `D:4595` `rustty-termio` `shell_integration.rs` `TmpResourcesDir` builds paths via `to_string_lossy()` (violates zig-byteslice-to-rust-rawbytes) | **OPEN, LOW, no owner.** Test-only helper. | **fix in WS19 T15** (`OsStrExt::as_bytes`) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T15.** `OsStrExt::as_bytes` at both sites, with a RED/GREEN discriminator (not a smoke test). |
 
 ## C. Rows whose CLAIMED STATUS WAS WRONG (headline deliverable)
 
@@ -5445,16 +6011,17 @@ a vacuous gate means every "green" claim it ever made is unproven.**
 
 | # | Item | Verified evidence | Owner | Cost |
 |---|---|---|---|---|
-| **N1** | **G1b (`check_test_counts.py`) hard-codes the RUST-side absolute path, so run from a git worktree it gates `main`, not the working tree — G1b is VACUOUS for every worktree change** | `.port/tools/gates/check_test_counts.py:25,29,39,43,46,52,56,64,67,76,91,92` all read `/Users/gael/projects/rustty/crates/...`. Identical bug to the one `miri-run.sh` already fixed via `git rev-parse --show-toplevel`. **The ORACLE-side hardcodes (`:24` etc.) are CORRECT and must stay** — R3 makes the oracle external. Today the bug is masked by N4 (the gate exits 3 BLOCKED before counting), so **fixing N4 without N1 would turn a blocked gate into a silently WRONG one**. | **WS19 T1** | **S** |
-| **N2** | **`include/rustty.h` does not compile standalone as C** — `unknown type name 'Opaque'`; gate A5 only compiles the *curated* `rustty/vt.h`, which is why it was never caught | `clang -fsyntax-only -I include` over a TU including `rustty.h` → 2 errors at `include/rustty.h:2455` (`Opaque *rustty_wasm_alloc_opaque(void);`) and `:2457`. `grep -n 'Opaque' include/rustty.h`: the only `typedef`s are `Node` and `Command` — `Opaque` is never declared (cbindgen `WARN: Can't find Opaque`). `.port/tools/gates/check_rustty_vt_headers.sh:13` probes `#include <rustty/vt.h>` only. **Pre-existing** (confirmed by stashing), not introduced by any lane. | **WS19 T3** | **S** |
-| **N3** | **`crates/rustty-apprt/tests/gtk_wayland_winproto.rs` has TWO `gtk4::init()` tests in one binary, which cannot work** | `:26` and `:81` both call `gtk4::init()`. `gtk4::init()` pins GTK to the calling thread; libtest gives each `#[test]` its own thread even at `--test-threads=1`, so the second panics *"Attempted to initialize GTK from two different threads"*. WS16 T2 already established the fix (`a7fa3b7` "split the x11 KATs one-per-binary (GTK is thread-pinned)"); the wayland file was never split. Latent in already-merged code. | **WS19 T4** | **S** |
-| **N4** | **G1b is BLOCKED, not green** — `~/.cache/zig/p/` was evicted, so the vaxis/zf/libxev reference corpus is gone | `ls ~/.cache/zig/p/` → *No such file or directory*. `python3 .port/tools/gates/check_test_counts.py` → **exit 3**, "BLOCKED — missing zig reference file(s)", listing 42 paths under `zf-0.10.3-…`, `vaxis-0.5.1-…`, `libxev-0.0.0-…` (pinned at `:162,:183,:200`). `.port/tools/restore_zig_deps.sh` **does not exist** — only *proposed* in the WS12 plan. Correctly surfaced as a WARNING (never a silent green), but the per-module gate does not bind at all today. | **WS19 T1** (write the hash-pinned restore script; WS12 consumes it) | **S** |
-| **N5** | **`cargo test --workspace` (ci.sh step 4, the DEBUG lane) lacks `--no-fail-fast`, so a failure in one crate MASKS every later crate** | `.port/tools/ci.sh:289` is bare `cargo test --workspace`. This is what hid the `rustty-extra` golden failures behind `rustty-apprt-c --test smoke`. **Half the reported symptom is already fixed:** `ci.sh:288` runs `cargo build --workspace` first, so the cold-`target/` uplift problem (smoke needs `librustty_apprt_c.dylib` in `target/<profile>/`) does not bite *inside* ci.sh — only outside it. `check_release_lane.sh:148,155` already does both correctly; the debug lane must match. | **WS19 T1** | **S** |
-| **N6** | **G3b comment-coverage counts RISE as an ARTIFACT of porting beyond-pin commits** — the gate diffs against the pin, so a sentence upstream DELETED beyond the pin still exists at the pin and is reported "missing" | `.port/tools/gates/check_comment_coverage.py:34` reads `GHOSTTY_SRC`, defaulting to `/Users/gael/projects/ghostty/src` — the oracle **working tree, pinned at `4749c4e93`**. WS7 D2 saw the config lane go 5→9 for exactly this reason. **VERDICT (the question this audit was asked to settle): advancing the pin in Phase 3 resolves it WHOLESALE, and is the only correct fix.** Once `GHOSTTY_SRC` is the resynced tree, the deleted sentences are absent from the reference side and the counts drop by construction — no per-file exception list, no gate change, no R5 exposure. **Do NOT paper over it with a per-file `GHOSTTY_SRC` override**: that is precisely the spoof hole `ci.sh:114-129` killed for G1b (a probe redirected away from what the script actually reads yields a vacuous green). Until the pin advances, beyond-pin G3b deltas are EXPECTED and must be recorded per-lane. | **no code change; WS19 T2 records the verdict**, Phase 3 realizes it | **S** |
-| **N7** | **`example/*/build.sh` (all 23) link `target/release/librustty_vt_c.dylib` but build it only IF ABSENT, so a stale release dylib silently fails or mis-links** | `example/c-vt-colors/build.sh:11`: `[ -f "$lib" ] \|\| ( cd "$root" && cargo build … )`. Identical in all 23 (`ls example/*/build.sh \| wc -l` → 23). | **WS19 T16** | **S** |
-| **N8** | **3 `.blp` msgids still spell "Ghostty" and ZERO code-side i18n call sites are wrapped**, so `xgettext` extracts no msgid from any `.rs` file | `assets/ui/1.3/debug-warning.blp:6`, `assets/ui/1.5/inspector-window.blp:5`, `assets/ui/1.5/window.blp:307`. `grep -rn 'gettext_' crates/rustty-apprt/src crates/rustty-core/src` finds only the `i18n::init`/`initGlobalDomain` wiring, never a wrapped literal. **LEDGERED?** Yes — the WS13 plan documents both as findings F3/F4 with exact file:line tables and owns them in its T2/T3. This row is the `DEFERRALS.md` cross-reference so a ledger grep finds them too. | **WS13** (already planned) | **M** |
-| **N9** | **`threadEnter` error arms should drain the pty master BEFORE `stop()`** (`D:5090`) and **`posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race** (`D:5130`) — both filed 2026-07-29 with **NO owner** | Both verified as described. `posix_waitpid`'s `unreachable!("waitpid: unexpected errno")` is FAITHFUL (Zig std does the same), so the exposure is inherited — but Rust's `unreachable!` always panics where Zig's is a no-op in `ReleaseFast`, so the *consequence* diverges. The second reaper is real: `crates/rustty-xev/src/process.rs` calls `waitpid` in the `.proc` completion trampoline. | **WS19 T17** (one teardown-ordering fix + one shim-signature change; BOTH must be recorded as `[R1-DIVERGENCE]` alongside the bounded `killPid`) | **M** |
-| **N10** | **DOCUMENTATION finding (not a defect): a fresh `Terminal::compress(.incremental)` right after a COMPLETED pass returns `Pending`, not `Complete`**, because the incremental traversal restarts — this invalidates the obvious "work is done" probe | `crates/rustty-vt/src/terminal.rs:2861-2894` forwards straight to `PageList::compress(Incremental)` and maps the result 1:1; the doc comment (`:2847-2860`) says only "the return value tells callers whether they should continue calling it" and never states the restart. `renderer_seam.rs:1990-1997` already depends on the distinction (it schedules another tick on `Pending`, stops on `Complete`/`Unsupported`). Nothing anywhere records the gotcha, so the next test author will read `Pending` as "not finished". | **WS19 T18** — a doc-comment hunk on `Terminal::compress` **plus** a `#[test]` that pins the observed restart, so the behavior is documented where a test author will actually see it | **S** |
+| **N1** | **G1b (`check_test_counts.py`) hard-codes the RUST-side absolute path, so run from a git worktree it gates `main`, not the working tree — G1b is VACUOUS for every worktree change** | `.port/tools/gates/check_test_counts.py:25,29,39,43,46,52,56,64,67,76,91,92` all read `/Users/gael/projects/rustty/crates/...`. Identical bug to the one `miri-run.sh` already fixed via `git rev-parse --show-toplevel`. **The ORACLE-side hardcodes (`:24` etc.) are CORRECT and must stay** — R3 makes the oracle external. Today the bug is masked by N4 (the gate exits 3 BLOCKED before counting), so **fixing N4 without N1 would turn a blocked gate into a silently WRONG one**. | **WS19 T1** | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T1.** `RS_ROOT` from `git rev-parse --show-toplevel`; 26 hardcodes rewritten (the audit said ~12); a RUST-side stale-mapping guard added, FAIL arm mutation-proven. |
+| **N2** | **`include/rustty.h` does not compile standalone as C** — `unknown type name 'Opaque'`; gate A5 only compiles the *curated* `rustty/vt.h`, which is why it was never caught | `clang -fsyntax-only -I include` over a TU including `rustty.h` → 2 errors at `include/rustty.h:2455` (`Opaque *rustty_wasm_alloc_opaque(void);`) and `:2457`. `grep -n 'Opaque' include/rustty.h`: the only `typedef`s are `Node` and `Command` — `Opaque` is never declared (cbindgen `WARN: Can't find Opaque`). `.port/tools/gates/check_rustty_vt_headers.sh:13` probes `#include <rustty/vt.h>` only. **Pre-existing** (confirmed by stashing), not introduced by any lane. | **WS19 T3** | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T3.** `typedef void *Opaque` pinned in `cbindgen.toml`; A5 now compiles ALL published headers as C11 + C++17, and gained an ORACLE-driven bidirectional export arm which immediately found 2 more missing exports (→ Phase 3 **P3-RV5**). |
+| **N3** | **`crates/rustty-apprt/tests/gtk_wayland_winproto.rs` has TWO `gtk4::init()` tests in one binary, which cannot work** | `:26` and `:81` both call `gtk4::init()`. `gtk4::init()` pins GTK to the calling thread; libtest gives each `#[test]` its own thread even at `--test-threads=1`, so the second panics *"Attempted to initialize GTK from two different threads"*. WS16 T2 already established the fix (`a7fa3b7` "split the x11 KATs one-per-binary (GTK is thread-pinned)"); the wayland file was never split. Latent in already-merged code. | **WS19 T4** | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T4.** Wayland KATs split one-per-binary; new HARD gate **G-GTKINIT**, both FAIL arms mutation-proven. |
+| **N4** | **G1b is BLOCKED, not green** — `~/.cache/zig/p/` was evicted, so the vaxis/zf/libxev reference corpus is gone | `ls ~/.cache/zig/p/` → *No such file or directory*. `python3 .port/tools/gates/check_test_counts.py` → **exit 3**, "BLOCKED — missing zig reference file(s)", listing 42 paths under `zf-0.10.3-…`, `vaxis-0.5.1-…`, `libxev-0.0.0-…` (pinned at `:162,:183,:200`). `.port/tools/restore_zig_deps.sh` **does not exist** — only *proposed* in the WS12 plan. Correctly surfaced as a WARNING (never a silent green), but the per-module gate does not bind at all today. | **WS19 T1** (write the hash-pinned restore script; WS12 consumes it) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T1.** `.port/tools/restore_zig_deps.sh` (pin = zig's own content hash, verified via `zig fetch`); G1b went 3 BLOCKED → 0 GREEN. |
+| **N5** | **`cargo test --workspace` (ci.sh step 4, the DEBUG lane) lacks `--no-fail-fast`, so a failure in one crate MASKS every later crate** | `.port/tools/ci.sh:289` is bare `cargo test --workspace`. This is what hid the `rustty-extra` golden failures behind `rustty-apprt-c --test smoke`. **Half the reported symptom is already fixed:** `ci.sh:288` runs `cargo build --workspace` first, so the cold-`target/` uplift problem (smoke needs `librustty_apprt_c.dylib` in `target/<profile>/`) does not bite *inside* ci.sh — only outside it. `check_release_lane.sh:148,155` already does both correctly; the debug lane must match. | **WS19 T1** | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T1.** `--no-fail-fast` on ci.sh's debug lane; the masking was reproduced live (a `rustty-apprt-c --test smoke` failure at output line 485 of 5039). |
+| **N6** | **G3b comment-coverage counts RISE as an ARTIFACT of porting beyond-pin commits** — the gate diffs against the pin, so a sentence upstream DELETED beyond the pin still exists at the pin and is reported "missing" | `.port/tools/gates/check_comment_coverage.py:34` reads `GHOSTTY_SRC`, defaulting to `/Users/gael/projects/ghostty/src` — the oracle **working tree, pinned at `4749c4e93`**. WS7 D2 saw the config lane go 5→9 for exactly this reason. **VERDICT (the question this audit was asked to settle): advancing the pin in Phase 3 resolves it WHOLESALE, and is the only correct fix.** Once `GHOSTTY_SRC` is the resynced tree, the deleted sentences are absent from the reference side and the counts drop by construction — no per-file exception list, no gate change, no R5 exposure. **Do NOT paper over it with a per-file `GHOSTTY_SRC` override**: that is precisely the spoof hole `ci.sh:114-129` killed for G1b (a probe redirected away from what the script actually reads yields a vacuous green). Until the pin advances, beyond-pin G3b deltas are EXPECTED and must be recorded per-lane. | **no code change; WS19 T2 records the verdict**, Phase 3 realizes it | **S** | **WS19 EXECUTION STATUS:** **DONE (verdict recorded) — WS19 T2.** G3b subsection in the gates README + Phase 3 **P3-RV2**; per-file `GHOSTTY_SRC` override explicitly FORBIDDEN. |
+| **N7** | **`example/*/build.sh` (all 23) link `target/release/librustty_vt_c.dylib` but build it only IF ABSENT, so a stale release dylib silently fails or mis-links** | `example/c-vt-colors/build.sh:11`: `[ -f "$lib" ] \|\| ( cd "$root" && cargo build … )`. Identical in all 23 (`ls example/*/build.sh \| wc -l` → 23). | **WS19 T16** — ~~open~~ **RESOLVED 2026-07-29**: guard replaced with an unconditional `cargo build` in all 23 (cargo is already incremental, so the avoid-rebuild motive was void). Hazard demonstrated concretely, not argued: with the old guard and a present-but-bogus dylib, `ld: unknown file type in .../librustty_vt_c.dylib`; with the new one the rebuild replaces it and the example runs. All 23 build+run green (`ok=23 fail=0`), including after `touch -t 200001010000` on the dylib. Repo-wide sweep for the same idiom: no other occurrence. | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T16.** All 23 `example/*/build.sh` rebuild unconditionally; hazard demonstrated (`ld: unknown file type`), all 23 build+run. |
+| **N8** | **3 `.blp` msgids still spell "Ghostty" and ZERO code-side i18n call sites are wrapped**, so `xgettext` extracts no msgid from any `.rs` file | `assets/ui/1.3/debug-warning.blp:6`, `assets/ui/1.5/inspector-window.blp:5`, `assets/ui/1.5/window.blp:307`. `grep -rn 'gettext_' crates/rustty-apprt/src crates/rustty-core/src` finds only the `i18n::init`/`initGlobalDomain` wiring, never a wrapped literal. **LEDGERED?** Yes — the WS13 plan documents both as findings F3/F4 with exact file:line tables and owns them in its T2/T3. This row is the `DEFERRALS.md` cross-reference so a ledger grep finds them too. | **WS13** (already planned) | **M** | **WS19 EXECUTION STATUS:** **DONE (routed) — already WS13's**; cross-referenced. |
+| **N9** | **`threadEnter` error arms should drain the pty master BEFORE `stop()`** (`D:5090`) and **`posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race** (`D:5130`) — both filed 2026-07-29 with **NO owner** | Both verified as described. `posix_waitpid`'s `unreachable!("waitpid: unexpected errno")` is FAITHFUL (Zig std does the same), so the exposure is inherited — but Rust's `unreachable!` always panics where Zig's is a no-op in `ReleaseFast`, so the *consequence* diverges. The second reaper is real: `crates/rustty-xev/src/process.rs` calls `waitpid` in the `.proc` completion trampoline. | **WS19 T17** (one teardown-ordering fix + one shim-signature change; BOTH must be recorded as `[R1-DIVERGENCE]` alongside the bounded `killPid`) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T17** (`threadEnter` drain ordering + `posix_waitpid` `ECHILD`). Two `[R1-DIVERGENCE]`s to record with the fix. |
+| **N11** | **`ci.sh` STEPS 1 AND 2 — `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` — WERE BOTH RED ON `main`.** Not vacuous: genuinely FAILING, and evidently never run. Every lane that reported "gates green" reported it without these two. | Reproduced on the pristine `/Users/gael/projects/rustty` checkout at the pinned `rustc 1.93.1`: `cargo fmt --check` → **317 diffs across 76 files**; `cargo clippy --workspace --all-targets -- -D warnings` → **RED in 8 crates** (`rustty-z2d` 5, `gettext-sys` 1, `rustty-vt` 6, `rustty-vaxis` 1, `rustty-renderer` 4, `rustty-web-canvas` 6, `rustty-termio` 1, `xtask` 3). Found while running WS19 T7's per-crate clippy, not by looking for it. **Two root causes worth naming: (1) five of the "doc list item" failures share ONE bug — a doc-comment line beginning with `+ `, which markdown reads as a list bullet, making the lines after it lazy continuations (`rustty-z2d/src/lib.rs`, `rustty-renderer/src/generic.rs`, `rustty-termio/tests/subprocess_drop_repro.rs`); (2) the `not_unsafe_ptr_arg_deref` cluster in `rustty-web-canvas` is a REAL C-ABI signature gap — four `extern "C"` exports dereference caller-supplied pointers without being `unsafe fn`, unlike the `rustty-vt-c`/`rustty-apprt-c` convention. The rest are fidelity-preserving constructs (`(n + 7) / 8` ceil-div, reference-shaped large enum variants, ordering-marker `drop()` of a non-`Drop` value) now allowed AT THE SITE with a written reason, never crate-wide, and one genuinely useless assertion (`gettext-sys`'s `assert!(!(f as *const ()).is_null())` on a function pointer, replaced by `black_box` since only the linker reference was ever load-bearing). | **WS19 T7** (fixed in-line; both steps now green) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T7 (in-line).** `cargo fmt --check` 317 diffs → 0; `clippy --workspace --all-targets -D warnings` RED in 8 crates → clean. |
+| **N10** | **DOCUMENTATION finding (not a defect): a fresh `Terminal::compress(.incremental)` right after a COMPLETED pass returns `Pending`, not `Complete`**, because the incremental traversal restarts — this invalidates the obvious "work is done" probe | `crates/rustty-vt/src/terminal.rs:2861-2894` forwards straight to `PageList::compress(Incremental)` and maps the result 1:1; the doc comment (`:2847-2860`) says only "the return value tells callers whether they should continue calling it" and never states the restart. `renderer_seam.rs:1990-1997` already depends on the distinction (it schedules another tick on `Pending`, stops on `Complete`/`Unsupported`). Nothing anywhere records the gotcha, so the next test author will read `Pending` as "not finished". | **WS19 T18** — ~~open~~ **RESOLVED 2026-07-29.** Behavior CONFIRMED by scratch probe before documenting anything: driving `compress(Incremental)` to `Complete` and calling once more printed `WS19-T18-PROBE: after Complete, next incremental = Pending`. Landed as (a) a `PORT NOTE` on `Terminal::compress` stating that `Pending` means "call me again", never "work is outstanding", and that `Complete` is not a durable probe; (b) `terminal_compress_incremental_restarts_after_complete`, which also asserts the pass took >1 step so a one-call convergence cannot make it vacuous; (c) a cross-reference in `MIRI_EXCEPTIONS.md`'s compression-coverage argument, where the same misreading would corrupt a coverage claim. | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T18.** Restart CONFIRMED by probe, then documented in 3 places and pinned by a test that cannot go vacuous. |
 
 ## E. Structural ledger defects found (fix in WS19 T2)
 
@@ -5492,3 +6059,47 @@ WS15 GlobalShortcuts (merged `e8a9f59`), `D:4776` x11 winproto (merged `07b64db`
 **Out-of-scope-by-platform (NOT deferrals, per `ROADMAP:214`):** every
 `#[cfg(windows)]` seam (`D:3155`, `D:4155`, `D:4169`), the `iocp`/`wasi_poll` xev
 backends, and the iOS device runtime.
+
+## G. Methodology correction — the self-confirming-scope failure mode [added 2026-07-29]
+
+**How this audit got a row wrong.** Row **O17** was recorded as "OPEN, correctly
+described". It was **not open** — `stb_image_resize` shipped on 2026-06-30 at
+`2e82776`. The audit verified the row by re-running the row's own evidence grep,
+which was scoped to `crates/rustty-font/src`. The code lives in the **sibling**
+crate `crates/rustty-font-shaper/`, created afterwards by the **D1 three-tier
+split**. *The grep scope WAS the bug*, so re-running it was a self-confirming check
+that could not detect the error.
+
+**RULE, binding on every future ledger audit: never verify a row with a search
+scope the row itself supplies. Use a repo-wide search, then narrow.** A row that
+names its own scope is exactly the row whose scope may be stale — crate splits,
+renames (`ghostty.rs`→`rustty.rs` at `410c387`, which also broke a G1b mapping) and
+re-homings all invalidate scopes silently while the row's prose stays plausible.
+
+**Re-derivation of every affected verdict [WS19 T14, 2026-07-29].** Each row below
+was re-checked with a **repo-wide** grep instead of the row's own scope. Result: O17
+was the only wrong one, but two further rows were found to be **stale in the
+opposite direction** — claiming open work that has shipped.
+
+| Row | Repo-wide re-derivation | Verdict |
+|---|---|---|
+| **O17** stb glyph resize | `grep -rn 'stbir_resize_uint8' crates/` → `rustty-font-shaper/src/stb.rs:18`, `build.rs`, `face/freetype.rs:806` | **WAS WRONG** — ported at `2e82776`; reclassified to vacuous coverage → **WS11** |
+| **O18** synthetic `cli.rs` "4 live `unimplemented!()` binary-entry seams" | `grep -rn 'unimplemented\|todo!' crates/rustty-synthetic/` → **0 hits**. `cli.rs:97` `main()`, `:245/:274/:297` `main_action_impl_{ascii,osc,utf8}` are all LIVE; `Cargo.toml:26-28` registers the `rustty-synthetic` bin at `src/main_gen.rs`, whose `fn main` calls `cli::main()` | **WAS WRONG (stale)** — all 4 seams filled; only the LOCAL `detectArgs` replica remains, and that is a permanent acyclic-split divergence (see the divergence section) |
+| **O19** bench `main_bench.zig` binary entry | `crates/rustty-bench/Cargo.toml:21-23` registers the `rustty-bench` bin at `src/main_bench.rs`; `main_bench.rs:24` `fn main() -> ExitCode` calls `rustty_bench::cli::main()` | **WAS WRONG (stale)** — shipped. `os_signpost` (`benchmark.rs:81-101`, no-op + verbatim body) and the local `detectArgs` are the real residuals, both permanent divergences |
+| **O14** `Atlas.Wasm` test | `grep -rn 'wasm' crates/rustty-font/src/atlas.rs` → `:740` "PORT NOTE (wasm — feature-gated OFF)", block preserved as comments | confirmed **OPEN** → WS14 |
+| **O15** `App.zig` Wasm block | `grep -rn 'Wasm' crates/rustty-core/src/app.rs` → `:998`–`:1007`, preserved as comments | confirmed **OPEN** → WS14 |
+| **O16** WebGL backend | repo-wide `grep -rni 'webgl'` → only `build_config::renderer::Backend::Webgl` (an enum variant) + prose "WebGL wasm-deferred"; no backend implementation | confirmed **OPEN** → WS14 |
+| **O5** `PageList::Limits` | repo-wide `grep -rn 'struct Limits'` → only `kitty/graphics_image.rs:126` (an unrelated struct); no `PageList::Limits` | confirmed **OPEN** → Phase 3 re-vet P3-RV1 |
+| **O6** GTK portal `OpenURI` | repo-wide `grep -rni 'openuri\|open_uri'` across `crates/` → **0 hits**; the only portal code is `gtk/class/global_shortcuts.rs` (GlobalShortcuts iface) | confirmed **OPEN** → WS19 T8 |
+| **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ends in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | confirmed **OPEN** → WS19 T10 |
+| **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returns `None` unconditionally; `:103` is the unreachable emit | confirmed **OPEN** → WS19 T12 |
+| **O21** `shell_integration.rs` lossy path | `crates/rustty-termio/src/shell_integration.rs:1708` and `:1760` both `to_string_lossy()` | confirmed **OPEN** → WS19 T15 |
+| **O1** `style::Color` | `crates/rustty-vt/src/style.rs:143` is a plain `enum Color { None, Palette(u8), Rgb(RGB) }`, no `#[repr]` | confirmed **OPEN** → WS19 T5 |
+| **O3** `cursor_scroll_region_up` | already repo-wide in the original audit (`grep -rn … crates/` → 0 hits) | confirmed **OPEN** → WS10, pin-sequenced |
+
+**Related gate consequence.** The same class of staleness broke a **gate**, not just a
+ledger row: G1b's `MAP` still pointed at `crates/rustty-cli/src/ghostty.rs` and
+`crates/rustty/src/main_ghostty.rs` after `410c387` renamed both. WS19 T1 added a
+RUST-side existence guard so a mapped-but-absent path is a loud RED instead of a
+silent `rust=0`. Scope staleness is a recurring defect in this program, not a
+one-off; gates that name paths need existence guards.

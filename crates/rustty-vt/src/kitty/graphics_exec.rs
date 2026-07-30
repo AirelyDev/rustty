@@ -896,8 +896,8 @@ mod tests {
         // Transmit and display, then delete everything (including image
         // data), then retransmit the same ID.
         {
-            let cmd =
-                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,c=1,r=1;////////").unwrap();
+            let cmd = command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,c=1,r=1;////////")
+                .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }

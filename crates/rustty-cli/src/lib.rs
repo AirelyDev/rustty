@@ -9,8 +9,11 @@
 //! — CLI_BLUEPRINT.md §3+§7 — and the TUI-CLI wiring filled the formerly
 //! deferred interactive vaxis+zf render paths: `list_colors`/`list_keybinds`
 //! prettyPrint and the `list_themes` interactive fuzzy picker are LIVE over
-//! rustty-vaxis + rustty-zf. The crate's ONLY live seam is `boo.rs` (a pure
-//! vaxis animation leaf, DEFERRALS.md "cli C5").
+//! rustty-vaxis + rustty-zf. ~~The crate's ONLY live seam is `boo.rs` (a pure
+//! vaxis animation leaf, DEFERRALS.md "cli C5").~~
+//! **CORRECTION [WS19 T2 audit, 2026-07-29 — audit row W3]: `boo.rs` is NOT a
+//! seam.** It is a 525-line live port with a real `run()` at `boo.rs:406`
+//! (`boo.rs:22` is a doc-comment line). The crate has **zero live seams**.
 //!
 //! History: C1 landed the action dispatcher
 //! (`action.zig` 7t, `ghostty.zig` Action enum + `run`/`runMain` 4t), `help.zig`,
@@ -42,8 +45,8 @@
 // reference `cli.*` surface.
 
 pub mod action;
-pub mod rustty;
 pub mod help_strings;
+pub mod rustty;
 
 // The action impls. `help`/`version` (C1), the C2 config/introspection actions,
 // the C3 ssh subsystem, the C4 apprt-backed + misc actions, the C5

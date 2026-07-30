@@ -60,7 +60,9 @@ mod tests {
     #[test]
     fn grapheme_width_empty() {
         let mut width: u8 = 42;
-        assert_eq!(0, unsafe { grapheme_width(std::ptr::null(), 0, &mut width) });
+        assert_eq!(0, unsafe {
+            grapheme_width(std::ptr::null(), 0, &mut width)
+        });
         assert_eq!(0, width);
     }
 

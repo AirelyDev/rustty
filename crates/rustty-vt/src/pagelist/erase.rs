@@ -86,7 +86,11 @@ impl PageList {
         // rows up by 1 as well.
         while !unsafe { (*node).next }.is_null() {
             let next = unsafe { (*node).next };
-            let next_rows = unsafe { (*super::Node::page(next)).rows.ptr((*super::Node::page(next)).memory_ptr()) };
+            let next_rows = unsafe {
+                (*super::Node::page(next))
+                    .rows
+                    .ptr((*super::Node::page(next)).memory_ptr())
+            };
 
             // We take the top row of the page and clone it in to the bottom
             // row of the previous page, which gets rid of the top row that was
@@ -314,7 +318,11 @@ impl PageList {
 
         while !unsafe { (*node).next }.is_null() {
             let next = unsafe { (*node).next };
-            let next_rows = unsafe { (*super::Node::page(next)).rows.ptr((*super::Node::page(next)).memory_ptr()) };
+            let next_rows = unsafe {
+                (*super::Node::page(next))
+                    .rows
+                    .ptr((*super::Node::page(next)).memory_ptr())
+            };
 
             unsafe {
                 (*super::Node::page(node)).clone_row_from(
@@ -529,7 +537,11 @@ impl PageList {
             // This is a cheap operation because we're just moving cell offsets,
             // not the actual cell contents.
             assert!(chunk.start == 0);
-            let rows = unsafe { (*super::Node::page(chunk.node)).rows.ptr((*super::Node::page(chunk.node)).memory_ptr()) };
+            let rows = unsafe {
+                (*super::Node::page(chunk.node))
+                    .rows
+                    .ptr((*super::Node::page(chunk.node)).memory_ptr())
+            };
             let scroll_amount = unsafe { super::Node::rows(chunk.node) } - chunk.end;
             for i in 0..scroll_amount {
                 let src: *mut Row = unsafe { rows.add((i + chunk.end) as usize) };

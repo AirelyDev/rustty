@@ -2604,8 +2604,13 @@ impl TCP {
     /// # Safety
     /// `c`/`loop_` valid+stable (held raw by the loop).
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub unsafe fn accept<UD, CB>(self, loop_: *mut Loop, c: *mut Completion, userdata: *mut UD, cb: CB)
-    where
+    pub unsafe fn accept<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
         UD: 'static,
         CB: Fn(
                 *mut UD,
@@ -4400,7 +4405,9 @@ impl File {
                             Loop::from_epoll(l_inner),
                             Completion::from_epoll(c_inner),
                             File::from_epoll(s_inner),
-                            r_inner.map(PollEvent::from_epoll).map_err(PollError::from_epoll),
+                            r_inner
+                                .map(PollEvent::from_epoll)
+                                .map_err(PollError::from_epoll),
                         )
                     },
                 );
@@ -5534,8 +5541,8 @@ mod tests {
         use std::os::unix::io::IntoRawFd;
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("rustty_xev_file_dyn_{}_{}", std::process::id(), n));
+        let path =
+            std::env::temp_dir().join(format!("rustty_xev_file_dyn_{}_{}", std::process::id(), n));
         let f = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -5683,15 +5690,16 @@ mod tests {
                 [WriteRequest::default(), WriteRequest::default()];
             // The queued writes are 4 bytes each, so this callback only asserts
             // success (unlike `write_cb`, which pins the 7-byte payload above).
-            let qwrite_cb = |_ud: *mut (),
-                             _l: *mut Loop,
-                             _c: *mut Completion,
-                             _s: File,
-                             _b: WriteBuffer,
-                             r: core::result::Result<usize, WriteError>| {
-                r.unwrap();
-                CallbackAction::Disarm
-            };
+            let qwrite_cb =
+                |_ud: *mut (),
+                 _l: *mut Loop,
+                 _c: *mut Completion,
+                 _s: File,
+                 _b: WriteBuffer,
+                 r: core::result::Result<usize, WriteError>| {
+                    r.unwrap();
+                    CallbackAction::Disarm
+                };
             unsafe {
                 qfile.queue_write::<(), _>(
                     ptr::addr_of_mut!(loop_),
@@ -5762,15 +5770,16 @@ mod tests {
             let file = File::init_fd(read_fd);
             let mut c = Completion::default();
             let mut ready = false;
-            let poll_cb = |ud: *mut bool,
-                           _l: *mut Loop,
-                           _c: *mut Completion,
-                           _s: File,
-                           r: core::result::Result<PollEvent, PollError>| {
-                r.unwrap();
-                unsafe { *ud = true };
-                CallbackAction::Disarm
-            };
+            let poll_cb =
+                |ud: *mut bool,
+                 _l: *mut Loop,
+                 _c: *mut Completion,
+                 _s: File,
+                 r: core::result::Result<PollEvent, PollError>| {
+                    r.unwrap();
+                    unsafe { *ud = true };
+                    CallbackAction::Disarm
+                };
             unsafe {
                 file.poll(
                     ptr::addr_of_mut!(loop_),

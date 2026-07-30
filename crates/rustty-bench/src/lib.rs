@@ -108,8 +108,7 @@ mod tests {
         // pub const PageCompression = @import("PageCompression.zig");
         let _ = core::any::type_name::<crate::page_compression::PageCompression>();
         // pub const ScrollbackCompression = @import("ScrollbackCompression.zig");
-        let _ =
-            core::any::type_name::<crate::scrollback_compression::ScrollbackCompression>();
+        let _ = core::any::type_name::<crate::scrollback_compression::ScrollbackCompression>();
         // `options` / `osc_parser` are not re-exported by `main.zig` (see the
         // PORT NOTE above) but are pub mods of this hub, so touch them too.
         let _ = core::any::type_name::<crate::options::DataFile>();

@@ -290,6 +290,15 @@ pub enum Storage {
 /// `deinit()` discipline while making a dropped-on-the-floor value a warning.
 /// Today only tests and the inspector construct one; Phase C5 adds real callers.
 #[must_use = "a PreservedPage owns a decoded page buffer; call `deinit()`"]
+// WS19 (audit row N11): `clippy::large_enum_variant` — `Owned` embeds a whole `Page`
+// by value while `Borrowed` is one pointer. That asymmetry is DELIBERATE and mirrors the
+// reference's `Node.PreservedPage`: the resident case must not allocate or copy anything
+// (it hands back a borrowed pointer into the live node), and the compressed case must own
+// the decoded page outright so the node's storage is left untouched. Boxing `Owned` —
+// the lint's fix — would add a heap indirection to every compressed-page inspection and
+// split ownership of the decoded page from the buffer `deinit` frees, for no benefit:
+// this value is a short-lived stack local, never stored in a collection.
+#[allow(clippy::large_enum_variant)]
 pub enum PreservedPage {
     Borrowed(*const Page),
     Owned {
@@ -371,7 +380,6 @@ impl CreatePage {
         }
     }
 }
-
 
 impl Node {
     /// Return the terminal page stored in this node.
@@ -584,7 +592,9 @@ impl Node {
                 }
             }
 
-            RestoreMode::Discard => unsafe { (*NodeData::compressed_payload(data)).page.shallow_copy() },
+            RestoreMode::Discard => unsafe {
+                (*NodeData::compressed_payload(data)).page.shallow_copy()
+            },
         };
 
         // Replacing `data` drops the CompressedPage, freeing its encoding
@@ -2207,8 +2217,7 @@ impl PageList {
                 it = unsafe { (*node).next };
                 continue;
             }
-            return p.y < unsafe { Node::rows(node) }
-                && p.x < unsafe { Node::cols(node) };
+            return p.y < unsafe { Node::rows(node) } && p.x < unsafe { Node::cols(node) };
         }
 
         false
@@ -2411,9 +2420,8 @@ fn decommit_pool_item(item: *mut u8, item_size: usize, dirty_len: usize) {
     // SAFETY: `item` is a live pool item of `item_size` page-aligned,
     // page-multiple bytes with `dirty_len <= item_size`, and nothing aliases it
     // (it has already been removed from the page list).
-    let _ = unsafe {
-        crate::mem::decommit(crate::mem::DecommitMode::Zero, item, item_size, dirty_len)
-    };
+    let _ =
+        unsafe { crate::mem::decommit(crate::mem::DecommitMode::Zero, item, item_size, dirty_len) };
 }
 
 /// The counterpart to [`decommit_pool_item`] for buffers handed back out by the

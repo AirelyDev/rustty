@@ -295,8 +295,7 @@ pub fn cargo_build_json(
 /// rewritten in place, or cargo's freshness tracking sees them change.
 pub fn normalize_archive(src: &Path, dst: &Path) -> Result<(), String> {
     if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     let _ = std::fs::remove_file(dst);
     std::fs::copy(src, dst)
@@ -327,7 +326,9 @@ mod tests {
         let p = parse_artifacts(SAMPLE).unwrap();
         assert_eq!(
             p.staticlibs,
-            vec![PathBuf::from("/w/target/aarch64-apple-darwin/xcframework/librustty_apprt_c.a")]
+            vec![PathBuf::from(
+                "/w/target/aarch64-apple-darwin/xcframework/librustty_apprt_c.a"
+            )]
         );
         assert_eq!(p.native.len(), 1);
         assert_eq!(p.native[0].lib_name, "z");
@@ -398,7 +399,10 @@ mod tests {
             search_paths: vec![PathBuf::from("/w/a"), PathBuf::from("/w/b")],
         };
         let exists = |p: &Path| p == Path::new("/w/b/libz.a");
-        assert_eq!(req.resolve_with(&exists).unwrap(), PathBuf::from("/w/b/libz.a"));
+        assert_eq!(
+            req.resolve_with(&exists).unwrap(),
+            PathBuf::from("/w/b/libz.a")
+        );
     }
 
     /// `normalize_archive` must produce a copy WITH a regenerated symbol table
@@ -437,7 +441,11 @@ mod tests {
             .success());
 
         let toc = |p: &Path| -> String {
-            let out = Command::new("/usr/bin/ar").arg("-t").arg(p).output().unwrap();
+            let out = Command::new("/usr/bin/ar")
+                .arg("-t")
+                .arg(p)
+                .output()
+                .unwrap();
             String::from_utf8_lossy(&out.stdout).to_string()
         };
         assert!(
@@ -527,7 +535,10 @@ mod tests {
             .resolve_under_with(Path::new("/w/target"), &exists)
             .unwrap_err();
         assert!(err.contains("OUTSIDE"), "{err}");
-        assert!(err.contains("/opt/homebrew/opt/gettext/lib/libintl.a"), "{err}");
+        assert!(
+            err.contains("/opt/homebrew/opt/gettext/lib/libintl.a"),
+            "{err}"
+        );
         // …and the same request inside the tree is accepted.
         let req = NativeArchiveRequest {
             search_paths: vec![PathBuf::from("/w/target/aarch64/xcframework/build/x/out")],
@@ -535,7 +546,9 @@ mod tests {
         };
         let exists =
             |p: &Path| p == Path::new("/w/target/aarch64/xcframework/build/x/out/libintl.a");
-        assert!(req.resolve_under_with(Path::new("/w/target"), &exists).is_ok());
+        assert!(req
+            .resolve_under_with(Path::new("/w/target"), &exists)
+            .is_ok());
     }
 
     /// Containment is LEXICAL: `..` must not be able to escape the build root,
@@ -573,6 +586,9 @@ mod tests {
         };
         let err = req.resolve_with(&|_| false).unwrap_err();
         assert!(err.contains("libz.a"), "error must name the archive: {err}");
-        assert!(err.contains("zlib-sys"), "error must name the package: {err}");
+        assert!(
+            err.contains("zlib-sys"),
+            "error must name the package: {err}"
+        );
     }
 }

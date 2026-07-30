@@ -19,14 +19,30 @@ zig-cache dep packages, R3), and a missing ref would silently count zig=0 and
 turn the gate VACUOUSLY green. Never green on that: surface it (ci.sh renders
 exit 3 as a WARNING, never a pass).
 """
-import re, sys, glob, os
+import re, sys, glob, os, subprocess
+
+# WS19 T1 (N1): the RUST side must follow the CHECKOUT THIS SCRIPT LIVES IN, not a
+# hardcoded absolute path. Run from a git worktree, the old hardcodes made the gate
+# count `main`'s tests while reporting on the worktree's changes — G1b was VACUOUS for
+# every worktree change. Same bug `.port/tools/miri-run.sh` already fixed this way.
+RS_ROOT = subprocess.run(
+    ["git", "rev-parse", "--show-toplevel"],
+    cwd=os.path.dirname(os.path.abspath(__file__)),
+    capture_output=True, text=True, check=True,
+).stdout.strip()
+
+# The ORACLE root stays hardcoded ON PURPOSE (R3: the oracle is an EXTERNAL reference,
+# never shipped to CI) and stays NON-overridable: `.port/tools/ci.sh:114-129` records
+# why an env-redirectable oracle probe was killed as a spoof hole (probe passes against
+# a fake dir while the script counts zig=0 everywhere -> vacuous green, R5).
+GH_ROOT = "/Users/gael/projects/ghostty"
 
 GH = "/Users/gael/projects/ghostty/src/terminal"
-RS = "/Users/gael/projects/rustty/crates/rustty-vt/src"
+RS = f"{RS_ROOT}/crates/rustty-vt/src"
 
 # rustty-font: GH base differs (src/font, not src/terminal).
 GHF = "/Users/gael/projects/ghostty/src/font"
-RSF = "/Users/gael/projects/rustty/crates/rustty-font/src"
+RSF = f"{RS_ROOT}/crates/rustty-font/src"
 
 # rustty-font-shaper: the D1 3-tier shaper crate (ABOVE vt+font). Same GH base
 # (src/font) as rustty-font, but the impure C-lib/CoreText face+discovery+
@@ -36,24 +52,24 @@ RSF = "/Users/gael/projects/rustty/crates/rustty-font/src"
 # Linux default=fontconfig_freetype); the fontconfig discoverer + web_canvas
 # face are DEFERRED (documented in DEFERRALS.md), ported as SkipZigTest-style
 # skip-stub #[test]s so the count still holds.
-RSFS = "/Users/gael/projects/rustty/crates/rustty-font-shaper/src"
+RSFS = f"{RS_ROOT}/crates/rustty-font-shaper/src"
 
 # rustty-args: GH base differs (src/cli, not src/terminal). Stage C.
 GHC = "/Users/gael/projects/ghostty/src/cli"
-RSA = "/Users/gael/projects/rustty/crates/rustty-args/src"
+RSA = f"{RS_ROOT}/crates/rustty-args/src"
 
 # rustty-cli: GH base = src/cli (same GHC) + src/cli.zig. Phase-2 CLI milestone.
-RSCLI = "/Users/gael/projects/rustty/crates/rustty-cli/src"
+RSCLI = f"{RS_ROOT}/crates/rustty-cli/src"
 
 # rustty-extra: GH base = src/extra (shell completions + editor syntax). The five
 # comptime generators; only fish.zig (`getDescription`) + vim.zig (anon `test {}`,
 # skipped by zig_count) carry tests.
 GHX = "/Users/gael/projects/ghostty/src/extra"
-RSX = "/Users/gael/projects/rustty/crates/rustty-extra/src"
+RSX = f"{RS_ROOT}/crates/rustty-extra/src"
 
 # rustty-terminfo: GH base differs (src/terminfo, not src/terminal). Stage C.
 GHT = "/Users/gael/projects/ghostty/src/terminfo"
-RST = "/Users/gael/projects/rustty/crates/rustty-terminfo/src"
+RST = f"{RS_ROOT}/crates/rustty-terminfo/src"
 
 # rustty-cfg-fmt: GH base = src/config (config/formatter.zig). Near-leaf below
 # config<->input (formatter.zig's key.zig import is DEAD code; Key lives with
@@ -61,10 +77,10 @@ RST = "/Users/gael/projects/rustty/crates/rustty-terminfo/src"
 # the much larger src/terminal/formatter.zig (the Page/Screen/Terminal debug
 # formatters in rustty-vt).
 GHCFG = "/Users/gael/projects/ghostty/src/config"
-RSCF = "/Users/gael/projects/rustty/crates/rustty-cfg-fmt/src"
+RSCF = f"{RS_ROOT}/crates/rustty-cfg-fmt/src"
 
 # rustty-config: C1 leaf value-types (same GH base = src/config as GHCFG above).
-RSCG = "/Users/gael/projects/rustty/crates/rustty-config/src"
+RSCG = f"{RS_ROOT}/crates/rustty-config/src"
 
 # rustty-input: GH base = src/input. The vt input slice (mouse/paste/key/
 # key_encode/mouse_encode/function_keys + the VT-Mods half of key_mods) already
@@ -73,7 +89,7 @@ RSCG = "/Users/gael/projects/rustty/crates/rustty-config/src"
 # keyboard/helpgen_actions (+ the config-dependent RemapSet/translation half of
 # key_mods, counted by the existing input_key_mods entry above).
 GHI = "/Users/gael/projects/ghostty/src/input"
-RSI = "/Users/gael/projects/rustty/crates/rustty-input/src"
+RSI = f"{RS_ROOT}/crates/rustty-input/src"
 
 # rustty-renderer: the R-a headless renderer slice (heavy-tier, R-a of memory
 # heavy-tier-strategy). GH base = src/renderer. The unit-portable, GPU-free
@@ -88,8 +104,8 @@ RSI = "/Users/gael/projects/rustty/crates/rustty-input/src"
 # (mirrors the config url-regex + input Link.zig resolutions, DEFERRALS.md). The GPU
 # draw path (Metal/OpenGL/generic/image/custom shaders) is R-d/Phase 3.
 GHR = "/Users/gael/projects/ghostty/src/renderer"
-RSR = "/Users/gael/projects/rustty/crates/rustty-renderer/src"
-RSRT = "/Users/gael/projects/rustty/crates/rustty-render-types/src"
+RSR = f"{RS_ROOT}/crates/rustty-renderer/src"
+RSRT = f"{RS_ROOT}/crates/rustty-render-types/src"
 
 # rustty-vt-c: the C-ABI projection crate (Stage B). GH base = src/terminal/c
 # (the `c/*.zig` ABI wrappers behind lib_vt.zig's @export lines). All test bodies
@@ -99,7 +115,7 @@ RSRT = "/Users/gael/projects/rustty/crates/rustty-render-types/src"
 # tightly-coupled ABI surface; the per-crate `cargo test -p rustty-vt-c` count is
 # the authoritative backstop and this gate guards rust #[test] >= zig test{}.
 GHVC = "/Users/gael/projects/ghostty/src/terminal/c"
-RSVC = "/Users/gael/projects/rustty/crates/rustty-vt-c/src"
+RSVC = f"{RS_ROOT}/crates/rustty-vt-c/src"
 
 # rustty-apprt-api: the A5 keystone interface crate (break #8, breaks apprt<->core).
 # GH base = src/apprt (the action.zig types + surface/ipc/runtime/structs seam).
@@ -109,18 +125,18 @@ RSVC = "/Users/gael/projects/rustty/crates/rustty-vt-c/src"
 # zero GPU dep) is hoisted into the rustty-renderer crate root (like the
 # render-types A1 size hoist) and mapped by `renderer_health` below.
 GHAP = "/Users/gael/projects/ghostty/src/apprt"
-RSAP = "/Users/gael/projects/rustty/crates/rustty-apprt-api/src"
+RSAP = f"{RS_ROOT}/crates/rustty-apprt-api/src"
 # rustty-apprt: the concrete apprt backends (embedded/none/browser), EMBEDDED_BLUEPRINT
 # §7. Same GH base = src/apprt as GHAP above (the backend files, not the seam). The
 # libghostty C ABI wrappers live in the separate rustty-apprt-c top-sink crate.
-RSAPPRT = "/Users/gael/projects/rustty/crates/rustty-apprt/src"
+RSAPPRT = f"{RS_ROOT}/crates/rustty-apprt/src"
 # rustty-apprt-c: the libghostty C ABI top-sink crate. Ports embedded.zig's `CAPI`
 # block (the extern structs, chunk E5 -> capi.rs; the 71 `ghostty_*` exports,
 # E6..E10) + the main_c.zig C API hub (lib.rs). All 0-test reference files.
-RSAPPRTC = "/Users/gael/projects/rustty/crates/rustty-apprt-c/src"
+RSAPPRTC = f"{RS_ROOT}/crates/rustty-apprt-c/src"
 # rustty (the `rustty` bin, member 27). GH base = src root (main.zig /
 # main_ghostty.zig live beside App.zig). CLI_BLUEPRINT.md §5/§6 chunk C6.
-RSBIN = "/Users/gael/projects/rustty/crates/rustty/src"
+RSBIN = f"{RS_ROOT}/crates/rustty/src"
 # renderer.zig is at src/renderer.zig (crate root), one level above GHR (src/renderer).
 GHSRC = "/Users/gael/projects/ghostty/src"
 
@@ -131,25 +147,25 @@ GHSRC = "/Users/gael/projects/ghostty/src"
 # the Rust side adds reify/seam helper tests — rust >= zig holds).
 GHCR = "/Users/gael/projects/ghostty/src/crash"
 GHPKGS = "/Users/gael/projects/ghostty/pkg/sentry"
-RSCR = "/Users/gael/projects/rustty/crates/rustty-crash/src"
+RSCR = f"{RS_ROOT}/crates/rustty-crash/src"
 
 # rustty-termio: the termio tier (integration-tier blueprint stage 2+). GH base
 # = src/termio (+ termio.zig at src root). Stage 2 lands the dep wiring + the
 # struct shapes of the 0-test files + message.zig; Exec/shell_integration/
 # stream_handler (+ the relocated src/Command.zig, break #13b) are stages 3-4.
 GHTIO = "/Users/gael/projects/ghostty/src/termio"
-RSTIO = "/Users/gael/projects/rustty/crates/rustty-termio/src"
+RSTIO = f"{RS_ROOT}/crates/rustty-termio/src"
 
 # rustty-inspector: core-tier chunk C1 (CORE_BLUEPRINT §4). GH base =
 # src/inspector. Only the pure-data key-widget surface (Event/EventRing/label)
 # + the main.zig KeyEvent re-export are carved; ALL inspector GUI logic
 # (Inspector.zig, units.zig, the other widgets, dcimgui) is Phase 3.
 GHINS = "/Users/gael/projects/ghostty/src/inspector"
-RSINS = "/Users/gael/projects/rustty/crates/rustty-inspector/src"
+RSINS = f"{RS_ROOT}/crates/rustty-inspector/src"
 
 # rustty-core: the core tier (CORE_BLUEPRINT §6/§7). GH base = src root
 # (App.zig / Surface.zig / surface_mouse.zig live beside main_ghostty.zig).
-RSCORE = "/Users/gael/projects/rustty/crates/rustty-core/src"
+RSCORE = f"{RS_ROOT}/crates/rustty-core/src"
 
 # rustty-xev: the libxev event-loop crate (D6, XEV_BLUEPRINT §7 / [ADV-FIX F7]).
 # The count-gate cannot see libxev via ghostty/src — libxev is a content-addressed
@@ -160,7 +176,7 @@ RSCORE = "/Users/gael/projects/rustty/crates/rustty-core/src"
 # the three pure intrusive data-structure files (queue/queue_mpsc/heap); later
 # chunks add darwin/loop/kqueue/async/timer/process/stream entries.
 GHXEV = "/Users/gael/.cache/zig/p/libxev-0.0.0-86vtc4IcEwCqEYxEYoN_3KXmc6A9VLcm22aVImfvecYs/src"
-RSXEV = "/Users/gael/projects/rustty/crates/rustty-xev/src"
+RSXEV = f"{RS_ROOT}/crates/rustty-xev/src"
 
 # rustty-wuffs: the pkg/wuffs safe-wrapper parity crate (the renderer's
 # background-image decode path). GH base = pkg/wuffs/src (NOT ghostty src/), so it
@@ -170,7 +186,7 @@ RSXEV = "/Users/gael/projects/rustty/crates/rustty-xev/src"
 # zig_count); error.zig/swizzle.zig carry 0 (swizzle is an R5 seam). zig=6; the
 # Rust side adds the ref_all_decls compile-touch (rust=7 >= 6).
 GHWUFFS = "/Users/gael/projects/ghostty/pkg/wuffs/src"
-RSWUFFS = "/Users/gael/projects/rustty/crates/rustty-wuffs/src"
+RSWUFFS = f"{RS_ROOT}/crates/rustty-wuffs/src"
 
 # rustty-zf: the vendored `zf` 0.10.3 fuzzy-finder parity crate (the theme-picker
 # rank/highlight `cli/list_themes.zig` sorts on). GH base = the content-addressed
@@ -181,7 +197,7 @@ RSWUFFS = "/Users/gael/projects/rustty/crates/rustty-wuffs/src"
 # 2 (rank/highlight exported C library interface). zig=8; the Rust side adds the
 # ref_all_decls compile-touch (rust=9 >= 8).
 GHZF = "/Users/gael/.cache/zig/p/zf-0.10.3-OIRy8RuJAACKA3Lohoumrt85nRbHwbpMcUaLES8vxDnh/src/zf"
-RSZF = "/Users/gael/projects/rustty/crates/rustty-zf/src"
+RSZF = f"{RS_ROOT}/crates/rustty-zf/src"
 
 # rustty-vaxis: the vendored `libvaxis` 0.5.1 TUI-lib parity crate (the interactive
 # CLI's terminal-UI dependency). GH base = the content-addressed zig-cache dep dir
@@ -198,7 +214,7 @@ RSZF = "/Users/gael/projects/rustty/crates/rustty-zf/src"
 # Key 5 + gwidth 11 + Screen 1 + Window 8 + Parser 34 + queue 7 + Loop 1 + TextInput 3 = 71;
 # the two rust globs pick up every ported #[test], keeping rust >= zig.
 GHVAXIS = "/Users/gael/.cache/zig/p/vaxis-0.5.1-BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS/src"
-RSVAXIS = "/Users/gael/projects/rustty/crates/rustty-vaxis/src"
+RSVAXIS = f"{RS_ROOT}/crates/rustty-vaxis/src"
 
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
@@ -247,7 +263,7 @@ MAP = {
     # 23 are no longer deferred — they landed once OptionAsAlt + cfg-fmt became
     # available — so apc_deferred is now 0 and BOTH rust files count against the
     # one zig file (vt=1 anon test + input=23 -> 24 >= 23).
-    "input_key_mods":    (["/Users/gael/projects/ghostty/src/input/key_mods.zig"], [f"{RS}/input/key_mods.rs", "/Users/gael/projects/rustty/crates/rustty-input/src/key_mods.rs"], 0),
+    "input_key_mods":    (["/Users/gael/projects/ghostty/src/input/key_mods.zig"], [f"{RS}/input/key_mods.rs", f"{RS_ROOT}/crates/rustty-input/src/key_mods.rs"], 0),
     # vt-15 search/ (gated)
     "search":            ([f"{GH}/search/Thread.zig", f"{GH}/search/active.zig", f"{GH}/search/pagelist.zig", f"{GH}/search/screen.zig", f"{GH}/search/sliding_window.zig", f"{GH}/search/viewport.zig"], [f"{RS}/search/*.rs"], 0),
     # vt-16 tmux/ (control mode; oniguruma-gated control tests counted via static
@@ -319,7 +335,11 @@ MAP = {
     # version.zig (0t, PARTIAL). The remaining cli/ action impls are sequencing
     # stubs (0t, no MAP entry yet); their entries land with chunks C2–C5.
     "cli_action":        ([f"{GHC}/action.zig"], [f"{RSCLI}/action.rs"], 0),
-    "cli_ghostty":       ([f"{GHC}/ghostty.zig"], [f"{RSCLI}/ghostty.rs"], 0),
+    # WS19 T1: R2 renamed cli/ghostty.rs -> cli/rustty.rs at 410c387 and this mapping
+    # was never updated. It counted rust=0 for a file with 4 live #[test]s — invisible
+    # because the gate was BLOCKED on the evicted zig corpus. The new RUST-side
+    # existence guard in main() is what makes this class loud instead of silent.
+    "cli_ghostty":       ([f"{GHC}/ghostty.zig"], [f"{RSCLI}/rustty.rs"], 0),
     "cli_root":          ([f"{GHC}/../cli.zig"], [f"{RSCLI}/lib.rs"], 0),
     "cli_help":          ([f"{GHC}/help.zig"], [f"{RSCLI}/help.rs"], 0),
     "cli_version":       ([f"{GHC}/version.zig"], [f"{RSCLI}/version.rs"], 0),
@@ -401,7 +421,8 @@ MAP = {
     # inventory level (2t); at the GATE both are the skipped anonymous form (zig=0),
     # so rust>=zig holds with the ported reify tests.
     "main":              ([f"{GHSRC}/main.zig"], [f"{RSBIN}/main.rs"], 0),
-    "main_ghostty":      ([f"{GHSRC}/main_ghostty.zig"], [f"{RSBIN}/main_ghostty.rs"], 0),
+    # WS19 T1: R2 renamed main_ghostty.rs -> main_rustty.rs at 410c387; mapping was stale.
+    "main_ghostty":      ([f"{GHSRC}/main_ghostty.zig"], [f"{RSBIN}/main_rustty.rs"], 0),
     # ADV-FIX 6 (§6 option b): main_c.zig (3 quoted `ghostty_string_s` tests) is
     # RE-HOMED to rustty-apprt-c (the libghostty C-API hub the `String` port lives
     # in) — the bin does NOT dep apprt-c. zig=3; the 3 tests are ported into
@@ -904,6 +925,23 @@ def main():
         print("counts cannot bind (a missing ref would vacuously count zig=0):")
         print("\n".join(missing))
         sys.exit(3)
+    # WS19 T1 anti-vacuity guard, RUST side. Symmetric to the zig-side BLOCKED arm
+    # above, but a DIFFERENT failure: a mapped RUST file that does not exist counts
+    # rust=0, which is *silently wrong* rather than blocked — it either REDs for the
+    # wrong reason (a rename read as "4 dropped tests", which is exactly what
+    # cli/ghostty.rs -> cli/rustty.rs did at 410c387) or, when zig=0, passes green
+    # while measuring nothing at all. A stale mapping is a GATE defect: name it as one.
+    stale = []
+    for mod, (_zg, rg, _apc) in MAP.items():
+        if only and mod != only:
+            continue
+        stale += [f"  {mod}: {g}" for g in rg if "*" not in g and not os.path.exists(g)]
+    if stale:
+        print("TEST-COUNT GATE: RED — STALE MAPPING; mapped RUST file(s) do not exist.")
+        print("These would count rust=0 and mis-report (or vacuously pass when zig=0).")
+        print("Fix the MAP entry — do NOT delete the row:")
+        print("\n".join(stale))
+        sys.exit(1)
     bad = 0
     print("module            zig  rust  status")
     for mod, (zg, rg, apc) in MAP.items():

@@ -1583,7 +1583,8 @@ impl<M: AppMailbox> Termio<M> {
             // deactivateInspector under `renderer_state.mutex` (already held by
             // this function's caller, `processOutput`), and always holds a live
             // `*mut rustty_inspector::Inspector` when `Some`.
-            let insp: *mut rustty_inspector::Inspector = insp_ptr as *mut rustty_inspector::Inspector;
+            let insp: *mut rustty_inspector::Inspector =
+                insp_ptr as *mut rustty_inspector::Inspector;
             // for (buf, 0..) |byte, i| {
             for &byte in buf {
                 // insp.recordPtyRead(self.alloc, &self.terminal, buf[i .. i + 1]) catch |err| {

@@ -41,6 +41,8 @@ use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{
 };
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 
+use wayland_client::protocol::wl_region::WlRegion;
+use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_protocols_plasma::output_order::v1::client::kde_output_order_v1::{
     self, KdeOutputOrderV1,
 };
@@ -50,8 +52,6 @@ use wayland_protocols_plasma::server_decoration::client::org_kde_kwin_server_dec
 };
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide::OrgKdeKwinSlide;
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide_manager::OrgKdeKwinSlideManager;
-use wayland_client::protocol::wl_region::WlRegion;
-use wayland_client::protocol::wl_surface::WlSurface;
 
 /// PORTS: `Globals.zig:29-47` `Tag`. Which advertised global a binding
 /// corresponds to. Kept only to route the `global_remove` event

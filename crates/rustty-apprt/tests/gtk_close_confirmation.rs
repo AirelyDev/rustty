@@ -73,12 +73,24 @@ fn close_confirmation_dialog_maps_responses() {
     //     vfunc override on the custom Dialog base — which must map "close" -> the
     //     `close-request` signal and anything else -> `cancel`.
     dialog.emit_by_name::<()>("response", &[&"close"]);
-    assert_eq!(close_fired.get(), 1, "response \"close\" emits close-request");
-    assert_eq!(cancel_fired.get(), 0, "response \"close\" does NOT emit cancel");
+    assert_eq!(
+        close_fired.get(),
+        1,
+        "response \"close\" emits close-request"
+    );
+    assert_eq!(
+        cancel_fired.get(),
+        0,
+        "response \"close\" does NOT emit cancel"
+    );
 
     dialog.emit_by_name::<()>("response", &[&"cancel"]);
     assert_eq!(cancel_fired.get(), 1, "response \"cancel\" emits cancel");
-    assert_eq!(close_fired.get(), 1, "response \"cancel\" does NOT emit close-request");
+    assert_eq!(
+        close_fired.get(),
+        1,
+        "response \"cancel\" does NOT emit close-request"
+    );
 
     // (4) present(None) must not abort (sets heading/body from Target, then presents).
     dialog.present(None);

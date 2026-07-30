@@ -1289,7 +1289,9 @@ fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
             Err(err) => {
                 // Before OutOfSpace, we should have reached maxInt
                 assert_eq!(IncreaseCapacityError::OutOfSpace, err);
-                assert_eq!(max_styles, unsafe { super::Node::capacity(s.pages.first).styles });
+                assert_eq!(max_styles, unsafe {
+                    super::Node::capacity(s.pages.first).styles
+                });
                 break;
             }
         }
@@ -1432,7 +1434,9 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
             let cols = unsafe { super::Node::cols(node) };
             for y in 0..rows {
                 for x in 0..cols {
-                    let rac = unsafe { (*super::Node::page(node)).get_row_and_cell(x as usize, y as usize) };
+                    let rac = unsafe {
+                        (*super::Node::page(node)).get_row_and_cell(x as usize, y as usize)
+                    };
                     let cell = unsafe { *rac.cell };
                     assert!(
                         cell.is_empty() && cell.to_bits() == Cell::zeroed().to_bits(),
@@ -2502,7 +2506,10 @@ fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
 #[test]
 fn pagelist_partial_erase_restarts_compression_before_continuation() {
     let mut s = PageList::init(80, 24, None).unwrap();
-    fill_compressible_history(&mut s, super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED + 2);
+    fill_compressible_history(
+        &mut s,
+        super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED + 2,
+    );
     let _ = s.compress(CompressionMode::Full);
 
     let first = s.pages.first;
@@ -8287,7 +8294,9 @@ fn pagelist_resize_no_reflow_less_cols_clears_graphemes() {
         None,
     );
     while let Some(chunk) = it.next() {
-        assert_eq!(0usize, unsafe { (*super::Node::page(chunk.node)).grapheme_count() });
+        assert_eq!(0usize, unsafe {
+            (*super::Node::page(chunk.node)).grapheme_count()
+        });
     }
 
     s.deinit();

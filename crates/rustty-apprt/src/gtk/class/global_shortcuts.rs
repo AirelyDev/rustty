@@ -191,9 +191,10 @@ mod imp {
         /// deferred to `constructed` because the handler is expressed on the wrapper.
         fn constructed(&self) {
             self.parent_constructed();
-            self.obj().connect_notify_local(Some("config"), |gs, _pspec| {
-                gs.refresh();
-            });
+            self.obj()
+                .connect_notify_local(Some("config"), |gs, _pspec| {
+                    gs.refresh();
+                });
         }
 
         /// PORTS: `global_shortcuts.zig:598-620` `dispose`. Drops references here so

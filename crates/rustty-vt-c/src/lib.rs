@@ -63,9 +63,9 @@ pub mod size_report;
 pub mod style;
 pub mod sys;
 pub mod terminal;
-pub mod unicode;
 #[cfg(test)]
 mod test_util;
+pub mod unicode;
 // pub const types = @import("types.zig");
 // PORT NOTE: now landed (this sub-batch). `types.zig` registers the C-ABI
 // extern-struct layout for ~29 types whose `.C` projections are now all defined.

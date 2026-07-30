@@ -153,7 +153,11 @@ fn placeholder_overlays_do_not_capture_input() {
         p.emit_by_name::<()>("closed", &[]);
     }
     let mut child_exits = Vec::new();
-    find_by_type(&surface_widget, "GhosttySurfaceChildExited", &mut child_exits);
+    find_by_type(
+        &surface_widget,
+        "GhosttySurfaceChildExited",
+        &mut child_exits,
+    );
     assert!(
         !child_exits.is_empty(),
         "the surface template must contain the child-exited overlay"

@@ -136,6 +136,19 @@ run_test_counts() {
     echo "         test-count gate cannot bind here."
     return 3
   fi
+  # WS19 T1 (N4), defense 3: the ZIG-DEP corpora under ~/.cache/zig/p/ are a CACHE and
+  # get evicted (a zig upgrade or `rm -rf ~/.cache` is enough). check_test_counts.py
+  # already exits 3 BLOCKED in that case, but it does so with a wall of paths and no
+  # remedy. Pre-flight it here so the BLOCKED message names the one command that fixes
+  # it. --verify-only never fetches, so CI stays hermetic.
+  if ! bash "$ROOT/.port/tools/restore_zig_deps.sh" --verify-only >/dev/null 2>&1; then
+    echo "BLOCKED: the pinned zig-dep source corpora (libxev / zf / vaxis) under"
+    echo "         ~/.cache/zig/p/ are absent or incomplete, so G1b's ZIG side"
+    echo "         cannot bind (a missing ref would count zig=0 -> vacuous green)."
+    echo "         Restore with: bash .port/tools/restore_zig_deps.sh"
+    bash "$ROOT/.port/tools/restore_zig_deps.sh" --verify-only 2>&1 | sed 's/^/         /'
+    return 3
+  fi
   "$PY" "$GATES/check_test_counts.py"
 }
 
@@ -160,6 +173,30 @@ GATE_REGISTRY=(
   # — from going unnoticed again. HARD: it is green today and its verdict has a
   # `--self-test` RED-flip proof.
   "G-REL|HARD|bash $GATES/check_release_lane.sh"
+  # G-GTKINIT (WS19 T4, audit row N3) — one `gtk4::init()` per test binary. GTK is
+  # thread-pinned and libtest gives every `#[test]` its own thread, so a second
+  # `gtk4::init()` in one binary ALWAYS panics. `tests/gtk_wayland_winproto.rs`
+  # shipped with two and nothing noticed, because the GTK KATs are `#[ignore]`d and
+  # only ever run by hand on the VM. This is a STATIC check on purpose: it binds on
+  # macOS too, where those KATs cannot even compile, so a macOS lane catches a bad
+  # merge. HARD: green at landing, milliseconds, and BOTH its FAIL arms (doubled
+  # init; vacuous zero-match) are mutation-proven.
+  "G-GTKINIT|HARD|bash $GATES/check_gtk_one_init.sh"
+  # G-P2 (WS19 T19) — the Phase 2 CLOSURE gate, and the standing invariant that keeps
+  # Phase 2 closed. It parses the four Phase-2 ledgers and FAILS if any open item lacks
+  # an owner in an OPEN workstream, where "open workstream" is DERIVED from the ROADMAP's
+  # own checklist rather than hardcoded (proven live: marking a WS merged flips the
+  # positive-control fixture from PASS to FAIL). This is the gate that makes the WS19
+  # audit's headline finding — 21 of 38 genuinely-open items were ORPHANED, filed into
+  # workstreams that had already merged — structurally impossible to repeat silently.
+  #
+  # HARD, not PROGRESS, and deliberately so even though it is RED at landing: it is RED
+  # because Phase 2 genuinely is not closed (2 items remain — see its output), and
+  # downgrading a gate to avoid an inconvenient truth is exactly the R5 weakening this
+  # workstream exists to stop. Its FAIL, PASS and BLOCKED arms are each fixture-proven
+  # (`.port/tools/gates/fixtures/phase2-closure-{orphan,owned}.md`), which is the bar
+  # G6b and G-REL met. When the last two items land it goes green and STAYS green.
+  "G-P2|HARD|$PY $GATES/check_phase2_closure.py"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"
@@ -286,7 +323,15 @@ echo "=================================================================="
 run_cargo "cargo fmt --check"        cargo fmt --check
 run_cargo "cargo clippy -D warnings" cargo clippy --workspace --all-targets -- -D warnings
 run_cargo "cargo build --workspace"  cargo build --workspace
-run_cargo "cargo test --workspace"   cargo test --workspace
+# WS19 T1 (N5): --no-fail-fast. Bare `cargo test --workspace` STOPS at the first failing
+# test target, so every crate ordered after it is never run and its failures are MASKED.
+# That is how `rustty-extra`'s golden failures hid behind `rustty-apprt-c --test smoke`.
+# `check_release_lane.sh:155` is the precedent (it already runs --no-fail-fast).
+# NOTE: the `cargo build --workspace` step immediately above already pays the cold-target/
+# compile cost, so the "one early failure also wastes the uplift" half of that symptom
+# does not bite INSIDE ci.sh — only outside it, which is what WS19 T16 addresses for the
+# example/*/build.sh scripts.
+run_cargo "cargo test --workspace"   cargo test --workspace --no-fail-fast
 
 # ---- 5: parity gates (HARD first, then PROGRESS) ---------------------------
 for phase in HARD PROGRESS; do

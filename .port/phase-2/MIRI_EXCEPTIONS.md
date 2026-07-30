@@ -1092,6 +1092,17 @@ on nearly every PageList mutation, and adds no SB/TB or leak coverage.
 | `split` with the PRE-FIX reference-derived `Node::page` | Stacked Borrows | **UB reproduced as predicted** (see below) | ~3 min |
 | `roundtrip` + `leak` | Stacked Borrows | **OPEN FINDING** — see below | ~45 min |
 
+> **OWNER [WS19 T19, 2026-07-29]: WS19 T5** (audit row O1). This OPEN FINDING is the
+> `style::Color` uninitialized-payload defect: `crates/rustty-vt/src/style.rs:143` is a
+> plain Rust `enum Color { None, Palette(u8), Rgb(RGB) }` with no `#[repr]`, so a typed
+> write of a `Style` leaves the inactive payload uninit and `CompressedPage::init`
+> compresses those bytes. It was filed to **WS8**, which has MERGED — the row was
+> ORPHANED. **NOT yet executed:** the fix is a byte-complete `#[repr(C)]` value with
+> accessors (closer to the reference's `union(Tag)` than a Rust enum is), across ~160
+> call sites, with the `mapinit_styled` harness scenario as the RED and the production
+> Miri test `pagelist_compress_page_round_trips_a_cold_history_page` as the acceptance
+> evidence. Gate **G-P2** reports it RED until then.
+
 ### The I2 negative control (this is the proof the fix is load-bearing)
 
 Restoring B6's `match &mut *addr_of_mut!((*node).data) { Resident(p) => p as *mut Page }`
@@ -1391,6 +1402,17 @@ are dominated by LZ4 volume and stay far out of budget (drain: 1631s). So:
    compressed node. The compress/restore SEAM's aliasing is separately Miri-proven by
    `.port/phase-2/mirihar-pagelist-compress`'s `split`/`siblings`/`roundtrip`/`leak`, and
    leak-freedom of the encodings is now continuously gated natively by G6b.
+
+   > **`Pending` does NOT mean "unfinished work remains" [WS19 T18, audit row N10].**
+   > A fresh `compress(Incremental)` issued right after a pass that returned `Complete`
+   > returns **`Pending`** again — the incremental traversal RESTARTS rather than
+   > remembering that it converged (observed, and pinned by
+   > `terminal_compress_incremental_restarts_after_complete` in
+   > `crates/rustty-vt/src/terminal.rs`). This matters for the coverage argument above:
+   > "drive until `Complete`" is the correct way to exercise a full pass, but
+   > `result == Complete` is **not** a durable "compression is done" probe, so a test
+   > that calls `compress` once and asserts `Complete` is asserting something else than
+   > it appears to. The `Terminal::compress` doc comment carries the same note.
 4. **Intractability is allocation volume, not logic** — established by both measurements
    in the root-cause section: the same methods on a single page are tractable
    (77s / 194s), and the excepted tests differ only in how many std-capacity page

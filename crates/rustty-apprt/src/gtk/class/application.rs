@@ -270,8 +270,9 @@ mod imp {
         /// `None` until bound — the reload is then a no-op (faithful to a
         /// not-yet-wired core, placeholder-leaf doctrine).
         #[allow(clippy::type_complexity)]
-        pub update_config_thunk:
-            RefCell<Option<Box<dyn Fn(&rustty_config::Config) -> Result<(), rustty_core::app::Error>>>>,
+        pub update_config_thunk: RefCell<
+            Option<Box<dyn Fn(&rustty_config::Config) -> Result<(), rustty_core::app::Error>>>,
+        >,
 
         /// rustty-only seam carrying the monomorphized global-shortcut dispatch
         /// (`self.core().performAllAction(self.rt(), action)`,
@@ -771,8 +772,7 @@ mod imp {
             let this_weak = obj.downgrade();
             global_shortcuts.connect_local("trigger", false, move |args| {
                 // args[0] is the emitting `GlobalShortcuts`; args[1] is the action.
-                let boxed: ActionBoxed =
-                    args[1].get().expect("trigger action is an ActionBoxed");
+                let boxed: ActionBoxed = args[1].get().expect("trigger action is an ActionBoxed");
                 if let Some(app) = this_weak.upgrade() {
                     app.imp().global_shortcut_trigger(&boxed);
                 }
@@ -781,7 +781,8 @@ mod imp {
 
             // Store the owned strong ref (Invariant 12: manually held, never
             // parented; cleared to release).
-            self.global_shortcuts.replace(Some(global_shortcuts.upcast()));
+            self.global_shortcuts
+                .replace(Some(global_shortcuts.upcast()));
         }
 
         /// PORTS: `application.zig:1655-1663` `globalShortcutTrigger`. Perform the
@@ -849,17 +850,29 @@ mod imp {
                 &Action::Inspector(InspectorMode::Toggle),
             );
             self.sync_action_accelerator("app.show-gtk-inspector", &Action::ShowGtkInspector);
-            self.sync_action_accelerator("win.toggle-command-palette", &Action::ToggleCommandPalette);
+            self.sync_action_accelerator(
+                "win.toggle-command-palette",
+                &Action::ToggleCommandPalette,
+            );
             self.sync_action_accelerator("win.close", &Action::CloseWindow);
             self.sync_action_accelerator("win.new-window", &Action::NewWindow);
             self.sync_action_accelerator("win.new-tab", &Action::NewTab);
-            self.sync_action_accelerator("win.close-tab::this", &Action::CloseTab(CloseTabMode::This));
+            self.sync_action_accelerator(
+                "win.close-tab::this",
+                &Action::CloseTab(CloseTabMode::This),
+            );
             self.sync_action_accelerator("tab.close::this", &Action::CloseTab(CloseTabMode::This));
-            self.sync_action_accelerator("win.split-right", &Action::NewSplit(SplitDirection::Right));
+            self.sync_action_accelerator(
+                "win.split-right",
+                &Action::NewSplit(SplitDirection::Right),
+            );
             self.sync_action_accelerator("win.split-down", &Action::NewSplit(SplitDirection::Down));
             self.sync_action_accelerator("win.split-left", &Action::NewSplit(SplitDirection::Left));
             self.sync_action_accelerator("win.split-up", &Action::NewSplit(SplitDirection::Up));
-            self.sync_action_accelerator("win.copy", &Action::CopyToClipboard(CopyToClipboard::Mixed));
+            self.sync_action_accelerator(
+                "win.copy",
+                &Action::CopyToClipboard(CopyToClipboard::Mixed),
+            );
             self.sync_action_accelerator("win.paste", &Action::PasteFromClipboard);
             self.sync_action_accelerator("win.reset", &Action::Reset);
             self.sync_action_accelerator("win.clear", &Action::ClearScreen);
@@ -885,7 +898,11 @@ mod imp {
         /// PORTS: `application.zig:1169-1200` `syncActionAccelerator`. Resets the GTK
         /// action's accelerators, then installs the one derived from the current
         /// keybind trigger for `action` (if any) via `gtk.Application.setAccelsForAction`.
-        fn sync_action_accelerator(&self, gtk_action: &str, action: &rustty_input::binding::Action) {
+        fn sync_action_accelerator(
+            &self,
+            gtk_action: &str,
+            action: &rustty_input::binding::Action,
+        ) {
             use gtk4::prelude::*;
             let obj = self.obj();
             let gtk_app = obj.upcast_ref::<gtk4::Application>();
@@ -1586,11 +1603,7 @@ fn action_present_surface(
 }
 
 /// PORTS: `application.zig:1687-1696` `actionQuit` (`quit`).
-fn action_quit(
-    _action: &gio::SimpleAction,
-    _parameter: Option<&glib::Variant>,
-    app: &Application,
-) {
+fn action_quit(_action: &gio::SimpleAction, _parameter: Option<&glib::Variant>, app: &Application) {
     // `priv.core_app.performAction(self.rt(), .quit)` (`:1693`). The core `.quit`
     // action is a pure passthrough back to the apprt (`App.zig:425`), so it
     // collapses to the direct `Application::quit` the `Action::Quit` performAction
@@ -2327,9 +2340,8 @@ impl Application {
         // `updateConfig` synchronously calls back `rt_app.perform_action(.app,
         // .config_change, ...)` which lands in `action::config_change` →
         // `Application::set_config`.
-        self.imp()
-            .update_config_thunk
-            .replace(Some(Box::new(move |config: &rustty_config::Config| {
+        self.imp().update_config_thunk.replace(Some(Box::new(
+            move |config: &rustty_config::Config| {
                 match rt_app {
                     // SAFETY: as above — app-thread-only access to the two backrefs.
                     Some(rt_app) => {
@@ -2337,7 +2349,8 @@ impl Application {
                     }
                     None => Ok(()),
                 }
-            })));
+            },
+        )));
 
         // The color-scheme propagation (`handleStyleManagerDark`,
         // `application.zig:1553-1563`): `core_app.colorSchemeEvent(self.rt(),
@@ -2391,9 +2404,8 @@ impl Application {
         // are BACKREFs owned by libghostty-core / the apprt `App`, never freed
         // here. It runs on the app thread (the GTK main loop delivers the portal
         // `Activated` signal there).
-        self.imp()
-            .perform_all_action_thunk
-            .replace(Some(Box::new(move |action: rustty_input::binding::Action| {
+        self.imp().perform_all_action_thunk.replace(Some(Box::new(
+            move |action: rustty_input::binding::Action| {
                 let Some(rt_app) = rt_app else {
                     return;
                 };
@@ -2414,7 +2426,8 @@ impl Application {
                         eprintln!("warn(gtk): failed to perform global shortcut action");
                     }
                 }
-            })));
+            },
+        )));
     }
 
     /// Binds the `rt_app` BACKREF — the apprt `App`'s stable address — into the
@@ -3035,10 +3048,8 @@ mod action {
 
         // `setDefaultActionAndTargetValue("app.present-surface",
         // glib.Variant.newUint64(0))` (`:1983-1986`).
-        notification.set_default_action_and_target_value(
-            "app.present-surface",
-            Some(&0u64.to_variant()),
-        );
+        notification
+            .set_default_action_and_target_value("app.present-surface", Some(&0u64.to_variant()));
 
         // Notification ID = body so an identical follow-up replaces the prior one
         // (`:1988-1999`).
@@ -3428,8 +3439,7 @@ mod action {
         // point. As in the reference, any launch error falls back to the OS opener
         // (`:2359-2363`).
         let uri = String::from_utf8_lossy(value.url);
-        if let Err(err) =
-            gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
+        if let Err(err) = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
         {
             eprintln!("warn(gtk): unable to open uri err={err}");
             open_url_fallback(value.kind, value.url);
@@ -4006,7 +4016,8 @@ mod action {
                 let Some(w) = widget(v) else { return false };
                 // `surface.rt_surface.gobj().toggleCommandPalette()` →
                 // `activateAction("win.toggle-command-palette", null)`.
-                w.activate_action("win.toggle-command-palette", None).is_ok()
+                w.activate_action("win.toggle-command-palette", None)
+                    .is_ok()
             }
         }
     }

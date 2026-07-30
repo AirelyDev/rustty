@@ -1706,10 +1706,9 @@ impl Surface {
     pub fn queueInspectorRender(&mut self) {
         // SAFETY: `self.app` is a live `*mut App` for the lifetime of this Surface
         // (E1/E2 invariant — the embedded app outlives every surface it owns).
-        if let Err(_err) = unsafe { &*self.app }.perform_action(
-            Target::Surface(&self.core_surface),
-            Action::RenderInspector,
-        ) {
+        if let Err(_err) = unsafe { &*self.app }
+            .perform_action(Target::Surface(&self.core_surface), Action::RenderInspector)
+        {
             // log.err("error rendering the inspector err={}", .{err});
         }
     }
@@ -2208,8 +2207,7 @@ impl Inspector {
                         &raw const (*core_surface).mouse.selection_gesture
                     },
                 };
-                let wakeup: &rustty_xev::Async =
-                    unsafe { &(*core_surface).renderer_thread.wakeup };
+                let wakeup: &rustty_xev::Async = unsafe { &(*core_surface).renderer_thread.wakeup };
                 // SAFETY: `inspector` is non-null (validated above) and owned by
                 // `core_surface`'s renderer state for the duration of this call.
                 unsafe { (*inspector).render(data, wakeup) };
@@ -2274,7 +2272,9 @@ impl Inspector {
         desc: *mut c_void,
     ) -> Result<(), ApprtError> {
         let _ = (command_buffer, desc);
-        unimplemented!("embedded::Inspector::renderMetal — Metal is Darwin-only; unreachable off macOS")
+        unimplemented!(
+            "embedded::Inspector::renderMetal — Metal is Darwin-only; unreachable off macOS"
+        )
     }
 
     // pub fn updateContentScale(self: *Inspector, x: f64, y: f64) void { ... }
@@ -2425,7 +2425,11 @@ impl Inspector {
         //     @floatCast(yoff * scale),
         // );
         unsafe {
-            dcimgui_sys::ImGuiIO_AddMouseWheelEvent(io, (xoff * scale) as f32, (yoff * scale) as f32)
+            dcimgui_sys::ImGuiIO_AddMouseWheelEvent(
+                io,
+                (xoff * scale) as f32,
+                (yoff * scale) as f32,
+            )
         };
     }
 
@@ -2519,10 +2523,22 @@ impl Inspector {
         // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftAlt, mods.alt);
         // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftSuper, mods.super);
         unsafe {
-            dcimgui_sys::ImGuiIO_AddKeyEvent(io, dcimgui_sys::ImGuiKey_LeftShift as c_int, mods.shift);
-            dcimgui_sys::ImGuiIO_AddKeyEvent(io, dcimgui_sys::ImGuiKey_LeftCtrl as c_int, mods.ctrl);
+            dcimgui_sys::ImGuiIO_AddKeyEvent(
+                io,
+                dcimgui_sys::ImGuiKey_LeftShift as c_int,
+                mods.shift,
+            );
+            dcimgui_sys::ImGuiIO_AddKeyEvent(
+                io,
+                dcimgui_sys::ImGuiKey_LeftCtrl as c_int,
+                mods.ctrl,
+            );
             dcimgui_sys::ImGuiIO_AddKeyEvent(io, dcimgui_sys::ImGuiKey_LeftAlt as c_int, mods.alt);
-            dcimgui_sys::ImGuiIO_AddKeyEvent(io, dcimgui_sys::ImGuiKey_LeftSuper as c_int, mods.super_);
+            dcimgui_sys::ImGuiIO_AddKeyEvent(
+                io,
+                dcimgui_sys::ImGuiKey_LeftSuper as c_int,
+                mods.super_,
+            );
         }
 
         // // Send our keypress

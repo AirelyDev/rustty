@@ -1705,7 +1705,15 @@ mod tests {
 
             // const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
             // errdefer allocator.free(path);
-            let path = base.to_string_lossy().into_owned().into_bytes();
+            //
+            // WS19 T15 (audit row O21): was
+            // `base.to_string_lossy().into_owned().into_bytes()`, which replaces any
+            // non-UTF-8 byte in the path with U+FFFD (3 bytes) — a SILENT, LOSSY
+            // corruption of a value the reference treats as opaque bytes
+            // (`realpathAlloc` returns `[]u8`, and POSIX paths are byte strings, not
+            // UTF-8). `OsStrExt::as_bytes` is the exact analogue: the platform bytes,
+            // unmodified. See memory `zig-byteslice-to-rust-rawbytes`.
+            let path = std::os::unix::ffi::OsStrExt::as_bytes(base.as_os_str()).to_vec();
 
             // const shell_path = try std.fmt.allocPrint(
             //     allocator,
@@ -1752,13 +1760,99 @@ mod tests {
 
     /// PORT NOTE (test shim): `tmp_dir.dir.realpathAlloc(alloc, ".")` — the resolved
     /// absolute tmp path as bytes.
+    ///
+    /// WS19 T15 (audit row O21): returns the RAW platform bytes via
+    /// `OsStrExt::as_bytes`. It previously went through
+    /// `to_string_lossy().into_owned().into_bytes()`, which silently rewrote any
+    /// non-UTF-8 byte as U+FFFD — a lossy round-trip of a value the reference treats as
+    /// opaque bytes (`realpathAlloc` returns `[]u8`; POSIX paths are byte strings).
+    /// `tmpdir_path_with_non_utf8_byte_round_trips_exactly` is the RED/GREEN
+    /// discriminator for this change. See memory `zig-byteslice-to-rust-rawbytes`.
     fn realpath_bytes(tmp_dir: &TempDir) -> Vec<u8> {
-        tmp_dir
-            .dir()
-            .realpath(".")
-            .unwrap()
-            .to_string_lossy()
-            .into_owned()
-            .into_bytes()
+        let path = tmp_dir.dir().realpath(".").unwrap();
+        std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()).to_vec()
+    }
+
+    /// RED/GREEN DISCRIMINATOR for WS19 T15 (audit row O21) — not a smoke test.
+    ///
+    /// Asserts that the conversion `realpath_bytes` (and the production
+    /// `TmpResourcesDir` path build) now uses is BYTE-PRESERVING, and that the one it
+    /// used before is not. Under `to_string_lossy().into_owned().into_bytes()` a `0xFF`
+    /// byte becomes U+FFFD (`EF BF BD`); under `OsStrExt::as_bytes` it survives. Both
+    /// halves are asserted, so the test fails if the fix is reverted AND fails if the
+    /// fixture stops being non-UTF-8 (which would make it vacuous).
+    ///
+    /// PLATFORM NOTE: this half deliberately does NOT touch the filesystem. APFS
+    /// rejects non-UTF-8 filenames outright (`EILSEQ`, verified: `create_dir_all` on
+    /// `b"ws19_\xffdir"` returns "Illegal byte sequence" on macOS), so a
+    /// filesystem-based fixture cannot exist on the primary host. The property under
+    /// test is the CONVERSION, not the syscall, and the conversion is host-independent.
+    /// The filesystem round-trip is exercised on Linux by the sibling test below.
+    #[test]
+    fn non_utf8_path_bytes_survive_the_conversion_but_not_the_lossy_one() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::PathBuf;
+
+        // Built at RUNTIME, not as a `b"..."` literal: clippy's
+        // `invalid_from_utf8` correctly points out that `from_utf8` on a literal whose
+        // invalidity is statically known "always returns an error". The vacuity check
+        // below is still worth making — it is what stops someone silently swapping in a
+        // UTF-8-safe fixture — so keep the check and remove the staticness.
+        let mut raw_owned: Vec<u8> = b"/tmp/ws19_".to_vec();
+        raw_owned.push(0xFF);
+        raw_owned.extend_from_slice(b"dir");
+        let raw: &[u8] = &raw_owned;
+        let path = PathBuf::from(OsStr::from_bytes(raw));
+
+        assert!(
+            std::str::from_utf8(raw).is_err(),
+            "the fixture must be non-UTF-8 or this test proves nothing (vacuous)"
+        );
+
+        // The conversion the fixed code uses.
+        let kept = OsStrExt::as_bytes(path.as_os_str()).to_vec();
+        assert_eq!(
+            kept, raw,
+            "OsStrExt::as_bytes must return the platform bytes unmodified"
+        );
+
+        // The conversion the code used BEFORE this fix.
+        let lossy = path.to_string_lossy().into_owned().into_bytes();
+        assert_ne!(
+            lossy, raw,
+            "if the lossy conversion also round-trips, this fixture cannot discriminate \
+             the fix from the bug — pick a byte the lossy path actually mangles"
+        );
+        assert!(
+            lossy.windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]),
+            "expected the U+FFFD replacement sequence in the LOSSY result, which is \
+             exactly the corruption this fix removes; got {lossy:?}"
+        );
+    }
+
+    /// The filesystem half of the WS19 T15 discriminator. Linux-only: APFS rejects
+    /// non-UTF-8 filenames with `EILSEQ`, ext4/tmpfs accept them.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn realpath_bytes_round_trips_a_non_utf8_directory_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = TempDir::init().unwrap();
+        let base = tmp.dir().realpath(".").unwrap();
+        let sub = base.join(OsStr::from_bytes(b"ws19_\xffdir"));
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let bytes = OsStrExt::as_bytes(sub.as_os_str()).to_vec();
+        assert!(
+            bytes.windows(9).any(|w| w == b"ws19_\xffdir"),
+            "the raw 0xFF byte did not survive the realpath round-trip: {bytes:?}"
+        );
+        assert!(
+            !bytes.windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]),
+            "found U+FFFD in the path bytes — a lossy String conversion is still on \
+             this path: {bytes:?}"
+        );
     }
 }

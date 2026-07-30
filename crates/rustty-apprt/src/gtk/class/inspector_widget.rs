@@ -98,9 +98,8 @@ mod imp {
         /// `surface` property (`inspector_widget.zig:28-43`).
         fn properties() -> &'static [glib::ParamSpec] {
             static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
-            PROPERTIES.get_or_init(|| {
-                vec![glib::ParamSpecObject::builder::<Surface>("surface").build()]
-            })
+            PROPERTIES
+                .get_or_init(|| vec![glib::ParamSpecObject::builder::<Surface>("surface").build()])
         }
 
         /// PORTS: `inspector_widget.zig:106-111` `getSurfaceValue`.
@@ -190,8 +189,7 @@ mod imp {
                 mouse_click_state: unsafe { (*core_surface).mouse.click_state },
                 selection_gesture: unsafe { &raw const (*core_surface).mouse.selection_gesture },
             };
-            let wakeup: &rustty_xev::Async =
-                unsafe { &(*core_surface).renderer_thread.wakeup };
+            let wakeup: &rustty_xev::Async = unsafe { &(*core_surface).renderer_thread.wakeup };
             // SAFETY: `inspector` is non-null (validated above) and owned by
             // `core_surface`'s renderer state for the duration of this call.
             unsafe { (*inspector).render(data, wakeup) };
@@ -241,8 +239,9 @@ impl InspectorWidget {
 
         // Do nothing if we're not changing the value (`:128`).
         let cur = imp.surface.get();
-        let new = surface_
-            .map_or(std::ptr::null_mut(), |s| s.upcast_ref::<glib::Object>().as_ptr());
+        let new = surface_.map_or(std::ptr::null_mut(), |s| {
+            s.upcast_ref::<glib::Object>().as_ptr()
+        });
         if new == cur {
             return;
         }
@@ -300,7 +299,8 @@ impl InspectorWidget {
 
         // Store our surface. We don't need to ref this because we setup the weak
         // notify above (`:167-169`).
-        imp.surface.set(surface.upcast_ref::<glib::Object>().as_ptr());
+        imp.surface
+            .set(surface.upcast_ref::<glib::Object>().as_ptr());
 
         self.queue_render();
     }

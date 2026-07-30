@@ -91,7 +91,12 @@ unsafe fn pty_master(core: *mut CoreSurface) -> std::os::fd::RawFd {
 /// renderer crate's `read_bound_framebuffer_rgba` (which dispatches only through
 /// the process-global GL loader, so it reads whichever context is current — here
 /// the inspector's, NOT the terminal's).
-fn capture_inspector(gl_area: &gtk4::GLArea, api: &rustty_renderer::opengl::OpenGL, w: usize, h: usize) -> Option<Vec<u8>> {
+fn capture_inspector(
+    gl_area: &gtk4::GLArea,
+    api: &rustty_renderer::opengl::OpenGL,
+    w: usize,
+    h: usize,
+) -> Option<Vec<u8>> {
     gl_area.make_current();
     if gl_area.error().is_some() {
         return None;
@@ -124,9 +129,7 @@ fn non_uniform_pixels(rgba: &[u8], tol: u8) -> usize {
 fn changed_pixels(a: &[u8], b: &[u8], tol: u8) -> usize {
     let mut n = 0;
     for (pa, pb) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
-        if pa[0].abs_diff(pb[0]) > tol
-            || pa[1].abs_diff(pb[1]) > tol
-            || pa[2].abs_diff(pb[2]) > tol
+        if pa[0].abs_diff(pb[0]) > tol || pa[1].abs_diff(pb[1]) > tol || pa[2].abs_diff(pb[2]) > tol
         {
             n += 1;
         }
@@ -235,7 +238,9 @@ fn inspector_dump() {
         ctx.iteration(true);
         assert!(Instant::now() < deadline, "core surface was never built");
     }
-    let core = surface.core().expect("core surface built on first GLArea resize");
+    let core = surface
+        .core()
+        .expect("core surface built on first GLArea resize");
 
     // The terminal renderer's OpenGL API — reused only for its context-agnostic
     // `read_bound_framebuffer_rgba` (it reads whichever GL context is current).
@@ -369,8 +374,7 @@ fn inspector_dump() {
         let master = unsafe { pty_master(core) };
         use std::io::Write as _;
         use std::os::fd::FromRawFd as _;
-        let mut pipe =
-            std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(master) });
+        let mut pipe = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(master) });
         let _ = pipe.flush();
     }
 
@@ -441,5 +445,9 @@ fn inspector_dump() {
     while core_app.mailbox.pop().is_some() {}
 
     let run_result = app.run();
-    assert!(run_result.is_ok(), "App::run returns Ok: {:?}", run_result.err());
+    assert!(
+        run_result.is_ok(),
+        "App::run returns Ok: {:?}",
+        run_result.err()
+    );
 }

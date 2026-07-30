@@ -81,7 +81,9 @@ fn write_completion(
     bytes: Vec<u8>,
 ) -> Result<(), String> {
     if bytes.is_empty() {
-        return Err(format!("shell completion generator produced empty output for {subdir}/{file}"));
+        return Err(format!(
+            "shell completion generator produced empty output for {subdir}/{file}"
+        ));
     }
     let dir = share_dir.join(subdir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;

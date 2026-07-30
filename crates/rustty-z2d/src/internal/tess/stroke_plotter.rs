@@ -22,8 +22,8 @@
 use crate::internal::error::InternalError;
 use crate::internal::path_nodes::{PathCurveTo, PathLineTo, PathMoveTo, PathNode};
 use crate::internal::point::Point;
-use crate::internal::tess::dasher;
 use crate::internal::tess::dashed_plotter;
+use crate::internal::tess::dasher;
 use crate::internal::tess::face::Face;
 use crate::internal::tess::pen::Pen;
 use crate::internal::tess::point_buffer::PointBuffer;

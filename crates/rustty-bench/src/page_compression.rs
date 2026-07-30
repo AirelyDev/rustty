@@ -733,7 +733,8 @@ impl PageCompression {
                 table,
                 ..
             } = &mut *self_;
-            let encoded_len = match lz4::compress(&data[off..off + len], compression_output, table) {
+            let encoded_len = match lz4::compress(&data[off..off + len], compression_output, table)
+            {
                 Ok(n) => n,
                 Err(err) => {
                     eprintln!("[{LOG_SCOPE}] page compression report failed err={err:?}");
@@ -822,10 +823,7 @@ fn percentage(part: usize, whole: usize) -> f64 {
 
 /// `compat_file.readToEndAlloc(file, alloc, max)` — read the whole file, failing
 /// if it exceeds `max` bytes.
-fn read_to_end_limited<R: std::io::Read>(
-    r: &mut R,
-    max: usize,
-) -> Result<Vec<u8>, std::io::Error> {
+fn read_to_end_limited<R: std::io::Read>(r: &mut R, max: usize) -> Result<Vec<u8>, std::io::Error> {
     let mut out = Vec::new();
     let mut chunk = [0u8; 64 * 1024];
     loop {

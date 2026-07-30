@@ -114,7 +114,13 @@ mod catalog_tests {
         // domain, which other tests in the crate could observe.
         let f: unsafe extern "C" fn(*const std::os::raw::c_char) -> *const std::os::raw::c_char =
             textdomain;
-        assert!(!(f as *const ()).is_null());
+        // WS19 (audit row N11): this was `assert!(!(f as *const ()).is_null())`, which
+        // `clippy::useless_ptr_null_checks` correctly rejects — a function pointer is
+        // never null, so the assertion could not fail and proved nothing. Only the
+        // REFERENCE to `textdomain` was ever load-bearing (it forces the symbol to be
+        // linked). `black_box` keeps that reference in a form the optimizer cannot
+        // discard, without pretending to assert anything.
+        std::hint::black_box(f);
     }
 }
 

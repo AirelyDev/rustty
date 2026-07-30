@@ -197,16 +197,27 @@ Ranked by severity, then reachability.
   non-English users. Faithful only while no catalog is bound (the deferred
   state). Documented deferral; not runtime-critical for a terminal window.
 
-### 2.8 [LOW] terminfo SOURCE (`ghostty.terminfo`) + termcap never emitted — diverges only in Debug builds
-- **rustty**: `xtask/src/res_terminfo.rs:50-90` compiles the DB via `tic` but
-  installs neither the `.terminfo` source nor a `.termcap`.
-- **ghostty**: `GhosttyResources.zig:44-54`/`:62-78` install both when
-  `emit_terminfo`/`emit_termcap` — which default FALSE for Release, TRUE for
-  Debug (`Config.zig:410-429`).
-- **Consequence**: the shipping app is **Release**, so rustty MATCHES there. It
-  diverges only for a Debug build (informational files; the compiled DB rustty
-  does produce is what TERM resolution uses). Not covered by the R5 note, so
-  recorded here though behaviorally moot for the Release app.
+
+> **OWNER [WS19 T19, 2026-07-29]: WS13 (i18n & docs).** Flagged by gate G-P2 as a row with
+> no disposition and no owner. WS13's Goal already names outcome (2) as "`rustty_translate`
+> … stops returning the identity stub and forwards to real `dgettext`, which WS9's vendored
+> libintl now makes linkable" — so the work is owned and planned; this row simply never
+> said so, which is how a planned item still reads as an orphan to anyone sweeping the
+> ledgers. Fix-list item 7 below carries the same owner.
+
+### 2.8 terminfo SOURCE (`ghostty.terminfo`) + termcap never emitted — **RECLASSIFIED as a permanent Justified R1 Divergence [WS19 T14, 2026-07-29 — audit row O20]**
+- **MOVED.** The authoritative entry, with its 4-criterion basis, is now
+  "terminfo SOURCE + termcap files never emitted (Debug builds only)" in
+  `.port/phase-2/DEFERRALS.md`'s `# Justified R1 Divergences` section. Fix-list item 8
+  below is DELETED: it was marked "(Optional)", and "optional" is not a disposition — a
+  row nobody owns and nobody will schedule reads as open work to any closure sweep.
+- The facts are unchanged and are restated at the divergence entry: rustty compiles the
+  DB via `tic` (`xtask/src/res_terminfo.rs:50-90`) but installs neither the `.terminfo`
+  source nor a `.termcap`; ghostty installs both when `emit_terminfo`/`emit_termcap`,
+  which **default FALSE for Release, TRUE for Debug** (`Config.zig:410-429`). **The
+  shipping app is Release, so rustty matches the oracle exactly in the shipped
+  configuration**; the divergence is confined to a Debug build and to informational
+  files, while the COMPILED DB — what TERM resolution actually reads — IS produced.
 
 ### 2.9 [LOW] `host_view` field access on `Platform::MacOS` may not compile on non-darwin — ✅ RESOLVED (WS3: `platform_host_view` arms are `#[cfg]`-gated per target with a `non_darwin_returns_null` regression KAT; Linux both-platform gate GREEN on main 57a63d0 — `cargo build --workspace` exit 0 on aarch64 Fedora, 2026-07-23)
 - **rustty**: `embedded.rs:2230` `Platform::MacOS(m) => m.nsview` in an
@@ -361,8 +372,17 @@ behavior or harden the artifact, ordered by user-visible impact then robustness:
    fix; drop the null catch-all. (Full iOS attach path is a separate deferred
    tier.)
 7. **Wire i18n runtime seam** (§2.7, LOW) — real `dgettext` link + `.po`/`msgfmt`
-   pipeline when i18n is un-BROKEN.
-8. **(Optional) Debug-gate terminfo source + termcap** (§2.8, LOW) — exact-mirror
-   the reference's Debug build.
+   pipeline when i18n is un-BROKEN. **OWNER [WS19 T19, 2026-07-29]: WS13 (i18n & docs)**,
+   which owns exactly this as outcome (2) of its Goal; the `.po`/`msgfmt` half is already
+   done (`xtask/src/res_misc.rs` `gen_locale`) and WS9's vendored libintl made the
+   `dgettext` link possible, so what remains is the call-site wrapping and dropping the
+   identity stub. The trigger has already fired — this is scheduled work, not a deferral.
+8. ~~**(Optional) Debug-gate terminfo source + termcap** (§2.8, LOW) — exact-mirror
+   the reference's Debug build.~~ **DELETED [WS19 T14, 2026-07-29 — audit row O20].**
+   "(Optional)" is not a disposition: the row had no owner, no trigger and no schedule,
+   yet read as open work. §2.8 is now a permanent **Justified R1 Divergence** in
+   `DEFERRALS.md` with a 4-criterion basis — rustty matches the oracle exactly in the
+   SHIPPED (Release) configuration, and the trigger, if a Debug-parity need ever
+   appears, is named there along with the two `GhosttyResources.zig` hunks to mirror.
 9. ✅ DONE (WS3) — **(Verify) non-darwin compile of `host_view`** (§2.9, LOW) — run `cargo build`
    on a non-darwin target; cfg-gate the MacOS arm if it fails.

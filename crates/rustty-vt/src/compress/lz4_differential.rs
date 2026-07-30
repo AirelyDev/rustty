@@ -262,8 +262,7 @@ impl Generator {
             Generator::Mixed => {
                 let mut i: usize = 0;
                 while i < buf.len() {
-                    let segment =
-                        core::cmp::min(random.int_range_at_most(1, 2048), buf.len() - i);
+                    let segment = core::cmp::min(random.int_range_at_most(1, 2048), buf.len() - i);
                     let sub = random.enum_value();
                     if sub != Generator::Mixed {
                         sub.fill(random, &mut buf[i..i + segment]);
@@ -315,12 +314,8 @@ impl Workspace {
 /// length so the input and the scratch buffers stay disjoint fields of the
 /// same workspace instead of an alias of one of them.
 fn expect_codec_properties(ws: &mut Workspace, input_len: usize) -> usize {
-    let encoded_len = lz4::compress(
-        &ws.input[..input_len],
-        &mut ws.encoded,
-        &mut ws.table,
-    )
-    .unwrap();
+    let encoded_len =
+        lz4::compress(&ws.input[..input_len], &mut ws.encoded, &mut ws.table).unwrap();
     assert!(encoded_len <= lz4::compress_bound(input_len).unwrap());
 
     expect_valid_block(&ws.encoded[..encoded_len], input_len);

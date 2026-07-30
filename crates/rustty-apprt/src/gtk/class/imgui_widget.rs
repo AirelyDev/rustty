@@ -222,7 +222,7 @@ impl<T: ImguiWidgetImpl> ImguiWidgetImplExt for T {
         unsafe {
             let data = Self::type_data();
             let parent_class = data.as_ref().parent_class() as *const imp::ImguiWidgetClass;
-            (((*parent_class).imgui_setup))(self.obj().unsafe_cast_ref::<ImguiWidget>());
+            ((*parent_class).imgui_setup)(self.obj().unsafe_cast_ref::<ImguiWidget>());
         }
     }
 
@@ -230,7 +230,7 @@ impl<T: ImguiWidgetImpl> ImguiWidgetImplExt for T {
         unsafe {
             let data = Self::type_data();
             let parent_class = data.as_ref().parent_class() as *const imp::ImguiWidgetClass;
-            (((*parent_class).imgui_render))(self.obj().unsafe_cast_ref::<ImguiWidget>());
+            ((*parent_class).imgui_render)(self.obj().unsafe_cast_ref::<ImguiWidget>());
         }
     }
 }
@@ -346,10 +346,22 @@ impl ImguiWidget {
         let mods = key::translate_mods(gtk_mods);
         // SAFETY: `io` non-null; `ImGuiKey_*` are valid key enum values.
         unsafe {
-            cimgui::ImGuiIO_AddKeyEvent(io, cimgui::ImGuiKey_LeftShift as cimgui::ImGuiKey, mods.shift);
-            cimgui::ImGuiIO_AddKeyEvent(io, cimgui::ImGuiKey_LeftCtrl as cimgui::ImGuiKey, mods.ctrl);
+            cimgui::ImGuiIO_AddKeyEvent(
+                io,
+                cimgui::ImGuiKey_LeftShift as cimgui::ImGuiKey,
+                mods.shift,
+            );
+            cimgui::ImGuiIO_AddKeyEvent(
+                io,
+                cimgui::ImGuiKey_LeftCtrl as cimgui::ImGuiKey,
+                mods.ctrl,
+            );
             cimgui::ImGuiIO_AddKeyEvent(io, cimgui::ImGuiKey_LeftAlt as cimgui::ImGuiKey, mods.alt);
-            cimgui::ImGuiIO_AddKeyEvent(io, cimgui::ImGuiKey_LeftSuper as cimgui::ImGuiKey, mods.super_);
+            cimgui::ImGuiIO_AddKeyEvent(
+                io,
+                cimgui::ImGuiKey_LeftSuper as cimgui::ImGuiKey,
+                mods.super_,
+            );
         }
 
         // If our keyval has a key, then we send that key event (`:176-181`).
@@ -534,7 +546,12 @@ impl ImguiWidget {
         // dispatch through the renderer crate's process-global GL loader, which
         // the terminal GLArea's realize populates (mirroring the reference's
         // process-global glad).
-        gl::clear_color(0x28 as f32 / 0xFF as f32, 0x2C as f32 / 0xFF as f32, 0x34 as f32 / 0xFF as f32, 1.0);
+        gl::clear_color(
+            0x28 as f32 / 0xFF as f32,
+            0x2C as f32 / 0xFF as f32,
+            0x34 as f32 / 0xFF as f32,
+            1.0,
+        );
         gl::clear(GL_COLOR_BUFFER_BIT);
         // SAFETY: context current; `ImGui_GetDrawData` returns the current
         // frame's draw data (valid until the next `NewFrame`).
@@ -644,7 +661,11 @@ impl ImguiWidget {
         let io = unsafe { cimgui::ImGui_GetIO() };
         let scale_factor = this.scale_factor_f64();
         unsafe {
-            cimgui::ImGuiIO_AddMousePosEvent(io, (x * scale_factor) as f32, (y * scale_factor) as f32);
+            cimgui::ImGuiIO_AddMousePosEvent(
+                io,
+                (x * scale_factor) as f32,
+                (y * scale_factor) as f32,
+            );
         }
     }
 
@@ -686,7 +707,9 @@ impl ImguiWidget {
         let now = Instant::now();
 
         // Throttle to 30 FPS (~33ms between frames) (`:465-472`).
-        let frame_time = std::time::Duration::from_nanos(std::time::Duration::from_secs(1).as_nanos() as u64 / 30);
+        let frame_time = std::time::Duration::from_nanos(
+            std::time::Duration::from_secs(1).as_nanos() as u64 / 30,
+        );
         let should_render = match widget.imp().last_render_time.get() {
             Some(last) => now.duration_since(last) >= frame_time,
             None => true,

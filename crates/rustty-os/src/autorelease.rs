@@ -67,6 +67,10 @@ mod tests {
             assert_eq!(retain_count(&obj), baseline + 1, "autoreleased +1 pending");
         });
         // Pool drained on scope exit: the pending +1 was released.
-        assert_eq!(retain_count(&obj), baseline, "pool must drain on closure exit");
+        assert_eq!(
+            retain_count(&obj),
+            baseline,
+            "pool must drain on closure exit"
+        );
     }
 }

@@ -22,12 +22,12 @@
 
 pub mod noop;
 
-#[cfg(feature = "wayland")]
-pub mod wayland;
 /// The blur-region helper ([`BlurRegion`](blur_region::BlurRegion)) is consumed
 /// by the Wayland AND X11 arms, so it is gated to either.
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod blur_region;
+#[cfg(feature = "wayland")]
+pub mod wayland;
 #[cfg(feature = "x11")]
 pub mod x11;
 

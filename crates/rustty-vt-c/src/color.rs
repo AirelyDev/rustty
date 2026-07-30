@@ -433,7 +433,14 @@ mod tests {
                     b: 204,
                 },
             ),
-            (b"0A0B0C", RGB { r: 10, g: 11, b: 12 }),
+            (
+                b"0A0B0C",
+                RGB {
+                    r: 10,
+                    g: 11,
+                    b: 12,
+                },
+            ),
             (
                 b"FFF",
                 RGB {
@@ -442,8 +449,22 @@ mod tests {
                     b: 255,
                 },
             ),
-            (b"#345", RGB { r: 51, g: 68, b: 85 }),
-            (b"rgb:1/2/3", RGB { r: 17, g: 34, b: 51 }),
+            (
+                b"#345",
+                RGB {
+                    r: 51,
+                    g: 68,
+                    b: 85,
+                },
+            ),
+            (
+                b"rgb:1/2/3",
+                RGB {
+                    r: 17,
+                    g: 34,
+                    b: 51,
+                },
+            ),
             (b"  black ", RGB { r: 0, g: 0, b: 0 }),
             (
                 b" #AABBCC   ",
@@ -747,11 +768,7 @@ mod tests {
     #[test]
     fn palette_generate_null_base_uses_default() {
         let base = color::DEFAULT;
-        let bg = RGB {
-            r: 5,
-            g: 10,
-            b: 15,
-        };
+        let bg = RGB { r: 5, g: 10, b: 15 };
         let fg = RGB {
             r: 245,
             g: 250,
@@ -767,11 +784,7 @@ mod tests {
     #[test]
     fn palette_generate_null_skip() {
         let base = color::DEFAULT;
-        let bg = RGB {
-            r: 5,
-            g: 10,
-            b: 15,
-        };
+        let bg = RGB { r: 5, g: 10, b: 15 };
         let fg = RGB {
             r: 245,
             g: 250,

@@ -429,8 +429,16 @@ fn compare_commands(a: &Command, b: &Command) -> bool {
 
     // Compare case-insensitively with colon → tab normalization (`:253-264`).
     for i in 0..a_bytes.len().min(b_bytes.len()) {
-        let a_char = if a_bytes[i] == b':' { b'\t' } else { a_bytes[i] };
-        let b_char = if b_bytes[i] == b':' { b'\t' } else { b_bytes[i] };
+        let a_char = if a_bytes[i] == b':' {
+            b'\t'
+        } else {
+            a_bytes[i]
+        };
+        let b_char = if b_bytes[i] == b':' {
+            b'\t'
+        } else {
+            b_bytes[i]
+        };
         let a_lower = a_char.to_ascii_lowercase();
         let b_lower = b_char.to_ascii_lowercase();
         if a_lower != b_lower {
@@ -620,8 +628,7 @@ mod imp_command {
                         return Some(d.clone());
                     }
                     let surface = j.surface.get()?;
-                    let title =
-                        effective_title(&surface).unwrap_or_else(|| "Untitled".to_string());
+                    let title = effective_title(&surface).unwrap_or_else(|| "Untitled".to_string());
                     if let Some(pwd) = surface_pwd(&surface) {
                         if !title.contains(&pwd) {
                             j.description = Some(pwd.clone());

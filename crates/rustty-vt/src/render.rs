@@ -1232,8 +1232,7 @@ impl RenderState {
                     continue;
                 }
 
-                let other_page: *mut page::Page =
-                    unsafe { crate::pagelist::Node::page(pin.node) };
+                let other_page: *mut page::Page = unsafe { crate::pagelist::Node::page(pin.node) };
                 let other = 'link2: {
                     let rac = unsafe { (*other_page).get_row_and_cell(x, pin.y as usize) };
                     let link_id = match unsafe { (*other_page).lookup_hyperlink(rac.cell) } {

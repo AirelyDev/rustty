@@ -490,7 +490,8 @@ impl Selection {
                 let mut found = false;
                 while let Some(next) = current.down(1) {
                     let rac = next.row_and_cell();
-                    let cells = unsafe { (*crate::pagelist::Node::page(next.node)).get_cells(rac.row) };
+                    let cells =
+                        unsafe { (*crate::pagelist::Node::page(next.node)).get_cells(rac.row) };
                     if page::Cell::has_text_any(unsafe { &*cells }) {
                         unsafe {
                             *end_pin = next;
@@ -571,7 +572,8 @@ impl Selection {
                 );
                 while let Some(next) = it.next() {
                     let rac = next.row_and_cell();
-                    let cells = unsafe { (*crate::pagelist::Node::page(next.node)).get_cells(rac.row) };
+                    let cells =
+                        unsafe { (*crate::pagelist::Node::page(next.node)).get_cells(rac.row) };
                     if page::Cell::has_text_any(unsafe { &*cells }) {
                         unsafe {
                             *end_pin = next;

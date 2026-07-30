@@ -220,8 +220,7 @@ fn compiled_entry_exists(terminfo_dir: &Path, primary_name: &str) -> bool {
 /// output dirs so it can never ship in the app bundle again.
 fn gen_app_root(share_dir: &Path) -> Result<(), String> {
     let app_dir = share_dir.join(crate::APP);
-    std::fs::create_dir_all(&app_dir)
-        .map_err(|e| format!("create {}: {e}", app_dir.display()))?;
+    std::fs::create_dir_all(&app_dir).map_err(|e| format!("create {}: {e}", app_dir.display()))?;
 
     let stale_note = app_dir.join("DEFERRALS.md");
     match std::fs::remove_file(&stale_note) {
@@ -241,7 +240,8 @@ mod tests {
     /// materializes (not just that the pipeline returns Ok).
     #[test]
     fn gen_terminfo_produces_compiled_entry() {
-        let base = std::env::temp_dir().join(format!("rustty-xtask-tinfo-test-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("rustty-xtask-tinfo-test-{}", std::process::id()));
         let share = base.join("share");
         std::fs::create_dir_all(&share).unwrap();
 
@@ -261,15 +261,27 @@ mod tests {
         // named after `crate::APP` (Task 14).
         let src = share.join(format!("terminfo/{}.terminfo", crate::APP));
         let cap = share.join(format!("terminfo/{}.termcap", crate::APP));
-        assert!(src.is_file(), "no {}.terminfo source at {}", crate::APP, src.display());
-        assert!(cap.is_file(), "no {}.termcap at {}", crate::APP, cap.display());
+        assert!(
+            src.is_file(),
+            "no {}.terminfo source at {}",
+            crate::APP,
+            src.display()
+        );
+        assert!(
+            cap.is_file(),
+            "no {}.termcap at {}",
+            crate::APP,
+            cap.display()
+        );
         assert!(
             std::fs::metadata(&src).unwrap().len() > 0,
-            "{}.terminfo source is empty", crate::APP
+            "{}.terminfo source is empty",
+            crate::APP
         );
         assert!(
             std::fs::metadata(&cap).unwrap().len() > 0,
-            "{}.termcap is empty", crate::APP
+            "{}.termcap is empty",
+            crate::APP
         );
 
         // share/{APP} root exists; the pre-WS1 DEFERRALS.md placeholder is GONE
@@ -284,8 +296,8 @@ mod tests {
     /// (so it can never ship in the app bundle again).
     #[test]
     fn gen_app_root_scrubs_stale_deferrals_note() {
-        let base = std::env::temp_dir()
-            .join(format!("rustty-xtask-approot-test-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("rustty-xtask-approot-test-{}", std::process::id()));
         let share = base.join("share");
         let app_dir = share.join(crate::APP);
         std::fs::create_dir_all(&app_dir).unwrap();
@@ -294,7 +306,10 @@ mod tests {
         gen_app_root(&share).expect("gen_app_root");
 
         assert!(app_dir.is_dir());
-        assert!(!app_dir.join("DEFERRALS.md").exists(), "stale note must be scrubbed");
+        assert!(
+            !app_dir.join("DEFERRALS.md").exists(),
+            "stale note must be scrubbed"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

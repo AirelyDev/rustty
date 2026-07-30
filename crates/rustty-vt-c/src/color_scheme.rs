@@ -49,9 +49,8 @@ mod tests {
     fn dark() {
         let mut buf = [0u8; MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE];
         let mut written = 0usize;
-        let result = unsafe {
-            report_encode(ColorScheme::Dark, buf.as_mut_ptr(), buf.len(), &mut written)
-        };
+        let result =
+            unsafe { report_encode(ColorScheme::Dark, buf.as_mut_ptr(), buf.len(), &mut written) };
         assert_eq!(Result::Success, result);
         assert_eq!(b"\x1B[?997;1n", &buf[..written]);
     }
@@ -62,7 +61,12 @@ mod tests {
         let mut buf = [0u8; MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE];
         let mut written = 0usize;
         let result = unsafe {
-            report_encode(ColorScheme::Light, buf.as_mut_ptr(), buf.len(), &mut written)
+            report_encode(
+                ColorScheme::Light,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut written,
+            )
         };
         assert_eq!(Result::Success, result);
         assert_eq!(b"\x1B[?997;2n", &buf[..written]);
@@ -84,7 +88,12 @@ mod tests {
         let mut buf = [0u8; 3];
         let mut written = 0usize;
         let result = unsafe {
-            report_encode(ColorScheme::Light, buf.as_mut_ptr(), buf.len(), &mut written)
+            report_encode(
+                ColorScheme::Light,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut written,
+            )
         };
         assert_eq!(Result::OutOfSpace, result);
         assert_eq!(9, written);
@@ -95,9 +104,8 @@ mod tests {
     fn exact_buffer() {
         let mut buf = [0u8; 9];
         let mut written = 0usize;
-        let result = unsafe {
-            report_encode(ColorScheme::Dark, buf.as_mut_ptr(), buf.len(), &mut written)
-        };
+        let result =
+            unsafe { report_encode(ColorScheme::Dark, buf.as_mut_ptr(), buf.len(), &mut written) };
         assert_eq!(Result::Success, result);
         assert_eq!(9, written);
     }

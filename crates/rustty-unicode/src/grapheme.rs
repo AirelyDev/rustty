@@ -385,17 +385,47 @@ mod tests {
     // test "grapheme width: variation selectors" (oracle 65e61282a)
     #[test]
     fn grapheme_width_variation_selectors() {
-        assert_eq!(GraphemeWidthEffect::Wide, grapheme_width_effect(0x2764, 0xFE0F));
-        assert_eq!(GraphemeWidthEffect::Narrow, grapheme_width_effect(0x23, 0xFE0E));
-        assert_eq!(GraphemeWidthEffect::Ignore, grapheme_width_effect('x' as u32, 0xFE0F));
+        assert_eq!(
+            GraphemeWidthEffect::Wide,
+            grapheme_width_effect(0x2764, 0xFE0F)
+        );
+        assert_eq!(
+            GraphemeWidthEffect::Narrow,
+            grapheme_width_effect(0x23, 0xFE0E)
+        );
+        assert_eq!(
+            GraphemeWidthEffect::Ignore,
+            grapheme_width_effect('x' as u32, 0xFE0F)
+        );
 
-        assert_eq!(GraphemeWidth { len: 2, width: 2 }, grapheme_width(&[0x2764, 0xFE0F]));
-        assert_eq!(GraphemeWidth { len: 2, width: 2 }, grapheme_width(&[0x23, 0xFE0F]));
-        assert_eq!(GraphemeWidth { len: 2, width: 1 }, grapheme_width(&['x' as u32, 0xFE0F]));
-        assert_eq!(GraphemeWidth { len: 3, width: 1 }, grapheme_width(&['x' as u32, 0xFE0F, 0xFE0F]));
-        assert_eq!(GraphemeWidth { len: 2, width: 1 }, grapheme_width(&[0x23, 0xFE0E]));
-        assert_eq!(GraphemeWidth { len: 2, width: 1 }, grapheme_width(&[0x231A, 0xFE0E]));
-        assert_eq!(GraphemeWidth { len: 3, width: 1 }, grapheme_width(&[0x231A, 0xFE0E, 0xFE0F]));
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 2 },
+            grapheme_width(&[0x2764, 0xFE0F])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 2 },
+            grapheme_width(&[0x23, 0xFE0F])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 1 },
+            grapheme_width(&['x' as u32, 0xFE0F])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 3, width: 1 },
+            grapheme_width(&['x' as u32, 0xFE0F, 0xFE0F])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 1 },
+            grapheme_width(&[0x23, 0xFE0E])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 1 },
+            grapheme_width(&[0x231A, 0xFE0E])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 3, width: 1 },
+            grapheme_width(&[0x231A, 0xFE0E, 0xFE0F])
+        );
         assert_eq!(
             GraphemeWidth { len: 4, width: 2 },
             grapheme_width(&[0x1F3F4, 0x200D, 0x2620, 0xFE0F])
@@ -409,9 +439,18 @@ mod tests {
             GraphemeWidth { len: 5, width: 2 },
             grapheme_width(&[0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467])
         );
-        assert_eq!(GraphemeWidth { len: 3, width: 2 }, grapheme_width(&[0x23, 0xFE0F, 0x20E3]));
-        assert_eq!(GraphemeWidth { len: 2, width: 1 }, grapheme_width(&['1' as u32, 0x20E3]));
-        assert_eq!(GraphemeWidth { len: 2, width: 2 }, grapheme_width(&[0x1F44B, 0x1F3FF]));
+        assert_eq!(
+            GraphemeWidth { len: 3, width: 2 },
+            grapheme_width(&[0x23, 0xFE0F, 0x20E3])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 1 },
+            grapheme_width(&['1' as u32, 0x20E3])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 2 },
+            grapheme_width(&[0x1F44B, 0x1F3FF])
+        );
     }
 
     // test "grapheme width: spacing marks can widen narrow clusters" (oracle 65e61282a)
@@ -432,27 +471,48 @@ mod tests {
         let cp = mark.expect("a spacing mark should exist");
         assert_eq!(1, table().get(cp).width);
         assert!(!table().get(cp).width_zero_in_grapheme);
-        assert_eq!(GraphemeWidth { len: 2, width: 2 }, grapheme_width(&['a' as u32, cp]));
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 2 },
+            grapheme_width(&['a' as u32, cp])
+        );
     }
 
     // test "grapheme width: segmentation" (oracle 65e61282a)
     #[test]
     fn grapheme_width_segmentation() {
-        assert_eq!(GraphemeWidth { len: 1, width: 1 }, grapheme_width(&['a' as u32]));
-        assert_eq!(GraphemeWidth { len: 1, width: 1 }, grapheme_width(&['a' as u32, 'b' as u32]));
+        assert_eq!(
+            GraphemeWidth { len: 1, width: 1 },
+            grapheme_width(&['a' as u32])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 1, width: 1 },
+            grapheme_width(&['a' as u32, 'b' as u32])
+        );
         assert_eq!(
             GraphemeWidth { len: 2, width: 2 },
             grapheme_width(&[0x1F1E6, 0x1F1E7, 0x1F1E8])
         );
-        assert_eq!(GraphemeWidth { len: 1, width: 2 }, grapheme_width(&[0x1F1E8]));
+        assert_eq!(
+            GraphemeWidth { len: 1, width: 2 },
+            grapheme_width(&[0x1F1E8])
+        );
         assert_eq!(GraphemeWidth { len: 0, width: 0 }, grapheme_width(&[]));
-        assert_eq!(GraphemeWidth { len: 2, width: 0 }, grapheme_width(&[0x0301, 0x0302]));
+        assert_eq!(
+            GraphemeWidth { len: 2, width: 0 },
+            grapheme_width(&[0x0301, 0x0302])
+        );
     }
 
     // test "grapheme width: u32 invalid codepoints stand alone" (oracle 65e61282a)
     #[test]
     fn grapheme_width_u32_invalid() {
-        assert_eq!(GraphemeWidth { len: 1, width: 1 }, grapheme_width(&[0x110000, 0x0301]));
-        assert_eq!(GraphemeWidth { len: 1, width: 1 }, grapheme_width(&['a' as u32, 0x110000]));
+        assert_eq!(
+            GraphemeWidth { len: 1, width: 1 },
+            grapheme_width(&[0x110000, 0x0301])
+        );
+        assert_eq!(
+            GraphemeWidth { len: 1, width: 1 },
+            grapheme_width(&['a' as u32, 0x110000])
+        );
     }
 }

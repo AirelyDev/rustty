@@ -22,7 +22,13 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 - R1 full fidelity vs the ghostty oracle at `../ghostty` (pinned `4749c4e`); the
   oracle is reference-only — no build-time dependency on it (R3).
 - R2 product identity: rustty naming with per-token casing preservation
-  (Ghostty→Rustty, ghostty→rustty); `ghostty_*` C-ABI aliases stay.
+  (Ghostty→Rustty, ghostty→rustty); ~~`ghostty_*` C-ABI aliases stay~~ —
+  **CORRECTED [WS19 T2, 2026-07-29, audit rows W7 / §E.3]: `ghostty_*` C-ABI aliases
+  were DELETED UPSTREAM at `e4cc852`; rustty exports `rustty_*` only, in every
+  profile** (`crates/rustty-apprt-c/Cargo.toml:31-33`; a repo-wide search for
+  `export_name` under `crates/rustty-apprt-c/src/` returns 0 hits). `identity-oracle`
+  flips only the `rustty-identity` STRING identity, for the differential harness.
+  **Do not re-add aliases.**
 - R4/R5: acyclic crate graph; gates (`check_acyclic.sh`, A4 ABI gate, Miri lanes)
   are invariant — never weakened to pass.
 - DG5: C-ABI panic policy is ABORT — no unwind across the ABI.
@@ -77,7 +83,7 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 | WS | Plan file | Scope |
 |----|-----------|-------|
 | **WS10 perf series (BL-4)** | `2026-07-23-ws10-perf-series.md` | SIMD scans, bulk CSI/print, pty pipelining. Guarded by the benchmark suite (goal: hold or extend the 14/14 wins). |
-| **WS11 font glyph resize** | `2026-07-23-ws11-font-glyph-resize.md` | `stb_image_resize` parity for the FreeType glyph-resize path (stb-sys cc build for bit-exactness), wired on the non-macOS path, KAT vs oracle rasterization. |
+| **WS11 font glyph resize** | `2026-07-23-ws11-font-glyph-resize.md` | ~~`stb_image_resize` parity for the FreeType glyph-resize path (stb-sys cc build for bit-exactness), wired on the non-macOS path, KAT vs oracle rasterization.~~ **CORRECTED [WS19 T14, 2026-07-29 — audit row O17]: the PORT ALREADY SHIPPED at `2e82776` (2026-06-30)** — `crates/rustty-font-shaper/src/stb.rs:18`, `build.rs` `cc::Build` over `vendor/stb_impl.c`, `vendor/stb_image_resize.h` byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806`. Two further corrections: (1) the gating is `cfg(not(target_arch = "wasm32"))`, **not** `not(target_os = "macos")` — the seam is LIVE ON macOS (`nm -g` shows `T _stbir_resize_uint8` in the macOS archive), so "wired on the non-macOS path" is wrong; (2) **do NOT chase bit-exactness by changing `build.rs` flags** — ghostty's own Debug and ReleaseFast builds of the identical C disagree (9/512 bytes, maxdelta 1, ReleaseFast's loop vectorizer), rustty sits on the consensus side across 5 toolchain/optimization combos on 2 OSes, and since the seam is live on macOS a flag change would *create* divergence and violate R5. **WS11's real scope is that the coverage is VACUOUS**: every test reaching the resize runs at scale 1.0 (`8x16→8x16`, `136x128→136x128`) and `render_and_resize` never enters the bitmap arm (Inconsolata is an outline font) — swapping stb for nearest-neighbour leaves all 9 tests green. |
 | **WS12 vaxis completion** | `2026-07-23-ws12-vaxis-completion.md` | Resolve the uucode width-table fork (presents Option A extend rustty-unicode vs Option B vendor uucode-0.1.0 tables to the human — decision REQUIRED in-plan, not deferred); zigimg image tier (`transmit_image`/`load_image`/`Image::draw`/`cell_size`); verify `boo` end-to-end. |
 | **WS13 i18n & docs** | `2026-07-23-ws13-i18n-docs.md` | Vendor the `.po` corpus + msgfmt step (real `share/locale`); mdgen man-page pipeline (markdown→roff); `rustty_translate` live. |
 | **WS14 wasm/WebGL renderer** | `2026-07-23-ws14-wasm-webgl.md` | Port the WebGL backend + wasm entry (`main_wasm`, `Atlas.Wasm` C-ABI/JS surface); build `wasm32` target green; **validate live in Chrome via the browser automation tools** (load harness page, screenshot the rendered canvas, assert glyph output). |
@@ -165,11 +171,68 @@ loud RED rather than an infinite CI wait.
 - [x] WS7 scrollback compression — AUTHORED; **Phase A EXECUTED + MERGED** (LZ4 codec); Phases B-E = Round 2
 - [x] WS8 upstream small-sweep — AUTHORED + EXECUTED + MERGED (both platforms green)
 - [x] WS9 packaging — AUTHORED + EXECUTED + MERGED (self-contained xcframework proven)
-- [ ] WS10–WS17: authored at wave start
+- ~~[ ] WS10–WS17: authored at wave start~~ **STALE [WS19 T2, 2026-07-29 — audit
+  §E.4]; per-WS rows:**
+- [ ] WS10 perf (BL-4) — **NOT authored**, not executed. Open. Inherits audit row **O3**
+  (`Screen::cursor_scroll_region_up`, beyond-pin `77190bd02`, pin-sequenced).
+- [x] WS11 font glyph resize — **authored 2026-07-29 in the WS11 plan-authoring lane
+  (10 tasks)**; not executed. Open. Inherits audit row **O17**, **as reclassified**: the
+  `stb_image_resize` port itself SHIPPED at `2e82776`; what WS11 owns is that its test
+  coverage is **vacuous** (all reaching tests at scale 1.0; the bitmap arm is never
+  entered). Do NOT change the stb `build.rs` flags — see the WS11 scope cell.
+- [x] WS12 vaxis completion — authored (`c7c93f7`); **NOT executed**. Open. Consumes
+  WS19 T1's `.port/tools/restore_zig_deps.sh`.
+- [x] WS13 i18n & docs — authored (`39355ff`); **NOT executed**. Open. Owns audit rows
+  **N8** (3 `.blp` msgids + the unwrapped code-side call sites) and **O13b**
+  (`main_build_data` + the `+gen-*` file-emit wiring).
+- [ ] WS14 wasm/WebGL — **NOT authored**, not executed. Open. Inherits audit rows
+  **O13a** (`main_wasm.zig`), **O14** (`Atlas.Wasm` test), **O15** (`App.zig` Wasm
+  block), **O16** (WebGL renderer backend).
+- [x] WS15 GTK GlobalShortcuts — authored + EXECUTED + **MERGED `e8a9f59`**. DONE.
+- [x] WS16 X11 winproto — authored + EXECUTED + **MERGED `07b64db`**. DONE.
+- [x] WS17 verification debt — authored (`ef7621a`); **NOT executed**. Open. Scope is
+  V2/V3/V4/V1b **plus V5** (V5 was orphaned; WS19 T14 adds it).
+- [x] WS18 release lane — authored in-ROADMAP + EXECUTED + **MERGED `eeec83f`**. DONE.
+- [ ] WS19 Phase 2 closeout — authored
+  (`docs/superpowers/plans/2026-07-29-ws19-phase2-closeout.md`); **IN FLIGHT, not
+  executed to completion — open.** Lands the standing closure gate **G-P2** and closes
+  Phase 2. **Executed: T1 T2 T3 T4 T7 T11 T13 T14 T15 T16 T18 T19** (+ the new audit row
+  N11, and the O17 correction from the WS11 lane). **REMAINING: T5** (`style::Color`
+  padding-free), **T6** (the `-C debug-assertions=off` vt Miri lane; must follow T5),
+  **T8** (GTK portal `OpenURI`, VM), **T9** (wayland decoration-mode re-read, VM),
+  **T10** (kqueue `thread_perform` `&mut Loop`), **T12** (`+version` OSC-8 hyperlink),
+  **T17** (termio `threadEnter` drain ordering + `posix_waitpid` `ECHILD`), and **T20**
+  (the both-platform finale). Gate **G-P2** enumerates exactly these as RED and will not
+  go green until they land — see its output, which is the authoritative worklist.
 
 ## Wave status
 - **Wave 0 COMPLETE** (WS1/WS2/WS3) — both platforms green.
 - **Wave 1 COMPLETE** (WS4/WS5) — both platforms green.
 - **Wave 2 COMPLETE** (WS6/WS7-A/WS8/WS9) — main 53f1387; macOS + Linux both `cargo build --workspace`
   exit 0 and rustty-vt 2111 passed/0 failed; BL-2 rss_probe PASS (9.0 MiB returned) on Linux.
-- **Round 2 next**: WS7 Phases B-E (unblocked — BL-2 has landed).
+- ~~**Round 2 next**: WS7 Phases B-E (unblocked — BL-2 has landed).~~
+  **STALE [WS19 T2, 2026-07-29 — audit §E.4]: WS7 Phases B (`098fc63`), C (`ab2c08c`),
+  D1–D8 and E (`bbecaf7`) are ALL MERGED.**
+
+### True remaining scope [WS19 T2, 2026-07-29]
+
+| WS | Plan | Executed | True state |
+|---|---|---|---|
+| WS1–WS9 | authored | **merged** | DONE |
+| WS10 perf (BL-4) | **NOT authored** | no | open; inherits O3 (pin-sequenced) |
+| WS11 font glyph resize | authored 2026-07-29 (WS11 lane, 10 tasks) | **no** | open; inherits O17 **as reclassified** — the port shipped at `2e82776`, the VACUOUS COVERAGE is the work |
+| WS12 vaxis completion | authored (`c7c93f7`) | **no** | open; consumes WS19 T1's restore script |
+| WS13 i18n & docs | authored (`39355ff`) | **no** | open; owns N8, O13b |
+| WS14 wasm/WebGL | **NOT authored** | no | open; inherits O13a/O14/O15/O16 |
+| WS15 GTK GlobalShortcuts | authored | **merged `e8a9f59`** | DONE |
+| WS16 X11 winproto | authored | **merged `07b64db`** | DONE |
+| WS17 verification debt | authored (`ef7621a`) | **no** | open; scope V2/V3/V4/V1b **+ V5** |
+| WS18 release lane | authored in-ROADMAP | **merged `eeec83f`** | DONE |
+| **WS19 Phase 2 closeout** | this wave | **partially — T1–T4, T7, T11, T13–T16, T18, T19 landed; T5, T6, T8, T9, T10, T12, T17, T20 REMAIN** | open; lands **G-P2**, which is RED and names the remainder |
+
+**The open set is exactly WS10, WS11, WS12, WS13, WS14, WS17 — plus Phase 3
+(`.port/phase-3/`, upstream resync).** Gate **G-P2**
+(`.port/tools/gates/check_phase2_closure.py`) derives that set FROM THIS CHECKLIST and
+FAILS if any Phase-2 ledger row is open without an owner in it, so this table and the
+per-WS checklist above are load-bearing: marking a WS `merged`/`DONE` immediately makes
+filing new work into it a gate failure.

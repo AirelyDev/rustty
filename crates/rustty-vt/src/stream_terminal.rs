@@ -140,8 +140,7 @@ pub struct Effects<'a> {
     /// terminal silently read the user's clipboard, and a VT state
     /// library has no way to mediate that with user consent.
     // clipboard_write: ?*const fn (*Handler, clipboard.Write) clipboard.WriteResult
-    pub clipboard_write:
-        Option<fn(&mut Handler<'a>, clipboard::Write) -> clipboard::WriteResult>,
+    pub clipboard_write: Option<fn(&mut Handler<'a>, clipboard::Write) -> clipboard::WriteResult>,
 
     /// Called in response to a color scheme DSR query (CSI ? 996 n).
     /// Returns the current color scheme. Return null to silently
@@ -715,7 +714,9 @@ impl<'a> Handler<'a> {
                 //     try c.encodeRgb16(writer);
                 //     try writer.writeAll(terminator.string());
                 // },
-                color::Dynamic::Foreground | color::Dynamic::Background | color::Dynamic::Cursor => {
+                color::Dynamic::Foreground
+                | color::Dynamic::Background
+                | color::Dynamic::Cursor => {
                     let _ = write!(out, "\x1b]{};", *dynamic as u32);
                     c.encode_rgb16(out);
                     out.extend_from_slice(terminator.string());
@@ -1955,7 +1956,13 @@ impl<'a> stream::Handler for Handler<'a> {
         // OSC 52 uses an empty payload to clear the selected clipboard.
         // if (data.len == 0) { _ = func(self, .{ .location, .contents = &.{} }); return; }
         if data.is_empty() {
-            let _ = func(self, clipboard::Write { location, contents: &[] });
+            let _ = func(
+                self,
+                clipboard::Write {
+                    location,
+                    contents: &[],
+                },
+            );
             return;
         }
 
@@ -1978,7 +1985,13 @@ impl<'a> stream::Handler for Handler<'a> {
             mime: b"text/plain",
             data: &decoded,
         }];
-        let _ = func(self, clipboard::Write { location, contents: &contents });
+        let _ = func(
+            self,
+            clipboard::Write {
+                location,
+                contents: &contents,
+            },
+        );
     }
 
     // .mouse_shape => self.terminal.mouse_shape = value,
@@ -2646,10 +2659,7 @@ mod tests {
         s.handler.effects.write_pty = Some(cap_write_pty);
 
         s.next_slice(b"\x1b]21;background=?\x1b\\");
-        assert_eq!(
-            cap_take().unwrap().as_slice(),
-            b"\x1b]21;background=\x1b\\"
-        );
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b]21;background=\x1b\\");
 
         s.next_slice(b"\x1b]21;foreground=rgb:12/34/56;2=rgb:aa/bb/cc\x1b\\");
         s.next_slice(b"\x1b]21;foreground=?;background=?;2=?\x1b\\");
@@ -3165,12 +3175,36 @@ mod tests {
 
         // Selectors are normalized and payloads are decoded before the callback.
         let cases: &[(&[u8], clipboard::Location, &[u8])] = &[
-            (b"\x1B]52;c;aGVsbG8=\x1B\\", clipboard::Location::Standard, b"hello"),
-            (b"\x1B]52;s;d29ybGQ=\x07", clipboard::Location::Selection, b"world"),
-            (b"\x1B]52;p;cHJpbWFyeQ==\x1B\\", clipboard::Location::Primary, b"primary"),
-            (b"\x1B]52;0;Y3V0\x1B\\", clipboard::Location::Standard, b"cut"),
-            (b"\x1B]52;x;ZmFsbGJhY2s=\x1B\\", clipboard::Location::Standard, b"fallback"),
-            (b"\x1B]52;c;YQBi\x1B\\", clipboard::Location::Standard, b"a\x00b"),
+            (
+                b"\x1B]52;c;aGVsbG8=\x1B\\",
+                clipboard::Location::Standard,
+                b"hello",
+            ),
+            (
+                b"\x1B]52;s;d29ybGQ=\x07",
+                clipboard::Location::Selection,
+                b"world",
+            ),
+            (
+                b"\x1B]52;p;cHJpbWFyeQ==\x1B\\",
+                clipboard::Location::Primary,
+                b"primary",
+            ),
+            (
+                b"\x1B]52;0;Y3V0\x1B\\",
+                clipboard::Location::Standard,
+                b"cut",
+            ),
+            (
+                b"\x1B]52;x;ZmFsbGJhY2s=\x1B\\",
+                clipboard::Location::Standard,
+                b"fallback",
+            ),
+            (
+                b"\x1B]52;c;YQBi\x1B\\",
+                clipboard::Location::Standard,
+                b"a\x00b",
+            ),
         ];
 
         for (i, (sequence, location, data)) in cases.iter().enumerate() {
@@ -3178,14 +3212,23 @@ mod tests {
             assert_eq!(i + 1, CLIP_COUNT.with(|c| c.get()));
             assert_eq!(*location, CLIP_LOCATION.with(|c| c.get()));
             assert_eq!(1, CLIP_CONTENTS_LEN.with(|c| c.get()));
-            assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
-            assert_eq!(*data, CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+            assert_eq!(
+                b"text/plain".as_slice(),
+                CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice()
+            );
+            assert_eq!(
+                *data,
+                CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice()
+            );
         }
 
         // Empty data is a clear, represented by an empty contents slice.
         s.next_slice(b"\x1B]52;s;\x1B\\");
         assert_eq!(cases.len() + 1, CLIP_COUNT.with(|c| c.get()));
-        assert_eq!(clipboard::Location::Selection, CLIP_LOCATION.with(|c| c.get()));
+        assert_eq!(
+            clipboard::Location::Selection,
+            CLIP_LOCATION.with(|c| c.get())
+        );
         assert_eq!(0, CLIP_CONTENTS_LEN.with(|c| c.get()));
         assert!(CLIP_MIME.with(|c| c.borrow().is_none()));
         assert!(CLIP_DATA.with(|c| c.borrow().is_none()));
@@ -3198,22 +3241,43 @@ mod tests {
         // OSC 1337 Copy shares the normalized clipboard write path.
         s.next_slice(b"\x1B]1337;Copy=:aVRlcm0y\x1B\\");
         assert_eq!(cases.len() + 2, CLIP_COUNT.with(|c| c.get()));
-        assert_eq!(clipboard::Location::Standard, CLIP_LOCATION.with(|c| c.get()));
-        assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
-        assert_eq!(b"iTerm2".as_slice(), CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+        assert_eq!(
+            clipboard::Location::Standard,
+            CLIP_LOCATION.with(|c| c.get())
+        );
+        assert_eq!(
+            b"text/plain".as_slice(),
+            CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice()
+        );
+        assert_eq!(
+            b"iTerm2".as_slice(),
+            CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice()
+        );
 
         // Parsing across write boundaries still invokes exactly one atomic write.
         s.next_slice(b"\x1B]52;p;ZnJh");
         s.next_slice(b"Z21lbnRlZA==\x1B");
         s.next_slice(b"\\");
         assert_eq!(cases.len() + 3, CLIP_COUNT.with(|c| c.get()));
-        assert_eq!(clipboard::Location::Primary, CLIP_LOCATION.with(|c| c.get()));
-        assert_eq!(b"text/plain".as_slice(), CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice());
-        assert_eq!(b"fragmented".as_slice(), CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice());
+        assert_eq!(
+            clipboard::Location::Primary,
+            CLIP_LOCATION.with(|c| c.get())
+        );
+        assert_eq!(
+            b"text/plain".as_slice(),
+            CLIP_MIME.with(|c| c.borrow().clone()).unwrap().as_slice()
+        );
+        assert_eq!(
+            b"fragmented".as_slice(),
+            CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice()
+        );
 
         // Callback results are intentionally ignored for protocols without a
         // write acknowledgement. The denied result above did not stop later writes.
-        assert_eq!(clipboard::WriteResult::Denied, CLIP_RESULT.with(|c| c.get()));
+        assert_eq!(
+            clipboard::WriteResult::Denied,
+            CLIP_RESULT.with(|c| c.get())
+        );
 
         clip_clear_capture();
         t.deinit(Global);

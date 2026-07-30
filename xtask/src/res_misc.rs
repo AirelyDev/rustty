@@ -5,7 +5,7 @@
 //!   * `share/man`   — ghostty `src/build/GhosttyDocs.zig` (`installDummy` path).
 //!   * `share/locale` — ghostty `src/build/GhosttyI18n.zig`.
 //!   * `share/bat`   — ghostty `src/build/GhosttyResources.zig` (sublime syntax
-//!                     install to `share/bat/syntaxes`).
+//!     install to `share/bat/syntaxes`).
 //!
 //! These three are NOT runtime-critical for a basic terminal window; the macOS
 //! `Rustty.xcodeproj` Copy-Resources build phase references `../zig-out/share/

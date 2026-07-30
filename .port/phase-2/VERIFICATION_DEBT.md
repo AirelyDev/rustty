@@ -12,53 +12,23 @@ and delete it here.
 
 ---
 
-## V1. macOS build + test of `rustty-xev` — **DISCHARGED [2026-07-23]; row was STALE**
+## ~~V1. macOS build + test of `rustty-xev`~~ — **DISCHARGED 2026-07-23; ROW DELETED [WS19 T14, 2026-07-29]**
 
-**Status: CLOSED.** Flagged by the WS19 Phase 2 closure audit as row **W11** — a
-claimed-open item that had shipped weeks earlier. `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md:41`
-records "VD:V1 (rustty-xev never compiled on macOS) — DISCHARGED 2026-07-23", and every
-workstream since gates on `cargo build --workspace` + `cargo test` on macOS as a merge
-condition (ROADMAP sequencing rule 2), which compiles and runs `rustty-xev` including
-the `__ulock_wait`/`__ulock_wake` shim and the `thread_pool` lifecycle tests. This row
-was never deleted even though this file's own header says to delete verified items.
-**Owner of the deletion: WS19 T14** (it stays here, marked, until WS19 rewrites the
-file — deleting it silently now would lose the audit trail). The historical recipe is
-retained below for anyone re-checking the shim in isolation.
+This row's body has been **deleted**, per this file's own header rule ("When an item is
+verified … delete it here"). It was a claimed-open item that had shipped weeks earlier —
+audit row **W11**: `ROADMAP:41` records "VD:V1 (rustty-xev never compiled on macOS) —
+DISCHARGED 2026-07-23", and every workstream since gates on `cargo build --workspace` +
+`cargo test` on macOS as a merge condition (ROADMAP sequencing rule 2), which compiles
+and runs `rustty-xev` including the `__ulock_wait`/`__ulock_wake` shim and the
+`thread_pool` lifecycle tests.
 
-### Historical (the original V1 text)
+The audit trail lives in the `# PHASE 2 CLOSURE AUDIT (WS19)` section of
+`.port/phase-2/DEFERRALS.md` (row W11), which is why deleting the body here loses
+nothing. This one-paragraph stub is kept ONLY so a reader who arrives from an old
+reference to "V1" is not left wondering whether the row was dropped by accident; it
+carries no open work and no recipe.
 
-**What changed that macOS consumes.** The `xev-libxev-completion` branch (12 commits,
-`eb655ba..9de16be`) edited SHARED code that the macOS build compiles:
-
-- `crates/rustty-xev/src/thread_pool.rs` — the whole ThreadPool port is new and
-  un-gated for both OSes. The macOS futex shim (`__ulock_wait`/`__ulock_wake`,
-  `thread_pool.rs` bottom) **parses but has never been compiled** (cfg-gated, no
-  toolchain here). Note: the Linux futex_wake i32-clamp bug class does NOT apply to
-  the macOS shim (`n > 1` selects `ULF_WAKE_ALL` — a flag, not a count), but this
-  reasoning is unverified by execution. The Task-1 `Event::wake` deliberate deviation
-  (unconditional SHUTDOWN wake + sticky SHUTDOWN; see the DELIBERATE DEVIATION note
-  in-file and the `DEFERRALS.md` entry) is shared code and runs on macOS too.
-- `crates/rustty-xev/src/lib.rs` — export-seam and header-comment changes around the
-  per-target `pub use` blocks.
-- `crates/rustty-xev/tests/surface_parity.rs` — new compile-time export pins
-  (Linux-gated; must stay inert on macOS).
-
-**Recipe (on any Mac with the repo's pinned Rust 1.93.1):**
-```
-cargo build -p rustty-xev
-cargo test  -p rustty-xev            # kqueue suite + ThreadPool smoke/lifecycle tests
-cargo clippy -p rustty-xev --all-targets
-```
-**Expected:** builds clean; full suite green — specifically the `thread_pool` tests
-(`schedule_runs_all_tasks_and_deinit_joins`, `multi_worker_quiesce_then_join_50x`,
-`init_shutdown_deinit_without_tasks_joins_cleanly`) now exercise the `__ulock_*` shim
-for the first time. `multi_worker_quiesce_then_join_50x` has a 60 s watchdog: a hang
-there means the macOS shim's wake semantics diverge — capture per-thread backtraces
-(`sample <pid>` / lldb `thread backtrace all`) before killing; do not paper over with
-`max_threads = 1`.
-
-Also worthwhile while there: `cargo build -p rustty-apprt` (macOS apprt untouched this
-session — expected no-op confirmation).
+---
 
 ## V1b. macOS terminal inspector (cmd+opt+i) — SIGNED OFF [WS6, 2026-07-28]
 
@@ -108,7 +78,16 @@ which was read and confirmed present but never triggered end-to-end.
 Re-verify opportunistically on a multi-display machine, or by exercising the
 1x/HiDPI resolution-toggle fallback on a single-display machine.
 
-## V2. Bare-metal GPU rendering/perf sign-off (blocked: VM is llvmpipe-only)
+## V2. Bare-metal GPU rendering/perf sign-off (blocked: VM is llvmpipe-only) — **OWNER: WS17**
+
+> **OWNER [WS19 T19, 2026-07-29]: WS17 (verification debt).** V2 had no owner written
+> anywhere in its entry — it was implicitly WS17's (WS17's Goal names "V2 real-GPU
+> sign-off"), but nothing in THIS file said so, and an implicit owner is how V5 became an
+> orphan. Gate **G-P2** now requires every open row here to name an owner in an OPEN
+> workstream AND to carry a runnable recipe (a fenced code block), because this file's own
+> header promises "the exact recipe so whoever has the environment can run it without
+> archaeology". WS17 T1 additionally lands `hw_gl_probe.sh` so V2 becomes a one-command
+> check with a fixture-testable PASS arm.
 
 **Context.** ALL Linux/GTK rendering validation to date ran on llvmpipe (software GL
 4.6 core; virtio-gpu, no hardware acceleration). Per the 2026-07-18 decision this is a
@@ -154,11 +133,24 @@ RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/debug/rustty
 
 ---
 
-**Out of scope by decision (not debt):** the WebGL/wasm apprt (owner decision,
-2026-07); macOS `File`/`TCP`/`UDP` watcher instantiations (tracked in `DEFERRALS.md`
-as the C7 follow-up chunk — an implementation deferral, not verification debt).
+**Out of scope by decision (not debt):** ~~the WebGL/wasm apprt (owner decision,
+2026-07)~~ **[WS19 T14 correction: the WebGL/wasm surface is now OWNED — routed to WS14,
+audit rows O13a/O14/O15/O16 — so it is scheduled work, not an out-of-scope decision]**;
+~~macOS `File`/`TCP`/`UDP` watcher instantiations (tracked in `DEFERRALS.md`
+as the C7 follow-up chunk — an implementation deferral, not verification debt)~~
+**[WS19 T11 correction: reclassified as a permanent Justified R1 Divergence, with a
+4-criterion basis, in `DEFERRALS.md`'s divergence section — it is neither debt nor a
+deferral, and `crates/rustty-xev/tests/surface_parity.rs` pins it]**.
 
-## V4. `set_urgent` KAT on the primary GNOME/mutter session (avoided: crash correlation)
+## V4. `set_urgent` KAT on the primary GNOME/mutter session (avoided: crash correlation) — **OWNER: WS17**
+
+> **OWNER [WS19 T19, 2026-07-29]: WS17 (verification debt).** Gate G-P2 flagged this row
+> as owned only by CLOSED workstreams (WS16, WS19 appear in its text as the lanes that
+> touched it, which is provenance, not ownership). WS17's Goal names "V4 mutter
+> `set_urgent`", and WS17 T9 runs it under a NESTED/headless compositor rather than the
+> primary session — which is the whole point, since two hard host crashes correlated with
+> primary-session KAT activity. The recipe below was retargeted by WS19 T4 to the new
+> `gtk_wayland_set_urgent` binary; verify that before relying on it.
 
 **Context.** The set_urgent activation-token dispatch seam is RESOLVED and
 runtime-verified on an ISOLATED headless sway (see `DEFERRALS.md` 2026-07-19 entry;
@@ -170,9 +162,17 @@ so the mutter-session run was deliberately not repeated. mutter implements the s
 
 **Recipe (any stable GNOME Wayland session):**
 ```
-cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_winproto \
+cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_set_urgent \
   -- --ignored --exact wayland_set_urgent_dispatches_activation_token
 ```
+> **RECIPE RETARGETED [WS19 T4, 2026-07-29 — audit row N3].** The binary was
+> ~~`--test gtk_wayland_winproto`~~ and would have run the WRONG binary. That file
+> carried TWO `gtk4::init()` calls, which can never both pass (GTK is thread-pinned;
+> libtest gives every `#[test]` its own thread even at `--test-threads=1`), so this
+> test was split into its own binary `tests/gtk_wayland_set_urgent.rs` following the
+> WS16 precedent `a7fa3b7`. Gate **G-GTKINIT**
+> (`.port/tools/gates/check_gtk_one_init.sh`) now fails if any test binary regains a
+> second `gtk4::init()`.
 **Expected:** `ok` in ~1 s (bounded at ~10 s — a broken seam fails, never hangs).
 
 ## V5. X11 winproto residuals: no native X11 session, no KWin, and NO synthetic keyboard input on this VM [WS16, 2026-07-29]

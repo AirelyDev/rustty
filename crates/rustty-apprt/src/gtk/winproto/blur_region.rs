@@ -137,7 +137,13 @@ impl BlurRegion {
 
         // See https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/css-variables.html#window-radius
         // (`BlurRegion.zig:99-107`).
-        let mut slices = approx_rounded_rect(x, y, width, height, if are_corners_rounded { 15 } else { 0 });
+        let mut slices = approx_rounded_rect(
+            x,
+            y,
+            width,
+            height,
+            if are_corners_rounded { 15 } else { 0 },
+        );
 
         if to_device_coordinates {
             // Transform surface coordinates to device coordinates

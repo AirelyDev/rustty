@@ -38,8 +38,7 @@ impl PageList {
     pub fn get_cell(&self, pt: point::Point) -> Option<Cell> {
         let pt_pin = self.pin(pt)?;
         let rac = unsafe {
-            (*super::Node::page(pt_pin.node))
-                .get_row_and_cell(pt_pin.x as usize, pt_pin.y as usize)
+            (*super::Node::page(pt_pin.node)).get_row_and_cell(pt_pin.x as usize, pt_pin.y as usize)
         };
         Some(Cell {
             node: pt_pin.node,
@@ -199,8 +198,10 @@ impl PageList {
                             }
                             write!(writer, "{}", char::from_u32(cell.codepoint()).unwrap())?;
                             if cell.has_grapheme() {
-                                let grapheme =
-                                    unsafe { (*super::Node::page(chunk.node)).lookup_grapheme(cell) }.unwrap();
+                                let grapheme = unsafe {
+                                    (*super::Node::page(chunk.node)).lookup_grapheme(cell)
+                                }
+                                .unwrap();
                                 for cp in grapheme {
                                     write!(writer, "{}", char::from_u32(*cp).unwrap())?;
                                 }
