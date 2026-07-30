@@ -1630,6 +1630,16 @@ impl Handler for VTHandler {
     // Required for the parser stream interface
     fn deinit(&mut self) {}
 
+    // PORT NOTE (WS10 T14): this handler DOES declare `vtRaw` in the reference,
+    // so `@hasDecl(T, "vtRaw")` is true for it and `1a88f3622`/`253e4f9c3`/
+    // `300f42c7a` disable every CSI fast path at comptime for this stream —
+    // "those handlers keep the exact previous behavior". `HAS_VT_RAW` is
+    // rustty's spelling of that `@hasDecl`, and it MUST be set here: without
+    // it, the fast paths would dispatch CSIs without producing a
+    // `parser::Action`, and the inspector's VT-event log would silently lose
+    // every CSI. Guarded by `stream_fast_paths_bypassed_when_vt_raw_hooked`.
+    const HAS_VT_RAW: bool = true;
+
     // pub fn vtRaw(self, action) !bool — the raw-action hook (returns skip flag).
     fn vt_raw(&mut self, action: &Action) -> bool {
         self.vt_raw_impl(action)

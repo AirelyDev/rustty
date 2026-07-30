@@ -1392,6 +1392,12 @@ impl<'a> stream::Handler for Handler<'a> {
     // stream's `@hasDecl(T, "vtRaw")` branch is skipped (no raw interception).
     // The trait's default returns `false`; we keep the explicit override as a
     // no-op for fidelity with that "not declared" state.
+    //
+    // WS10 T14: for the same reason `HAS_VT_RAW` is deliberately left at its
+    // `false` default here and must NOT be set. This handler is the one the
+    // real IO thread and the `terminal-stream` benchmark use, so it is exactly
+    // the handler the CSI fast paths exist for. The no-op `vt_raw` override
+    // below is fidelity decoration, not a declaration.
     fn vt_raw(&mut self, action: &crate::parser::Action) -> bool {
         false
     }

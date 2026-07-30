@@ -1100,3 +1100,78 @@ T19's headline claim ("~2.7x to ~11x less lock hold"). It is NOT compared to
 upstream's table: those rows are M4 Max numbers over differently-styled content,
 and the `ascii-small.bin` corpus is plain text — upstream's own "full rebuild,
 plain text" row is the one at the memcpy floor and unchanged by the commit.
+
+---
+
+## WS10 T13/T14 — the CSI fast-path family, and why this host cannot measure it
+
+**Ported:** `1a88f3622` (csiDispatchFinal + csi_entry fast path), `253e4f9c3`
+(consumeCsiParams), `300f42c7a` (csiEntryByte hoisted into consumeUntilGround).
+
+### Plan erratum: the task order is backwards
+
+The plan sequences T13 (`253e4f9c3`) before T14 (`1a88f3622`). `253e4f9c3`'s
+`consumeCsiParams` **calls** `self.csiDispatchFinal(c)`, which `1a88f3622`
+introduces. Upstream's real order:
+
+```
+$ git -C ../ghostty log --oneline --pretty="%h %ad %s" --date=short \
+    4749c4e93..origin/main -- src/terminal/stream.zig
+...
+300f42c7a 2026-07-06 terminal: handle CSI entry bytes inline in consumeUntilGround
+253e4f9c3 2026-07-06 terminal: bulk-parse CSI parameter bytes at the slice level
+1a88f3622 2026-07-06 terminal: dispatch CSI finals directly from stream fast paths
+47e26df60 2026-07-06 terminal: batch printed codepoint runs into direct row fills
+```
+
+i.e. oldest-first `47e26df60` -> `1a88f3622` -> `253e4f9c3` -> `300f42c7a`.
+Ported in the upstream order. (Note this also puts T16's `47e26df60` FIRST in
+the family, not last — the plan's Layer-3 ordering
+`253e4f9c3 -> 300f42c7a -> 1a88f3622 -> ... -> 47e26df60` is wrong in three
+places.)
+
+### These commits are UNMEASURABLE against this repo's corpora
+
+Upstream measures them on a 2.6 GB real-session recording and on purpose-built
+100 MB `csi` and `sgr` corpora, reporting +18%/+29%/+2.7% on `terminal-stream`.
+rustty has neither corpus:
+
+- **`terminal-stream/ascii`** — `ascii.bin` contains **zero ESC bytes** (see the
+  WS10 T10 section above). `consume_until_ground` is never entered, so
+  `consume_csi_params`, `csi_entry_byte` and `csi_dispatch_final` are never
+  executed. Measured effect: none, by construction.
+- **`terminal-parser/utf8`** — the `terminal-parser` benchmark drives
+  `Parser::next` directly and never goes through `Stream`, so none of these
+  three commits is on its path at all.
+- No `csi` or `sgr` corpus exists here.
+
+Measured anyway for the record (loaded box, **load 10.93 — provisional and not
+usable as a fence**): `+terminal-parser --data=utf8.bin` 0.30 / 0.09 / 0.09 s
+before and after — unchanged, as predicted.
+
+**So the WS10 suite cannot show a win or a loss for this family, and none is
+claimed.** The evidence for these three commits is fidelity plus the two
+differential tests below. Generating `csi`/`sgr` corpora and re-measuring is
+owned by the deferred measurement campaign (V17, `BEYOND-PIN`).
+
+### A vacuity trap this uncovered, worth recording on its own
+
+The first version of `stream_csi_bulk_params_match_per_byte` drove the bulk path
+through `Stream::next_slice`. It was **completely vacuous**, because
+`next_slice` opens with
+
+```rust
+if DEBUG || !crate::options::SIMD { for &c in input { self.next(c); } return; }
+```
+
+and `options::SIMD` is `cfg!(feature = "simd")`, **off** in a default
+`cargo test -p rustty-vt`. So the "bulk vs per-byte" differential was comparing
+the per-byte path with itself. It was caught by mutation, not by review: a
+deliberate off-by-one in `consume_csi_params`'s final-byte return left the
+**entire 2163-test suite green**. The test now calls `consume_until_ground`
+directly (reproducing `next_slice_capped`'s ESC-scan loop) so it binds in BOTH
+feature configurations, and the suite is run under `--features simd` as well.
+
+Anything else in this repo that verifies a `next_slice` fast path without either
+enabling `simd` or calling the inner function directly is suspect for the same
+reason.
