@@ -1093,17 +1093,21 @@ impl Cell {
     /// this file then consider a different approach and ask yourself very
     /// carefully if you really need this.
     pub fn screen_point(&self) -> point::Point {
-        let mut y: size::CellCountInt = self.row_idx;
+        // PORT NOTE (oracle e6e4a9fdc, `REVIEW_CLASSES.md` §1): the accumulator
+        // is `u32`, not `size::CellCountInt`. `point::Coordinate.y` is already
+        // `u32`; accumulating page-local `u16` row counts in a `u16` overflowed
+        // once scrollback crossed 65,535 physical rows — which PANICS in debug
+        // and WRAPS SILENTLY in release, producing a wrong coordinate with no
+        // diagnostic. Widening makes the addition exact over the full range the
+        // coordinate type promises, so there is no lossy softening to guard.
+        let mut y: u32 = self.row_idx as u32;
         let mut node_ = self.node;
         while !unsafe { (*node_).prev }.is_null() {
             let node = unsafe { (*node_).prev };
-            y += unsafe { super::Node::rows(node) };
+            y += unsafe { super::Node::rows(node) } as u32;
             node_ = node;
         }
 
-        point::Point::Screen(point::Coordinate {
-            x: self.col_idx,
-            y: y as u32,
-        })
+        point::Point::Screen(point::Coordinate { x: self.col_idx, y })
     }
 }

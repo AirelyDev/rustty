@@ -225,6 +225,20 @@ impl PageList {
             }
             Scroll::DeltaPrompt(n) => self.scroll_prompt(n),
             Scroll::DeltaRow(n) => 'delta_row: {
+                // PORT NOTE (oracle c753fe4a4, `REVIEW_CLASSES.md` §1): the
+                // reference was `@intCast(-n)` at each use, which has no
+                // positive signed representation for `isize::MIN`. `@abs(n)`
+                // maps to `n.unsigned_abs()`, NEVER `(-n) as usize` — the latter
+                // panics in debug and wraps silently in release.
+                //
+                // On §1's "saturate AND assert" shape: that pairing exists so a
+                // LOSSY softening cannot silently absorb an invariant break.
+                // `unsigned_abs` is not lossy — it is exact and total over every
+                // `isize` — so there is no absorbed invariant to guard here. The
+                // assert that IS load-bearing is on the consumers below, which
+                // require a non-zero magnitude on the signed fast paths.
+                let amount: usize = n.unsigned_abs();
+
                 match self.viewport {
                     // If we're at the top and we're scrolling backwards,
                     // we don't have to do anything, because there's nowhere to go.
@@ -250,11 +264,12 @@ impl PageList {
                         core::cmp::Ordering::Equal => break 'delta_row,
 
                         core::cmp::Ordering::Less => {
-                            match unsafe { (*self.viewport_pin).up_overflow((-n) as usize) } {
+                            debug_assert!(amount > 0, "n < 0 implies a non-zero magnitude");
+                            match unsafe { (*self.viewport_pin).up_overflow(amount) } {
                                 PinOverflow::Offset(new_pin) => {
                                     unsafe { *self.viewport_pin = new_pin };
                                     if let Some(v) = self.viewport_pin_row_offset.as_mut() {
-                                        *v -= (-n) as usize;
+                                        *v -= amount;
                                     }
                                     break 'delta_row;
                                 }
@@ -268,7 +283,8 @@ impl PageList {
                         }
 
                         core::cmp::Ordering::Greater => {
-                            match unsafe { (*self.viewport_pin).down_overflow(n as usize) } {
+                            debug_assert!(amount > 0, "n > 0 implies a non-zero magnitude");
+                            match unsafe { (*self.viewport_pin).down_overflow(amount) } {
                                 // If we offset its a valid pin but we still have to
                                 // check if we're in the active area.
                                 PinOverflow::Offset(new_pin) => {
@@ -277,7 +293,7 @@ impl PageList {
                                     } else {
                                         unsafe { *self.viewport_pin = new_pin };
                                         if let Some(v) = self.viewport_pin_row_offset.as_mut() {
-                                            *v += n as usize;
+                                            *v += amount;
                                         }
                                     }
                                     break 'delta_row;
@@ -297,12 +313,12 @@ impl PageList {
                 // from our viewport.
                 let top = self.get_top_left(point::Tag::Viewport);
                 let p: Pin = if n < 0 {
-                    match top.up_overflow((-n) as usize) {
+                    match top.up_overflow(amount) {
                         PinOverflow::Offset(v) => v,
                         PinOverflow::Overflow { end, .. } => end,
                     }
                 } else {
-                    match top.down_overflow(n as usize) {
+                    match top.down_overflow(amount) {
                         PinOverflow::Offset(v) => v,
                         PinOverflow::Overflow { end, .. } => end,
                     }
@@ -343,7 +359,11 @@ impl PageList {
         if delta == 0 {
             return;
         }
-        let delta_start: usize = (if delta > 0 { delta } else { -delta }) as usize;
+        // PORT NOTE (oracle afbf5ba15, `REVIEW_CLASSES.md` §1): `@abs(delta)`.
+        // The reference's `if (delta > 0) delta else -delta` has no positive
+        // signed representation for `isize::MIN`.
+        let delta_start: usize = delta.unsigned_abs();
+        debug_assert!(delta != 0, "handled by the early return above");
         let mut delta_rem: usize = delta_start;
 
         // We start at the row before or after our viewport depending on the

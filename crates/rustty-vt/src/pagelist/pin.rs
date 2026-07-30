@@ -135,7 +135,17 @@ impl PageList {
             }
             coord.y = (p.y - tl.y) as u32;
         } else {
-            coord.y += (unsafe { super::Node::rows(tl.node) } - tl.y) as u32;
+            // PORT NOTE (oracle 30b42f42a, `REVIEW_CLASSES.md` §1): every
+            // cross-page row contribution is a CHECKED add. The reference used
+            // `std.math.add(u32, ...) catch return null`; the plain `+=` this
+            // replaces panicked in debug and WRAPPED SILENTLY in release for an
+            // unbounded PageList with more than 2^32 rows, converting a valid
+            // pin into a plausible-looking wrong point. `None` is the oracle's
+            // fallback — it reuses the existing "outside the range" result, so
+            // no caller sees a new error shape.
+            coord.y = coord
+                .y
+                .checked_add((unsafe { super::Node::rows(tl.node) } - tl.y) as u32)?;
             let mut node_ = unsafe { (*tl.node).next };
             loop {
                 if node_.is_null() {
@@ -144,11 +154,13 @@ impl PageList {
                 }
                 let node = node_;
                 if core::ptr::eq(node, p.node) {
-                    coord.y += p.y as u32;
+                    coord.y = coord.y.checked_add(p.y as u32)?;
                     break;
                 }
 
-                coord.y += unsafe { super::Node::rows(node) } as u32;
+                coord.y = coord
+                    .y
+                    .checked_add(unsafe { super::Node::rows(node) } as u32)?;
                 node_ = unsafe { (*node).next };
             }
         }

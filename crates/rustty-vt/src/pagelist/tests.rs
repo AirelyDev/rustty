@@ -12625,3 +12625,180 @@ fn pagelist_PageIterator_count_crosses_page_boundaries() {
 
     s.deinit();
 }
+
+// -- P3-W1 T3: the release-arithmetic subset ---------------------------------
+// oracle c753fe4a4, afbf5ba15, e6e4a9fdc, 30b42f42a. See
+// `.port/phase-3/REVIEW_CLASSES.md` §1: Zig traps only in safety builds, Rust
+// panics in debug and WRAPS in release, so each of these tests asserts a VALUE
+// and is deliberately NOT gated on `debug_assertions` — a release wrap produces
+// a wrong answer with no panic, and a `#[should_panic]`-only control would be
+// blind to exactly that case. Run the file with `--release` as well as debug.
+
+// ref: test "PageList scroll minimum row delta"
+#[test]
+fn pagelist_scroll_minimum_row_delta() {
+    let mut s = PageList::init(10, 3, None).unwrap();
+
+    // Create one row of history so scrolling all the way back has an
+    // observable result.
+    s.grow_rows(1).unwrap();
+    s.scroll(Scroll::DeltaRow(isize::MIN));
+
+    assert!(matches!(s.viewport, Viewport::Top));
+
+    s.deinit();
+}
+
+// ref: test "PageList: jump minimum prompt delta"
+#[test]
+fn pagelist_jump_minimum_prompt_delta() {
+    let mut s = PageList::init(10, 3, None).unwrap();
+
+    s.scroll(Scroll::DeltaPrompt(isize::MIN));
+    assert!(matches!(s.viewport, Viewport::Active));
+
+    s.deinit();
+}
+
+// ref: test "PageList Cell screenPoint supports long scrollback"
+//
+// PORT NOTE: the reference builds a `[]Node` of 307 metadata-only nodes with
+// `.data = .{ .resident = undefined }`. rustty does NOT construct `undefined`
+// pages (see the `mixed_width_pin_list_for_test` note); instead this uses THREE
+// real pages and temporarily raises the two leading pages' `size.rows` to the
+// `CellCountInt` maximum. `screen_point` reads nothing but that metadata field
+// and the `prev` links, so the model is exact for the code under test, and the
+// real sizes are restored before `deinit`.
+#[test]
+fn pagelist_Cell_screenPoint_supports_long_scrollback() {
+    let mut s = PageList::init(1, 1, None).unwrap();
+    s.pause_integrity_checks(true);
+
+    for _ in 0..2 {
+        let node = s
+            .create_page(super::CreatePage::new(Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            }))
+            .unwrap();
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+        unsafe { s.pages.append(node) };
+        s.total_rows += 1;
+    }
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let third = unsafe { (*second).next };
+
+    let rows_per_page = size::CellCountInt::MAX;
+    for node in [first, second] {
+        unsafe { (*super::Node::page(node)).size.rows = rows_per_page };
+    }
+
+    // Two full-height leading pages exceed the u16 row range, which is the
+    // whole point: the pre-fix accumulator was `size::CellCountInt`.
+    let expected_y: u32 = 2 * rows_per_page as u32;
+    assert!(expected_y > size::CellCountInt::MAX as u32);
+
+    let rac = Pin {
+        node: third,
+        y: 0,
+        x: 0,
+        garbage: false,
+    }
+    .row_and_cell();
+    let cell = super::access::Cell {
+        node: third,
+        row: rac.row,
+        cell: rac.cell,
+        row_idx: 0,
+        col_idx: 0,
+    };
+    assert_eq!(
+        point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: expected_y
+        }),
+        cell.screen_point()
+    );
+
+    // Restore the true sizes so deinit sees a consistent list.
+    for node in [first, second] {
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+    }
+    s.deinit();
+}
+
+// ref: test "PageList pointFromPin rejects overflowing screen coordinate"
+//
+// PORT NOTE: the reference allocates 65,539 metadata-only `Node`s so the
+// accumulated Y exceeds `u32`. That is ~16 MB of `undefined` page structs in
+// rustty terms, so instead this builds a THREE-page list, sets every page's
+// `size.rows` to the `CellCountInt` maximum, and closes the `next` chain into a
+// RING. `point_from_pin`'s walk is a pure accumulate-until-found loop over
+// `next`, so a ring drives exactly the same arithmetic with 65k iterations
+// instead of 65k allocations, and the pin it searches for is a page that is not
+// in the ring. Pre-fix this panicked "attempt to add with overflow" in debug and
+// LOOPED FOREVER on a wrapped accumulator in release; post-fix the checked add
+// returns `None`, which is the oracle's fallback and also guarantees
+// termination. The ring is undone before `deinit`.
+#[test]
+fn pagelist_pointFromPin_rejects_overflowing_screen_coordinate() {
+    let mut s = PageList::init(1, 1, None).unwrap();
+    s.pause_integrity_checks(true);
+
+    let mut extra: Vec<*mut super::Node> = Vec::new();
+    for _ in 0..3 {
+        let node = s
+            .create_page(super::CreatePage::new(Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            }))
+            .unwrap();
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+        extra.push(node);
+    }
+    // The first two join the list; the third stays detached and is the pin we
+    // search for, so the walk never terminates by finding it.
+    for &node in &extra[..2] {
+        unsafe { s.pages.append(node) };
+        s.total_rows += 1;
+    }
+    let target = extra[2];
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let third = unsafe { (*second).next };
+    let saved_next = unsafe { (*third).next };
+
+    for node in [first, second, third] {
+        unsafe { (*super::Node::page(node)).size.rows = size::CellCountInt::MAX };
+    }
+    // Close the ring.
+    unsafe { (*third).next = first };
+
+    assert_eq!(
+        None,
+        s.point_from_pin(
+            point::Tag::Screen,
+            Pin {
+                node: target,
+                y: 0,
+                x: 0,
+                garbage: false,
+            }
+        )
+    );
+
+    // Undo the ring and the sizes.
+    unsafe { (*third).next = saved_next };
+    for node in [first, second, third] {
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+    }
+    // The detached page never entered the list, so free it explicitly.
+    unsafe { s.pages.append(target) };
+    s.total_rows += 1;
+    s.deinit();
+}
