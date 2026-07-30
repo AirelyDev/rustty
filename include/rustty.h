@@ -92,6 +92,27 @@ typedef struct Node Node;
 /** Opaque OSC parser command handle (a pointer to the internal command). */
 typedef struct RusttyOscCommand *Command;
 
+/**
+ * Amount of compression work `rustty_terminal_compress` performs. `#[repr(C)]`;
+ * the declaration order is part of the librustty-vt C ABI.
+ * C: RusttyTerminalCompressionMode (rustty-vt terminal::TerminalCompressionMode)
+ */
+typedef enum {
+    TERMINAL_COMPRESSION_MODE_INCREMENTAL = 0,
+    TERMINAL_COMPRESSION_MODE_FULL = 1,
+} TerminalCompressionMode;
+
+/**
+ * Scheduling result from `rustty_terminal_compress`. `#[repr(C)]`; the
+ * declaration order is part of the librustty-vt C ABI.
+ * C: RusttyTerminalCompressionResult (rustty-vt terminal::TerminalCompressionResult)
+ */
+typedef enum {
+    TERMINAL_COMPRESSION_RESULT_UNSUPPORTED = 0,
+    TERMINAL_COMPRESSION_RESULT_PENDING = 1,
+    TERMINAL_COMPRESSION_RESULT_COMPLETE = 2,
+} TerminalCompressionResult;
+
 
 /**
  * C: GhosttyFocusEvent -> RusttyFocusEvent (R2)
@@ -248,6 +269,7 @@ typedef enum {
 typedef enum {
     DATA_DATA_INVALID = 0,
     DATA_DATA_PLACEMENT_ITERATOR = 1,
+    DATA_DATA_GENERATION = 2,
 } Data;
 
 /**
@@ -263,6 +285,7 @@ typedef enum {
     IMAGE_DATA_IMAGE_DATA_COMPRESSION = 6,
     IMAGE_DATA_IMAGE_DATA_DATA_PTR = 7,
     IMAGE_DATA_IMAGE_DATA_DATA_LEN = 8,
+    IMAGE_DATA_IMAGE_DATA_GENERATION = 9,
 } ImageData;
 
 /**
@@ -755,6 +778,11 @@ typedef struct {
  * C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2)
  */
 typedef ScrollViewportC ScrollViewport;
+
+/**
+ * C: GhosttyTerminalCompressionResult -> RusttyTerminalCompressionResult (R2)
+ */
+typedef TerminalCompressionResult CompressionResult;
 
 /**
  * C: GhosttyTerminalSelectWordOptions -> RusttyTerminalSelectWordOptions (R2)
@@ -2106,6 +2134,25 @@ void rustty_terminal_vt_write(Terminal terminal, const uint8_t *ptr, uintptr_t l
  * `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
  */
 void rustty_terminal_scroll_viewport(Terminal terminal, ScrollViewport behavior);
+
+/**
+ * C: rustty_terminal_compression_activity
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle;
+ * `out_activity`, if non-null, must be a valid, writable pointer to a `u64`.
+ */
+int rustty_terminal_compression_activity(Terminal terminal, uint64_t *out_activity);
+
+/**
+ * C: rustty_terminal_compress
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_result`,
+ * if non-null, must be a valid, writable pointer to a
+ * `RusttyTerminalCompressionResult`.
+ */
+int rustty_terminal_compress(Terminal terminal, int mode, CompressionResult *out_result);
 
 /**
  * C: rustty_terminal_mode_get

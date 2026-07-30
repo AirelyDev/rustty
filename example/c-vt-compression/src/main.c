@@ -1,0 +1,72 @@
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+#include <rustty/vt.h>
+
+//! [compression-idle-step]
+// Perform one step after the application's idle timer fires. Returning true
+// asks the application to schedule another step while the terminal is idle.
+static bool compression_idle_step(RusttyTerminal terminal) {
+  RusttyTerminalCompressionResult compression_result;
+  RusttyResult result = rustty_terminal_compress(
+      terminal,
+      RUSTTY_TERMINAL_COMPRESSION_MODE_INCREMENTAL,
+      &compression_result);
+  assert(result == RUSTTY_SUCCESS);
+
+  switch (compression_result) {
+    case RUSTTY_TERMINAL_COMPRESSION_RESULT_PENDING:
+      return true;
+    case RUSTTY_TERMINAL_COMPRESSION_RESULT_COMPLETE:
+    case RUSTTY_TERMINAL_COMPRESSION_RESULT_UNSUPPORTED:
+      return false;
+    default:
+      assert(false);
+      return false;
+  }
+}
+//! [compression-idle-step]
+
+int main(void) {
+  RusttyTerminal terminal;
+  RusttyTerminalOptions opts = {
+    .cols = 80,
+    .rows = 24,
+    .max_scrollback = 10 * 1024 * 1024,
+  };
+  RusttyResult result = rustty_terminal_new(NULL, &terminal, opts);
+  assert(result == RUSTTY_SUCCESS);
+
+  //! [compression-activity]
+  uint64_t compression_activity;
+  result = rustty_terminal_compression_activity(
+      terminal,
+      &compression_activity);
+  assert(result == RUSTTY_SUCCESS);
+
+  // Terminal mutations may change the token. When it changes, restart the
+  // application's idle timer rather than compressing on the output path.
+  const char *line = "repeated and compressible terminal history\r\n";
+  for (size_t i = 0; i < 4000; i++) {
+    rustty_terminal_vt_write(
+        terminal,
+        (const uint8_t *)line,
+        strlen(line));
+  }
+
+  uint64_t new_activity;
+  result = rustty_terminal_compression_activity(terminal, &new_activity);
+  assert(result == RUSTTY_SUCCESS);
+  if (new_activity != compression_activity) {
+    compression_activity = new_activity;
+    // Restart the application's compression idle timer here.
+  }
+  //! [compression-activity]
+
+  // Simulate the idle timer and its short pending-work continuations.
+  while (compression_idle_step(terminal)) {}
+
+  rustty_terminal_free(terminal);
+  return 0;
+}

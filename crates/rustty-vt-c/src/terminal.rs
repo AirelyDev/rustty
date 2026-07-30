@@ -625,6 +625,31 @@ fn device_type_from_int(v: u16) -> device_attributes::DeviceType {
 // PORT NOTE: nullable opaque handle; raw `*mut TerminalWrapper` (null == none).
 pub type Terminal = *mut TerminalWrapper;
 
+/// C: GhosttyTerminalCompressionMode -> RusttyTerminalCompressionMode (R2)
+// pub const CompressionMode = ZigTerminal.CompressionMode;
+// PORT NOTE: the reference nests these on `Terminal`; rustty hoists them to
+// `rustty_vt::terminal` module scope (Rust has no namespaced type declarations
+// inside an `impl`) with a `Terminal` prefix, so the alias re-exports the
+// hoisted name under the reference's unprefixed C-API name.
+pub type CompressionMode = rustty_vt::terminal::TerminalCompressionMode;
+
+/// C: GhosttyTerminalCompressionResult -> RusttyTerminalCompressionResult (R2)
+// pub const CompressionResult = ZigTerminal.CompressionResult;
+pub type CompressionResult = rustty_vt::terminal::TerminalCompressionResult;
+
+// BUILD-failure gate (D2 pattern): the declaration order of both enums is part
+// of the librustty-vt C ABI, and `compress` narrows the incoming C `c_int` to
+// `CompressionMode` with an explicit `match` on these literal discriminants.
+// Pin them (and the `c_int` ABI width the headers declare) so any drift fails
+// the build rather than silently changing the ABI or the accepted `mode` range.
+const _: () = assert!(CompressionMode::Incremental as c_int == 0);
+const _: () = assert!(CompressionMode::Full as c_int == 1);
+const _: () = assert!(CompressionResult::Unsupported as c_int == 0);
+const _: () = assert!(CompressionResult::Pending as c_int == 1);
+const _: () = assert!(CompressionResult::Complete as c_int == 2);
+const _: () = assert!(size_of::<CompressionMode>() == size_of::<c_int>());
+const _: () = assert!(size_of::<CompressionResult>() == size_of::<c_int>());
+
 // pub fn zigTerminal(terminal_: Terminal) ?*ZigTerminal {
 //     return (terminal_ orelse return null).terminal;
 // }
@@ -828,6 +853,83 @@ pub unsafe fn vt_write(terminal_: Terminal, ptr: *const u8, len: usize) {
     // contract). The stream's handler aliases this wrapper's terminal.
     let input = unsafe { core::slice::from_raw_parts(ptr, len) };
     unsafe { (*terminal_).stream.next_slice(input) };
+}
+
+// pub fn compression_activity(terminal_: Terminal, out_activity_: ?*u64) ... Result {
+//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//     const out_activity = out_activity_ orelse return .invalid_value;
+//     out_activity.* = t.compressionActivity();
+//     return .success;
+// }
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle; `out_activity_`, if
+/// non-null, must be a valid writable pointer to a `u64`.
+pub unsafe fn compression_activity(terminal_: Terminal, out_activity_: *mut u64) -> Result {
+    // const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `terminal_` is a live wrapper; `terminal` is its owned heap
+    // terminal.
+    let t: *const ZigTerminal = unsafe { (*terminal_).terminal };
+    // const out_activity = out_activity_ orelse return .invalid_value;
+    if out_activity_.is_null() {
+        return Result::InvalidValue;
+    }
+    // out_activity.* = t.compressionActivity();
+    // SAFETY: `out_activity_` is non-null and writable (caller contract).
+    unsafe { *out_activity_ = (*t).compression_activity() };
+    // return .success;
+    Result::Success
+}
+
+// pub fn compress(terminal_: Terminal, mode_: c_int, out_result_: ?*CompressionResult) ... Result {
+//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//     const out_result = out_result_ orelse return .invalid_value;
+//     const mode = std.meta.intToEnum(CompressionMode, mode_) catch
+//         return .invalid_value;
+//
+//     out_result.* = t.compress(mode);
+//     return .success;
+// }
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle; `out_result_`, if
+/// non-null, must be a valid writable pointer to a `CompressionResult`.
+pub unsafe fn compress(
+    terminal_: Terminal,
+    mode_: c_int,
+    out_result_: *mut CompressionResult,
+) -> Result {
+    // const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `terminal_` is a live wrapper.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    // const out_result = out_result_ orelse return .invalid_value;
+    if out_result_.is_null() {
+        return Result::InvalidValue;
+    }
+    // const mode = std.meta.intToEnum(CompressionMode, mode_) catch
+    //     return .invalid_value;
+    //
+    // PORT NOTE (soundness): the reference's `intToEnum` is a checked
+    // conversion. rustty must NOT `transmute` an unchecked `c_int` into the
+    // `#[repr(C)]` enum — an out-of-range discriminant is instant UB — so the
+    // conversion is an explicit exhaustive `match` on the incoming integer,
+    // which is the sound analog and the only place the C-ABI open-enum value is
+    // narrowed to the closed Rust enum.
+    let mode = match mode_ {
+        0 => CompressionMode::Incremental,
+        1 => CompressionMode::Full,
+        _ => return Result::InvalidValue,
+    };
+
+    // out_result.* = t.compress(mode);
+    // SAFETY: `out_result_` is non-null and writable (caller contract).
+    unsafe { *out_result_ = (*t).compress(mode) };
+    // return .success;
+    Result::Success
 }
 
 /// C: GhosttyTerminalOption -> RusttyTerminalOption (R2)
@@ -2608,6 +2710,142 @@ mod tests {
             });
             assert!(viewport_active);
 
+            unsafe { free(t) };
+        });
+    }
+
+    // test "compression invalid arguments" (oracle 172f15da3)
+    #[test]
+    fn compression_invalid_arguments() {
+        with_test_allocator(|alloc| {
+            // var activity: u64 = undefined;
+            // var compression_result: CompressionResult = undefined;
+            let mut activity: u64 = 0;
+            let mut compression_result = CompressionResult::Unsupported;
+
+            // try testing.expectEqual(Result.invalid_value, compression_activity(null, &activity));
+            assert_eq!(Result::InvalidValue, unsafe {
+                compression_activity(std::ptr::null_mut(), &mut activity)
+            });
+            // try testing.expectEqual(Result.invalid_value, compress(null, @intFromEnum(.incremental), &compression_result));
+            assert_eq!(Result::InvalidValue, unsafe {
+                compress(
+                    std::ptr::null_mut(),
+                    CompressionMode::Incremental as c_int,
+                    &mut compression_result,
+                )
+            });
+
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000_000);
+            assert_eq!(Result::Success, new_result);
+
+            // try testing.expectEqual(Result.invalid_value, compression_activity(t, null));
+            assert_eq!(Result::InvalidValue, unsafe {
+                compression_activity(t, std::ptr::null_mut())
+            });
+            // try testing.expectEqual(Result.invalid_value, compress(t, @intFromEnum(.incremental), null));
+            assert_eq!(Result::InvalidValue, unsafe {
+                compress(
+                    t,
+                    CompressionMode::Incremental as c_int,
+                    std::ptr::null_mut(),
+                )
+            });
+            // try testing.expectEqual(Result.invalid_value, compress(t, -1, &compression_result));
+            assert_eq!(Result::InvalidValue, unsafe {
+                compress(t, -1, &mut compression_result)
+            });
+
+            // defer free(t);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "compression activity and incremental scheduling" (oracle 172f15da3)
+    #[test]
+    fn compression_activity_and_incremental_scheduling() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000_000);
+            assert_eq!(Result::Success, new_result);
+
+            // var initial_activity: u64 = undefined;
+            // try testing.expectEqual(Result.success, compression_activity(t, &initial_activity));
+            let mut initial_activity: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                compression_activity(t, &mut initial_activity)
+            });
+
+            // const line = "repeated and compressible terminal history\r\n";
+            // const repeat = 4_000;
+            // const input = try testing.allocator.alloc(u8, line.len * repeat);
+            // for (0..repeat) |i| @memcpy(input[i * line.len ..][0..line.len], line);
+            // vt_write(t, input.ptr, input.len);
+            let line: &[u8] = b"repeated and compressible terminal history\r\n";
+            const REPEAT: usize = 4_000;
+            let mut input: Vec<u8> = Vec::with_capacity(line.len() * REPEAT);
+            for _ in 0..REPEAT {
+                input.extend_from_slice(line);
+            }
+            unsafe { vt_write(t, input.as_ptr(), input.len()) };
+
+            // var activity: u64 = undefined;
+            // try testing.expectEqual(Result.success, compression_activity(t, &activity));
+            // try testing.expect(activity != initial_activity);
+            let mut activity: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                compression_activity(t, &mut activity)
+            });
+            assert_ne!(activity, initial_activity);
+
+            // var compression_result: CompressionResult = undefined;
+            // for (0..1_000) |_| { ... } else return error.TestUnexpectedResult;
+            let mut compression_result = CompressionResult::Unsupported;
+            let mut completed = false;
+            for _ in 0..1_000 {
+                assert_eq!(Result::Success, unsafe {
+                    compress(
+                        t,
+                        CompressionMode::Incremental as c_int,
+                        &mut compression_result,
+                    )
+                });
+
+                match compression_result {
+                    // .pending => continue,
+                    CompressionResult::Pending => continue,
+                    // .complete => break,
+                    CompressionResult::Complete => {
+                        completed = true;
+                        break;
+                    }
+                    // .unsupported => unreachable,
+                    CompressionResult::Unsupported => {
+                        unreachable!("test builds always support strict reclamation")
+                    }
+                }
+            }
+            // The reference's `else` clause on the `for` loop: falling out
+            // without a `break` is `error.TestUnexpectedResult`.
+            assert!(completed);
+
+            // Compression changes storage representation, not the activity token.
+            // var final_activity: u64 = undefined;
+            // try testing.expectEqual(Result.success, compression_activity(t, &final_activity));
+            // try testing.expectEqual(activity, final_activity);
+            let mut final_activity: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                compression_activity(t, &mut final_activity)
+            });
+            assert_eq!(activity, final_activity);
+
+            // try testing.expectEqual(Result.success, compress(t, @intFromEnum(.full), &compression_result));
+            // try testing.expectEqual(CompressionResult.complete, compression_result);
+            assert_eq!(Result::Success, unsafe {
+                compress(t, CompressionMode::Full as c_int, &mut compression_result)
+            });
+            assert_eq!(CompressionResult::Complete, compression_result);
+
+            // defer free(t);
             unsafe { free(t) };
         });
     }
