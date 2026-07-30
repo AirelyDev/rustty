@@ -78,7 +78,16 @@ which was read and confirmed present but never triggered end-to-end.
 Re-verify opportunistically on a multi-display machine, or by exercising the
 1x/HiDPI resolution-toggle fallback on a single-display machine.
 
-## V2. Bare-metal GPU rendering/perf sign-off (blocked: VM is llvmpipe-only)
+## V2. Bare-metal GPU rendering/perf sign-off (blocked: VM is llvmpipe-only) — **OWNER: WS17**
+
+> **OWNER [WS19 T19, 2026-07-29]: WS17 (verification debt).** V2 had no owner written
+> anywhere in its entry — it was implicitly WS17's (WS17's Goal names "V2 real-GPU
+> sign-off"), but nothing in THIS file said so, and an implicit owner is how V5 became an
+> orphan. Gate **G-P2** now requires every open row here to name an owner in an OPEN
+> workstream AND to carry a runnable recipe (a fenced code block), because this file's own
+> header promises "the exact recipe so whoever has the environment can run it without
+> archaeology". WS17 T1 additionally lands `hw_gl_probe.sh` so V2 becomes a one-command
+> check with a fixture-testable PASS arm.
 
 **Context.** ALL Linux/GTK rendering validation to date ran on llvmpipe (software GL
 4.6 core; virtio-gpu, no hardware acceleration). Per the 2026-07-18 decision this is a
@@ -133,7 +142,15 @@ as the C7 follow-up chunk — an implementation deferral, not verification debt)
 4-criterion basis, in `DEFERRALS.md`'s divergence section — it is neither debt nor a
 deferral, and `crates/rustty-xev/tests/surface_parity.rs` pins it]**.
 
-## V4. `set_urgent` KAT on the primary GNOME/mutter session (avoided: crash correlation)
+## V4. `set_urgent` KAT on the primary GNOME/mutter session (avoided: crash correlation) — **OWNER: WS17**
+
+> **OWNER [WS19 T19, 2026-07-29]: WS17 (verification debt).** Gate G-P2 flagged this row
+> as owned only by CLOSED workstreams (WS16, WS19 appear in its text as the lanes that
+> touched it, which is provenance, not ownership). WS17's Goal names "V4 mutter
+> `set_urgent`", and WS17 T9 runs it under a NESTED/headless compositor rather than the
+> primary session — which is the whole point, since two hard host crashes correlated with
+> primary-session KAT activity. The recipe below was retargeted by WS19 T4 to the new
+> `gtk_wayland_set_urgent` binary; verify that before relying on it.
 
 **Context.** The set_urgent activation-token dispatch seam is RESOLVED and
 runtime-verified on an ISOLATED headless sway (see `DEFERRALS.md` 2026-07-19 entry;

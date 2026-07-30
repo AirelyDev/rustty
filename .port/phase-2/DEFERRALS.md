@@ -177,6 +177,18 @@ untouched (2019). ScrollViewport + sgr-Attribute C-ABI surfaces are now RESOLVED
    is not part of the vt-c C export surface. Its `[16]u64`=128 size verification +
    const-assert land if/when an ABI-compatible `Action` is actually shipped.
 
+   > **OWNER [WS19 T19, 2026-07-29]: Phase 3** (upstream resync) — added because gate
+   > **G-P2** flagged this row as an open claim with a TRIGGER but NO OWNER, which is
+   > exactly the shape that produces orphans. It is **upstream-conditional, not
+   > deferred**: the reference itself carries "TODO: Before shipping an ABI-compatible
+   > libghostty, verify this" and "This was just arbitrarily chosen for now", so the
+   > `[16]u64`=128 verification cannot be written against a layout upstream has not
+   > committed to. **Phase 3 assertion:** if the resync range contains a commit that
+   > fixes `stream.Action`'s `c_union` layout, port the const-assert with it; if it does
+   > not, this row stays as-is and remains correct. No rustty-side work is possible
+   > before that.
+
+
 ## Pre-existing deferred seams (lower priority, noted)
 - `sgr.rs` local `SepList` — can be retargeted to re-export `parser::SepList` (vt-5
   defined the canonical one). Cosmetic; tracked PORT NOTE in sgr.rs.
@@ -1923,6 +1935,15 @@ GPU renderer / D6 libxev port):**
      (D6) — the runtime-panic leaves `init` is written LIVE against.
    **Target: the D6 libxev port** (fills `rustty-xev` in place).
 
+   > **RESOLVED / STALE [WS19 T19, 2026-07-29]** — flagged by gate G-P2 as an open claim
+   > with no owner. **D6 LANDED**: the libxev port completed as xev Milestones A/B
+   > (`crates/rustty-xev`; `thread_pool.rs` alone is 1630 lines with 0
+   > `unimplemented!()`, audit row W5), and `rustty-xev` is a real crate, not a
+   > placeholder. The struck **Target:** names "the D6 libxev port", which is the
+   > pre-WS codename for work that is complete — see the "READ THIS BEFORE GREPPING"
+   > note at the top of this file.
+
+
 5. **App.zig Wasm block (C4, in-file).** `App.zig:579 pub const Wasm` is
    wasm-target-gated and commented out IN the reference; preserved verbatim at
    the bottom of app.rs. **Target: the rustty wasm app-runtime** — **OWNER [WS19 T14, 2026-07-29]: WS14 (wasm/WebGL)**; "the rustty wasm app-runtime" is a milestone name, not a workstream, so these rows were ORPHANED. Gate **G-P2** now FAILS on any open row whose owner is not an OPEN workstream (off-by-default
@@ -2647,6 +2668,21 @@ generation + the C compile+link+run KAT and audits the completed 71-export surfa
    but not yet its own cbindgen header (a separate config-milestone deliverable), so
    `smoke.c` forward-declares the 3 config functions it uses (against the opaque `Config`
    from rustty-apprt.h). **Target: config C-ABI header (own milestone).**
+
+   > **RECLASSIFIED as a bounded TEST-SHIM accommodation, not open work
+   > [WS19 T19, 2026-07-29].** Flagged by gate G-P2: "config C-ABI header (own
+   > milestone)" is a milestone name, not an owner. What is actually being described is
+   > that `smoke.c` — a TEST fixture — forward-declares 3 config functions instead of
+   > including a generated `rustty-config.h`. The SHIPPED artifacts are unaffected:
+   > `rustty-config` already exports the `rustty_config_*` symbols, and every published
+   > header (`rustty.h`, `rustty-apprt.h`, `rustty-embed.h`) now compiles standalone as
+   > C11 and C++17 under gate A5 (WS19 T3). A forward declaration in a test that links
+   > the real library is a normal C practice, and the A4/A5 ABI gates bind the symbols
+   > regardless of which header declares them. **If a config header is ever wanted for
+   > its own sake, the trigger is a CONSUMER asking for one** — at which point it is a
+   > cbindgen invocation in `xtask` beside the existing two. No owner is needed for a
+   > test-fixture convenience.
+
 4. **Cross-crate ABI-pin const-asserts** (`capi.rs`, the E11 audit): `Options`==64,
    `SurfaceOptions`==88, `EnvVar`==16, `PlatformC`==8, `TargetC`==16, `ActionC`==32 +
    the enum-width pins — the drift gate that keeps the hand-pinned header honest.
@@ -3876,6 +3912,14 @@ macro; `PackedStruct::field_names()` mirroring `AutoStruct`; rustty-cli
 deferral:** the `+gen-*` CLI/build.rs file-emit wiring (writes the scripts to disk
 at packaging time) stays deferred with `main_build_data` (C6). 2 `test{}` ported.
 
+> **OWNER [WS19 T19, 2026-07-29 — audit row O13b]: WS13 (i18n & docs).** Flagged by gate
+> G-P2 as an open claim with no owner. This is the SAME item as the `main_build_data.zig`
+> + `+gen-*` file-emit wiring routed to WS13 above, seen from the shell-completion side:
+> the generators are ported and tested, only the write-to-disk-at-packaging-time wiring
+> is outstanding, and WS13 owns the generated-artifact/xtask emission axis. Added to
+> WS13's plan.
+
+
 ## `src/build/mdgen/**` + `src/build/webgen/**` — man-page + website doc generators (low priority)
 
 **Ghostty source:** `src/build/mdgen/**` (`mdgen.zig`, `main_ghostty_1.zig`,
@@ -4282,6 +4326,14 @@ for the app-id/`.desktop` environment setup that any portal call needs.
 
 The gap-analysis app-core inventory marked `src/main_gen.zig`, `src/main_wasm.zig`,
 and `src/main_build_data.zig` as done. **They are NOT ported — they are DEFERRED.**
+
+> **SPLIT AND OWNED [WS19 T19, 2026-07-29 — audit rows O13a/O13b].** Flagged by gate
+> G-P2 as an open claim with no owner; this is the second copy of the three-file bundle.
+> Same disposition as the C6 copy: **`main_gen.zig` is PORTED** (
+> `crates/rustty-synthetic/src/main_gen.rs`, registered as a bin at
+> `Cargo.toml:26-28`) so that third is STALE; **`main_wasm.zig` → WS14**;
+> **`main_build_data.zig` + the `+gen-*` emit wiring → WS13** (added to WS13's plan).
+
 This is already correctly tracked in the **C6 ledger entry** (see "`main_gen.zig` /
 `main_wasm.zig` / `main_build_data.zig` (0t each) DEFERRED", above): they are
 standalone build-tool / WASM-module entrypoints, NOT on the `rustty` exe's
@@ -4353,6 +4405,11 @@ first confirm 0.2.0+Ghostty-config reproduces uucode-0.1.0's EAW/GC/emoji/graphe
 results for the 11 pinned tests.
 
 **Un-defer trigger:** the above decision is made AND the chosen data source reproduces
+> **OWNER [WS19 T19, 2026-07-29]: WS12 (vaxis completion).** Flagged by gate G-P2 as an
+> open claim carrying a trigger but NO owner. WS12 is the workstream that completes
+> `rustty-vaxis`, so the uucode/width-data decision and its consequences belong to it —
+> including making the decision itself, which is the trigger's precondition.
+
 the 11 `gwidth` tests + `unicode.zig` grapheme results byte-exact. Chunk 1b then adds
 `gwidth.rs` (`Method` enum unicode/wcwidth/no_zwj; `eawToWidth`; `gwidth`; 11 tests) +
 `unicode.rs` (`Grapheme`/`GraphemeIterator`/`graphemeIterator`) and the
@@ -4372,6 +4429,7 @@ preserved and the field/method surface is fixed so the later chunk FILLS them.
    `initial_*`/`buf`/`last_mouse_button_press`) + `unimplemented!()` method bodies; the
    non-windows (macOS/Linux) build never names it (which also sidesteps its latent Zig
    `self.fd` bug — its `read` references a field it lacks). **Target: a Windows-target
+   OUT-OF-SCOPE-BY-PLATFORM per `ROADMAP:214` — see the WS19 T19 note below.
    chunk.**
 
 2. ~~**`vaxis.rs` — the `Vaxis` INHABITED placeholder leaves.**~~ **RESOLVED by
@@ -4383,6 +4441,17 @@ preserved and the field/method surface is fixed so the later chunk FILLS them.
 3. **`tty.rs` — `TestTty::next_event`.** A Windows-API-compat stub (`unimplemented!()`) —
    Zig returns `error.SkipZigTest`; never reached on non-windows targets. Filled with the
    `WindowsTty` decode (item 1). **Target: a Windows-target chunk.**
+
+   > **OUT-OF-SCOPE-BY-PLATFORM, not a deferral [WS19 T19, 2026-07-29].** Both `tty.rs`
+   > Windows items were flagged by gate G-P2 as open claims with no owner, because
+   > "a Windows-target chunk" is not a workstream and never will be one:
+   > `ROADMAP:214` puts Windows out of the port's scope entirely, alongside every
+   > `#[cfg(windows)]` seam (`D:3155`, `D:4155`, `D:4169`), the `iocp`/`wasi_poll` xev
+   > backends and the iOS device runtime. Out-of-scope-by-platform items are explicitly
+   > NOT deferrals — there is no owner to name because there is no plan for the target.
+   > Recorded here so a closure sweep classifies them correctly instead of hunting for
+   > an owner that should not exist.
+
 
 4. ~~**`loop_.rs` — the `test Loop` lifecycle test (`#[ignore]`).**~~ **RESOLVED by
    Chunk 4a**: `loop_lifecycle` (loop_.rs:558) is UN-IGNORED — the filled
@@ -4408,6 +4477,7 @@ no entry):
    Zig-source dep `zigimg` (`img.convertToPixelFormat`, PNG decode) before the
    (LIVE) kitty transmit paths. Same dep class as libxev/z2d/vaxis itself: a
    vendored-dep port. **Un-defer trigger: a `rustty-zigimg` port (or an R3
+   OWNER: **WS12** — see the WS19 T19 note below.
    pure-Rust re-home of the two conversions), needed only when a TUI consumer
    transmits images.**
 2. **`image.rs:223` `Image::draw` + `image.rs:248` `Image::cell_size`.** The
@@ -4416,6 +4486,14 @@ no entry):
    until item 1 lands (a vaxis `Image` can only be constructed through
    `transmit_image`/`load_image`), so they defer WITH the zigimg tier.
    **Un-defer trigger: item 1.**
+
+  > **OWNER [WS19 T19, 2026-07-29]: WS12 (vaxis completion).** Flagged by gate G-P2 as an
+  > open claim with NO owner. Same class as `Vaxis::transmit_image`/`load_image` above:
+  > both depend on the image-decode tier (`rustty-zigimg` or an R3-acceptable
+  > substitute), and WS12 is the workstream that completes `rustty-vaxis`. Naming WS12
+  > here is what stops these two rows drifting back into ownerlessness — the gate now
+  > fails if they do.
+
 
 No other live seams exist in the crate outside the `#[cfg(windows)]` family +
 `TestTty::next_event` (Chunk 3b items 1/3 above).

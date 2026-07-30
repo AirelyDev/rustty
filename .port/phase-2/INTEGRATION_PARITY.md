@@ -197,6 +197,14 @@ Ranked by severity, then reachability.
   non-English users. Faithful only while no catalog is bound (the deferred
   state). Documented deferral; not runtime-critical for a terminal window.
 
+
+> **OWNER [WS19 T19, 2026-07-29]: WS13 (i18n & docs).** Flagged by gate G-P2 as a row with
+> no disposition and no owner. WS13's Goal already names outcome (2) as "`rustty_translate`
+> … stops returning the identity stub and forwards to real `dgettext`, which WS9's vendored
+> libintl now makes linkable" — so the work is owned and planned; this row simply never
+> said so, which is how a planned item still reads as an orphan to anyone sweeping the
+> ledgers. Fix-list item 7 below carries the same owner.
+
 ### 2.8 terminfo SOURCE (`ghostty.terminfo`) + termcap never emitted — **RECLASSIFIED as a permanent Justified R1 Divergence [WS19 T14, 2026-07-29 — audit row O20]**
 - **MOVED.** The authoritative entry, with its 4-criterion basis, is now
   "terminfo SOURCE + termcap files never emitted (Debug builds only)" in
@@ -364,7 +372,11 @@ behavior or harden the artifact, ordered by user-visible impact then robustness:
    fix; drop the null catch-all. (Full iOS attach path is a separate deferred
    tier.)
 7. **Wire i18n runtime seam** (§2.7, LOW) — real `dgettext` link + `.po`/`msgfmt`
-   pipeline when i18n is un-BROKEN.
+   pipeline when i18n is un-BROKEN. **OWNER [WS19 T19, 2026-07-29]: WS13 (i18n & docs)**,
+   which owns exactly this as outcome (2) of its Goal; the `.po`/`msgfmt` half is already
+   done (`xtask/src/res_misc.rs` `gen_locale`) and WS9's vendored libintl made the
+   `dgettext` link possible, so what remains is the call-site wrapping and dropping the
+   identity stub. The trigger has already fired — this is scheduled work, not a deferral.
 8. ~~**(Optional) Debug-gate terminfo source + termcap** (§2.8, LOW) — exact-mirror
    the reference's Debug build.~~ **DELETED [WS19 T14, 2026-07-29 — audit row O20].**
    "(Optional)" is not a disposition: the row had no owner, no trigger and no schedule,

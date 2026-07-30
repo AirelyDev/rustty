@@ -182,6 +182,21 @@ GATE_REGISTRY=(
   # merge. HARD: green at landing, milliseconds, and BOTH its FAIL arms (doubled
   # init; vacuous zero-match) are mutation-proven.
   "G-GTKINIT|HARD|bash $GATES/check_gtk_one_init.sh"
+  # G-P2 (WS19 T19) — the Phase 2 CLOSURE gate, and the standing invariant that keeps
+  # Phase 2 closed. It parses the four Phase-2 ledgers and FAILS if any open item lacks
+  # an owner in an OPEN workstream, where "open workstream" is DERIVED from the ROADMAP's
+  # own checklist rather than hardcoded (proven live: marking a WS merged flips the
+  # positive-control fixture from PASS to FAIL). This is the gate that makes the WS19
+  # audit's headline finding — 21 of 38 genuinely-open items were ORPHANED, filed into
+  # workstreams that had already merged — structurally impossible to repeat silently.
+  #
+  # HARD, not PROGRESS, and deliberately so even though it is RED at landing: it is RED
+  # because Phase 2 genuinely is not closed (2 items remain — see its output), and
+  # downgrading a gate to avoid an inconvenient truth is exactly the R5 weakening this
+  # workstream exists to stop. Its FAIL, PASS and BLOCKED arms are each fixture-proven
+  # (`.port/tools/gates/fixtures/phase2-closure-{orphan,owned}.md`), which is the bar
+  # G6b and G-REL met. When the last two items land it goes green and STAYS green.
+  "G-P2|HARD|$PY $GATES/check_phase2_closure.py"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"

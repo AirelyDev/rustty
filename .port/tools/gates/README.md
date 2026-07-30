@@ -56,6 +56,66 @@ Helpers (not gates themselves):
 - `cargo_cycle_check.py` — the real-rustty-Cargo-graph SCC checker that backs G7
   (dependency-free TOML scan + Tarjan; `--fail-on-scc` default on).
 
+## G-P2 (`check_phase2_closure.py`) — the Phase 2 closure invariant (WS19 T19)
+
+**What it enforces.** Phase 2 is a COMPLETION roadmap, so "deferred to a later phase" is
+not an acceptable disposition. Every open item across `.port/phase-2/DEFERRALS.md`,
+`VERIFICATION_DEBT.md`, `MIRI_EXCEPTIONS.md` and `INTEGRATION_PARITY.md` must end as
+exactly one of: struck/fixed; a permanent **Justified R1 Divergence**; **verification
+debt with a runnable recipe**; or OPEN **with an owner that is an OPEN workstream**
+(or `Phase 3`). The gate FAILS on the last case when the owner is missing or names a
+workstream that has already merged.
+
+**Why it exists.** The WS19 closure audit found that **21 of 38 genuinely-open items were
+ORPHANED** — filed into a closed workstream, or never owned at all. Nobody was ever going
+to pick them up, and nothing detected it. This gate makes that class structurally
+impossible to repeat silently.
+
+**The owner set is DERIVED, never hardcoded.** `OPEN_WORKSTREAMS` comes from the
+plan-authoring checklist in
+`docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md` — the same text a human
+reads. A hardcoded list would rot exactly when it matters: the day a workstream merges,
+every row still filed against it becomes an orphan, and a stale list would keep passing
+them. Inspect the derivation with `--check-derivation`.
+
+**Per-file contracts.** The four ledgers have different shapes, so the gate has three
+readers rather than one over-general one: `DEFERRALS.md` (entry + open-marker model),
+`VERIFICATION_DEBT.md` (must name an owner **and** carry a fenced-code-block recipe —
+that file's own header promises one), and `INTEGRATION_PARITY.md` (`### N.N` sections +
+the fix list; `## N. Sanctioned Divergences` is excluded, being that file's analogue of
+`# Justified R1 Divergences`).
+
+**Anti-vacuity.** A non-empty ledger in which ZERO items are found is a LOUD failure, not
+a pass — a parser that silently matches nothing reports every file as clean, which is the
+failure mode this program has already hit twice. An empty derivation is `exit 3` BLOCKED.
+A missing ledger file is `exit 3` BLOCKED, never a silent green.
+
+**Exit codes:** `0` clean · `1` unowned or closed-WS-owned item(s) · `3` BLOCKED.
+
+**Reproduce all three arms (each was observed and recorded at landing):**
+
+```sh
+# FAIL — items filed to a merged WS, and an item with no owner at all. Must be 1.
+python3 .port/tools/gates/check_phase2_closure.py \
+  --fixture .port/tools/gates/fixtures/phase2-closure-orphan.md; echo "must be 1: rc=$?"
+
+# PASS — the positive control: same shape, owner is an OPEN workstream. Must be 0.
+python3 .port/tools/gates/check_phase2_closure.py \
+  --fixture .port/tools/gates/fixtures/phase2-closure-owned.md;  echo "must be 0: rc=$?"
+
+# BLOCKED — absence is never a silent green. Must be 3.
+python3 .port/tools/gates/check_phase2_closure.py \
+  --fixture /nonexistent.md; echo "must be 3: rc=$?"
+
+# DERIVATION IS LIVE — mark an open WS as merged in the ROADMAP and the PASS fixture
+# must FLIP to FAIL. (Verified with WS14: rc 0 -> 1, then 1 -> 0 on revert.)
+python3 .port/tools/gates/check_phase2_closure.py --check-derivation
+```
+
+**Do NOT downgrade it to PROGRESS to get a green CI.** It is registered HARD. If it is
+RED, Phase 2 is not closed — the output IS the remaining worklist, and relaxing the gate
+to hide that is precisely the R5 weakening the gate exists to prevent.
+
 ## G3b (`check_comment_coverage.py`) — beyond-pin comment deltas are EXPECTED (WS19 T2 verdict)
 
 **Read this before "fixing" a G3b `missing` count that went UP after a port lane.**
