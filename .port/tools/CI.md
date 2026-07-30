@@ -200,6 +200,66 @@ step and, for D8, the G8 bench lane.
 
 ---
 
+## Opt-in lanes (NOT part of the default run)
+
+### `--webgl` — the WS14 wasm / WebGL2 browser lane
+
+```sh
+bash .port/tools/ci.sh --webgl
+```
+
+which is exactly these two commands, in order:
+
+```sh
+.port/tools/build-main-wasm.sh --release            # ~9 s cold, ~5 s warm
+.port/tools/gates/ws14_webgl_browser_gate.sh        # ~6 s (headless Chrome)
+```
+
+**What it proves.** The freestanding `rustty_wasm.wasm` cdylib
+(`wasm32-unknown-unknown`, zero wasi imports, every import in `env`) is loaded in
+a real headless Chrome, its `Atlas.Wasm` texture is uploaded as an `R8` NEAREST
+WebGL2 texture, `readPixels` counts ink per 32 px cell column, and those counts
+must **equal** an expectation computed at runtime on the CPU **from the same atlas
+bytes the module holds** (read back through `rustty_wasm_atlas_data` — never a
+hardcoded number, never the JS copy of what was written).
+
+**Why it cannot go vacuously green.** Every invocation runs three arms and passes
+only if the positive arm matches **and both negative controls fail**:
+
+| arm | mutation | must |
+| --- | --- | --- |
+| positive | none | MATCH the CPU expectation |
+| NC1 | atlas UVs offset by +3 px | FAIL |
+| NC2 | fragment shader outputs black | FAIL |
+
+plus NC3 (structural): the third, deliberately undrawn cell column must be
+**exactly 0** ink; and four product-sensitivity assertions (P1 each glyph left ink;
+P2 the reserved regions are disjoint; P3 whole-atlas ink equals the sum of the
+per-region inks, i.e. `Atlas::set` wrote nothing outside its region; P4 the two
+distinct glyphs produce distinct counts). P3/P4 are what make the gate sensitive to
+the **ported product code** rather than only to its own injected mutations — both
+were demonstrated RED by mutating `Atlas::set`'s destination offset (`+1` column →
+P4 red; `+2` rows → P3 red), with the gate returning to GREEN on revert.
+
+**Why it is opt-in, not default.** It needs a second full target's artifacts plus a
+browser process, and two things a CI box may not have. Missing either is **exit 3
+(BLOCKED)**, never a silent green:
+
+- the `wasm32-unknown-unknown` rustup target → `rustup target add wasm32-unknown-unknown`
+- a Chrome/Chromium binary (the driver probes the usual macOS/Linux paths)
+
+**Headless is not a weaker proxy.** `--headless=new --enable-unsafe-swiftshader`
+was observed to produce **byte-identical** ink counts to a live, GPU-backed Chrome
+on the same host (WS14 T9 design probe and WS14 T10's live run), so wiring the lane
+headlessly in CI asserts the same pixels a human sees at
+`example/wasm-webgl/index.html`.
+
+The driver is Node-only with **zero npm dependencies** (node's built-in `WebSocket`
++ `fetch` speak CDP directly) and serves over loopback only
+(`python3 -m http.server --bind 127.0.0.1`).
+
+---
+
 ## Why this is honest (no fabricated greens)
 
 - Hard-fail gates that pass today (`fmt`, `clippy`, `build`, `test`, G7, G4
