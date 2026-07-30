@@ -1041,3 +1041,62 @@ the benchmark's own `step` function and asserts the cursor reached **(3, 1)**.
 Mutation proof: with `HEAD`'s print-only handler restored the same test reports
 **(3, 0)** — the CSI ignored, "ABX" on row 0. That is the non-vacuous check the
 plan was reaching for; the timing check could not have supplied it.
+
+---
+
+## WS10 T12 — `screen-clone --loops`, and what it can and cannot resolve
+
+**Ported:** `446f80f4e`'s `benchmark/ScreenClone.zig` hunk — the `loops: u32 = 1`
+option and `stepRender`'s 1 000 -> `50_000 * loops` iteration count.
+
+**NOT ported here (T19 owns them):** the three new modes `render-locked`,
+`render-clean`, `render-partial`. T12 Step 2's own criterion decides this:
+`grep -n "fn begin_update" crates/rustty-vt/src/render.rs` -> **0 hits**. All
+three modes call `RenderState.beginUpdate`, and the begin/end split IS
+`446f80f4e`'s Rust-side substance, which lands in T19. A `Mode` variant that
+cannot run is worse than an absent one.
+
+### `--loops` does NOT scale `screen-clone.clone` — so it cannot resolve that drift
+
+T12 Step 3 directs using `--loops` with the per-pass slope method to re-check
+T1's `screen-clone.clone` +20.1% drift finding. **That is not possible with this
+commit.** Verified against the reference file itself:
+
+```
+$ git -C ../ghostty show 446f80f4e:src/benchmark/ScreenClone.zig | grep -n 'for (0\.\.'
+160:    for (0..1000) |_| {                                  # stepNoop
+171:    for (0..1000) |_| {                                  # stepClone
+204:    for (0..50_000 * @as(u64, self.opts.loops)) |_| {     # stepRender
+234:    for (0..50_000 * @as(u64, self.opts.loops)) |_| {     # stepRenderLocked
+262:    for (0..3_000_000 * @as(u64, self.opts.loops)) |_| {  # stepRenderClean
+292:    for (0..2_000_000 * @as(u64, self.opts.loops)) |_| {  # stepRenderPartial
+```
+
+`--loops` is a **render-family knob only**. `stepNoop` and `stepClone` keep
+their hardcoded 1 000 iterations, so `screen-clone.noop` and
+`screen-clone.clone` are byte-for-byte unaffected by this task — and the drift
+question for `screen-clone.clone` remains open, owned by the deferred
+measurement campaign (V17, `BEYOND-PIN`).
+
+### The slope measurement that IS available
+
+`+screen-clone --mode=render --data=ascii-small.bin --loops=N`, release-fast,
+**loaded box (load ~4.6) — PROVISIONAL**:
+
+| loops | wall |
+|--:|--:|
+| 1 | 0.45 s |
+| 5 | 2.28 s |
+| 9 | 4.06 s |
+
+Slope `(t(9) - t(1)) / (9 - 1)` = **0.451 s** per loop-unit; the `(5,1)` pair
+agrees at 0.458 s. One loop-unit is 50 000 `RenderState::update` calls forcing a
+full rebuild, so **~9.0 µs per full-rebuild update** at 120x80 on this host,
+with the process-spawn/setup floor falling out at ~0.00 s (it is ~0.45 s of pure
+work even at `--loops=1`, which is the entire point of the 50x iteration bump).
+
+That 9.0 µs figure is recorded as the **pre-`446f80f4e` rustty baseline** for
+T19's headline claim ("~2.7x to ~11x less lock hold"). It is NOT compared to
+upstream's table: those rows are M4 Max numbers over differently-styled content,
+and the `ascii-small.bin` corpus is plain text — upstream's own "full rebuild,
+plain text" row is the one at the memcpy floor and unchanged by the commit.

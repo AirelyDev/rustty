@@ -40,6 +40,11 @@ pub struct Options {
     // mode: Mode = .clone,
     mode: Mode,
 
+    /// Multiplier on the number of iterations each step runs. This is
+    /// useful to make a benchmark run long enough for profiling.
+    // loops: u32 = 1,
+    loops: u32,
+
     /// The size of the terminal. This affects benchmarking when
     /// dealing with soft line wrapping and the memory impact
     /// of page sizes.
@@ -66,6 +71,8 @@ impl Default for Options {
         Options {
             // mode: Mode = .clone,
             mode: Mode::Clone,
+            // loops: u32 = 1,
+            loops: 1,
             // @"terminal-rows": u16 = 80,
             terminal_rows: 80,
             // @"terminal-cols": u16 = 120,
@@ -89,6 +96,17 @@ pub enum Mode {
     /// RenderState rather than a screen clone.
     // render,
     Render,
+    //
+    // DEFERRED TO T19 (decided per T12 Step 2's own criterion, recorded here
+    // rather than in a ledger because it is discharged inside this same
+    // workstream): `446f80f4e` also adds `render-locked`, `render-clean` and
+    // `render-partial`. All three call `RenderState::beginUpdate`, and
+    // `grep -n "fn begin_update" crates/rustty-vt/src/render.rs` -> 0 hits: the
+    // begin/end split IS `446f80f4e`'s Rust-side substance and lands in T19.
+    // Landing the three variants now would mean either stubbing them (a
+    // `Mode` that cannot run is worse than an absent one) or duplicating T19's
+    // API. `--loops` is landed now because it is independent of that API and is
+    // the instrument T12 exists to provide.
 }
 
 impl Mode {
@@ -111,6 +129,11 @@ impl rustty_args::args::Target for Options {
         match key {
             b"mode" => {
                 self.mode = rustty_args::args::parse_field_enum(value, Mode::from_name)?;
+                Ok(())
+            }
+            // loops: u32
+            b"loops" => {
+                self.loops = rustty_args::args::parse_field_int(value)?;
                 Ok(())
             }
             // @"terminal-rows": u16
@@ -339,8 +362,16 @@ impl ScreenClone {
 
         // We loop because its so fast that a single benchmark run doesn't
         // properly capture our speeds.
-        // for (0..1000) |_| {
-        for _ in 0..1000 {
+        // for (0..50_000 * @as(u64, self.opts.loops)) |_| {
+        //
+        // PORT NOTE (446f80f4e, WS10 T12): 1 000 -> 50 000 x `loops`. This is
+        // the ONLY step function the reference re-scales; `stepNoop` and
+        // `stepClone` stay at 1 000 (verified against
+        // `git show 446f80f4e:src/benchmark/ScreenClone.zig` — only the three
+        // render-family loops carry the multiplier). So `--loops` is a
+        // render-mode knob, not a global one, and `screen-clone.{noop,clone}`
+        // timings are UNCHANGED by this task.
+        for _ in 0..(50_000u64 * u64::from(self_.opts.loops)) {
             // Forces a full rebuild because it thinks our screen changed
             // state.screen = .alternate;
             state.screen = Key::Alternate;
