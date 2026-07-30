@@ -2497,13 +2497,18 @@ impl Subprocess {
     //     write: Pty.Fd,
     // } {
     pub fn start(&mut self, alloc: Allocator) -> Result<PtyFds, crate::Error> {
-        // The windows spawn half (out_pipe/in_pipe + pseudo_console) stays
-        // deferred (D6 windows; verbatim in the reference block above); termio's
+        // The windows spawn half (out_pipe/in_pipe + pseudo_console) is OUT OF
+        // SCOPE BY PLATFORM, not deferred — Windows is not a target this port
+        // builds (`.port/phase-2/DEFERRALS.md`, `# Justified R1 Divergences`);
+        // the reference block above is preserved verbatim and termio's
         // pty/PtyFds surface is posix-typed.
         #[cfg(windows)]
         {
             let _ = alloc;
-            unimplemented!("termio.Exec.Subprocess.start windows spawn deferred (D6 windows); verbatim body above")
+            unimplemented!(
+                "termio.Exec.Subprocess.start windows spawn: OUT OF SCOPE BY PLATFORM \
+                 (DEFERRALS.md, # Justified R1 Divergences); verbatim body above"
+            )
         }
 
         #[cfg(not(windows))]
@@ -3722,7 +3727,8 @@ impl ReadThread {
         _quit: rustty_os::windows::HANDLE,
     ) {
         unimplemented!(
-            "termio.Exec.ReadThread.threadMainWindows deferred (D6); verbatim body above"
+            "termio.Exec.ReadThread.threadMainWindows: OUT OF SCOPE BY PLATFORM \
+             (DEFERRALS.md, # Justified R1 Divergences); verbatim body above"
         )
     }
 }
