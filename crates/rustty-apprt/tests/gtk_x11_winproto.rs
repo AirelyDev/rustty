@@ -24,6 +24,16 @@
 //! FAILS at its `Protocol::X11` assertion with `left: None` — the union falls
 //! through to the noop arm. So a pass is evidence the X11 arm really ran.
 //!
+//! ONE HEADED TEST PER BINARY (structural, verified empirically on the VM):
+//! `gtk4::init()` binds GTK to the calling thread, and libtest runs every `#[test]`
+//! on its own spawned thread — even under `--test-threads=1`. A second
+//! `gtk4::init()` in the same process therefore panics with
+//! `"Attempted to initialize GTK from two different threads"` (or
+//! `"Failed to acquire default main context"` when the two race). So each X11 KAT
+//! lives in its OWN integration-test file / process:
+//! `gtk_x11_winproto.rs` (this file, arm selection), `gtk_x11_xkb_init.rs`,
+//! `gtk_x11_event_mods.rs`, `gtk_x11_windowid.rs`.
+//!
 //! R5: gated `all(target_os = "linux", feature = "x11")` (the `x11` feature implies
 //! `gtk`).
 #![cfg(all(target_os = "linux", feature = "x11"))]
@@ -49,30 +59,5 @@ fn x11_app_init_selects_x11_arm() {
         "under GDK_BACKEND=x11 the winproto union must select the X11 arm — proving \
          the X11Display downcast + xdisplay() + set_program_class + atom intern all \
          succeeded against the real X server without crashing"
-    );
-}
-
-/// The XKB extension really initialized: `x11.zig:71-101` runs `XkbQueryExtension`
-/// and `XkbSelectEventDetails` in `App.init` and stores the returned
-/// `base_event_code`. A real X server always assigns a non-zero base event code
-/// (event codes 0 and 1 are reserved for errors/replies), so a non-zero value here
-/// is proof the query actually ran and succeeded — not that the field defaulted.
-#[test]
-#[ignore = "headed GTK + a live X server; run under GDK_BACKEND=x11 — see the module docs"]
-fn x11_app_init_initializes_xkb() {
-    gtk4::init().expect("gtk init");
-    let display = gtk4::gdk::Display::default().expect("a default GDK display");
-    let config = CoreConfig::default_config();
-    let app = App::init(&display, "io.airely.rustty", &config)
-        .expect("winproto App::init must not error on a live display");
-
-    assert_eq!(app.protocol(), Protocol::X11, "must be on the X11 arm");
-
-    let base = app
-        .x11_xkb_base_event_code()
-        .expect("the X11 arm must expose its XKB base event code");
-    assert!(
-        base > 1,
-        "XkbQueryExtension must have assigned a real base event code, got {base}"
     );
 }
