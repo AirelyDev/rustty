@@ -110,6 +110,70 @@ mod retain {
     );
 }
 
+/// rustty-only host readback helpers — NOT a port.
+///
+/// `Atlas.Wasm` exports no way to READ the atlas back: the reference's only
+/// readback path is `atlas_debug_canvas`, which paints the atlas into a DOM
+/// canvas for a human to look at. A falsifiable pixel gate needs the bytes
+/// themselves (the WS14 browser gate computes its expectation from the atlas the
+/// MODULE holds, never from a JS-side copy of what it wrote), so these two
+/// accessors expose `Atlas::data()`/`Atlas::size()` over the C ABI.
+///
+/// They keep the `rustty_wasm_` prefix precisely because they are rustty-only:
+/// the unprefixed names in this artifact (`config_*`, `atlas_*`, `malloc`,
+/// `free`) are exactly the reference's exports, and nothing else.
+// PORT STATUS: rustty-only (no reference counterpart) — additive, wasm-only.
+pub mod host_readback {
+    use rustty_font::atlas::Atlas;
+
+    /// Return a pointer to the atlas texture bytes and write the byte length into
+    /// `out_len`, so the host can read the rendered pixels out of wasm memory.
+    ///
+    /// # Safety
+    /// `atlas` must be null or a live atlas from `atlas_new`; `out_len` must be
+    /// null or point at writable `usize` storage.
+    #[no_mangle]
+    pub unsafe extern "C" fn rustty_wasm_atlas_data(
+        atlas: *const Atlas,
+        out_len: *mut usize,
+    ) -> *const u8 {
+        if atlas.is_null() {
+            if !out_len.is_null() {
+                unsafe { *out_len = 0 };
+            }
+            return core::ptr::null();
+        }
+        let data = unsafe { &*atlas }.data();
+        if !out_len.is_null() {
+            unsafe { *out_len = data.len() };
+        }
+        data.as_ptr()
+    }
+
+    /// The atlas's width == height in pixels (`Atlas.size`). 0 for a null atlas.
+    ///
+    /// # Safety
+    /// `atlas` must be null or a live atlas from `atlas_new`.
+    #[no_mangle]
+    pub unsafe extern "C" fn rustty_wasm_atlas_size(atlas: *const Atlas) -> u32 {
+        if atlas.is_null() {
+            return 0;
+        }
+        unsafe { &*atlas }.size()
+    }
+
+    // Same `#[used]` retention mechanism as `mod retain` above: these are
+    // `#[no_mangle]` exports of an rlib+cdylib crate, so the static pins them.
+    type HostReadbackExports = (
+        unsafe extern "C" fn(*const Atlas, *mut usize) -> *const u8,
+        unsafe extern "C" fn(*const Atlas) -> u32,
+    );
+
+    #[used]
+    static RETAIN_HOST_READBACK: HostReadbackExports =
+        (rustty_wasm_atlas_data, rustty_wasm_atlas_size);
+}
+
 /// The `std.log.Level` analog for the wasm module's compile-time log level.
 // PORT: `std.log.Level` — the level enum `std_options.log_level` selects from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>rustty — Atlas.Wasm through WebGL2</title>
+    <style>
+      body {
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        margin: 2rem;
+        max-width: 68rem;
+      }
+      h1 {
+        font-size: 1.2rem;
+      }
+      p {
+        max-width: 52rem;
+      }
+      canvas#gl {
+        image-rendering: pixelated;
+        width: 480px;
+        height: 160px;
+        border: 1px solid #888;
+        background: #222;
+      }
+      #atlas canvas {
+        image-rendering: pixelated;
+        width: 256px;
+        height: 256px;
+        border: 1px solid #888;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 0.75rem;
+        overflow-x: auto;
+      }
+      code {
+        background: #f4f4f4;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>rustty — the <code>Atlas.Wasm</code> texture rendered through WebGL2</h1>
+
+    <p>
+      This page is the <strong>wasm consumer</strong>. Upstream ghostty's
+      <code>src/renderer/WebGL.zig</code> is a two-line placeholder — a doc comment and
+      <code>pub const WebGL = @This();</code>, with no fields, methods, shaders or draw path — so
+      there is no browser renderer to port. libghostty's wasm model is that the consumer renders
+      itself, which is exactly what happens here: <code>rustty_wasm.wasm</code> (the port of
+      <code>main_wasm.zig</code>) owns the texture atlas through <code>Atlas.Wasm</code>'s C ABI, and
+      the page below uploads that atlas as an <code>R8</code> texture and draws one quad per glyph
+      with WebGL2.
+    </p>
+
+    <p>
+      Serve it over HTTP from the repository root — <code>fetch()</code> of a <code>.wasm</code> does
+      not work from <code>file://</code>:
+    </p>
+    <pre>.port/tools/build-main-wasm.sh --release
+python3 -m http.server 8731 --bind 127.0.0.1
+open http://127.0.0.1:8731/example/wasm-webgl/index.html</pre>
+
+    <p>
+      Everything below is <strong>asserted, not admired</strong>. The per-cell ink counts read back
+      with <code>gl.readPixels</code> must equal an expectation computed on the CPU from the atlas
+      bytes the wasm module holds (never from a JS copy of what was written), the third cell column
+      must be exactly zero, and two negative controls must FAIL on every run: NC1 shifts each glyph's
+      atlas offset by 3px, NC2 makes the fragment shader emit black. The same assertion body runs
+      headlessly in <code>.port/tools/gates/ws14_webgl_browser_gate.sh</code>.
+    </p>
+
+    <h2>WebGL2 output (3 cell columns, 5× nearest-neighbour upscale)</h2>
+    <canvas id="gl" width="96" height="32"></canvas>
+
+    <h2>Result</h2>
+    <pre id="result">running…</pre>
+
+    <h2>Log</h2>
+    <pre id="log"></pre>
+
+    <h2><code>atlas_debug_canvas()</code> — the reference's own readback path</h2>
+    <div id="atlas"></div>
+
+    <script type="module">
+      // Load the SHARED assertion body — byte-identical to what the gate evaluates.
+      //
+      // `eval` is deliberate and safe here, and it is the POINT of the design: the
+      // gate drives the same file through CDP `Runtime.evaluate`, which requires the
+      // body to be a bare expression (an IIFE evaluating to a Promise), not an ES
+      // module with exports. Fetching and evaluating that same text is what
+      // guarantees the page and the gate can never diverge. The input is a
+      // same-origin file from this repository served over loopback — not user input,
+      // not remote content; there is no untrusted data path into it.
+      const src = await (await fetch("./gate.js")).text();
+      let result;
+      try {
+        // eslint-disable-next-line no-eval
+        result = await eval(src);
+      } catch (e) {
+        result = { error: String(e) };
+      }
+      window.__ws14_result = result;
+      const verdict =
+        result.pass_good && result.neg_offset_fails && result.neg_black_fails && result.glError === 0
+          ? "PASS"
+          : "FAIL";
+      document.getElementById("result").textContent =
+        verdict + "\n" + JSON.stringify(result, null, 2);
+      // Show the canvas atlas_debug_canvas built, if the handle is live.
+      for (const c of document.querySelectorAll("canvas")) {
+        if (c.id !== "gl" && !c.parentElement) document.getElementById("atlas").append(c);
+      }
+    </script>
+  </body>
+</html>
