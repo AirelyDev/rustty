@@ -1,5 +1,78 @@
 # VAXIS Chunk 1b — gwidth / unicode + the vendored uucode-0.1.0 subset — DESIGN
 
+## WS12 decisions (2026-07-29) — RATIFIED
+
+Both forks the WS12 plan (`docs/superpowers/plans/2026-07-23-ws12-vaxis-completion.md`)
+put to the human are now **closed**. Recorded verbatim so neither rots back into an
+"open blocker" ledger row a third time.
+
+**DECISION 1 — the uucode width-table fork: `uucode: Option B, as shipped.`**
+
+> "The 'decision REQUIRED' in the ROADMAP was already made and shipped at `e0abb03`
+> (2026-07-10) — a vendored uucode-0.1.0 runtime subset at
+> `crates/rustty-vaxis/src/uucode/` regenerated at build time from a vendored UCD
+> 16.0.0 corpus. `VAXIS_C1B_DESIGN.md:13` records it verbatim. **Ratified: keep B.**
+> Option A would first require proving uucode 0.2.0 + ghostty's stripped config
+> reproduces 0.1.0-vanilla across all 1.1M code points and four fields, to save 3.7 MB
+> of build-time text at the cost of permanently coupling `rustty-vt` — the port's most
+> load-bearing crate — to a TUI library's dependency pin."
+
+Decided by the human (project owner, gael@airely.io) on 2026-07-29, delivered to the
+WS12 executing lane in its task brief. **Obligation attached to the ratification:**
+WS12 T4 must prove the Option-B gate is non-vacuous (perturb one generated table entry
+and confirm `spot_check` + a `gwidth_*` test actually go RED). Discharged — see
+"WS12 T4 non-vacuity proof" below.
+
+**DECISION 2 — the zigimg image tier: `zigimg: Option Z-C, ratified.`**
+
+> "A faithful zigimg port is **18,316 src LOC across 15 format modules + ~10,700 test
+> LOC** for code no ghostty path calls. The surface vaxis actually touches is **six
+> operations**. Build a ~600-LOC `rustty-zigimg` crate re-homing those six onto
+> ghostty's *own* vendored codecs — decode via `rustty-wuffs` (whose RGBA_NONPREMUL
+> output *is* zigimg's `rgba32`), convert, plus a small PNG encoder over `zlib-sys`.
+> `DEFERRALS.md:4196` already blesses this route. **One bounded divergence, documented
+> as a PORT NOTE, not a seam:** `load_image` accepts PNG+JPEG rather than 15 formats —
+> a superset of what ghostty itself supports."
+
+Decided by the human (project owner, gael@airely.io) on 2026-07-29, same brief.
+Option Z-A (full 29k-LOC port) and Z-B (PNG-only, which would leave the other 14
+formats as a residual deferral) are both **rejected and stay rejected**.
+
+### WS12 T4 non-vacuity proof (executed 2026-07-29)
+
+Negative control run in a scratch copy of the crate (`/tmp/ws12-uucode-nonvac`,
+discarded afterwards): `parse_east_asian_width` in `build.rs` was patched with a single
+added line, `eaw[0x4E00] = EAW_NEUTRAL;`, forcing `U+4E00` (CJK UNIFIED IDEOGRAPH-ONE,
+genuinely `Wide`) to `Neutral`. With that one table entry wrong:
+
+```
+---- gwidth::tests::gwidth_missing_wide_anchor stdout ----
+thread '…' panicked at src/gwidth.rs:298:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+---- uucode::tables::tests::spot_check stdout ----
+thread '…' panicked at src/uucode/tables.rs:65:9:
+assertion `left == right` failed
+  left: Neutral
+ right: Wide
+
+failures:
+    gwidth::tests::gwidth_missing_wide_anchor
+    uucode::tables::tests::spot_check
+test result: FAILED. 95 passed; 2 failed; 0 ignored
+```
+
+Both the direct table pin (`spot_check`, `tables.rs:65`) and a *behavioural* width test
+(`gwidth_missing_wide_anchor`, `gwidth.rs:298`, which measures `"一"` at width 2) went
+RED. **Positive control:** reverting that single line in the same scratch tree returns
+`97 passed; 0 failed`, so the two failures are caused by the perturbation and not by the
+scratch tree's standalone-manifest surgery. The tables are therefore genuinely read by
+the test suite; the Option-B gate is **not** vacuous. A `tests/ucd_provenance.rs` KAT
+additionally pins the six vendored UCD inputs to the SHA-256 digests now recorded in
+`ucd/PROVENANCE.md` (also negative-controlled: a one-byte perturbation of a scratch
+copy of `UnicodeData.txt` turns it RED).
+
 **Crate:** existing `crates/rustty-vaxis` (Chunk 1a value types already landed; this
 chunk adds the width/grapheme surface). Ports the VENDORED dep `libvaxis` 0.5.1
 (rockorager, hash `BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS`).
