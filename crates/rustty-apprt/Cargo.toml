@@ -41,7 +41,25 @@ gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita", "rustty-
 # "gtk-v4_20")]` push in `class/application.rs`; that push STILL carries the live
 # runtime `gtk_version::at_least(4, 20, 0)` guard, so it self-disables at runtime
 # on a < 4.20 shared library. Recorded in the `L5 GTK baseline pin` DEFERRALS row.
-gtk-v4_20 = ["gtk", "gtk4/v4_20"]
+# `gtk-v4_20` implies `gtk-v4_16`: a build box with >= 4.20 headers also has the
+# >= 4.16 ones, so ghostty compiled there takes BOTH modern arms.
+gtk-v4_20 = ["gtk", "gtk-v4_16", "gtk4/v4_20"]
+
+# OPT-IN GTK 4.16 API surface — the sibling of `gtk-v4_20` above, and the second
+# (and last) of the two arms the `v4_14` ceiling forces to their legacy shape.
+# DEFAULT OFF: at `v4_14` gtk4-rs does not expose `CssSection::bytes()`
+# (`#[cfg(feature = "v4_16")]`, gtk4-0.11.4 `src/auto/css_section.rs:57`), so the
+# stock build logs the CSS-parse-error location/domain/code/message WITHOUT the
+# offending source bytes — byte-for-byte what ghostty compiles on the 4.14 floor
+# (the comptime fold in `gtk_version.atLeast` collapses the `if (comptime
+# gtk_version.atLeast(4, 16, 0)) bytes: {...}` arm at `application.zig:1261`).
+# Turning this on selects gtk4-rs's `v4_16` API surface (raising the compile-time
+# CEILING so `CssSection::bytes` exists) and lights the `#[cfg(feature =
+# "gtk-v4_16")]` byte-dump in `class/application.rs`; that dump STILL carries the
+# live runtime `gtk_version::at_least(4, 16, 0)` guard, so it self-disables at
+# runtime on a < 4.16 shared library. Recorded in the same `L5 GTK baseline pin`
+# DEFERRALS row as `gtk-v4_20`.
+gtk-v4_16 = ["gtk", "gtk4/v4_16"]
 
 # Windowing-protocol backends behind the `gtk::winproto` union. Both are DECLARED
 # here so the `#[cfg(feature = …)]` arms in `src/gtk/winproto.rs` are recognized

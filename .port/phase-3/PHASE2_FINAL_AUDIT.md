@@ -80,17 +80,50 @@ against `crates/rustty-apprt/src/gtk/**`. Sizes are oracle blob bytes.
 
 | # | Oracle file | Size | Port state | Cost |
 |---|---|---|---|---|
-| **P2.1** | `gtk/ipc/DBus.zig` | 6,223 B | absent — no `ipc` module in `gtk.rs:93-107` | M |
-| **P2.2** | `gtk/ipc/new_window.zig` | 2,213 B | absent | S |
-| **P2.3** | `gtk/ipc/toggle_quick_terminal.zig` | 803 B | absent | S |
-| **P2.4** | `gtk/post_fork.zig` | 4,403 B | absent — only quoted in `gtk.rs:26` | S/M |
-| **P2.5** | `gtk/pre_exec.zig` | 2,716 B | absent — only quoted in `gtk.rs:25` | S |
-| **P2.6** | `gtk/cgroup.zig` | 3,354 B | absent; `class/surface.rs:2029` calls `cgroup_path` a "**Placeholder-leaf (L6, invariant 8)**" | M |
-| **P2.7** | `gtk/flatpak.zig` (`resourcesDir`) | 1,127 B | absent — 0 hits for `resources_dir` under `src/gtk/` | S |
-| **P2.8** | `gtk/class/config_errors_dialog.zig` | 4,477 B | absent; `class/application.rs:353-360` says "Until **Task 24**, `show_config_errors_dialog` never …" — Task 24 never ran. The `.blp` asset ships (`assets/ui/1.2/config-errors-dialog.blp`), so the dialog is dead weight today. | M |
-| **P2.9** | `gtk/build/blueprint.zig` | 5,643 B | absent (build-time blueprint compile) | S/M |
+| **P2.1** | `gtk/ipc/DBus.zig` | 6,223 B | ~~absent~~ **FALSE POSITIVE — already ported** (WS20) | — |
+| **P2.2** | `gtk/ipc/new_window.zig` | 2,213 B | ~~absent~~ **FALSE POSITIVE — already ported** (WS20) | — |
+| **P2.3** | `gtk/ipc/toggle_quick_terminal.zig` | 803 B | ~~absent~~ **FALSE POSITIVE — already ported** (WS20) | — |
+| **P2.4** | `gtk/post_fork.zig` | 4,403 B | **PORTED** (WS20) → `src/gtk/post_fork.rs` | done |
+| **P2.5** | `gtk/pre_exec.zig` | 2,716 B | **PORTED** (WS20) → `src/gtk/pre_exec.rs` | done |
+| **P2.6** | `gtk/cgroup.zig` | 3,354 B | **PORTED** (WS20) → `src/gtk/cgroup.rs` | done |
+| **P2.7** | `gtk/flatpak.zig` (`resourcesDir`) | 1,127 B | **PORTED** (WS20) → `src/gtk/flatpak.rs` | done |
+| **P2.8** | `gtk/class/config_errors_dialog.zig` | 4,477 B | **PORTED** (WS20) → `src/gtk/class/config_errors_dialog.rs`; the Task-24 placeholder in `class/application.rs` `show_config_errors_dialog` is discharged and the `.blp` is now live | done |
+| **P2.9** | `gtk/build/blueprint.zig` | 5,643 B | ~~absent~~ **FALSE POSITIVE — already ported** (WS20) | — |
 
-Total Tier 2 ≈ **31 KB** of reference ≈ **900–1,000 LOC**.
+**WS20 RESOLUTION [2026-07-30] — 5 of the 9 needed porting; 4 were false
+positives.** The file-level oracle diff that produced this table can only see
+1:1 filename correspondence, and four of these nine were ported under a
+different shape:
+
+* **P2.1 / P2.2 / P2.3** (`gtk/ipc/*`) were FLATTENED into
+  `crates/rustty-apprt/src/gtk/app.rs`. `DBus.zig`'s `init` target switch is
+  `ipc_bus_target` (`app.rs:150`), its `send` is `ipc_send` (`app.rs:177`), and
+  the two action files are `ipc_new_window` (`app.rs:233`) /
+  `ipc_toggle_quick_terminal` (`app.rs:244`), reached from `App::perform_ipc`
+  (`app.rs:135`) — the same dispatch the oracle's `App.zig:80-90` does.
+* **P2.9** (`build/blueprint.zig`) was ported into
+  `crates/rustty-apprt/build.rs`: the adw-version gate (`build.rs:210`, oracle
+  `:58-67`), the `blueprint-compiler >= 0.16` gate
+  (`blueprint_compiler_version_gate`, oracle `:69-121`), and the compile step
+  (`compile_blueprint`, oracle `:123-173`), all citing the oracle lines. A
+  standalone Zig build *binary* has no Rust analogue; a `build.rs` is where that
+  logic must live.
+
+The five real gaps (P2.4–P2.8) are ported. `pre_exec.rs` preserves the
+reference's async-signal-safe discipline exactly — it does NOT call the
+allocating `rustty_os::cgroup::current`, and hand-rolls an allocation-free
+equivalent (a unit test proves the two agree byte-for-byte).
+
+**Not a gap — `class/surface.rs:2029` `cgroup_path`.** M10 below cites this as
+unported cgroup support. It is not: the oracle's `apprt/gtk/Surface.zig:40-42`
+`cgroup()` returns `self.surface.cgroupPath()`, and `cgroupPath` **has no
+definition anywhere in the oracle** (`git grep cgroupPath origin/main` → that
+one call site only), nor does anything call `apprt.Surface.cgroup()`. The oracle
+site is itself dead; the rustty `-> None` placeholder is behaviour-equivalent to
+it and needs nothing from `gtk/cgroup.zig`.
+
+Total Tier 2 ≈ **31 KB** of reference ≈ **900–1,000 LOC**, of which ~15 KB was
+already ported under other names.
 
 ### Tier 3 — named, real, single-item gaps
 
@@ -239,7 +272,7 @@ code-verified (see §6). The material results:
 | **M7** | Gate owner-detection is a **bare WS-id grep**, so provenance passes as ownership | `OWNER_RE` at `:105` matches `WS\d` anywhere in an entry. `VERIFICATION_DEBT.md` V6 has **no** `OWNER:` line yet is credited `['WS17','WS19']` from mentions of "WS19 T9 made…" and "the WS17 plan's V3 assumptions". |
 | **M8** | Gate scores a whole entry **closed on any disposition token**, hiding live residuals | V3 is scored `closed` on the word DISCHARGED while its own text lists **two** open residuals with a recipe and names no owner. |
 | **M9** | Two ledgers the gate **never reads** | `LEDGERS` at `:75-80` omits `.port/phase-2/VT_MIRI_SWEEP.md` — which carried **9 real Stacked-Borrows UB tests** marked "fix pending" and "the vt Miri G6 lane stays correctly RED" — and `.port/phase-2/DEFERRALS.swiftapp-misc.md`. An unported UB fix could sit there indefinitely and G-P2 would stay green. |
-| **M10** | Unported GTK cgroup support labelled a **"Placeholder-leaf"** | `crates/rustty-apprt/src/gtk/class/surface.rs:2029`. `gtk/cgroup.zig` (3,354 B) has no counterpart anywhere in `crates/`. "Placeholder-leaf" is doing the same work as "scope boundary". |
+| **M10** | Unported GTK cgroup support labelled a **"Placeholder-leaf"** | `crates/rustty-apprt/src/gtk/class/surface.rs:2029`. `gtk/cgroup.zig` (3,354 B) has no counterpart anywhere in `crates/`. "Placeholder-leaf" is doing the same work as "scope boundary". **RESOLVED [2026-07-30, WS20], and the row was half wrong.** `gtk/cgroup.zig` IS now ported (`src/gtk/cgroup.rs`, with `pre_exec.rs`/`post_fork.rs`), so the label no longer stands in for missing work. The `cgroup_path` site itself was never the gap: the oracle's `apprt/gtk/Surface.zig:41` calls `self.surface.cgroupPath()`, a method with **no definition anywhere in the oracle**, and nothing calls `apprt.Surface.cgroup()` either — the oracle site is dead, so `-> None` is behaviour-equivalent to it. The mis-labelling critique stands; the "unported cgroup support" premise attached to *this* site did not. |
 | **M11** | Flatpak excused as a **"build-config branch (const false)"** | `exec.rs:3297`. `-Dflatpak` is a real, user-selectable ghostty build option (`oracle:src/build/Config.zig:170`, wired at `:529`/`:621`) and is what the official Flatpak package uses. "comptime false" is the Zig-flavoured spelling of "out of scope". |
 
 ---

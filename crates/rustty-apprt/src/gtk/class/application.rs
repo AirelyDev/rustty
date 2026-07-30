@@ -527,7 +527,8 @@ mod imp {
         /// `CssProvider::parsing-error` handler that logs CSS parse errors,
         /// connected in `new` (`application.zig:416-422`).
         ///
-        /// **Task 9 fills this.** Placeholder-leaf no-op.
+        /// The reference's `{s}` of `err.f_message orelse "«unknown»"`
+        /// (`application.zig:1272,1279`).
         pub(super) fn signal_css_parsing_error(
             &self,
             section: &gtk4::CssSection,
@@ -536,12 +537,45 @@ mod imp {
             // `css_section.toString()` (`:1259`). gtk4-rs's `CssSection` renders
             // its location via `Display`.
             let location = section.to_str();
-            // PORT NOTE: the reference's `gtk_version.atLeast(4, 16, 0)` arm
-            // (`:1261-1274`) additionally dumps the offending CSS bytes via
-            // `css_section.getBytes()`. `CssSection::bytes` is `#[cfg(v4_16)]` in
-            // gtk4-rs and the pinned binding surface is `v4_14` (AD-3 / Cargo.toml),
-            // so the byte-dump is not reachable through the bindings here; the
-            // location + domain/code/message line (`:1275-1280`) is preserved.
+
+            // The GTK >= 4.16 byte-dump arm (`:1261-1274`). Ghostty writes it
+            // `if (comptime gtk_version.atLeast(4, 16, 0)) bytes: { ... }`, whose
+            // leading `comptime` fold collapses the branch away when built
+            // against a pre-4.16 header (`gtk_version.zig:58-62`). rustty mirrors
+            // that fold FAITHFULLY as the same two-part gate the `:1565`
+            // `prefers-color-scheme` push uses: `#[cfg(feature = "gtk-v4_16")]`
+            // is the comptime analog (`CssSection::bytes` is
+            // `#[cfg(feature = "v4_16")]` in gtk4-rs — gtk4-0.11.4
+            // `src/auto/css_section.rs:57`, outside the pinned `v4_14` ceiling,
+            // so the DEFAULT build simply omits the dump exactly like ghostty
+            // built on the 4.14 floor), and a live `at_least(4, 16, 0)` probe is
+            // the runtime analog (this port has no `comptime_version` header
+            // constant, so the runtime check is never folded out). See the AD-3
+            // BASELINE PIN note in `Cargo.toml` and the `L5 GTK baseline pin`
+            // DEFERRALS row.
+            #[cfg(feature = "gtk-v4_16")]
+            if crate::gtk::gtk_version::at_least(4, 16, 0) {
+                // `const bytes = css_section.getBytes() orelse break :bytes;`
+                // (`:1262`) — and `const ptr = bytes.getData(&len) orelse break
+                // :bytes; const data = ptr[0..len];` (`:1263-1265`). The
+                // reference logs the raw CSS BYTES; we keep them as `&[u8]` and
+                // render them with the byte-preserving `{:?}`-free lossy view
+                // only at the very last step, never converting the payload.
+                if let Some(bytes) = section.bytes() {
+                    let data: &[u8] = &bytes;
+                    eprintln!(
+                        "warn(gtk): css parsing failed at {location}: {:?} {} {}\n{}",
+                        error.domain(),
+                        error.code(),
+                        error.message(),
+                        String::from_utf8_lossy(data),
+                    );
+                    // `return;` (`:1274`).
+                    return;
+                }
+            }
+
+            // The fallback line (`:1275-1280`).
             eprintln!(
                 "warn(gtk): css parsing failed at {location}: {:?} {} {}",
                 error.domain(),

@@ -191,7 +191,7 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
     let start = std::time::Instant::now();
 
     // `loop: while (true) { ... }` (`:91-115`).
-    loop {
+    'outer: loop {
         // `if (start.untilNow(...).toMilliseconds() > 250)` (`:92`).
         if start.elapsed().as_millis() > 250 {
             // PORT NOTE (reference quirk, preserved): this arm reads
@@ -214,7 +214,7 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
             eprintln!(
                 "warn({LOG_SCOPE}): transition to transient systemd scope {expected_display} took too long"
             );
-            break;
+            break 'outer;
         }
 
         // `not_found: { ... }` (`:101-112`).
@@ -248,7 +248,7 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
                 eprintln!(
                     "debug({LOG_SCOPE}): transition to transient systemd scope {expected_display} complete"
                 );
-                break;
+                break 'outer;
             }
         }
 

@@ -87,7 +87,7 @@ pub fn fmt_scope(buf: &mut [u8], pid: u32) -> &[u8] {
     // `assert(buf.len >= fmt.len - 2 + log10_int(maxInt(u32)) + 1)`
     // (`cgroup.zig:22`); `+ 1` beyond it for the `bufPrintZ` sentinel.
     assert!(
-        buf.len() >= SCOPE_BUF_LEN + 1,
+        buf.len() > SCOPE_BUF_LEN,
         "cgroup.fmt_scope: buffer too small"
     );
 
@@ -275,9 +275,14 @@ mod tests {
     }
 
     /// The reference's fixed `[256]u8` call-site buffers (`cgroup.zig:34`,
-    /// `pre_exec.zig:46`, `post_fork.zig:57`) must be big enough for us too.
+    /// `pre_exec.zig:46`, `post_fork.zig:57`) must be big enough for us too —
+    /// exercised, not just asserted: a 256-byte buffer must accept the widest
+    /// possible scope name.
     #[test]
     fn scope_buf_len_fits_reference_256_byte_buffer() {
-        assert!(SCOPE_BUF_LEN + 1 <= 256);
+        let mut buf = [0u8; 256];
+        let got = fmt_scope(&mut buf, u32::MAX);
+        assert_eq!(got.len(), SCOPE_BUF_LEN);
+        assert!(got.len() < buf.len(), "the NUL sentinel must also fit");
     }
 }

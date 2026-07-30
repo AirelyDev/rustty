@@ -102,7 +102,7 @@ mod imp {
 
             // `gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType())`
             // (`:126-129`).
-            self.obj().dispose_template();
+            self.dispose_template();
         }
     }
 
