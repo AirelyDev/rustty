@@ -72,6 +72,7 @@ use super::command_palette::ActionBoxed;
 use super::config::Config;
 use super::global_shortcuts::GlobalShortcuts;
 use super::tab::TabOverrides;
+use crate::gtk::portal::OpenUri;
 use crate::gtk::surface::Surface as ApprtSurface;
 use crate::gtk::{build_info, ext, winproto, WeakRef};
 
@@ -142,6 +143,13 @@ mod imp {
         /// (Task 9) creates it. Invariant 12: manually held, never parented — the
         /// port holds the strong ref explicitly and clears it to release.
         pub global_shortcuts: RefCell<Option<glib::Object>>,
+
+        /// PORTS: `application.zig:219` `open_uri: OpenURI = undefined` (OWNED —
+        /// an inline struct, `.init(rt_app)` in `new` (`:404`) and `deinit()` at
+        /// dispose (`:440`)). The port stores it inline as well: [`OpenUri`] is a
+        /// cheap `Rc` handle, created eagerly so `openUri()` is always valid, and
+        /// `deinit_private` calls its `deinit`.
+        pub open_uri: OpenUri,
 
         /// PORTS: `application.zig:203-205` `config_errors_dialog:
         /// WeakRef(ConfigErrorsDialog)` (SHARED / non-owning — the dialog may close
@@ -398,12 +406,13 @@ mod imp {
             // Set ourselves as the default application (`:1303`).
             (*obj).set_default();
 
-            // The D-Bus connection is only valid after GApplication startup
-            // (`:1305-1308`). PORT NOTE (L6 placeholder): the portal `OpenURI`
-            // object lands later; its `set_dbus_connection(app.dbus_connection())`
-            // call site is kept INHABITED here as a documented deferral so the
-            // startup order is faithful. `app.dbus_connection()` is available now
-            // (post parent-startup) but has no consumer until the OpenURI body.
+            // The D-Bus connection is only valid after GApplication startup, so the
+            // portal `OpenURI` object is handed it here (`:1305-1308`).
+            {
+                use gio::prelude::ApplicationExt as _;
+                let dbus = obj.upcast_ref::<gio::Application>().dbus_connection();
+                self.open_uri.set_dbus_connection(dbus.as_ref());
+            }
 
             // Setup our event loop backend (`:1311`).
             self.startup_xev();
@@ -1660,11 +1669,12 @@ fn deinit_private(priv_: &imp::Application) {
     // `priv.winproto.deinit()` (`application.zig:439`).
     priv_.winproto.borrow_mut().deinit();
 
-    // PORT NOTE: `priv.open_uri.deinit()` (`:440`) and
-    // `priv.global_shortcuts.unref()` (`:441`) free the portal `OpenURI` and the
-    // `GlobalShortcuts` GObject; neither is created yet (their types land in later
-    // tasks), so there is nothing to free. `global_shortcuts` is cleared
-    // defensively (a no-op while `None`).
+    // `priv.open_uri.deinit()` (`:440`) — cancels the cleanup timer, unsubscribes
+    // every in-flight `Response`, drops the entries and releases the D-Bus
+    // connection. Idempotent (its own `alive` flag).
+    priv_.open_uri.deinit();
+
+    // `priv.global_shortcuts.unref()` (`:441`) — clearing the field drops the ref.
     priv_.global_shortcuts.replace(None);
 
     // Drop the queued-window / tick / confirm-quit thunks (rustty-only seams) so
@@ -2476,6 +2486,15 @@ impl Application {
         self.imp().winproto.borrow_mut()
     }
 
+    /// PORTS: `application.zig:817-820` `openUri` — returns the open-URI portal
+    /// implementation. The reference returns `*OpenURI` (a pointer into the private
+    /// struct); [`OpenUri`] is itself an `Rc` handle, so a clone is the same shared
+    /// object, not a copy of its state.
+    #[must_use]
+    pub fn open_uri(&self) -> OpenUri {
+        self.imp().open_uri.clone()
+    }
+
     /// PORTS: `application.zig:474-592` `run`. A hand-rolled replacement for
     /// `gio.Application.run` (**AD-7**, the plan's defining structural choice) so
     /// the event loop can be interleaved with libghostty's core: after every
@@ -2895,6 +2914,14 @@ impl Application {
 /// static result. Where the leaf already exists (the `activate_action` widget
 /// actions installed by T20/T21, `Window`/`Tab`/`SplitTree` navigation, the render
 /// contract), the handler is fully wired.
+/// `openUrlFallback` re-exported for the portal module: `portal/OpenURI.zig` reaches
+/// it through its `app` backref (`OpenURI.zig:253`), which the port does not store
+/// (the fallback is app-independent — see [`crate::gtk::portal::OpenUri`]'s docs), so
+/// the portal calls this free function instead.
+pub(crate) fn open_url_fallback(kind: rustty_apprt_api::action::OpenUrlKind, url: &[u8]) {
+    action::open_url_fallback(kind, url);
+}
+
 mod action {
     use glib::prelude::*;
     use glib::subclass::prelude::*;
@@ -3423,7 +3450,6 @@ mod action {
 
     /// `pub fn openUrl(self, value) void` (`application.zig:2346-2364`).
     pub(super) fn open_url(app: &Application, value: rustty_apprt_api::action::OpenUrl<'_>) {
-        let _ = app;
         // Local file paths and `file://` URLs bypass the URI launcher and go
         // straight to the OS `open` fallback (`:2350-2356`).
         if value.url.starts_with(b"/") || value.url.starts_with(b"file://") {
@@ -3431,17 +3457,14 @@ mod action {
             return;
         }
 
-        // PORT NOTE: the reference dispatches to `self.openUri().start(value)`
-        // (`:2358`), the XDG-Desktop-Portal `OpenURI` D-Bus launcher
-        // (`portal/OpenURI.zig`). That portal subsystem is unported; `gio`'s
-        // `launch_default_for_uri` is the faithful stand-in — it routes through the
-        // portal under a sandbox and is the standard GLib "open this URI" entry
-        // point. As in the reference, any launch error falls back to the OS opener
-        // (`:2359-2363`).
-        let uri = String::from_utf8_lossy(value.url);
-        if let Err(err) = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
-        {
-            eprintln!("warn(gtk): unable to open uri err={err}");
+        // `self.openUri().start(value) catch |err| { log; openUrlFallback }`
+        // (`:2358-2363`) — the XDG-Desktop-Portal `OpenURI` D-Bus launcher
+        // (`portal/OpenURI.zig`, ported as [`crate::gtk::portal::OpenUri`]). Any
+        // synchronous failure to even ISSUE the request falls back to the OS opener;
+        // an asynchronous failure reaches the same fallback from the portal
+        // callbacks.
+        if let Err(err) = app.open_uri().start(value) {
+            eprintln!("error(gtk): unable to open uri err={err}");
             open_url_fallback(value.kind, value.url);
         }
     }
@@ -3449,7 +3472,7 @@ mod action {
     /// `pub fn openUrlFallback(self, kind, url) void` (`application.zig:1896-1905`).
     /// The minimal cross-platform URL opener (`internal_os.open`, ported as
     /// [`rustty_os::open::open`]).
-    fn open_url_fallback(kind: rustty_apprt_api::action::OpenUrlKind, url: &[u8]) {
+    pub(super) fn open_url_fallback(kind: rustty_apprt_api::action::OpenUrlKind, url: &[u8]) {
         use rustty_apprt_api::action::OpenUrlKind;
         // `apprt.action.OpenUrl.Kind` -> the `rustty_os::open::Kind` seam (`open.rs:31`).
         let kind = match kind {
