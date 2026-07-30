@@ -1948,4 +1948,88 @@ mod tests {
         lib.deinit();
         Ok(())
     }
+
+    /// KAT: the `stbir_resize_uint8` seam on a NON-UNIT bitmap-strike resize.
+    ///
+    /// The four `bitmap_glyph*` tests above all resize at scale 1.0, where every
+    /// resampler agrees (proved: substituting nearest neighbour leaves them green),
+    /// so they cannot witness resampler parity. This one does: Terminus' 8x16 strike
+    /// (pinned by `bitmap_glyph`) is stretched to 16x17 and 8x17, and the resulting
+    /// atlas bytes are compared against fixtures generated from the vendored C by the
+    /// D10 consensus build (`.port/tools/stb-resize-oracle/`, provenance in
+    /// `src/testdata/README.stb-resize.md`). Both dimension asserts are load-bearing:
+    /// if the constraint math ever collapses these back to 8x16 the test must fail
+    /// loudly rather than quietly become vacuous again.
+    #[test]
+    fn stb_resize_kat_bitmap_strike_grayscale() -> Result<(), Error> {
+        use rustty_font::glyph::{Align, Constraint};
+
+        const KAT_16X17: &[u8] = include_bytes!("../testdata/stb_resize_terminus_i_gray_16x17.bin");
+        const KAT_8X17: &[u8] = include_bytes!("../testdata/stb_resize_terminus_i_gray_8x17.bin");
+
+        let alloc = Global;
+        let mut lib = Library::init()?;
+        let mut atlas = Atlas::init(alloc, 512, Format::Grayscale)?;
+        let mut ft_font = Face::init(lib, embedded::TERMINUS_TTF, opts(size(12.0, 96, 96)))?;
+        let metrics = Metrics::calc(ft_font.get_metrics());
+
+        // (constraint_width, expected w, expected h, fixture)
+        let cases: [(u8, u32, u32, &[u8]); 2] = [(2, 16, 17, KAT_16X17), (1, 8, 17, KAT_8X17)];
+
+        for (cw, ew, eh, expected) in cases {
+            // glyph 77 = 'i' (same glyph the `bitmap_glyph` test pins at 8x16).
+            let g = ft_font.render_glyph(
+                alloc,
+                &mut atlas,
+                77,
+                RenderOptions {
+                    grid_metrics: metrics,
+                    constraint_width: cw,
+                    constraint: Constraint {
+                        size: ConstraintSize::Stretch,
+                        align_horizontal: Align::Center,
+                        align_vertical: Align::Center,
+                        ..Constraint::none
+                    },
+                    ..Default::default()
+                },
+            )?;
+
+            assert_eq!(
+                (ew, eh),
+                (g.width, g.height),
+                "constraint_width={cw}: target size"
+            );
+            assert_ne!(
+                (8u32, 16u32),
+                (g.width, g.height),
+                "constraint_width={cw}: this must be a NON-identity resize or the KAT is vacuous"
+            );
+            assert_eq!(
+                expected.len(),
+                (g.width * g.height) as usize,
+                "fixture length"
+            );
+
+            let mut actual = Vec::with_capacity(expected.len());
+            for y in 0..g.height as usize {
+                for x in 0..g.width as usize {
+                    actual.push(
+                        atlas.data()[(g.atlas_y as usize + y) * atlas.size() as usize
+                            + (g.atlas_x as usize + x)],
+                    );
+                }
+            }
+            assert_eq!(
+                expected,
+                &actual[..],
+                "constraint_width={cw}: resized bytes differ from the stb consensus fixture"
+            );
+        }
+
+        ft_font.deinit();
+        atlas.deinit(alloc);
+        lib.deinit();
+        Ok(())
+    }
 }

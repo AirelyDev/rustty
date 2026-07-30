@@ -35,6 +35,13 @@
 #                                # ReleaseSmall to reproduce FIXTURE exactly.
 #                                # Used to validate the in-crate KAT fixtures.
 #   run.sh --cflags "-ffast-math"  # perturb the consensus build (gate --self-test)
+#   run.sh ... --expect-scale 255 # multiply the harness output by N before comparing
+#                                # to --expect. Models the pipeline's post-resize
+#                                # num_grays normalisation: a MONO bitmap strike is
+#                                # densified to num_grays=2 (values 0/1) BEFORE the
+#                                # resize, and freetype.rs multiplies by
+#                                # `factor = 255/(num_grays-1)` AFTER it. So the
+#                                # in-crate fixture is 255x the raw resize output.
 #
 # EXIT CONTRACT (matches .port/tools/gates/README.md — never a silent green)
 #   0  GREEN     every assertion held
@@ -66,12 +73,13 @@ LIBM=()
 [[ "$(uname -s)" != "Darwin" ]] && LIBM=(-lm)
 
 EXTRA_CFLAGS=()
-CASE_IN="" CASE_IW=0 CASE_IH=0 CASE_C=1 CASE_OW=0 CASE_OH=0 EXPECT=""
+CASE_IN="" CASE_IW=0 CASE_IH=0 CASE_C=1 CASE_OW=0 CASE_OH=0 EXPECT="" EXPECT_SCALE=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cflags) IFS=' ' read -r -a EXTRA_CFLAGS <<< "$2"; shift 2 ;;
     --case) CASE_IN="$2" CASE_IW="$3" CASE_IH="$4" CASE_C="$5" CASE_OW="$6" CASE_OH="$7"; shift 7 ;;
     --expect) EXPECT="$2"; shift 2 ;;
+    --expect-scale) EXPECT_SCALE="$2"; shift 2 ;;
     -h|--help) sed -n '2,60p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -124,6 +132,12 @@ run_case() { # $1=binary $2=out $3..= case fields (ow oh in iw ih c)
   else
     "$bin" "$ow" "$oh" "$in" "$iw" "$ih" "$c" > "$out"
   fi
+  local rc=$?
+  # Model the pipeline's post-resize num_grays normalisation (see --expect-scale).
+  if [[ "$EXPECT_SCALE" != "1" ]]; then
+    python3 -c "import sys;p=sys.argv[1];n=int(sys.argv[2]);d=open(p,'rb').read();open(p,'wb').write(bytes(min(255,b*n) for b in d))" "$out" "$EXPECT_SCALE"
+  fi
+  return $rc
 }
 
 for spec in "${CASES[@]}"; do
