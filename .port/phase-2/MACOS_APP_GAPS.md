@@ -81,7 +81,8 @@ On-device visible-window KAT: remains #[ignore] (needs the process main thread);
 - **rustty-vaxis** `unimplemented!()` sites — CLI-TUI path, **not linked** into the macOS GUI app.
 - **core dummy-backend / app test-runtime** (`lib.rs:137`, `app.rs:1120`) — `#[cfg(test)]` only.
 - **Stale doc block** (`generic.rs:11-38`) — claims `DerivedConfig::init`/`setScreenSize`/`changeConfig`/`setFontGrid` are unimplemented seams; all four are landed & real. Update to narrow DEFERRED to W-ATTACH only.
-- **Deferred static bold/italic embedded faces**, **FreeType stbir resize**, **Atlas Wasm C-ABI** — off-path on macOS (variable font covers all styles; CoreText resizes via `scale_ctm`).
+- **Deferred static bold/italic embedded faces**, ~~**FreeType stbir resize**~~, **Atlas Wasm C-ABI** — off-path on macOS (variable font covers all styles; CoreText resizes via `scale_ctm`).
+  **CORRECTION [WS11, 2026-07-29]: `stbir` resize is NOT deferred and NOT off-path on macOS.** The port shipped 2026-06-30 (`2e82776`) and the gating is `cfg(not(target_arch = "wasm32"))`, not `not(target_os = "macos")` — `nm -g` shows `T _stbir_resize_uint8` in the macOS archive, so the seam is LIVE on macOS (it backs the `coretext_freetype` backend, mirroring the oracle's own `Backend` enum). CoreText being the *default* macOS backend is not the same as the FreeType face being absent. WS11 closed its residual (vacuous scale-1.0 coverage) with 5 tests + gate D10.
 
 ---
 
