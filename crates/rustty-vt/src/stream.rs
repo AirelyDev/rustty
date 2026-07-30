@@ -253,6 +253,28 @@ pub trait Handler {
     /// `deinit` — called when the owning `Stream` is deinitialized.
     fn deinit(&mut self) {}
 
+    /// Whether this handler declares a `vt_raw` hook.
+    ///
+    /// PORT NOTE (`1a88f3622`/`253e4f9c3`/`300f42c7a`, WS10 T13/T14): the
+    /// reference gates its CSI fast paths on `comptime @hasDecl(T, "vtRaw")` —
+    /// those paths dispatch WITHOUT going through `Parser.next`, so they would
+    /// bypass a raw hook, and a handler that has one (the inspector) must keep
+    /// the exact previous behaviour and observe every raw action.
+    ///
+    /// `@hasDecl` is a compile-time property of the type. rustty models `vtRaw`
+    /// as a trait method WITH A DEFAULT, so "did this handler declare it?" is
+    /// not recoverable from the method alone — every handler has one. This
+    /// associated const is the missing half: it is the direct mapping of
+    /// `@hasDecl(T, "vtRaw")`, it is `const` so the gate is monomorphized away
+    /// exactly like the reference's `comptime`, and it defaults to `false`
+    /// (= not declared) so the fast paths are ON by default.
+    ///
+    /// A HANDLER THAT OVERRIDES `vt_raw` MUST SET THIS TO `true`. Getting that
+    /// wrong is silent — the hook simply stops seeing CSI actions — which is
+    /// why `stream_fast_paths_bypassed_when_vt_raw_hooked` exists and is
+    /// mutation-proven against exactly that mistake.
+    const HAS_VT_RAW: bool = false;
+
     /// `vtRaw` — optional raw-action hook. A handler can expose this to get the
     /// raw parser action before it is further parsed. If this returns `true`
     /// then the stream skips its own processing of the action.
@@ -827,12 +849,223 @@ impl<'a, H: Handler> Stream<'a, H> {
             if offset >= input.len() {
                 return input.len();
             }
+
+            // Fast path for CSI entry: "ESC [" is by far the most
+            // common escape sequence prefix, so handle the '[' and
+            // the byte that follows it here rather than paying a
+            // nextNonUtf8 call for each.
+            // if (self.parser.state == .escape and input[offset] == '[') {
+            if self.parser.state == parser::State::Escape && input[offset] == b'[' {
+                self.parser.state = parser::State::CsiEntry;
+                offset += 1;
+                continue;
+            }
+
+            // if (comptime !@hasDecl(T, "vtRaw")) {
+            if !H::HAS_VT_RAW {
+                // if (self.parser.state == .csi_entry) {
+                //     if (self.csiEntryByte(input[offset])) { offset += 1; continue; }
+                // }
+                if self.parser.state == parser::State::CsiEntry
+                    && self.csi_entry_byte(input[offset])
+                {
+                    offset += 1;
+                    continue;
+                }
+
+                // Bulk-consume CSI parameter bytes. This can't be
+                // used for handlers with a vtRaw hook because it
+                // dispatches the CSI directly (see nextNonUtf8).
+                // if (self.parser.state == .csi_param) {
+                if self.parser.state == parser::State::CsiParam {
+                    // offset += self.consumeCsiParams(input[offset..]);
+                    offset += self.consume_csi_params(&input[offset..]);
+                    // if (offset >= input.len) return input.len;
+                    if offset >= input.len() {
+                        return input.len();
+                    }
+                    // If we're still in csi_param then the next byte
+                    // isn't a parameter byte; let nextNonUtf8 below
+                    // handle it. Otherwise re-check our state.
+                    // if (self.parser.state != .csi_param) continue;
+                    if self.parser.state != parser::State::CsiParam {
+                        continue;
+                    }
+                }
+            }
+
             // self.nextNonUtf8(input[offset]);
             self.next_non_utf8(input[offset]);
             // offset += 1;
             offset += 1;
         }
         // return offset;
+        offset
+    }
+
+    /// Fast path for a byte in the csi_entry state, the state right
+    /// after "ESC [". Virtually every CSI sequence spends exactly
+    /// one byte in this state, on either a digit, a private marker,
+    /// or a final byte. Returns true if the byte was fully handled;
+    /// false means the caller must process it through the general
+    /// state machine.
+    ///
+    /// Must not be used by handlers with a vtRaw hook because the
+    /// final byte case dispatches the CSI directly.
+    // inline fn csiEntryByte(self: *Self, c: u8) bool {
+    //     comptime assert(!@hasDecl(T, "vtRaw"));
+    #[inline(always)]
+    fn csi_entry_byte(&mut self, c: u8) -> bool {
+        // The reference's `comptime assert(!@hasDecl(T, "vtRaw"))` is a
+        // compile-time precondition on the caller. Rust cannot assert an
+        // associated const inside a generic fn body without a const-generic
+        // trick that would obscure the port, so it is a debug assertion — and
+        // `stream_fast_paths_bypassed_when_vt_raw_hooked` is the real guard.
+        debug_assert!(!H::HAS_VT_RAW);
+        // assert(self.parser.state == .csi_entry);
+        debug_assert!(self.parser.state == parser::State::CsiEntry);
+        // switch (c) {
+        match c {
+            // First parameter digit.
+            b'0'..=b'9' => {
+                self.parser.state = parser::State::CsiParam;
+                // param_acc is zero (cleared on escape entry)
+                // so accumulating is just the digit value.
+                self.parser.param_acc = u16::from(c - b'0');
+                self.parser.param_acc_idx = 1;
+            }
+            // An empty first parameter.
+            b';' => {
+                self.parser.state = parser::State::CsiParam;
+                self.parser.params[0] = 0;
+                self.parser.params_idx = 1;
+            }
+            // Private marker (e.g. '?' in "ESC [ ? 2004 h").
+            0x3C..=0x3F => {
+                self.parser.state = parser::State::CsiParam;
+                self.parser.collect(c);
+            }
+            // A final byte: a parameterless CSI.
+            0x40..=0x7E => self.csi_dispatch_final(c),
+            // Defer to the state machine for anything else
+            // (C0 controls, intermediates, colon).
+            _ => return false,
+        }
+        // return true;
+        true
+    }
+
+    /// Bulk-consume CSI parameter bytes (digits and separators)
+    /// and, if reached, the final byte (dispatching the CSI).
+    /// Returns the number of bytes consumed. Stops at the first
+    /// byte that isn't handled here, leaving the parser in the
+    /// csi_param state so the caller can process that byte.
+    //
+    // PORT NOTE (`253e4f9c3`, WS10 T13) — the `PERF(port)` stop-and-decide this
+    // task's Step 2 requires. The colliding rustty divergence is
+    // `crates/rustty-vt/src/parser.rs:592` "PERF(port): state-equal fast path"
+    // (the r5-parser-fastpath win). VERDICT: **coexist, both kept, neither
+    // altered.**
+    //
+    // They operate at different levels and cannot subsume one another. The r5
+    // divergence lives INSIDE `Parser::next` and short-circuits the
+    // exit/transition/entry triple whenever `state == next_state`; it is what
+    // makes the per-byte path cheap for EVERY parser state. `consume_csi_params`
+    // does not touch `Parser::next` at all — it hoists one specific state
+    // (`csi_param`) out of the byte loop entirely, so for those bytes
+    // `Parser::next` is never called and the r5 fast path is simply not on the
+    // path. For every other byte — every non-CSI state, and ALL CSI bytes when
+    // the handler declares `vt_raw` — `Parser::next` still runs and the r5 fast
+    // path still governs it. Nothing was deleted, nothing was weakened, and no
+    // `PERF(port)` marker was removed.
+    //
+    // ERRATUM ON THE PLAN'S TASK ORDER. The plan sequences this as T13, BEFORE
+    // T14's `1a88f3622`. That is backwards: `consumeCsiParams` calls
+    // `self.csiDispatchFinal(c)`, which `1a88f3622` introduces, and upstream's
+    // own order is `47e26df60` -> `1a88f3622` -> `253e4f9c3` -> `300f42c7a`
+    // (`git -C ../ghostty log --oneline 4749c4e93..origin/main --
+    // src/terminal/stream.zig`). Ported in the upstream order.
+    // fn consumeCsiParams(self: *Self, input: []const u8) usize {
+    fn consume_csi_params(&mut self, input: &[u8]) -> usize {
+        // const p = &self.parser;
+        // assert(p.state == .csi_param);
+        debug_assert!(self.parser.state == parser::State::CsiParam);
+
+        // Accumulate parser state in locals for the hot loop.
+        // var acc = p.param_acc;
+        // var acc_idx = p.param_acc_idx;
+        // var idx = p.params_idx;
+        let mut acc = self.parser.param_acc;
+        let mut acc_idx = self.parser.param_acc_idx;
+        let mut idx = self.parser.params_idx;
+
+        // var offset: usize = 0;
+        let mut offset: usize = 0;
+        // while (offset < input.len) {
+        while offset < input.len() {
+            // const c = input[offset];
+            let c = input[offset];
+            // switch (c) {
+            match c {
+                // A parameter digit.
+                b'0'..=b'9' => {
+                    // if (idx < Parser.MAX_PARAMS) {
+                    if (idx as usize) < parser::MAX_PARAMS {
+                        // acc *|= 10;
+                        // acc +|= c - '0';
+                        // acc_idx |= 1;
+                        acc = acc.saturating_mul(10);
+                        acc = acc.saturating_add(u16::from(c - b'0'));
+                        acc_idx |= 1;
+                    }
+                    offset += 1;
+                }
+
+                // A parameter separator.
+                b':' | b';' => {
+                    // if (idx < Parser.MAX_PARAMS) {
+                    if (idx as usize) < parser::MAX_PARAMS {
+                        // p.params[idx] = acc;
+                        self.parser.params[idx as usize] = acc;
+                        // if (c == ':') p.params_sep.set(idx);
+                        if c == b':' {
+                            self.parser.params_sep.set(idx as usize);
+                        }
+                        // idx += 1; acc = 0; acc_idx = 0;
+                        idx += 1;
+                        acc = 0;
+                        acc_idx = 0;
+                    }
+                    offset += 1;
+                }
+
+                // A final byte: dispatch the CSI.
+                0x40..=0x7E => {
+                    // p.param_acc = acc;
+                    // p.param_acc_idx = acc_idx;
+                    // p.params_idx = idx;
+                    self.parser.param_acc = acc;
+                    self.parser.param_acc_idx = acc_idx;
+                    self.parser.params_idx = idx;
+                    // self.csiDispatchFinal(c);
+                    self.csi_dispatch_final(c);
+                    // return offset + 1;
+                    return offset + 1;
+                }
+
+                // Anything else (C0 controls, intermediates, etc.)
+                // is handled by the caller.
+                _ => break,
+            }
+        }
+
+        // p.param_acc = acc;
+        // p.param_acc_idx = acc_idx;
+        // p.params_idx = idx;
+        // return offset;
+        self.parser.param_acc = acc;
+        self.parser.param_acc_idx = acc_idx;
+        self.parser.params_idx = idx;
         offset
     }
 
@@ -932,6 +1165,20 @@ impl<'a, H: Handler> Stream<'a, H> {
             self.parser.state = parser::State::CsiEntry;
             return;
         }
+
+        // The fast paths below dispatch actions directly rather than
+        // going through Parser.next, so they'd bypass a handler's
+        // vtRaw hook. Handlers with vtRaw (e.g. the inspector) use
+        // the general path for anything that produces an action.
+        // const has_vt_raw = comptime @hasDecl(T, "vtRaw");
+        //
+        // A `let` binding, not a nested `const` item — Rust nested items cannot
+        // capture the outer generic `H`. `H::HAS_VT_RAW` is an associated const,
+        // so this is still a compile-time constant per monomorphization and both
+        // branches below are const-folded exactly like the reference's
+        // `comptime`.
+        let has_vt_raw: bool = H::HAS_VT_RAW;
+
         // Fast path for CSI params.
         // if (self.parser.state == .csi_param) csi_param: { ... }
         if self.parser.state == parser::State::CsiParam {
@@ -975,6 +1222,17 @@ impl<'a, H: Handler> Stream<'a, H> {
                             self.parser.param_acc_idx = 0;
                         }
                     }
+                    // A final byte: dispatch the CSI directly.
+                    // 0x40...0x7E => if (comptime !has_vt_raw) {
+                    //     self.csiDispatchFinal(c);
+                    // } else break :csi_param,
+                    0x40..=0x7E => {
+                        if !has_vt_raw {
+                            self.csi_dispatch_final(c);
+                        } else {
+                            break 'csi_param;
+                        }
+                    }
                     // Explicitly ignored:
                     0x7F => {}
                     // Defer to the state machine to
@@ -983,6 +1241,16 @@ impl<'a, H: Handler> Stream<'a, H> {
                 }
                 return;
             }
+        }
+
+        // Fast path for CSI entry, the state right after "ESC [".
+        // if (comptime !has_vt_raw) {
+        //     if (self.parser.state == .csi_entry) {
+        //         if (self.csiEntryByte(c)) return;
+        //     }
+        // }
+        if !has_vt_raw && self.parser.state == parser::State::CsiEntry && self.csi_entry_byte(c) {
+            return;
         }
 
         // We explicitly inline this call here for performance reasons.
@@ -1040,6 +1308,71 @@ impl<'a, H: Handler> Stream<'a, H> {
         }
     }
 
+    /// Finalize and dispatch a CSI directly from parser state for
+    /// the fast paths in nextNonUtf8, without going through
+    /// Parser.next. This must match the behavior of the parser's
+    /// csi_dispatch action.
+    // fn csiDispatchFinal(self: *Self, c: u8) void {
+    fn csi_dispatch_final(&mut self, c: u8) {
+        // const p = &self.parser;
+        // p.state = .ground;
+        let p = &mut self.parser;
+        p.state = parser::State::Ground;
+
+        // Ignore sequences with too many parameters, matching the
+        // parser's behavior of dropping the dispatch entirely.
+        // if (p.params_idx >= Parser.MAX_PARAMS) { @branchHint(.unlikely); return; }
+        if p.params_idx as usize >= parser::MAX_PARAMS {
+            return;
+        }
+
+        // Finalize the last parameter if we have one.
+        // if (p.param_acc_idx > 0) { p.params[p.params_idx] = p.param_acc; p.params_idx += 1; }
+        if p.param_acc_idx > 0 {
+            p.params[p.params_idx as usize] = p.param_acc;
+            p.params_idx += 1;
+        }
+
+        // const action: Parser.Action.CSI = .{
+        //     .intermediates = p.intermediates[0..p.intermediates_idx],
+        //     .params = p.params[0..p.params_idx],
+        //     .params_sep = p.params_sep,
+        //     .final = c,
+        // };
+        //
+        // PORT NOTE: the reference's `action` slices into the parser's buffers;
+        // rustty's `parser::CSI` owns `InlineVec` prefixes (the `Action` PORT
+        // NOTE), so this is the same `InlineVec::from_buf` construction the
+        // parser's own `csi_dispatch` arm performs (`parser.rs:807`) — and
+        // deliberately so: any divergence between the two would be a
+        // fast-path-only behaviour difference, which is precisely what
+        // `stream_csi_bulk_params_match_per_byte` exists to catch.
+        let action = parser::CSI {
+            intermediates: parser::InlineVec::from_buf(p.intermediates, p.intermediates_idx),
+            params: parser::InlineVec::from_buf(p.params, p.params_idx),
+            params_sep: p.params_sep,
+            final_: c,
+        };
+
+        // We only allow colon or mixed separators for the 'm' command.
+        // if (c != 'm' and p.params_sep.count() > 0) {
+        //     @branchHint(.cold);
+        //     log.warn(
+        //         "CSI colon or mixed separators only allowed for 'm' command, got: {f}",
+        //         .{action},
+        //     );
+        //     return;
+        // }
+        if c != b'm' && p.params_sep.count() > 0 {
+            // log.warn("CSI colon or mixed separators only allowed for 'm' command, got: {f}", ...);
+            return;
+        }
+
+        // if (comptime debug) log.info("action: {f}", .{Parser.Action{ .csi_dispatch = action }});
+        // self.csiDispatch(action);
+        self.csi_dispatch(action);
+    }
+
     // inline fn print(self: *Self, c: u21) void {
     fn print(&mut self, c: u32) {
         // self.handler.vt(.print, .{ .cp = c });
@@ -1084,8 +1417,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                 locking: false,
             }),
 
-            // else => log.warn("invalid C0 character, ignoring: 0x{x}", .{c}),
-            _ => {}
+            // else => logUnsupportedOnce("invalid C0 character, ignoring: 0x{x}", .{c}, c),
+            _ => {
+                log_unsupported_once(&SEEN_INVALID_C0, u16::from(c));
+            }
         }
     }
 
@@ -1674,7 +2009,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                 if let Some(r) = req {
                     self.handler.device_attributes(r);
                 } else {
-                    // log.warn("invalid device attributes command: {f}", .{input});
+                    // logUnsupportedOnce(
+                    //     "invalid device attributes command: {f}",
+                    //     .{input},
+                    //     if (input.params.len > 0) input.params[0] else 0,
+                    // );
+                    log_unsupported_once(
+                        &SEEN_INVALID_DEVICE_ATTRIBUTES,
+                        if input.params.len() > 0 {
+                            input.params[0]
+                        } else {
+                            0
+                        },
+                    );
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -1776,7 +2123,8 @@ impl<'a, H: Handler> Stream<'a, H> {
                     if let Some(mode) = modes::mode_from_int(mode_int, ansi_mode) {
                         self.handler.set_mode(Mode { mode });
                     } else {
-                        // log.warn("unimplemented mode: {}", .{mode_int});
+                        // logUnsupportedOnce("unimplemented mode: {}", .{mode_int}, mode_int);
+                        log_unsupported_once(&SEEN_UNIMPLEMENTED_MODE, mode_int);
                     }
                 }
             }
@@ -1804,7 +2152,8 @@ impl<'a, H: Handler> Stream<'a, H> {
                     if let Some(mode) = modes::mode_from_int(mode_int, ansi_mode) {
                         self.handler.reset_mode(Mode { mode });
                     } else {
-                        // log.warn("unimplemented mode: {}", .{mode_int});
+                        // logUnsupportedOnce("unimplemented mode: {}", .{mode_int}, mode_int);
+                        log_unsupported_once(&SEEN_UNIMPLEMENTED_MODE, mode_int);
                     }
                 }
             }
@@ -1901,8 +2250,17 @@ impl<'a, H: Handler> Stream<'a, H> {
                             self.handler.modify_key_format(format);
                         }
 
-                        // else => log.warn("unknown CSI m with intermediate: {}", ...),
-                        _ => {}
+                        // else => logUnsupportedOnce(
+                        //     "unknown CSI m with intermediate: {}",
+                        //     .{input.intermediates[0]},
+                        //     input.intermediates[0],
+                        // ),
+                        _ => {
+                            log_unsupported_once(
+                                &SEEN_UNKNOWN_CSI_M_INTERMEDIATE,
+                                u16::from(input.intermediates[0]),
+                            );
+                        }
                     },
 
                     _ => {
@@ -2286,10 +2644,29 @@ impl<'a, H: Handler> Stream<'a, H> {
                                         _ => unreachable!(),
                                     }
                                 }
-                                // else log.warn("ignoring CSI 22/23 t with extra parameters: {f}", ...),
+                                // else logUnsupportedOnce(
+                                //     "ignoring CSI 22/23 t with extra parameters: {f}",
+                                //     .{input},
+                                //     input.params[0],
+                                // ),
+                                else {
+                                    log_unsupported_once(
+                                        &SEEN_CSI_22_23_T_EXTRA_PARAMS,
+                                        input.params[0],
+                                    );
+                                }
                             }
-                            // else => log.warn("ignoring CSI t with unimplemented parameter: {f}", ...),
-                            _ => {}
+                            // else => logUnsupportedOnce(
+                            //     "ignoring CSI t with unimplemented parameter: {f}",
+                            //     .{input},
+                            //     input.params[0],
+                            // ),
+                            _ => {
+                                log_unsupported_once(
+                                    &SEEN_CSI_T_UNIMPLEMENTED_PARAM,
+                                    input.params[0],
+                                );
+                            }
                         }
                     }
                     // else log.err("ignoring CSI t with no parameters: {f}", .{input});
@@ -2491,7 +2868,17 @@ impl<'a, H: Handler> Stream<'a, H> {
             // .change_window_icon => |icon| { ... }
             osc::Command::ChangeWindowIcon(_icon) => {
                 // @branchHint(.likely);
-                // log.info("OSC 1 (change icon) received and ignored icon={s}", .{icon});
+                // logUnsupportedOnce(
+                //     "OSC 1 (change icon) received and ignored icon={s}",
+                //     .{icon},
+                //     0,
+                // );
+                //
+                // b5053153f also moved this site from `log.info` to the
+                // `logUnsupportedOnce` (warn) family. The key is a literal 0, so
+                // this message is emitted at most ONCE per process regardless of
+                // the icon value.
+                log_unsupported_once(&SEEN_OSC1_CHANGE_ICON, 0);
             }
 
             // .clipboard_contents => |clip| { ... }
@@ -2708,7 +3095,12 @@ impl<'a, H: Handler> Stream<'a, H> {
                     _ => {} // fall through
                 }
 
-                // log.warn("unimplemented ESC action: {f}", .{action});
+                // logUnsupportedOnce(
+                //     "unimplemented ESC action: {f}",
+                //     .{action},
+                //     action.final,
+                // );
+                log_unsupported_once(&SEEN_UNIMPLEMENTED_ESC_ACTION, u16::from(action.final_));
             }
 
             // IND - Index
@@ -2947,11 +3339,181 @@ impl<'a, H: Handler> Stream<'a, H> {
                 // @branchHint(.likely);
             }
 
-            // else => log.warn("unimplemented ESC action: {f}", .{action}),
-            _ => {}
+            // else => logUnsupportedOnce(
+            //     "unimplemented ESC action: {f}",
+            //     .{action},
+            //     action.final,
+            // ),
+            _ => {
+                log_unsupported_once(&SEEN_UNIMPLEMENTED_ESC_ACTION, u16::from(action.final_));
+            }
         }
     }
 }
+
+// PORT NOTE (b5053153f, WS10 T7): the reference's `logUnsupportedOnce` is a
+// generic `fn (comptime format, args, key: u16) void` whose dedup table is a
+// `struct { var seen: [16]u32 }` inside the function body. Zig instantiates one
+// such table per `(format, @TypeOf(args))` tuple — NOT per call site. Two sites
+// that pass the same format string and the same argument type therefore SHARE a
+// table, and the commit contains exactly two such pairs: the SM/RM
+// `"unimplemented mode: {}"` sites, and the two `"unimplemented ESC action: {f}"`
+// sites. Rust has no per-instantiation static, so the port makes the table an
+// explicit `&'static UnsupportedOnceTable` argument and declares one static per
+// distinct reference tuple — eight statics for ten call sites, with the two
+// pairs deliberately sharing theirs. That is the reference's own granularity,
+// and it is observable: under the reference, setting then resetting the same
+// unimplemented mode logs ONCE, not twice.
+//
+// PORT NOTE (logging facade): the port carries NO logging facade — every
+// `log.*` call in the tree is preserved as a comment (see e.g.
+// `.port/phase-2/W1_DESIGN.md`'s "no logging facade is wired in the port yet"),
+// and `rustty-vt` does not depend on the `log` crate at all. So the ONE line of
+// this commit that cannot land is its tail, `log.warn(format, args)`. Everything
+// else — the table, the lock-free claim scan, the atomic orderings, the
+// table-full suppression, the per-site key choice, and the call-site
+// conversions — is live code and is exercised by
+// `stream_logs_unsupported_once_per_value`. The claim is performed at each site
+// exactly as the reference performs it, so when a facade is eventually wired the
+// only edit is to emit the message under the returned boolean.
+//
+// Consequence for the commit's PERF claim: upstream measured +3.2% on a 2.6 GB
+// real-session corpus, all of it eliminated `writev`. rustty issues no `writev`
+// here to eliminate, so the ported change is perf-NEUTRAL on this side by
+// construction — it is ported for fidelity and for the facade's benefit, not
+// for a win. Recorded as such rather than claimed as one.
+
+/// The per-`(format, args)` dedup table behind [`log_unsupported_once`].
+///
+/// ```zig
+/// const Static = struct {
+///     var seen: [16]u32 = @splat(empty);
+/// };
+/// ```
+struct UnsupportedOnceTable {
+    seen: [core::sync::atomic::AtomicU32; 16],
+}
+
+impl UnsupportedOnceTable {
+    /// `u32` slots so every `u16` key is representable alongside an empty
+    /// sentinel and so 32-bit targets (e.g. wasm32) have native atomics.
+    const EMPTY: u32 = u32::MAX;
+
+    const fn new() -> Self {
+        // `[AtomicU32; 16]` cannot use the `[expr; N]` repeat form because
+        // `AtomicU32` is not `Copy`; the reference's `@splat(empty)` is spelled
+        // out. `const`-callable so these can be `static`s.
+        Self {
+            seen: [
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+            ],
+        }
+    }
+
+    /// Test-only reader: the number of claimed slots. The table is the only
+    /// observable this change has in a facade-free port, so the test asserts on
+    /// it rather than on captured log output.
+    #[cfg(test)]
+    fn claimed(&self) -> usize {
+        use core::sync::atomic::Ordering;
+        self.seen
+            .iter()
+            .filter(|s| s.load(Ordering::Acquire) != Self::EMPTY)
+            .count()
+    }
+}
+
+/// Logs an unsupported-input message at most once per distinct key
+/// per process.
+///
+/// These messages are emitted in response to input that the terminal
+/// application controls, so a misbehaving (or merely chatty) program
+/// can trigger the same message millions of times, e.g. by toggling
+/// an unimplemented mode on every frame. Each log call has a real
+/// throughput cost (formatting plus a blocking write per message)
+/// while adding no diagnostic value beyond the first occurrence.
+///
+/// The keys seen so far are tracked in a small fixed table (64 bytes)
+/// instantiated per (format, argument type) tuple, i.e. roughly per
+/// call site. Real streams only ever produce a handful of distinct
+/// unsupported values per site, so if the table ever fills, messages
+/// for further new values are suppressed as well: by that point the
+/// log already shows this class of problem and unbounded distinct
+/// values would flood it anyway.
+///
+/// Returns whether the caller should emit the message. The reference emits it
+/// directly (`log.warn(format, args)`); the port has no facade to emit it to,
+/// so the decision is returned instead — see the PORT NOTE above.
+fn log_unsupported_once(table: &UnsupportedOnceTable, key: u16) -> bool {
+    use core::sync::atomic::Ordering;
+
+    let key = u32::from(key);
+
+    // The atomics make concurrent streams safe: slots are only ever
+    // claimed, never changed, so the scan can stop at the first empty
+    // slot. The worst case race is a benign duplicate message.
+    //
+    // for (&Static.seen) |*slot| { ... } else return;  // table full
+    for slot in &table.seen {
+        let cur = slot.load(Ordering::Acquire);
+        if cur == key {
+            return false; // already logged
+        }
+        if cur != UnsupportedOnceTable::EMPTY {
+            continue; // other key, keep scanning
+        }
+
+        // Empty slot: claim it for this key and log below.
+        match slot.compare_exchange(
+            UnsupportedOnceTable::EMPTY,
+            key,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            // `@cmpxchgStrong(...) orelse break` — null means we won.
+            Ok(_) => return true,
+
+            // Lost the race: suppress if it was to the same key, keep
+            // scanning otherwise.
+            Err(actual) => {
+                if actual == key {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // else return;  // table full: suppress new values too
+    false
+}
+
+// The eight reference `(format, @TypeOf(args))` instantiations, in the order
+// they appear in `stream.zig`. `SEEN_UNIMPLEMENTED_MODE` and
+// `SEEN_UNIMPLEMENTED_ESC_ACTION` are each shared by two call sites, exactly as
+// Zig shares them.
+static SEEN_INVALID_C0: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_INVALID_DEVICE_ATTRIBUTES: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_UNIMPLEMENTED_MODE: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_UNKNOWN_CSI_M_INTERMEDIATE: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_CSI_22_23_T_EXTRA_PARAMS: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_CSI_T_UNIMPLEMENTED_PARAM: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_OSC1_CHANGE_ICON: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_UNIMPLEMENTED_ESC_ACTION: UnsupportedOnceTable = UnsupportedOnceTable::new();
 
 // PORT NOTE: the reference test handlers are defined inline within each `test`
 // block as a local struct `H` with a comptime `vt(comptime action, value)`
@@ -2985,6 +3547,418 @@ mod tests {
     #[test]
     fn action() {
         // No C-ABI union in this crate; see PORT NOTE above.
+    }
+
+    // rustty-only test (b5053153f, WS10 T7). The reference ships this commit with
+    // NO test: its observable is the log stream, and Zig's `log.warn` is not
+    // capturable in a `test` block. In the port the observable is better —
+    // `UnsupportedOnceTable` is real state — so the dedup semantics are asserted
+    // directly. Two arms:
+    //
+    //   (1) the MECHANISM, on a table local to this test, so it is deterministic
+    //       and cannot be perturbed by other tests running in parallel;
+    //   (2) the WIRING, i.e. that the dispatch sites really call the helper,
+    //       through the ONE site whose key is a compile-time constant.
+    #[test]
+    fn stream_logs_unsupported_once_per_value() {
+        // ---- (1) mechanism -------------------------------------------------
+        let table = UnsupportedOnceTable::new();
+
+        // First sighting of a key logs; every repeat is suppressed.
+        assert!(log_unsupported_once(&table, 34));
+        assert!(!log_unsupported_once(&table, 34));
+        assert!(!log_unsupported_once(&table, 34));
+        assert_eq!(1, table.claimed());
+
+        // A DISTINCT value logs again — "once per distinct value", not "once".
+        assert!(log_unsupported_once(&table, 35));
+        assert!(!log_unsupported_once(&table, 35));
+        assert!(!log_unsupported_once(&table, 34));
+        assert_eq!(2, table.claimed());
+
+        // Key 0 is a real key, not the empty sentinel (the sentinel is
+        // `u32::MAX`, which no `u16` key can reach — that is why the slots are
+        // `u32`). If 0 were the sentinel this pair would both log.
+        assert!(log_unsupported_once(&table, 0));
+        assert!(!log_unsupported_once(&table, 0));
+
+        // Fill the remaining slots, then assert the reference's table-full rule:
+        // "if a table fills, new values are suppressed too".
+        for k in 100u16..(100 + 13) {
+            assert!(log_unsupported_once(&table, k), "slot {k} should be free");
+        }
+        assert_eq!(16, table.claimed());
+        assert!(
+            !log_unsupported_once(&table, 9999),
+            "table full: new values must be suppressed too"
+        );
+        // ...but an ALREADY-CLAIMED key is still found by the scan even when the
+        // table is full, so a full table does not resurrect duplicate messages.
+        assert!(!log_unsupported_once(&table, 34));
+
+        // ---- (2) wiring ----------------------------------------------------
+        // OSC 1 is the only converted site whose key is a literal (`0`), so its
+        // global table can never hold more than one claimed slot no matter what
+        // any other test does — which makes this arm order- and
+        // parallelism-independent, unlike an arm keyed on a mode number.
+        struct H;
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(H);
+        s.next_slice(b"\x1b]1;icon\x07");
+        assert_eq!(
+            1,
+            SEEN_OSC1_CHANGE_ICON.claimed(),
+            "the OSC 1 dispatch arm must claim its dedup slot"
+        );
+
+        // Driving the same unsupported input a second time must NOT claim
+        // anything further — this is the "once" half of the commit.
+        s.next_slice(b"\x1b]1;other-icon\x07");
+        assert_eq!(1, SEEN_OSC1_CHANGE_ICON.claimed());
+        assert!(
+            !log_unsupported_once(&SEEN_OSC1_CHANGE_ICON, 0),
+            "key 0 was already claimed by the dispatch arm"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // WS10 T13/T14 — the CSI fast-path differential guards.
+    //
+    // `1a88f3622`, `253e4f9c3` and `300f42c7a` all ship WITHOUT new tests
+    // upstream; their claim is "byte-for-byte identical semantics with the
+    // per-byte fast path it hoists", and nothing checks it. These two tests
+    // check it, and both are mutation-proven.
+    //
+    // The corpus is shared by both and deliberately covers every shape the
+    // three commits touch: plain params, sub-params (colon), mixed
+    // separators, empty leading params, `>`/`?`/`<`/`=` private markers,
+    // intermediates (which must FALL BACK to the state machine), a colon
+    // directly after "ESC [" (the csi_entry edge case the reference calls
+    // out), parameterless finals, MAX_PARAMS overflow (24 params -> the
+    // dispatch is dropped entirely), param value saturation, C0 controls
+    // embedded mid-sequence, 0x7F, and CAN/SUB.
+    const CSI_DIFFERENTIAL_CORPUS: &[&[u8]] = &[
+        b"\x1b[m",
+        b"\x1b[0m",
+        b"\x1b[38;2;10;20;30m",
+        b"\x1b[38:2:10:20:30m",
+        b"\x1b[38;2:10;20:30m",
+        b"\x1b[;5H",
+        b"\x1b[;;m",
+        b"\x1b[?2004h",
+        b"\x1b[?1000;1002;1006l",
+        b"\x1b[>4;2m",
+        b"\x1b[<0c",
+        b"\x1b[=0c",
+        b"\x1b[!p",
+        b"\x1b[ q",
+        b"\x1b[2 q",
+        b"\x1b[$}",
+        b"\x1b[:3m",
+        // Colon separators with a NON-'m' final. `csi_dispatch_final` (and the
+        // parser's own `csi_dispatch`) must DROP the whole dispatch here —
+        // "we only allow colon or mixed separators for the 'm' command". These
+        // entries are what make a dropped `params_sep.set()` in
+        // `consume_csi_params` observable; without them, every colon in the
+        // corpus is on an 'm' whose SGR parse is separator-insensitive.
+        b"\x1b[1:2H",
+        b"\x1b[1;2:3H",
+        b"\x1b[?1:2h",
+        b"\x1b[1:2J",
+        b"\x1b[H",
+        b"\x1b[A\x1b[B\x1b[C\x1b[D",
+        b"\x1b[1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17;18;19;20;21;22;23;24;25m",
+        b"\x1b[99999999m",
+        b"\x1b[1\x07;2m",
+        b"\x1b[1\x0d;2H",
+        b"\x1b[1\x7f2m",
+        b"\x1b[1\x18;2m",
+        b"\x1b[1\x1a;2m",
+        b"\x1b[1;2\x1b[3;4m",
+        b"hello\x1b[31mworld\x1b[0m\r\n",
+        b"\x1b[3;J\x1b[2K\x1b[10X",
+        b"\x1b[?25l\x1b[?25h",
+    ];
+
+    // A handler that records the exact sequence of dispatch callbacks it
+    // receives. This is the observable the three commits must preserve: they
+    // change HOW an action is produced (fast path vs `Parser.next`), never
+    // WHAT the handler is told.
+    #[derive(Default)]
+    struct RecordingHandler {
+        log: Vec<String>,
+    }
+
+    // The recorder is instantiated twice with different `HAS_VT_RAW`, which is
+    // the whole point, so the callback bodies live in a macro to guarantee the
+    // two impls are textually identical.
+    macro_rules! recording_handler_body {
+        () => {
+            fn print(&mut self, cp: u32) {
+                self.log.push(format!("print {cp}"));
+            }
+            fn cursor_up(&mut self, v: CursorMovement) {
+                self.log.push(format!("cursor_up {}", v.value));
+            }
+            fn cursor_down(&mut self, v: CursorMovement) {
+                self.log.push(format!("cursor_down {}", v.value));
+            }
+            fn cursor_left(&mut self, v: CursorMovement) {
+                self.log.push(format!("cursor_left {}", v.value));
+            }
+            fn cursor_right(&mut self, v: CursorMovement) {
+                self.log.push(format!("cursor_right {}", v.value));
+            }
+            fn cursor_pos(&mut self, v: CursorPos) {
+                self.log.push(format!("cursor_pos {} {}", v.row, v.col));
+            }
+            fn cursor_style(&mut self, v: ansi::CursorStyle) {
+                self.log.push(format!("cursor_style {v:?}"));
+            }
+            fn set_attribute(&mut self, attr: sgr::Attribute) {
+                self.log.push(format!("sgr {attr:?}"));
+            }
+            fn set_mode(&mut self, v: Mode) {
+                self.log.push(format!("set_mode {:?}", v.mode));
+            }
+            fn reset_mode(&mut self, v: Mode) {
+                self.log.push(format!("reset_mode {:?}", v.mode));
+            }
+            fn erase_display_below(&mut self, p: bool) {
+                self.log.push(format!("ed_below {p}"));
+            }
+            fn erase_display_scrollback(&mut self, p: bool) {
+                self.log.push(format!("ed_scrollback {p}"));
+            }
+            fn erase_line_complete(&mut self, p: bool) {
+                self.log.push(format!("el_complete {p}"));
+            }
+            fn erase_chars(&mut self, n: usize) {
+                self.log.push(format!("erase_chars {n}"));
+            }
+            fn linefeed(&mut self) {
+                self.log.push("linefeed".to_string());
+            }
+            fn carriage_return(&mut self) {
+                self.log.push("carriage_return".to_string());
+            }
+            fn bell(&mut self) {
+                self.log.push("bell".to_string());
+            }
+            fn modify_key_format(&mut self, v: ansi::ModifyKeyFormat) {
+                self.log.push(format!("modify_key_format {v:?}"));
+            }
+            fn full_reset(&mut self) {
+                self.log.push("full_reset".to_string());
+            }
+        };
+    }
+
+    impl Handler for RecordingHandler {
+        recording_handler_body!();
+    }
+
+    /// Same recorder, but declaring a `vt_raw` hook — which turns EVERY CSI
+    /// fast path off at monomorphization time, exactly as the reference's
+    /// `@hasDecl(T, "vtRaw")` does. This is the reference oracle for the two
+    /// tests below: the general `Parser.next` state machine.
+    #[derive(Default)]
+    struct RawHookedRecorder {
+        log: Vec<String>,
+        raw: Vec<String>,
+    }
+
+    impl Handler for RawHookedRecorder {
+        const HAS_VT_RAW: bool = true;
+
+        fn vt_raw(&mut self, action: &parser::Action) -> bool {
+            self.raw.push(format!("{action:?}"));
+            // false = do not skip; the stream still processes the action, so
+            // `log` stays comparable with `RecordingHandler`'s.
+            false
+        }
+
+        recording_handler_body!();
+    }
+
+    /// Drive the input through the BULK path — `consume_until_ground`, which is
+    /// where `253e4f9c3`'s `consume_csi_params` and `300f42c7a`'s
+    /// `csi_entry_byte` live.
+    ///
+    /// THIS IS NOT `next_slice`, AND THAT IS THE POINT. `next_slice` opens with
+    ///
+    ///     if DEBUG || !crate::options::SIMD { for &c in input { self.next(c); } return; }
+    ///
+    /// and `options::SIMD` is `cfg!(feature = "simd")`, OFF by default. So in a
+    /// default `cargo test -p rustty-vt` build, `next_slice` degenerates to the
+    /// per-byte `next` loop and NEVER reaches `consume_until_ground` — a
+    /// differential test written against `next_slice` compares the per-byte
+    /// path with itself and is exactly vacuous. That was caught here by
+    /// mutation: a deliberate off-by-one in `consume_csi_params`'s final-byte
+    /// return left the ENTIRE 2163-test suite green.
+    ///
+    /// This driver instead reproduces the ESC-scan loop `next_slice_capped`
+    /// runs when SIMD is on, calling `consume_until_ground` directly, so the
+    /// bulk path is exercised in BOTH feature configurations.
+    fn drive_bulk<H: Handler + Default>(input: &[u8]) -> H {
+        let mut s: Stream<H> = Stream::init(H::default());
+        let mut i = 0usize;
+        while i < input.len() {
+            if s.parser.state != parser::State::Ground {
+                // `consume_until_ground` always advances (it consumes at least
+                // one byte per iteration, or returns `input.len()`).
+                i += s.consume_until_ground(&input[i..]);
+                continue;
+            }
+            let c = input[i];
+            if c == 0x1B {
+                s.parser.state = parser::State::Escape;
+                s.parser.clear();
+                i += 1;
+                continue;
+            }
+            s.next_utf8(c);
+            i += 1;
+        }
+        s.handler
+    }
+
+    /// The public `next_slice` entry point. Identical to `drive_bulk` when the
+    /// `simd` feature is on; identical to `drive_per_byte` when it is off.
+    /// Both configurations are asserted, so neither can rot.
+    fn drive_slice<H: Handler + Default>(input: &[u8]) -> H {
+        let mut s: Stream<H> = Stream::init(H::default());
+        s.next_slice(input);
+        s.handler
+    }
+
+    fn drive_per_byte<H: Handler + Default>(input: &[u8]) -> H {
+        let mut s: Stream<H> = Stream::init(H::default());
+        for b in input {
+            s.next(*b);
+        }
+        s.handler
+    }
+
+    // rustty-only test (WS10 T13 Step 4): the bulk `consume_csi_params` /
+    // `csi_entry_byte` slice path must produce the identical handler action
+    // sequence as the per-byte `next` path, for every shape in the corpus.
+    //
+    // This is the falsifiable form of `253e4f9c3`'s "guaranteeing byte-for-byte
+    // identical semantics with the per-byte fast path it hoists".
+    #[test]
+    fn stream_csi_bulk_params_match_per_byte() {
+        for input in CSI_DIFFERENTIAL_CORPUS {
+            let per_byte = drive_per_byte::<RecordingHandler>(input);
+
+            let bulk = drive_bulk::<RecordingHandler>(input);
+            assert_eq!(
+                per_byte.log,
+                bulk.log,
+                "bulk path diverged from per-byte path on {:?}",
+                String::from_utf8_lossy(input)
+            );
+
+            // The public entry point too, so whichever of the two shapes the
+            // active feature set selects is also covered.
+            let sliced = drive_slice::<RecordingHandler>(input);
+            assert_eq!(
+                per_byte.log,
+                sliced.log,
+                "next_slice diverged from per-byte path on {:?}",
+                String::from_utf8_lossy(input)
+            );
+
+            // Split every input at every boundary and feed it as two chunks.
+            // `consume_csi_params` carries accumulator state across calls
+            // (`param_acc`/`param_acc_idx`/`params_idx` are written back on
+            // exit), so a mid-parameter split is exactly where a save/restore
+            // bug would hide.
+            for split in 1..input.len() {
+                let mut s: Stream<RecordingHandler> = Stream::init(RecordingHandler::default());
+                let mut feed = |chunk: &[u8]| {
+                    let mut i = 0usize;
+                    while i < chunk.len() {
+                        if s.parser.state != parser::State::Ground {
+                            i += s.consume_until_ground(&chunk[i..]);
+                            continue;
+                        }
+                        let c = chunk[i];
+                        if c == 0x1B {
+                            s.parser.state = parser::State::Escape;
+                            s.parser.clear();
+                            i += 1;
+                            continue;
+                        }
+                        s.next_utf8(c);
+                        i += 1;
+                    }
+                };
+                feed(&input[..split]);
+                feed(&input[split..]);
+                assert_eq!(
+                    per_byte.log,
+                    s.handler.log,
+                    "split at {split} diverged on {:?}",
+                    String::from_utf8_lossy(input)
+                );
+            }
+        }
+    }
+
+    // rustty-only test (WS10 T14 Step 3): the `vtRaw` interlock.
+    //
+    // `D-terminal-subsystems.md:506` flags this as load-bearing for the
+    // inspector: the fast paths dispatch without going through `Parser.next`,
+    // so a handler with a raw hook must stay on the general path or its VT
+    // event log silently loses every CSI. Two properties, both required:
+    //
+    //   (a) a raw-hooked handler still observes a `CsiDispatch` action for
+    //       every CSI in the corpus — the property that breaks if `HAS_VT_RAW`
+    //       is not set on a handler that overrides `vt_raw`;
+    //   (b) the fast paths did not change WHAT is dispatched — the fast-path
+    //       handler's callback log equals the general-path handler's, which
+    //       makes the general path the oracle for the whole fast-path family
+    //       (T13's test compares two fast-path spellings; this one compares
+    //       fast path against no fast path at all).
+    #[test]
+    fn stream_fast_paths_bypassed_when_vt_raw_hooked() {
+        let mut saw_csi = 0usize;
+        for input in CSI_DIFFERENTIAL_CORPUS {
+            let hooked = drive_bulk::<RawHookedRecorder>(input);
+            let fast = drive_bulk::<RecordingHandler>(input);
+
+            // (a)
+            let csis = hooked
+                .raw
+                .iter()
+                .filter(|a| a.starts_with("CsiDispatch"))
+                .count();
+            saw_csi += csis;
+
+            // (b)
+            assert_eq!(
+                hooked.log,
+                fast.log,
+                "fast path diverged from the general state machine on {:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
+
+        // Guard against the corpus silently ceasing to contain CSIs, which
+        // would make arm (a) vacuous. A FLOOR, not an equality: the count is
+        // not one-per-entry, because some entries deliberately produce no
+        // dispatch (the MAX_PARAMS-overflow entry) and some produce several
+        // (`\x1b[A\x1b[B\x1b[C\x1b[D`). Measured 33 at landing over 34 entries;
+        // the floor is set below that so ADDING corpus entries never reddens
+        // this, only losing CSIs does.
+        assert!(
+            saw_csi >= 30,
+            "the raw hook must still observe the corpus's CSI dispatches; \
+             saw {saw_csi} across {} entries (floor 30)",
+            CSI_DIFFERENTIAL_CORPUS.len()
+        );
     }
 
     // test "stream: print" { ... }

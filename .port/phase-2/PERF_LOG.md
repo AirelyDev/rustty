@@ -969,3 +969,327 @@ with `.port/tools/perf/headroom_probe.py <metrics.json>`.
 not the binary-size axis `BASELINE.json` also carries, and `--strict` RED's on
 those 9 absent size labels. Filed as debt (**V16**) rather than faked green —
 the axis is genuinely unmeasured, and gates are not weakened to pass.
+
+---
+
+## WS10 T10 — the `terminal-stream` bench corpus swap, and why it did NOT move the number
+
+**Ported:** `258de36d1` (full readonly terminal handler) + `4c5b1d5d5` (64 KiB
+chunks) into `crates/rustty-bench/src/terminal_stream.rs`.
+
+### The plan's expectation, and the measured refutation
+
+The WS10 plan (T10 Step 5) states that after the handler swap "the medians moved
+(they must — otherwise the handler swap did not take effect, which is the
+vacuous-verification trap here)", and T10 Step 6 further directs that
+`terminal-stream/ascii` be moved out of Fence 1's STRICT arm into a documented
+`INCOMPARABLE` set because "after this task rustty measures more work than the
+oracle binary does on this config".
+
+**Both conclusions are wrong for this repo's corpus, and the corpus is the
+benchmark.** Measured:
+
+```
+$ python3 -c "d=open('.port/phase-0/baseline/corpora/ascii.bin','rb').read(); \
+              print(len(d), d.count(b'\x1b'), sum(1 for b in d if b<32 or b>126))"
+67108864 0 0
+```
+
+`ascii.bin` is 64 MiB of **pure printable ASCII: zero ESC bytes, zero control
+bytes.** Every byte is a `print` action, and `print` flows into the same
+`Terminal::print` call under both the deleted print-only handler and the full
+`stream_terminal::Handler` — which is exactly what the upstream commit message
+says ("print throughput is identical under both handlers"). The escape-heavy
+work the commit exists to start measuring is **not present in this corpus at
+all**.
+
+So:
+
+1. **A neutral median is the CORRECT outcome here**, not evidence that the swap
+   failed to take effect.
+2. **`terminal-stream/ascii` remains COMPARABLE to the pinned oracle binary.**
+   The pinned oracle's `TerminalStream.zig` is the pre-swap print-only form, and
+   on a zero-escape corpus the two handlers are observationally identical. There
+   is no extra work for rustty to be doing. It is NOT moved to an `INCOMPARABLE`
+   set, and no `ACCEPTED_TRADEOFFS` entry is warranted — there is no trade.
+
+Measured on this (loaded, load 4.57 — **provisional**) box, `+terminal-stream
+--data=ascii.bin`, release-fast, 3 runs each, entry binary vs post-swap binary:
+
+| binary | run 1 | run 2 | run 3 |
+|---|--:|--:|--:|
+| pre-swap (print-only handler, 4 KiB) | 0.54 s | 0.33 s | 0.35 s |
+| post-swap (full handler, 64 KiB) | 0.57 s | 0.35 s | 0.34 s |
+
+Indistinguishable, as predicted above. The first run of each is cold-cache.
+
+### What this means for the rest of WS10
+
+Every Layer-3 claim of the form "terminal-stream improved by X%" measured
+against `ascii.bin` is measuring the **print path only** — not CSI/OSC/ESC
+dispatch, not terminal state updates. The bench code now matches upstream; the
+corpus does not. Regenerating an escape-heavy corpus (upstream measures against
+a 2.6 GB recording of real terminal sessions) would change what
+`terminal-stream/ascii` means and would break comparability with every
+historical number in this file, so it is NOT done here. It is recorded as the
+limiting factor on what this config can ever show.
+
+### The swap IS proven to have taken effect — behaviourally, not by timing
+
+`terminal_stream_uses_the_full_terminal_handler` drives `AB\x1b[2;3HX` through
+the benchmark's own `step` function and asserts the cursor reached **(3, 1)**.
+Mutation proof: with `HEAD`'s print-only handler restored the same test reports
+**(3, 0)** — the CSI ignored, "ABX" on row 0. That is the non-vacuous check the
+plan was reaching for; the timing check could not have supplied it.
+
+---
+
+## WS10 T12 — `screen-clone --loops`, and what it can and cannot resolve
+
+**Ported:** `446f80f4e`'s `benchmark/ScreenClone.zig` hunk — the `loops: u32 = 1`
+option and `stepRender`'s 1 000 -> `50_000 * loops` iteration count.
+
+**NOT ported here (T19 owns them):** the three new modes `render-locked`,
+`render-clean`, `render-partial`. T12 Step 2's own criterion decides this:
+`grep -n "fn begin_update" crates/rustty-vt/src/render.rs` -> **0 hits**. All
+three modes call `RenderState.beginUpdate`, and the begin/end split IS
+`446f80f4e`'s Rust-side substance, which lands in T19. A `Mode` variant that
+cannot run is worse than an absent one.
+
+### `--loops` does NOT scale `screen-clone.clone` — so it cannot resolve that drift
+
+T12 Step 3 directs using `--loops` with the per-pass slope method to re-check
+T1's `screen-clone.clone` +20.1% drift finding. **That is not possible with this
+commit.** Verified against the reference file itself:
+
+```
+$ git -C ../ghostty show 446f80f4e:src/benchmark/ScreenClone.zig | grep -n 'for (0\.\.'
+160:    for (0..1000) |_| {                                  # stepNoop
+171:    for (0..1000) |_| {                                  # stepClone
+204:    for (0..50_000 * @as(u64, self.opts.loops)) |_| {     # stepRender
+234:    for (0..50_000 * @as(u64, self.opts.loops)) |_| {     # stepRenderLocked
+262:    for (0..3_000_000 * @as(u64, self.opts.loops)) |_| {  # stepRenderClean
+292:    for (0..2_000_000 * @as(u64, self.opts.loops)) |_| {  # stepRenderPartial
+```
+
+`--loops` is a **render-family knob only**. `stepNoop` and `stepClone` keep
+their hardcoded 1 000 iterations, so `screen-clone.noop` and
+`screen-clone.clone` are byte-for-byte unaffected by this task — and the drift
+question for `screen-clone.clone` remains open, owned by the deferred
+measurement campaign (V17, `BEYOND-PIN`).
+
+### The slope measurement that IS available
+
+`+screen-clone --mode=render --data=ascii-small.bin --loops=N`, release-fast,
+**loaded box (load ~4.6) — PROVISIONAL**:
+
+| loops | wall |
+|--:|--:|
+| 1 | 0.45 s |
+| 5 | 2.28 s |
+| 9 | 4.06 s |
+
+Slope `(t(9) - t(1)) / (9 - 1)` = **0.451 s** per loop-unit; the `(5,1)` pair
+agrees at 0.458 s. One loop-unit is 50 000 `RenderState::update` calls forcing a
+full rebuild, so **~9.0 µs per full-rebuild update** at 120x80 on this host,
+with the process-spawn/setup floor falling out at ~0.00 s (it is ~0.45 s of pure
+work even at `--loops=1`, which is the entire point of the 50x iteration bump).
+
+That 9.0 µs figure is recorded as the **pre-`446f80f4e` rustty baseline** for
+T19's headline claim ("~2.7x to ~11x less lock hold"). It is NOT compared to
+upstream's table: those rows are M4 Max numbers over differently-styled content,
+and the `ascii-small.bin` corpus is plain text — upstream's own "full rebuild,
+plain text" row is the one at the memcpy floor and unchanged by the commit.
+
+---
+
+## WS10 T13/T14 — the CSI fast-path family, and why this host cannot measure it
+
+**Ported:** `1a88f3622` (csiDispatchFinal + csi_entry fast path), `253e4f9c3`
+(consumeCsiParams), `300f42c7a` (csiEntryByte hoisted into consumeUntilGround).
+
+### Plan erratum: the task order is backwards
+
+The plan sequences T13 (`253e4f9c3`) before T14 (`1a88f3622`). `253e4f9c3`'s
+`consumeCsiParams` **calls** `self.csiDispatchFinal(c)`, which `1a88f3622`
+introduces. Upstream's real order:
+
+```
+$ git -C ../ghostty log --oneline --pretty="%h %ad %s" --date=short \
+    4749c4e93..origin/main -- src/terminal/stream.zig
+...
+300f42c7a 2026-07-06 terminal: handle CSI entry bytes inline in consumeUntilGround
+253e4f9c3 2026-07-06 terminal: bulk-parse CSI parameter bytes at the slice level
+1a88f3622 2026-07-06 terminal: dispatch CSI finals directly from stream fast paths
+47e26df60 2026-07-06 terminal: batch printed codepoint runs into direct row fills
+```
+
+i.e. oldest-first `47e26df60` -> `1a88f3622` -> `253e4f9c3` -> `300f42c7a`.
+Ported in the upstream order. (Note this also puts T16's `47e26df60` FIRST in
+the family, not last — the plan's Layer-3 ordering
+`253e4f9c3 -> 300f42c7a -> 1a88f3622 -> ... -> 47e26df60` is wrong in three
+places.)
+
+### These commits are UNMEASURABLE against this repo's corpora
+
+Upstream measures them on a 2.6 GB real-session recording and on purpose-built
+100 MB `csi` and `sgr` corpora, reporting +18%/+29%/+2.7% on `terminal-stream`.
+rustty has neither corpus:
+
+- **`terminal-stream/ascii`** — `ascii.bin` contains **zero ESC bytes** (see the
+  WS10 T10 section above). `consume_until_ground` is never entered, so
+  `consume_csi_params`, `csi_entry_byte` and `csi_dispatch_final` are never
+  executed. Measured effect: none, by construction.
+- **`terminal-parser/utf8`** — the `terminal-parser` benchmark drives
+  `Parser::next` directly and never goes through `Stream`, so none of these
+  three commits is on its path at all.
+- No `csi` or `sgr` corpus exists here.
+
+Measured anyway for the record (loaded box, **load 10.93 — provisional and not
+usable as a fence**): `+terminal-parser --data=utf8.bin` 0.30 / 0.09 / 0.09 s
+before and after — unchanged, as predicted.
+
+**So the WS10 suite cannot show a win or a loss for this family, and none is
+claimed.** The evidence for these three commits is fidelity plus the two
+differential tests below. Generating `csi`/`sgr` corpora and re-measuring is
+owned by the deferred measurement campaign (V17, `BEYOND-PIN`).
+
+### A vacuity trap this uncovered, worth recording on its own
+
+The first version of `stream_csi_bulk_params_match_per_byte` drove the bulk path
+through `Stream::next_slice`. It was **completely vacuous**, because
+`next_slice` opens with
+
+```rust
+if DEBUG || !crate::options::SIMD { for &c in input { self.next(c); } return; }
+```
+
+and `options::SIMD` is `cfg!(feature = "simd")`, **off** in a default
+`cargo test -p rustty-vt`. So the "bulk vs per-byte" differential was comparing
+the per-byte path with itself. It was caught by mutation, not by review: a
+deliberate off-by-one in `consume_csi_params`'s final-byte return left the
+**entire 2163-test suite green**. The test now calls `consume_until_ground`
+directly (reproducing `next_slice_capped`'s ESC-scan loop) so it binds in BOTH
+feature configurations, and the suite is run under `--features simd` as well.
+
+Anything else in this repo that verifies a `next_slice` fast path without either
+enabling `simd` or calling the inner function directly is suspect for the same
+reason.
+
+---
+
+## WS10 T15 — `083d9709b`, the ASCII-inline SIMD ESC scan
+
+**Ported:** `crates/rustty-simd/cbits/simd/vt.cpp` +125/−36 — `WidenAsciiStore`
+(including the `HWY_TARGET == HWY_SCALAR` arm), `DecodeNonAsciiUntilControlSeq`,
+and the rewritten `DecodeUTF8UntilControlSeqImpl` that fuses the ESC scan with an
+ASCII widening decode and only falls into simdutf on the first byte >= 0x80.
+
+**This is the FIRST commit in the WS10 stream family whose effect this host's
+corpora can actually see**, because it fires on plain printable ASCII — which is
+exactly what `ascii.bin` is made of (see the T10 section: 64 MiB, zero ESC).
+
+Paired A/B, same session, `+terminal-stream`, release-fast, N=9 medians with one
+discarded warmup, **loaded box (load 7.85) — PROVISIONAL**:
+
+| corpus | before | after | Δ |
+|---|--:|--:|--:|
+| `ascii.bin` | 525.5 ms (min 396.6) | 469.9 ms (min 444.0) | **−10.6%** |
+| `utf8.bin` | 701.6 ms (min 694.7) | 698.0 ms (min 680.6) | −0.5% |
+
+The direction matches upstream's rationale exactly: ASCII gets the fused widening
+path (upstream measured +5.4% on an 87%-ASCII real-session corpus; a 100%-ASCII
+corpus should and does move more), and non-ASCII text "takes exactly the same
+code as before" (−0.5%, i.e. noise). The `ascii` spread is wide under this load
+(min 396.6 before vs 444.0 after) so the −10.6% is a direction, not a figure;
+re-measurement belongs to V17 (`BEYOND-PIN`).
+
+### Verification that is NOT a benchmark
+
+- `decode_simd_matches_scalar` (T5's 10 000-iteration differential fuzz vs the
+  scalar reference) passes against the rewritten kernel. This is the guard
+  `083d9709b` itself introduces upstream, and it is now doing real work.
+- **New:** `decode_ascii_fast_path_tight_output_no_overwrite`. The ASCII path
+  stores a WHOLE vector chunk unconditionally (`WidenAsciiStore(d, input_vec,
+  output + i); if (stop < 0) continue;`) — a speculative write the pre-commit
+  kernel never made. The existing `decode_tight_buffer_no_overread` cannot see
+  it: it sizes the output at `input.len() + 64`, so a chunk overwrite lands in
+  slack. The new test sizes output at exactly `input.len()` (the contract
+  minimum asserted by `utf8DecodeUntilControlSeq`) and sweeps len 0..=257 x stop
+  position x {ESC, non-ASCII}.
+- **ASan, armed and proven:** all 28 `rustty-simd` lib tests green under
+  `-Zsanitizer=address`. Mutation: `WidenAsciiStore(..., output + i + 1)` ->
+  `ERROR: AddressSanitizer: heap-buffer-overflow ... in hwy::N_NEON_BF16::StoreU`.
+- **The `HWY_SCALAR` arm compiles and is reachable.** `D-terminal-subsystems.md`
+  warns that omitting it breaks wasm and scalar highway targets. Proven with a
+  direct syntax compile:
+  `c++ -fsyntax-only -DHWY_COMPILE_ONLY_SCALAR -I crates/rustty-simd/cbits
+   -I crates-sys/highway-sys/vendor -I crates-sys/simdutf-sys/vendor
+   crates/rustty-simd/cbits/simd/vt.cpp` -> clean. Mutation: a syntax error
+  inside the `#if HWY_TARGET == HWY_SCALAR` arm makes THAT command fail while
+  the same command WITHOUT `-DHWY_COMPILE_ONLY_SCALAR` still compiles clean —
+  which proves the arm is both selected by the define and skipped without it.
+
+### Two gates that are RED on `main`, independently of this work
+
+Both were checked by stashing and re-running on the unmodified tree:
+
+- `check_sanitizer_canary.sh` -> **exit 1 on `main`**, on `valgrind.supp`
+  entries 2433-2437 lacking per-entry WHY comments (rule c). Pre-existing.
+- `.port/tools/build-vt-wasm.sh` + `wasm-vt-roundtrip.mjs` -> **exit 1 on
+  `main`**: the roundtrip script looks for
+  `target/wasm32-wasip1/release/rustty_vt_c.wasm`, which the build does not
+  produce at that path. Pre-existing. So T15 Step 4's "wasm is the `HWY_SCALAR`
+  arm's proof" could not be executed as written; the compile-and-mutate proof
+  above stands in its place, and it is arguably stronger — the wasm build does
+  not compile the C++ kernel at all (`crates/rustty-simd/src/vt.rs:14`
+  `#[cfg(not(target_arch = "wasm32"))]`), so the wasm roundtrip could never have
+  exercised `HWY_SCALAR` anyway.
+
+---
+
+## WS10 — INCOMPLETE WORK at this handoff (2026-07-30)
+
+**This section is NOT a deferral and NOT verification debt.** It is a record of
+BL-4 port work that has not been done. It is deliberately not filed in
+`DEFERRALS.md` or `VERIFICATION_DEBT.md`, because doing so would reclassify
+unwritten code as an accepted gap. WS10 remains OPEN and owns all of it.
+
+### Landed in this lane
+
+| task | upstream commits | commit |
+|---|---|---|
+| T4 | — (gate) | `da2d0e5` G-BENCH lane + count floor |
+| T7 | `b5053153f` | `6d69269` log-unsupported-once |
+| T8 | `2f0e6659d` (QoS hunk only) | `7725606` |
+| T9 | `9c9cf3e82` | `684ac51` |
+| T10 | `258de36d1` + `4c5b1d5d5` | `713cf22` |
+| T12 | `446f80f4e` (ScreenClone hunk) | `a2f0d2c` |
+| T13+T14 | `1a88f3622`, `253e4f9c3`, `300f42c7a` | `ae48e3b` |
+| T15 | `083d9709b` | `ae05b31` |
+
+### NOT started
+
+| task | upstream commits | size |
+|---|---|---|
+| T11 | `7e14347c1` — bound page map probe lengths + HyperlinkMap bench | `hash_map.zig` +472, `page.zig` +37, `Screen.zig` +3, `hyperlink.zig` +2, bench +155. Substance is the in-place rehash + 20% insertion headroom (upstream: 100x on map churn, 47x on full OSC 8 stream). Touches `Page` capacity math, so `check_capacity_saturation.sh` / `check_paired_invariants.sh` are in scope. |
+| T16 | `47e26df60` + `cb2d78587` + `f2a7652ab` — printed-run batching | `Terminal.zig` +675 / +112 / +155; `stream.zig` `Action::PrintSlice` + lane-wise printable-run scan; `simd/main.zig` `lanes(T)`; dispatch arms in `stream_terminal.rs` and `stream_handler.rs`. **`PERF(port)` stop-and-decide pending at `terminal.rs:884`** (r5-print-outline). |
+| T17 | `f6f79acce` + `8c523ed03` — bulk APC slice dispatch + vectorization, `ApcParser` bench, `synthetic/Kitty` generator | includes the union-payload borrow hazard flagged by `D-terminal-subsystems.md` §4.6. |
+| T19 | `446f80f4e` — render-state begin/end split | +1348/−209 across 9 files incl. the vt C ABI (`render.h` +66, `c/render.zig` +74). **`PERF(port)` stop-and-decide pending across `page_impl.rs:1423,1441,1467,1622` and `ref_counted_set.rs:528,652,723`** (r5-clone-style-run, −58.7% on `screen-clone.clone`). T12's three `ScreenClone` render modes land with it. |
+| T20 | `2f0e6659d` (pipeline) + `bb0ac4c72` | the HIGH-risk item: ~350 lines of concurrent code, needs `.port/phase-2/mirihar-ws10-pipeline/` with a raw-pointer slot handoff and a `&mut [u8]` negative control. T8 landed its separable QoS hunk only. |
+| T21 | — | the final paired re-measure. Cannot be authoritative on this box regardless (see the load record below). |
+
+Also still unported and **NOT** in this lane's scope: **T18** (`77190bd02`
+scroll-region optimizations + `Screen::cursor_scroll_region_up`, which carries
+`DEFERRALS.md`'s O3). `grep -rn 'cursor_scroll_region_up' crates/` -> 0 hits.
+It was re-owned to Phase 3 with the `BEYOND-PIN` marker by WS10 T18's ledger
+pass, which is a MEASUREMENT relaxation applied to an IMPLEMENTATION item;
+flagging it here so that reading is not inherited silently.
+
+### Measurement environment during this lane
+
+`uptime` 1-minute load average sampled repeatedly: **4.57, 7.85, 9.00, 10.93**
+against `ws10_suite.py`'s `IDLE_MAX` of 2.0. Every figure recorded in the T10 /
+T12 / T15 sections above is stamped PROVISIONAL for that reason, and no fence
+run was treated as authoritative. That is the harness behaving as designed
+(exit 2), not a failure to work around.
