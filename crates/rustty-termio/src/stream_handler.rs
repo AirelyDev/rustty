@@ -3138,6 +3138,12 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         self.apc.feed(alloc, byte);
     }
 
+    // .apc_put_slice => self.apc.feedSlice(self.alloc, value.bytes),
+    fn apc_put_slice(&mut self, bytes: &[u8]) {
+        let alloc = self.alloc;
+        self.apc.feed_slice(alloc, bytes);
+    }
+
     // // Unimplemented
     // .title_push,
     // .title_pop,

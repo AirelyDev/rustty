@@ -223,6 +223,70 @@ impl Handler {
         }
     }
 
+    /// Feed a slice of bytes to the handler. This is equivalent to
+    /// calling feed for each byte in order, but protocol payload bytes
+    /// are passed through in bulk so large payloads (e.g. Kitty graphics
+    /// images) avoid per-byte dispatch overhead.
+    //
+    // PORT NOTE (D-terminal-subsystems.md §4.6): the reference borrows the
+    // union payload (`.kitty => |*p|`) and reassigns the union
+    // (`self.state = .ignore`) from inside that borrow — legal in Zig,
+    // UB-adjacent in Rust. Here the payload borrow (`p`) ENDS at the
+    // `is_err()` call, so the `self.state = State::Ignore` assignment that
+    // follows is a fresh, exclusive borrow of `self.state` and the old
+    // parser is dropped by the assignment (which is also what reproduces the
+    // reference's `p.deinit()` for the kitty parser). This is the same shape
+    // `feed` above already uses; NLL, not luck, and `apc_feed_slice_*` plus
+    // the Miri run over this module are the proof.
+    // pub fn feedSlice(self: *Handler, alloc: Allocator, bytes: []const u8) void
+    pub fn feed_slice(&mut self, alloc: Allocator, bytes: &[u8]) {
+        // var rem = bytes;
+        let mut rem = bytes;
+        // while (rem.len > 0) {
+        while !rem.is_empty() {
+            match &mut self.state {
+                // .inactive => unreachable,
+                State::Inactive => unreachable!(),
+
+                // We're ignoring this APC command; drop the whole slice.
+                // .ignore => return,
+                State::Ignore => return,
+
+                // Identification consumes at most a few bytes; step
+                // through them one at a time until the state changes.
+                // .identify => { self.feed(alloc, rem[0]); rem = rem[1..]; },
+                State::Identify(_) => {
+                    self.feed(alloc, rem[0]);
+                    rem = &rem[1..];
+                }
+
+                // .kitty => |*p| if (comptime build_options.kitty_graphics) { ... } else unreachable,
+                State::Kitty(p) => {
+                    if KITTY_GRAPHICS {
+                        if p.feed_slice(rem).is_err() {
+                            // log.warn("kitty graphics protocol error: {}", .{err});
+                            // p.deinit();
+                            self.state = State::Ignore;
+                        }
+                        return;
+                    } else {
+                        unreachable!();
+                    }
+                }
+
+                // .glyph => |*p| { p.feedSlice(rem) catch ...; return; },
+                State::Glyph(p) => {
+                    if p.feed_slice(rem).is_err() {
+                        // log.warn("glyph protocol error: {}", .{err});
+                        p.deinit();
+                        self.state = State::Ignore;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     // pub fn end(self: *Handler) ?Command {
     //     defer {
     //         self.state.deinit();
@@ -683,6 +747,155 @@ mod tests {
         // try testing.expect(cmd.glyph == .query);
         assert!(matches!(cmd, Command::Glyph(glyph::Request::Query(_))));
         cmd.deinit(alloc);
+    }
+
+    // test "feedSlice valid Kitty command"
+    #[test]
+    fn feed_slice_valid_kitty_command() {
+        // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+        if !KITTY_GRAPHICS {
+            return;
+        }
+
+        let alloc = Global;
+
+        let mut h: Handler = Handler::default();
+        h.start();
+        h.feed_slice(alloc, b"Gf=24,s=10,v=20;aGVsbG8=");
+
+        let mut cmd = h.end(alloc).unwrap();
+        assert!(matches!(cmd, Command::Kitty(_)));
+
+        // The payload is base64-decoded by the parser on completion.
+        if let Command::Kitty(ref k) = cmd {
+            assert_eq!(b"hello".as_slice(), k.data.as_slice());
+        }
+        cmd.deinit(alloc);
+    }
+
+    // test "feedSlice identify split across slices"
+    #[test]
+    fn feed_slice_identify_split_across_slices() {
+        if !KITTY_GRAPHICS {
+            return;
+        }
+
+        let alloc = Global;
+
+        let mut h: Handler = Handler::default();
+        h.start();
+        h.feed_slice(alloc, b"G");
+        h.feed_slice(alloc, b"f=24,s=10,");
+        h.feed_slice(alloc, b"v=20;aGVsbG8=");
+
+        let mut cmd = h.end(alloc).unwrap();
+        assert!(matches!(cmd, Command::Kitty(_)));
+
+        // The payload is base64-decoded by the parser on completion.
+        if let Command::Kitty(ref k) = cmd {
+            assert_eq!(b"hello".as_slice(), k.data.as_slice());
+        }
+        cmd.deinit(alloc);
+    }
+
+    // test "feedSlice unknown APC command is ignored"
+    #[test]
+    fn feed_slice_unknown_apc_command_is_ignored() {
+        let alloc = Global;
+
+        let mut h: Handler = Handler::default();
+        h.start();
+        h.feed_slice(alloc, b"Xabcdef1234");
+        assert!(matches!(h.state, State::Ignore));
+        h.feed_slice(alloc, b"more data that is dropped");
+        assert!(h.end(alloc).is_none());
+    }
+
+    // test "feedSlice valid glyph command"
+    #[test]
+    fn feed_slice_valid_glyph_command() {
+        let alloc = Global;
+
+        let mut h: Handler = Handler::default();
+        h.start();
+        h.feed_slice(alloc, b"25a1;q;cp=E0A0");
+
+        let mut cmd = h.end(alloc).unwrap();
+        assert!(matches!(cmd, Command::Glyph(_)));
+        assert!(matches!(cmd, Command::Glyph(glyph::Request::Query(_))));
+        cmd.deinit(alloc);
+    }
+
+    // test "feedSlice kitty max bytes exceeded"
+    #[test]
+    fn feed_slice_kitty_max_bytes_exceeded() {
+        if !KITTY_GRAPHICS {
+            return;
+        }
+
+        let alloc = Global;
+
+        // var h: Handler = .{ .max_bytes = .init(.{ .kitty = 4 }) };
+        let mut h: Handler = Handler {
+            max_bytes: {
+                let mut mb = [0usize; Protocol::COUNT];
+                mb[Protocol::Kitty as usize] = 4;
+                mb
+            },
+            ..Handler::default()
+        };
+        h.start();
+        h.feed_slice(alloc, b"Ga=t;abcd");
+        assert!(!matches!(h.state, State::Ignore));
+        h.feed_slice(alloc, b"e");
+        assert!(matches!(h.state, State::Ignore));
+        h.deinit();
+    }
+
+    /// RUSTTY-SIDE (WS10 T17): `feed_slice` must be observationally identical
+    /// to `feed`-per-byte for every chunking of the same input — that is the
+    /// whole claim of `f6f79acce` ("equivalent to calling feed for each byte in
+    /// order"), and it is the property the union-payload borrow reshape could
+    /// break silently.
+    #[test]
+    fn feed_slice_matches_per_byte_for_every_chunking() {
+        let alloc = Global;
+        let inputs: &[&[u8]] = &[
+            b"Gf=24,s=10,v=20;aGVsbG8=",
+            b"25a1;q;cp=E0A0",
+            b"Xabcdef1234",
+            b"G",
+            b"25a1;",
+            b"",
+            b"Ga=t;abcdefghijklmnop",
+        ];
+
+        for input in inputs {
+            let per_byte_end = {
+                let mut h: Handler = Handler::default();
+                h.start();
+                for &c in *input {
+                    h.feed(alloc, c);
+                }
+                let e = h.end(alloc);
+                format!("{}", e.is_some())
+            };
+
+            // Every split point, as two slices.
+            for split in 0..=input.len() {
+                let mut h: Handler = Handler::default();
+                h.start();
+                h.feed_slice(alloc, &input[..split]);
+                h.feed_slice(alloc, &input[split..]);
+                let e = h.end(alloc);
+                assert_eq!(
+                    per_byte_end,
+                    format!("{}", e.is_some()),
+                    "input={:?} split={split}",
+                    String::from_utf8_lossy(input)
+                );
+            }
+        }
     }
 
     // test "disabled glyph command is ignored"

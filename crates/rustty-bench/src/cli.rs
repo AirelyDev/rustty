@@ -1,6 +1,7 @@
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
 // const cli = @import("../cli.zig");
+use crate::apc_parser::ApcParser;
 use crate::benchmark::{self, Benchmark, RunMode};
 use crate::codepoint_width::CodepointWidth;
 use crate::grapheme_break::GraphemeBreak;
@@ -41,6 +42,8 @@ pub enum Action {
     ScrollbackCompression,
     // @"hyperlink-map",
     HyperlinkMap,
+    // @"apc-parser",
+    ApcParser,
 }
 
 impl Action {
@@ -58,6 +61,7 @@ impl Action {
             b"page-compression" => Some(Action::PageCompression),
             b"scrollback-compression" => Some(Action::ScrollbackCompression),
             b"hyperlink-map" => Some(Action::HyperlinkMap),
+            b"apc-parser" => Some(Action::ApcParser),
             _ => None,
         }
     }
@@ -254,6 +258,7 @@ pub fn main_action(alloc: Allocator, action: Action, args: Args) -> Result<(), E
         Action::PageCompression => main_action_impl::<PageCompression>(alloc, args),
         Action::ScrollbackCompression => main_action_impl::<ScrollbackCompression>(alloc, args),
         Action::HyperlinkMap => main_action_impl::<HyperlinkMap>(alloc, args),
+        Action::ApcParser => main_action_impl::<ApcParser>(alloc, args),
     }
 }
 
@@ -353,8 +358,9 @@ mod tests {
             (b"page-compression", Action::PageCompression),
             (b"scrollback-compression", Action::ScrollbackCompression),
             (b"hyperlink-map", Action::HyperlinkMap),
+            (b"apc-parser", Action::ApcParser),
         ];
-        assert_eq!(10, names.len());
+        assert_eq!(11, names.len());
         for (name, expected) in names {
             assert_eq!(Some(*expected), Action::from_name(name), "{name:?}");
         }

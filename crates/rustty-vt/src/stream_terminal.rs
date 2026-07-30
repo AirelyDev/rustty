@@ -1898,6 +1898,12 @@ impl<'a> stream::Handler for Handler<'a> {
         self.apc_handler.feed(gpa, code);
     }
 
+    // .apc_put_slice => self.apc_handler.feedSlice(self.terminal.gpa(), value.bytes),
+    fn apc_put_slice(&mut self, bytes: &[u8]) {
+        let gpa = self.term().gpa();
+        self.apc_handler.feed_slice(gpa, bytes);
+    }
+
     // .apc_end => self.apcEnd(),
     fn apc_end(&mut self) {
         Handler::apc_end(self);

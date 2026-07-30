@@ -73,6 +73,15 @@ use crate::utf8_decoder::UTF8Decoder;
 // const debug = false;
 const DEBUG: bool = false;
 
+/// `std.simd.suggestVectorLength(u8)` for `8c523ed03`'s APC payload scan.
+/// NOTE this is the NATIVE width, not `simd.lanes` (= 2x native): `8c523ed03`
+/// predates `f2a7652ab`'s `lanes` helper and calls `suggestVectorLength`
+/// directly, so the ported scan uses the same width the reference does.
+const APC_SCAN_LANES: Option<usize> = match rustty_simd::native_vector_bits() {
+    Some(bits) => Some(bits / 8),
+    None => None,
+};
+
 /// `simd.lanes(u32)` for the printable-run scan in `next_slice_capped`
 /// (f2a7652ab). See `rustty_simd::lanes`.
 const PRINT_RUN_LANES: Option<usize> = rustty_simd::lanes(core::mem::size_of::<u32>());
@@ -581,6 +590,24 @@ pub trait Handler {
     /// `apc_put`
     fn apc_put(&mut self, _code: u8) {}
 
+    /// `apc_put_slice` — a run of APC string payload bytes.
+    ///
+    /// `pub const ApcPutSlice = struct { bytes: []const u8 }` in the reference
+    /// `Action` union (whose `C`/`cval` extern form is mirrored in the
+    /// `rustty-vt-c` crate, per this module's Action PORT NOTE).
+    //
+    // PORT NOTE (f6f79acce, WS10 T17): as with `print_slice`, the reference's
+    // exhaustive union forces every handler to add an arm, while this trait's
+    // methods have defaults. An empty default would silently DROP APC payload
+    // for every handler that only implements `apc_put`, so the default is the
+    // per-byte fan-out the bulk path replaces — making `apc_put_slice` exactly
+    // equivalent to the `apc_put` stream it batches.
+    fn apc_put_slice(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.apc_put(b);
+        }
+    }
+
     /// `apc_end`
     fn apc_end(&mut self) {}
 
@@ -976,6 +1003,23 @@ impl<'a, H: Handler> Stream<'a, H> {
                         continue;
                     }
                 }
+
+                // Bulk-consume APC string bytes into a single slice.
+                // APC payloads (e.g. Kitty graphics) can be megabytes
+                // of base64 data, so per-byte dispatch is far too slow.
+                // This can't be used for handlers with a vtRaw hook
+                // because it dispatches the slice directly.
+                // if (self.parser.state == .sos_pm_apc_string) {
+                if self.parser.state == parser::State::SosPmApcString {
+                    // offset += self.consumeApcString(input[offset..]);
+                    offset += self.consume_apc_string(&input[offset..]);
+                    // if (offset >= input.len) return input.len;
+                    if offset >= input.len() {
+                        return input.len();
+                    }
+                    // The next byte exits the string state; let
+                    // nextNonUtf8 below handle it.
+                }
             }
 
             // self.nextNonUtf8(input[offset]);
@@ -985,6 +1029,75 @@ impl<'a, H: Handler> Stream<'a, H> {
         }
         // return offset;
         offset
+    }
+
+    /// Bulk-consume APC string bytes and dispatch them as a single
+    /// apc_put_slice action. Returns the number of bytes consumed.
+    /// Stops at the first byte that is not an apc_put byte in the
+    /// parse table, leaving it for the caller to process through
+    /// the state machine. CAN, SUB, ESC, and most C1 bytes exit
+    /// or abort the string state; 0xA0-0xFF are ignored by the
+    /// table (not payload), so they can't be bulk-consumed either.
+    ///
+    /// Must not be used by handlers with a vtRaw hook because it
+    /// dispatches the slice directly.
+    // fn consumeApcString(self: *Self, input: []const u8) usize
+    fn consume_apc_string(&mut self, input: &[u8]) -> usize {
+        // comptime assert(!@hasDecl(T, "vtRaw"));
+        //
+        // Same treatment as `csi_entry_byte`/`consume_csi_params`: Rust cannot
+        // assert an associated const inside a generic fn body (the fn is
+        // monomorphized for EVERY handler, including the hooked ones, even
+        // though only the unhooked ones reach the call), so this is a debug
+        // assertion and `stream_fast_paths_bypassed_when_vt_raw_hooked` is the
+        // real guard.
+        debug_assert!(!H::HAS_VT_RAW);
+        // assert(self.parser.state == .sos_pm_apc_string);
+        assert!(self.parser.state == parser::State::SosPmApcString);
+
+        // var end: usize = 0;
+        let mut end: usize = 0;
+
+        // `8c523ed03`: scan ordinary APC bytes a vector at a time, keeping the
+        // scalar loop below as the tail and as the whole scan on targets with
+        // no recommended vector width.
+        // if (comptime std.simd.suggestVectorLength(u8)) |vector_len| { ... }
+        if let Some(vector_len) = APC_SCAN_LANES {
+            while end + vector_len <= input.len() {
+                // const invalid = (bytes == 0x18) | (bytes == 0x1A)
+                //               | (bytes == 0x1B) | (bytes >= 0x80);
+                // if (@reduce(.Or, invalid)) break;
+                let mut invalid = false;
+                for j in 0..vector_len {
+                    let b = input[end + j];
+                    invalid |= b == 0x18 || b == 0x1A || b == 0x1B || b >= 0x80;
+                }
+                if invalid {
+                    break;
+                }
+                end += vector_len;
+            }
+        }
+
+        // while (end < input.len) {
+        while end < input.len() {
+            match input[end] {
+                // Not apc_put bytes: CAN/SUB/ESC and most C1 exit
+                // or abort the state; 0xA0-0xFF are ignored by it.
+                // 0x18, 0x1A, 0x1B, 0x80...0xFF => break,
+                0x18 | 0x1A | 0x1B | 0x80..=0xFF => break,
+                // Everything else is an apc_put byte.
+                // else => end += 1,
+                _ => end += 1,
+            }
+        }
+
+        // if (end > 0) self.handler.vt(.apc_put_slice, .{ .bytes = input[0..end] });
+        if end > 0 {
+            self.handler.apc_put_slice(&input[0..end]);
+        }
+        // return end;
+        end
     }
 
     /// Fast path for a byte in the csi_entry state, the state right
@@ -3908,6 +4021,28 @@ mod tests {
         s.handler
     }
 
+    /// `drive_bulk` for a stream that already exists, so a test can feed
+    /// several chunks through the bulk path with the parser state carried
+    /// across calls (the reference does this with repeated `nextSlice`).
+    fn drive_bulk_into<H: Handler>(s: &mut Stream<H>, input: &[u8]) {
+        let mut i = 0usize;
+        while i < input.len() {
+            if s.parser.state != parser::State::Ground {
+                i += s.consume_until_ground(&input[i..]);
+                continue;
+            }
+            let c = input[i];
+            if c == 0x1B {
+                s.parser.state = parser::State::Escape;
+                s.parser.clear();
+                i += 1;
+                continue;
+            }
+            s.next_utf8(c);
+            i += 1;
+        }
+    }
+
     /// The public `next_slice` entry point. Identical to `drive_bulk` when the
     /// `simd` feature is on; identical to `drive_per_byte` when it is off.
     /// Both configurations are asserted, so neither can rot.
@@ -4084,6 +4219,220 @@ mod tests {
                 *h.runs.last().unwrap(),
                 "n={n}"
             );
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // WS10 T17 (f6f79acce + 8c523ed03): bulk APC slice dispatch.
+    // ---------------------------------------------------------------------
+
+    /// A test handler that accumulates APC bytes regardless of whether they
+    /// arrive per-byte (apc_put) or in bulk (apc_put_slice).
+    // const ApcTestHandler = struct { ... };
+    struct ApcTestHandler {
+        buf: [u8; 256],
+        len: usize,
+        slices: usize,
+        puts: usize,
+        started: usize,
+        ended: usize,
+    }
+
+    impl Default for ApcTestHandler {
+        fn default() -> ApcTestHandler {
+            ApcTestHandler {
+                buf: [0; 256],
+                len: 0,
+                slices: 0,
+                puts: 0,
+                started: 0,
+                ended: 0,
+            }
+        }
+    }
+
+    impl Handler for ApcTestHandler {
+        fn apc_start(&mut self) {
+            self.started += 1;
+        }
+        fn apc_end(&mut self) {
+            self.ended += 1;
+        }
+        fn apc_put(&mut self, code: u8) {
+            self.buf[self.len] = code;
+            self.len += 1;
+            self.puts += 1;
+        }
+        fn apc_put_slice(&mut self, bytes: &[u8]) {
+            self.buf[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+            self.len += bytes.len();
+            self.slices += 1;
+        }
+    }
+
+    /// Drive input through the bulk path (`consume_until_ground`, where
+    /// `consume_apc_string` lives), NOT through `next_slice` — see the vacuity
+    /// note on `drive_bulk`. `next_slice` is per-byte without `--features
+    /// simd`, so a test written against it would never reach a single
+    /// `apc_put_slice` in the default build.
+    fn drive_apc_bulk(input: &[u8]) -> ApcTestHandler {
+        drive_bulk::<ApcTestHandler>(input)
+    }
+
+    // test "stream: apc bulk slice"
+    #[test]
+    fn stream_apc_bulk_slice() {
+        let h = drive_apc_bulk(b"\x1b_Gf=24,s=10,v=20;aGVsbG8=\x1b\\");
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gf=24,s=10,v=20;aGVsbG8=".as_slice(), &h.buf[0..h.len]);
+
+        // With SIMD enabled the body must arrive as a single slice.
+        //
+        // PORT NOTE: the reference guards this with
+        // `if (comptime build_options.simd and !debug)`, because its `nextSlice`
+        // driver is the one that reaches the bulk path. This port drives
+        // `consume_until_ground` directly (see `drive_apc_bulk`), which is
+        // always the bulk path, so the assertion is UNCONDITIONAL here — and
+        // that is strictly stronger: it holds in both feature configurations.
+        assert_eq!(1, h.slices);
+        assert_eq!(0, h.puts);
+    }
+
+    // test "stream: apc bulk slice split across inputs"
+    #[test]
+    fn stream_apc_bulk_slice_split_across_inputs() {
+        let mut s: Stream<ApcTestHandler> = Stream::init(ApcTestHandler::default());
+        for chunk in [
+            b"\x1b_Gf=24,s=10".as_slice(),
+            b",v=20;aGVs".as_slice(),
+            b"bG8=\x1b\\".as_slice(),
+        ] {
+            drive_bulk_into(&mut s, chunk);
+        }
+        let h = s.handler;
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gf=24,s=10,v=20;aGVsbG8=".as_slice(), &h.buf[0..h.len]);
+    }
+
+    // test "stream: apc bulk slice keeps C0 bytes as data"
+    #[test]
+    fn stream_apc_bulk_slice_keeps_c0_bytes_as_data() {
+        // BEL does not terminate an APC string; it is payload data.
+        let h = drive_apc_bulk(b"\x1b_Gx\x07y\x1b\\");
+
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gx\x07y".as_slice(), &h.buf[0..h.len]);
+    }
+
+    // test "stream: apc aborted by CAN"  (text widened by 8c523ed03)
+    #[test]
+    fn stream_apc_aborted_by_can() {
+        // CAN (0x18) aborts the APC string via the anywhere => ground
+        // transition. Exiting the sos_pm_apc_string state emits apc_end,
+        // and the trailing bytes are printed, not treated as APC data.
+        let h = drive_apc_bulk(b"\x1b_Gabcdefghijklmnopqrstuvwxyz0123456789\x18def");
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(
+            b"Gabcdefghijklmnopqrstuvwxyz0123456789".as_slice(),
+            &h.buf[0..h.len]
+        );
+    }
+
+    // test "stream: apc scalar path matches"
+    #[test]
+    fn stream_apc_scalar_path_matches() {
+        let h = drive_per_byte::<ApcTestHandler>(b"\x1b_Gf=24;aGVsbG8=\x1b\\");
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gf=24;aGVsbG8=".as_slice(), &h.buf[0..h.len]);
+    }
+
+    // test "stream: apc vector boundaries match scalar path"
+    //
+    // This is the negative control for `8c523ed03`'s vectorization: it must
+    // FAIL if the lane boundary handling is off by one.
+    #[test]
+    fn stream_apc_vector_boundaries_match_scalar_path() {
+        let positions = [15usize, 16, 17, 31, 32, 33, 63, 64, 65];
+        let controls = [0x18u8, 0x1A, 0x1B, 0x80, 0xFF];
+
+        for position in positions {
+            for control in controls {
+                let mut input: Vec<u8> = Vec::with_capacity(96);
+                input.extend_from_slice(b"\x1b_G");
+                input.extend(core::iter::repeat_n(b'a', position));
+                input.push(control);
+                input.push(b'\\');
+                let bytes = &input[..];
+
+                let bulk = drive_apc_bulk(bytes);
+                let scalar = drive_per_byte::<ApcTestHandler>(bytes);
+
+                assert_eq!(
+                    scalar.started, bulk.started,
+                    "pos={position} ctl={control:#x}"
+                );
+                assert_eq!(scalar.ended, bulk.ended, "pos={position} ctl={control:#x}");
+                assert_eq!(
+                    &scalar.buf[0..scalar.len],
+                    &bulk.buf[0..bulk.len],
+                    "pos={position} ctl={control:#x}"
+                );
+            }
+        }
+    }
+
+    /// RUSTTY-SIDE (WS10 T17): the oracle's boundary test above NEVER reaches
+    /// `consume_apc_string`'s vector `invalid` branch.
+    ///
+    /// Its inputs end two bytes after the control, so with a 16-lane scan the
+    /// last FULL window always stops just short of the control and the scalar
+    /// tail finds it — the `if invalid { break }` arm is never taken. Proven by
+    /// mutation: making that arm `end += 1; break` left the oracle test GREEN.
+    ///
+    /// This variant pads the input after the control so the control lands
+    /// mid-window and the vector loop must detect it. Note 0x80..0xFF are
+    /// "ignored" by the parse table (still APC state), so the trailing bytes
+    /// after those controls are real payload that both paths must agree on —
+    /// which is exactly the differential this asserts.
+    #[test]
+    fn stream_apc_vector_invalid_branch_matches_scalar_path() {
+        let controls = [0x18u8, 0x1A, 0x1B, 0x80, 0xFF];
+
+        // Enough trailing bytes that the control is inside a full vector
+        // window for any plausible lane count (16 for NEON/SSE2 u8, 32 for
+        // AVX2).
+        for position in 0..40usize {
+            for control in controls {
+                let mut input: Vec<u8> = Vec::with_capacity(160);
+                input.extend_from_slice(b"\x1b_G");
+                input.extend(core::iter::repeat_n(b'a', position));
+                input.push(control);
+                input.extend(core::iter::repeat_n(b'z', 80));
+                input.extend_from_slice(b"\x1b\\");
+                let bytes = &input[..];
+
+                let bulk = drive_apc_bulk(bytes);
+                let scalar = drive_per_byte::<ApcTestHandler>(bytes);
+
+                assert_eq!(
+                    scalar.started, bulk.started,
+                    "pos={position} ctl={control:#x}"
+                );
+                assert_eq!(scalar.ended, bulk.ended, "pos={position} ctl={control:#x}");
+                assert_eq!(
+                    &scalar.buf[0..scalar.len],
+                    &bulk.buf[0..bulk.len],
+                    "pos={position} ctl={control:#x}"
+                );
+            }
         }
     }
 
