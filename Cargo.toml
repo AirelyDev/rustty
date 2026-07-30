@@ -98,6 +98,16 @@ members = [
     # check_test_counts.py.
     "crates/rustty-wuffs",
 
+    # ----- vendored-dep RE-HOME (R3): the zigimg surface libvaxis instantiates -----
+    # NOT a port of zigimg's 15 format modules (18,316 src LOC + ~10,700 test LOC for
+    # code no ghostty path calls). `libvaxis` 0.5.1 touches exactly SIX zigimg
+    # operations (`Vaxis.zig:983-1033`); this crate re-homes those six onto ghostty's
+    # OWN vendored codecs — decode via rustty-wuffs, PNG encode over zlib-sys. WS12
+    # Decision 2, Option Z-C (ratified; see .port/phase-2/VAXIS_C1B_DESIGN.md). A leaf
+    # (deps: rustty-wuffs + zlib-sys + allocator-api2); consumed only by rustty-vaxis's
+    # kitty-graphics image tier. NOT in the 3234-test src/ contract.
+    "crates/rustty-zigimg",
+
     # ----- vendored pure-Rust dependency port (R3): z2d 2D vector graphics -----
     # Port of the `vancluever/z2d` 0.10.0 subset ghostty uses in its sprite/glyf
     # font rasterizers (Context/Path/StaticPath/Surface/Transformation/painter +
@@ -240,6 +250,10 @@ wuffs-sys = { path = "crates-sys/wuffs-sys" }
 # `decode` API over the `wuffs-sys` FFI leaf. Consumed by the renderer's
 # background-image decode path.
 rustty-wuffs = { path = "crates/rustty-wuffs" }
+# The six-operation zigimg surface `libvaxis` 0.5.1 instantiates, re-homed onto
+# ghostty's own vendored codecs (WS12 Decision 2 / Option Z-C). Consumed by
+# rustty-vaxis's kitty-graphics image tier (`transmit_image`/`load_image`).
+rustty-zigimg = { path = "crates/rustty-zigimg" }
 # Pure-Rust PNG encoder/decoder — dev-only test-fixture helper (the SAME 0.18
 # stand-in rustty-font uses). rustty-wuffs uses it to GENERATE the 1×1 solid PNG
 # fixtures at test time (the reference `1x1#*.png` @embedFiles are absent from the

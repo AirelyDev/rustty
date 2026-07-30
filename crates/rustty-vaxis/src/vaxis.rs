@@ -182,16 +182,38 @@ impl Default for Vaxis<'_> {
 
 /// Error surface for the image transmit paths (Zig `error.NoGraphicsCapability` /
 /// `error.PathTooLong` plus the writer error union).
+///
+/// WS12 T9 adds [`ImageError::Decode`] for the decode/encode error set the reference
+/// inherits from `zigimg` through `loadImage`/`transmitImage`'s `!` return
+/// (`zigimg`'s `Image.ReadError`/`WriteError`/`ConvertError`). The three original variants
+/// are unchanged and stay byte-compatible with their existing users.
 #[derive(Debug)]
 pub enum ImageError {
     NoGraphicsCapability,
     PathTooLong,
     Io(io::Error),
+    /// A decode, convert or PNG-encode step failed — the `zigimg` half of the reference's
+    /// error union. Carries the underlying [`rustty_zigimg::Error`] rather than flattening
+    /// it, so `UnsupportedFormat` (no codec claims the magic bytes) stays distinguishable
+    /// from `NoSpaceLeft` (the faithfully preserved `imageByteSize()`-sized PNG buffer
+    /// overflow) and from a genuine I/O failure.
+    Decode(rustty_zigimg::Error),
 }
 
 impl From<io::Error> for ImageError {
     fn from(e: io::Error) -> Self {
         ImageError::Io(e)
+    }
+}
+
+impl From<rustty_zigimg::Error> for ImageError {
+    fn from(e: rustty_zigimg::Error) -> Self {
+        match e {
+            // A `zigimg` I/O failure is an I/O failure; keep it in the existing variant so
+            // callers matching `Io` do not have to learn a second spelling.
+            rustty_zigimg::Error::Io(io_err) => ImageError::Io(io_err),
+            other => ImageError::Decode(other),
+        }
     }
 }
 
@@ -959,63 +981,168 @@ impl<'a> Vaxis<'a> {
         res
     }
 
-    // R5 SEAM (zigimg — the DEFERRED dep): `transmitImage` decodes/converts a
-    // `zigimg.Image` (writeToMemory(.png) / convert(.rgb24/.rgba32) + rawBytes) into an
-    // arena buffer, base64-encodes it, then calls `transmitPreEncodedImage`. `zigimg` is
-    // absent, so the `img: *zigimg.Image` param is dropped and the body is an
-    // `unimplemented!()` seam (placeholder-leaf-doctrine). NOT reached by list_themes/boo.
-    // Verbatim Zig body:
-    //
-    // pub fn transmitImage(self, alloc, tty, img: *zigimg.Image, format) !Image {
-    //     if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
-    //     var arena = std.heap.ArenaAllocator.init(alloc);
-    //     defer arena.deinit();
-    //     const buf = switch (format) {
-    //         .png => png: {
-    //             const png_buf = try arena.allocator().alloc(u8, img.imageByteSize());
-    //             const png = try img.writeToMemory(png_buf, .{ .png = .{} });
-    //             break :png png;
-    //         },
-    //         .rgb => rgb: {
-    //             try img.convert(.rgb24);
-    //             break :rgb img.rawBytes();
-    //         },
-    //         .rgba => rgba: {
-    //             try img.convert(.rgba32);
-    //             break :rgba img.rawBytes();
-    //         },
-    //     };
-    //     const b64_buf = try arena.allocator().alloc(u8, base64Encoder.calcSize(buf.len));
-    //     const encoded = base64Encoder.encode(b64_buf, buf);
-    //     return self.transmitPreEncodedImage(tty, encoded, @intCast(img.width), @intCast(img.height), format);
-    // }
+    /// Transmit an image by encoding/converting it in memory, then emitting the
+    /// kitty-graphics transmit sequence.
+    ///
+    /// LIVE since WS12 T8 (was the zigimg R5 seam). The `zigimg` surface is supplied by
+    /// [`rustty_zigimg`], which re-homes the six operations `libvaxis` instantiates onto
+    /// ghostty's own vendored codecs (WS12 Decision 2, Option Z-C).
+    ///
+    /// PORT NOTE — the `img` parameter is RESTORED. The seam had signature
+    /// `(&mut self, tty, format)`, having dropped `img: *zigimg.Image` because the type did
+    /// not exist; that is what made the seam un-callable, and a filled body must not keep
+    /// it. `&mut rustty_zigimg::Image` is the faithful map of the reference's `*zigimg.Image`
+    /// (it mutates in place via `convert`).
+    ///
+    /// PORT NOTE — the arena. The reference wraps the caller's allocator in an
+    /// `ArenaAllocator` and `defer arena.deinit()`s it, purely to free the PNG buffer and
+    /// the base64 buffer together at scope exit. Rust's ownership does exactly that, so the
+    /// arena maps to local `Vec`s — the established house pattern for Zig arenas whose only
+    /// job is scope-lifetime bulk free.
+    ///
+    /// Verbatim Zig body (`libvaxis` 0.5.1 `src/Vaxis.zig:983-1015`), ported line by line
+    /// below:
+    ///
+    /// ```zig
+    /// pub fn transmitImage(self, alloc, tty, img: *zigimg.Image, format) !Image {
+    ///     if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    ///     var arena = std.heap.ArenaAllocator.init(alloc);
+    ///     defer arena.deinit();
+    ///     const buf = switch (format) {
+    ///         .png => png: {
+    ///             const png_buf = try arena.allocator().alloc(u8, img.imageByteSize());
+    ///             const png = try img.writeToMemory(png_buf, .{ .png = .{} });
+    ///             break :png png;
+    ///         },
+    ///         .rgb => rgb: {
+    ///             try img.convert(.rgb24);
+    ///             break :rgb img.rawBytes();
+    ///         },
+    ///         .rgba => rgba: {
+    ///             try img.convert(.rgba32);
+    ///             break :rgba img.rawBytes();
+    ///         },
+    ///     };
+    ///     const b64_buf = try arena.allocator().alloc(u8, base64Encoder.calcSize(buf.len));
+    ///     const encoded = base64Encoder.encode(b64_buf, buf);
+    ///     return self.transmitPreEncodedImage(tty, encoded, @intCast(img.width), @intCast(img.height), format);
+    /// }
+    /// ```
     pub fn transmit_image<W: Write>(
         &mut self,
-        _tty: &mut W,
-        _format: TransmitFormat,
+        tty: &mut W,
+        img: &mut rustty_zigimg::Image,
+        format: TransmitFormat,
     ) -> Result<Image, ImageError> {
-        unimplemented!("transmit_image — zigimg R5 seam (DEFERRALS.md)")
+        // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+        //
+        // NOTE this returns BEFORE anything is written, so a capability-less terminal sees
+        // zero bytes (pinned by the `transmit_image_without_kitty_graphics_writes_nothing`
+        // negative control). It also runs before `next_img_id` is bumped, matching the
+        // `defer` placement in `transmitPreEncodedImage`.
+        if !self.caps.kitty_graphics {
+            return Err(ImageError::NoGraphicsCapability);
+        }
+
+        // const buf = switch (format) { ... };
+        //
+        // `png_owned` keeps the PNG bytes alive for the borrow below; `.rgb`/`.rgba`
+        // borrow out of `img` itself after converting in place, exactly as the reference's
+        // `img.rawBytes()` does.
+        let png_owned: Vec<u8>;
+        let buf: &[u8] = match format {
+            TransmitFormat::Png => {
+                // const png_buf = try arena.allocator().alloc(u8, img.imageByteSize());
+                // const png = try img.writeToMemory(png_buf, .{ .png = .{} });
+                //
+                // The buffer is sized at `imageByteSize()` — the RAW pixel byte count —
+                // deliberately, because that is what upstream does. A high-entropy image
+                // whose PNG does not compress below its raw size therefore fails with
+                // `ImageError::Encode` here just as it fails with `error.NoSpaceLeft`
+                // upstream. Preserved quirk, not a bug to widen.
+                let mut png_buf = vec![0u8; img.image_byte_size()];
+                let written = rustty_zigimg::write_to_memory(img, &mut png_buf)?.len();
+                png_buf.truncate(written);
+                png_owned = png_buf;
+                &png_owned
+            }
+            TransmitFormat::Rgb => {
+                // try img.convert(.rgb24); break :rgb img.rawBytes();
+                img.convert(rustty_zigimg::PixelFormat::Rgb24);
+                img.raw_bytes()
+            }
+            TransmitFormat::Rgba => {
+                // try img.convert(.rgba32); break :rgba img.rawBytes();
+                img.convert(rustty_zigimg::PixelFormat::Rgba32);
+                img.raw_bytes()
+            }
+        };
+
+        // const b64_buf = try arena.allocator().alloc(u8, base64Encoder.calcSize(buf.len));
+        // const encoded = base64Encoder.encode(b64_buf, buf);
+        //
+        // The SAME encoder `transmit_local_image_path` uses (§5.4 port of
+        // `std.base64.standard.Encoder`) — deliberately not a second base64 path.
+        let encoded = base64_standard_encode(buf);
+
+        // return self.transmitPreEncodedImage(tty, encoded, @intCast(img.width), @intCast(img.height), format);
+        //
+        // Tail-call into the already-LIVE emitter, so the escape bytes, the 4096-byte
+        // chunking and the `m=1`/`m=0` continuation are byte-identical to the pre-encoded
+        // path and are not duplicated here. `@intCast` -> `as u16`: the reference truncates
+        // the `usize` dimensions the same way.
+        let width = img.width as u16;
+        let height = img.height as u16;
+        self.transmit_pre_encoded_image(tty, &encoded, width, height, format)
     }
 
-    // R5 SEAM (zigimg — the DEFERRED dep): `loadImage` decodes an image via
-    // `zigimg.Image.fromFilePath`/`fromMemory` then calls `transmitImage`. Verbatim Zig body:
-    //
-    // pub fn loadImage(self, alloc, tty, src: Image.Source) !Image {
-    //     if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
-    //     var read_buffer: [1024 * 1024]u8 = undefined; // 1MB buffer
-    //     var img = switch (src) {
-    //         .path => |path| try zigimg.Image.fromFilePath(alloc, path, &read_buffer),
-    //         .mem => |bytes| try zigimg.Image.fromMemory(alloc, bytes),
-    //     };
-    //     defer img.deinit();
-    //     return self.transmitImage(alloc, tty, &img, .png);
-    // }
-    pub fn load_image<W: Write>(
-        &mut self,
-        _tty: &mut W,
-        _src: Source,
-    ) -> Result<Image, ImageError> {
-        unimplemented!("load_image — zigimg R5 seam (DEFERRALS.md)")
+    /// Load an image from a path or a memory buffer and transmit it as PNG.
+    ///
+    /// LIVE since WS12 T9 (was the zigimg R5 seam).
+    ///
+    /// PORT NOTE — the 1 MiB read buffer. The reference declares
+    /// `var read_buffer: [1024 * 1024]u8 = undefined;` on the STACK. Here it is
+    /// `vec![0u8; 1024 * 1024]` rather than a 1 MiB Rust stack frame (which would risk
+    /// overflowing a non-main thread's default stack). **The SIZE is preserved on purpose,
+    /// not rounded off:** it bounds what `Source::Path` can read off disk, so it is
+    /// observable — a larger file fails rather than loading.
+    ///
+    /// Verbatim Zig body (`libvaxis` 0.5.1 `src/Vaxis.zig:1017-1033`):
+    ///
+    /// ```zig
+    /// pub fn loadImage(self, alloc, tty, src: Image.Source) !Image {
+    ///     if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    ///     var read_buffer: [1024 * 1024]u8 = undefined; // 1MB buffer
+    ///     var img = switch (src) {
+    ///         .path => |path| try zigimg.Image.fromFilePath(alloc, path, &read_buffer),
+    ///         .mem => |bytes| try zigimg.Image.fromMemory(alloc, bytes),
+    ///     };
+    ///     defer img.deinit();
+    ///     return self.transmitImage(alloc, tty, &img, .png);
+    /// }
+    /// ```
+    pub fn load_image<W: Write>(&mut self, tty: &mut W, src: Source) -> Result<Image, ImageError> {
+        // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+        //
+        // Checked HERE as well as in `transmit_image`, because the reference checks it in
+        // both — and checking first means a capability-less terminal never even reads the
+        // file, so the sink stays empty.
+        if !self.caps.kitty_graphics {
+            return Err(ImageError::NoGraphicsCapability);
+        }
+
+        // var read_buffer: [1024 * 1024]u8 = undefined; // 1MB buffer
+        let mut read_buffer = vec![0u8; 1024 * 1024];
+
+        // var img = switch (src) { ... };
+        let mut img = match src {
+            Source::Path(path) => rustty_zigimg::from_file_path(path, &mut read_buffer)?,
+            Source::Mem(bytes) => rustty_zigimg::from_memory(bytes)?,
+        };
+
+        // defer img.deinit();  — Rust ownership: `img` drops at scope exit.
+        // return self.transmitImage(alloc, tty, &img, .png);
+        self.transmit_image(tty, &mut img, TransmitFormat::Png)
     }
 
     /// deletes an image from the terminal's memory

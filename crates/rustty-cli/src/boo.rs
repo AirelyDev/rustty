@@ -11,6 +11,27 @@
 //! `zlib_sys::inflate_raw`). The R2 product-name comment (reference "Ghostty
 //! website") is retargeted to "Rustty website".
 //!
+//! VERIFIED END-TO-END [WS12 T5]: `crates/rustty-cli/tests/boo_pty_e2e.rs` drives the
+//! real `rustty +boo` binary through a pty (`.port/tools/boo_pty_kat.py`) and asserts
+//! rendered CONTENT — >= 10 synchronized-update frames, >= 1 `ESC[34m` colour run, and a
+//! cursor address at column >= 60 — plus a clean status-0 exit on ESC. Measured
+//! 2026-07-29: 69 frames / 2,009 colour runs / max col 142 / 145,598 bytes in ~3 s, and
+//! `EXIT_STATUS=0` **0.04 s** after ESC.
+//!
+//! TWO TRAPS THAT MAKE `+boo` LOOK BROKEN (encoded in that KAT so they stay known):
+//! 1. **A pty with no winsize renders nothing.** With a 0x0 winsize `+boo` emits only the
+//!    empty per-frame wrapper (`ESC[?2026h ESC[?25l ESC[H ESC[m ESC[?2026l`) — 2,640 bytes
+//!    of zero cell content. Any harness must `ioctl(TIOCSWINSZ)`; also note this module's
+//!    own 100w x 41h floor at :465.
+//! 2. **A bare pty MUST answer DSR or shutdown blocks in `Loop::stop`.** ESC sets
+//!    `ctx.quit` and `App::run` returns, but `Loop::stop()`
+//!    (`rustty-vaxis/src/loop_.rs:215`) wakes its reader thread — blocked in
+//!    `read(/dev/tty)` — by writing `ESC[5n`, then `join()`s it. Only a terminal that
+//!    answers `ESC[5n` with `ESC[0n` unblocks that read; against a non-answering pty
+//!    `join()` never returns. This is **upstream-faithful libvaxis behaviour, not a rustty
+//!    defect**, and it is the KAT's negative control: with that one reply suppressed the
+//!    process is still alive 4.4 s after ESC, versus 0.04 s to exit with it.
+//!
 //! ALIASING (H1/H3, mirihar-vxfw): `Boo` is driven type-erased — `*mut Boo` in the
 //! Widget's `userdata`, cast back per tick/draw. The draw produces a `Surface` whose
 //! `buffer` is a RAW alias into `self.buffer`, stored as `App.mouse_handler.last_frame`

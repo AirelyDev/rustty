@@ -3124,6 +3124,17 @@ The per-leaf notes below are kept for history with their outcomes marked:
     chunks 1a–4b stop at the `widgets`/TextInput tier and do NOT port the `vxfw`
     widget framework `Boo` is built on. Un-defer trigger: a vaxis vxfw follow-up
     chunk + the `framedata` asset (R3 copy).~~
+    **RESOLVED (`e7e5a8c`) — see the `boo` ✅ RESOLVED row ~240 lines above in this same
+    file, which this block contradicted for weeks. `crates/rustty-cli/src/boo.rs` is a
+    525-line live port with a real `run()`; both the vxfw widget-framework subset and the
+    `framedata` asset landed. VERIFIED END-TO-END [WS12 T5] by
+    `crates/rustty-cli/tests/boo_pty_e2e.rs` + `.port/tools/boo_pty_kat.py`: driving the
+    real binary through a pty gave `EXIT_STATUS=0` 0.04 s after ESC with 69 frames /
+    2,009 colour runs / max column 142 / 145,598 bytes, and the `--no-dsr` negative
+    control was still alive 4.37 s after ESC. Two traps are encoded in that KAT: a pty with
+    no winsize renders zero cell content, and a bare pty MUST answer DSR (`ESC[5n` →
+    `ESC[0n`) or shutdown blocks in `Loop::stop` — upstream-faithful libvaxis behaviour,
+    not a rustty defect.**
 
     **RESOLVED / STALE [WS19 T2 audit, 2026-07-29 — audit row W3].** This row was
     already self-contradicted 240 lines earlier by the `boo` entry at the
@@ -4446,13 +4457,54 @@ with the gen/wasm-artifact tooling milestone (the same `help_strings`-codegen
 follow-up), i.e. sub-project #3 (unused-subset) for the gen tooling and a separate
 WASM-artifact milestone for `main_wasm.zig`.
 
-## rustty-vaxis Chunk 1b (`gwidth.zig` + `unicode.zig`) — uucode-0.1.0 width-table blocker
+## rustty-vaxis Chunk 1b (`gwidth.zig` + `unicode.zig`) — uucode-0.1.0 width-table fork
+
+> ## ✅ RESOLVED — decided **Option B**, shipped `e0abb03` (2026-07-10), **RATIFIED 2026-07-29 (WS12 T2)**, gate proven non-vacuous (WS12 T4)
+>
+> **This is NOT an open blocker and has not been one since 2026-07-10.** Everything below
+> the banner is retained as HISTORICAL RECORD — the Option A/B/C analysis is worth keeping
+> so the reasoning survives — but the "needs a **human decision**" framing and the
+> "Un-defer trigger" at the end of this section are **stale prose describing a decision
+> that has already been made and implemented**. Read them as history, not as work items.
+> (This row was still presenting itself as an open human decision as late as the WS12 plan,
+> which is exactly the rot this banner exists to stop.)
+>
+> **What shipped (Option B):** a vendored `uucode` 0.1.0 runtime subset as a module inside
+> `rustty-vaxis` at `crates/rustty-vaxis/src/uucode/` (1,035 LOC across
+> `{mod,get,grapheme,tables,types,utf8}.rs`), whose stage1/stage2 tables are regenerated at
+> build time by `crates/rustty-vaxis/build.rs` (552 LOC) from the 3.7 MB vendored UCD 16.0.0
+> corpus at `crates/rustty-vaxis/ucd/`. `gwidth.rs` (311 LOC, 12 `#[test]`) and `unicode.rs`
+> (94 LOC) are LIVE. The UCD corpus is a **build-time input only** and is never shipped in
+> any artifact.
+>
+> **Ratification:** the human (project owner) ratified Option B verbatim on 2026-07-29;
+> the decision text, the tradeoff reasoning, and the reason Option A was rejected are
+> recorded in `.port/phase-2/VAXIS_C1B_DESIGN.md` § "WS12 decisions". Option A would first
+> require PROVING that a uucode-0.2.0 + ghostty-stripped-config derivation reproduces
+> 0.1.0-vanilla across all 1,114,112 code points and all four fields, to save 3.7 MB of
+> build-time text at the cost of permanently coupling `rustty-vt` — the port's most
+> load-bearing crate — to a TUI library's dependency pin. Option C (mapping `eawToWidth`
+> onto ghostty's derived `width`) stays rejected: it is a different algorithm and would
+> fake widths.
+>
+> **Why the gate is not vacuous (WS12 T4), because ratification by prose alone is not a
+> gate:** perturbing a single generated table entry in a scratch tree
+> (`eaw[0x4E00] = EAW_NEUTRAL`, forcing CJK IDEOGRAPH-ONE from `Wide` to `Neutral`) turns
+> **both** `uucode::tables::tests::spot_check` **and** the behavioural
+> `gwidth::tests::gwidth_missing_wide_anchor` RED (`95 passed; 2 failed`), and reverting
+> that one line returns `97 passed`. Additional pins added by T4: the UAX #29 corpus loop
+> now asserts it drove ≥ 1000 cases (a truncated `include_str!` corpus previously passed
+> silently — a 40-line corpus drives 16 cases and is now caught), and
+> `crates/rustty-vaxis/tests/ucd_provenance.rs` verifies all six vendored UCD inputs against
+> SHA-256 digests recorded in `ucd/PROVENANCE.md`.
+
+### Historical record — the original blocker write-up (2026-07-10)
 
 The vaxis port (`crates/rustty-vaxis`, vendored-dep-port of libvaxis 0.5.1) lands its
 CORE VALUE TYPES in **Chunk 1a** (`Cell`/`Key`/`Mouse`/`GraphemeCache`/`Winsize` +
 `Image` struct-shape — READY, dep-free; see `VAXIS_C1_DESIGN.md`). The two
-grapheme-width / grapheme-segmentation files are **DEFERRED to Chunk 1b** on a
-unicode-data blocker that needs a **human decision** (Option A vs B below):
+grapheme-width / grapheme-segmentation files were **DEFERRED to Chunk 1b** on a
+unicode-data blocker that needed a **human decision** (Option A vs B below):
 
 - `gwidth.zig` (216 LOC, **11 test{}**) → `gwidth.rs`
 - `unicode.zig` (64 LOC, 0 test) → `unicode.rs`
@@ -4563,37 +4615,97 @@ NOTE (T14 reconciliation, 2026-07-10): item 1's Windows seam family also covers
 `loop_.rs:341` (`#[cfg(windows)]` `tty_run` arm) — same `#[cfg(windows)]` class,
 same Windows-target-chunk target.
 
-## rustty-vaxis Chunks 4a/4b (the real `Vaxis<'a>` + widgets) — residual R5 seams [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT M5]
+## rustty-vaxis Chunks 4a/4b (the real `Vaxis<'a>` + widgets) — the image tier [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT M5]
 
 Chunk 4a (commit 9500493) replaced the 3b placeholder with the real `Vaxis<'a>`
 (render diff-and-emit engine, capability queries, kitty-graphics transmit
-paths); Chunk 4b (commit 17bcf2d) added the `widgets`/TextInput tier. The chunk
-sequence for the libvaxis port is FINISHED — these are the crate's remaining
-live seams (verbatim reference bodies preserved at each; this section replaces
+paths); Chunk 4b (commit 17bcf2d) added the `widgets`/TextInput tier.
+
+> ## ✅ RESOLVED — all four functions LIVE, WS12 T8–T11 (2026-07-29)
+>
+> **The image tier is no longer deferred, and `rustty-vaxis` has zero non-`#[cfg(windows)]`
+> `unimplemented!()`.** Verified: `grep -rn 'unimplemented!\|todo!' crates/rustty-vaxis/src/`
+> now returns only the `#[cfg(windows)]` family (`tty.rs:419,422,425,439,442,445,539`;
+> `loop_.rs:341`) plus two doc-comment mentions. Both former items are discharged:
+>
+> 1. **`Vaxis::transmit_image` + `Vaxis::load_image` — LIVE** over the new
+>    **`crates/rustty-zigimg`** crate (WS12 Decision 2, **Option Z-C**, ratified 2026-07-29;
+>    the tradeoff table and the decision text are in
+>    `.port/phase-2/VAXIS_C1B_DESIGN.md` § "WS12 decisions"). Note this row's own
+>    un-defer trigger read "a `rustty-zigimg` port **(or an R3 pure-Rust re-home of the two
+>    conversions)**" — the parenthetical is exactly what was taken. `rustty-zigimg`
+>    (≈840 src LOC + 264 test LOC) re-homes the **six** zigimg operations `libvaxis`
+>    actually instantiates (`Vaxis.zig:983-1033`) onto **ghostty's own vendored codecs**:
+>    decode via `rustty-wuffs` (whose RGBA_NONPREMUL output *is* zigimg's `rgba32`),
+>    a faithful `rgba32`↔`rgb24` converter, and a local PNG encoder over `zlib-sys`. It is
+>    explicitly **not** a port of zigimg's 15 format modules (18,316 src + ~10,700 test LOC,
+>    for a surface no ghostty code path calls) — that was Option Z-A and is rejected.
+>    `transmit_image`'s dropped `img` parameter is restored (the 3-arg signature is what had
+>    made the seam un-callable).
+>
+> 2. **`Image::draw` + `Image::cell_size` — LIVE**, and this row's stated rationale turned
+>    out to be **wrong in an instructive way**: they were said to "defer WITH the zigimg
+>    tier", but they need **zero** zigimg. Both are pure `Window`/`Screen` geometry and
+>    could have been filled at any point after Chunk 2; only *reachability* ever depended on
+>    item 1. Both had also silently dropped their `win: Window` parameter, which is the
+>    actual reason they were uncallable. Parameter restored.
+>
+> **THE ONE DIVERGENCE, bounded and named — a PORT NOTE, not a seam and not a deferral:**
+> the set of input file formats `load_image` accepts is **PNG + JPEG** rather than zigimg's
+> 15. That is a *superset* of what ghostty itself decodes anywhere (both kitty graphics and
+> background images go through `pkg/wuffs`, i.e. PNG+JPEG), and it is documented at
+> `crates/rustty-zigimg/Cargo.toml` and `src/decode.rs`. If a future consumer needs
+> BMP/GIF/TGA input, that is a new workstream (Option Z-A), **not** a WS12 residual.
+>
+> **Also preserved deliberately (an upstream quirk, found while KAT-ing):** `Vaxis.zig:996`
+> sizes its PNG buffer at `img.imageByteSize()` — the *raw* pixel byte count — and a PNG has
+> ~57 bytes of unavoidable fixed overhead, so **a tiny image cannot be transmitted as PNG at
+> all**. A 4×4 rgba32 image (64-byte budget) legitimately overflows, upstream too. Surfaced
+> as `ImageError::Decode(NoSpaceLeft)`; not "fixed" by widening the buffer.
+>
+> **Gates:** 22 KATs in `crates/rustty-vaxis/tests/image_tier.rs` (all four `Scale` arms and
+> the `contain` early break asserted to *different* hand-computed values; `cell_size`'s `try`
+> and `catch 0` arms asserted separately; `transmit_image` pinned to the COMPLETE expected
+> escape byte string; zero-byte-sink negative controls on both `NoGraphicsCapability`
+> paths). 28 tests in `rustty-zigimg`, whose PNG round trip is bit-exact through
+> `rustty-wuffs` and is negative-controlled by an IDAT byte flip. `check_acyclic.sh` GREEN
+> with the new `rustty-vaxis → rustty-zigimg → {rustty-wuffs, zlib-sys}` edges.
+>
+> Miri: the FFI-touching arms are `#[cfg_attr(miri, ignore)]` with rows in
+> `.port/phase-2/MIRI_EXCEPTIONS.md`; every geometry KAT stays Miri-live.
+>
+> **NOT struck by WS12, and correctly still open:** the `#[cfg(windows)]` family — see
+> "rustty-vaxis Chunk 3b" items 1/3. This program has no Windows host or target and the
+> non-Windows build never names them.
+
+### Historical record — the original seam write-up (2026-07-10)
+
+The chunk sequence for the libvaxis port is FINISHED — these were the crate's remaining
+live seams (verbatim reference bodies preserved at each; this section replaced
 the formerly-dangling "(DEFERRALS.md)" citations in vaxis.rs, which pointed at
 no entry):
 
-1. **`vaxis.rs:997` `Vaxis::transmit_image` + `vaxis.rs:1018` `Vaxis::load_image`
+1. ~~**`vaxis.rs:997` `Vaxis::transmit_image` + `vaxis.rs:1018` `Vaxis::load_image`
    — the `zigimg` seams.** Both decode/convert image payloads via the unported
    Zig-source dep `zigimg` (`img.convertToPixelFormat`, PNG decode) before the
    (LIVE) kitty transmit paths. Same dep class as libxev/z2d/vaxis itself: a
    vendored-dep port. **Un-defer trigger: a `rustty-zigimg` port (or an R3
-   OWNER: **WS12** — see the WS19 T19 note below.
    pure-Rust re-home of the two conversions), needed only when a TUI consumer
-   transmits images.**
-2. **`image.rs:223` `Image::draw` + `image.rs:248` `Image::cell_size`.** The
+   transmits images.**~~ OWNER was **WS12**; **discharged by WS12 T8/T9.**
+2. ~~**`image.rs:223` `Image::draw` + `image.rs:248` `Image::cell_size`.** The
    "(later chunk)" wording in-source is STALE (the chunk sequence is finished);
    the honest state: both consume a live `Window`/`Screen` but are unreachable
    until item 1 lands (a vaxis `Image` can only be constructed through
    `transmit_image`/`load_image`), so they defer WITH the zigimg tier.
-   **Un-defer trigger: item 1.**
+   **Un-defer trigger: item 1.**~~ **Discharged by WS12 T10/T11** — and, as the banner
+   notes, the "defer WITH the zigimg tier" reasoning was wrong: no zigimg was needed.
 
   > **OWNER [WS19 T19, 2026-07-29]: WS12 (vaxis completion).** Flagged by gate G-P2 as an
   > open claim with NO owner. Same class as `Vaxis::transmit_image`/`load_image` above:
   > both depend on the image-decode tier (`rustty-zigimg` or an R3-acceptable
   > substitute), and WS12 is the workstream that completes `rustty-vaxis`. Naming WS12
   > here is what stops these two rows drifting back into ownerlessness — the gate now
-  > fails if they do.
+  > fails if they do. **[Closed 2026-07-29 by WS12 T8–T11.]**
 
 
 No other live seams exist in the crate outside the `#[cfg(windows)]` family +

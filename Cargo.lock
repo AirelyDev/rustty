@@ -1612,7 +1612,10 @@ version = "0.1.0"
 name = "rustty-vaxis"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
  "libc",
+ "rustty-wuffs",
+ "rustty-zigimg",
 ]
 
 [[package]]
@@ -1692,6 +1695,15 @@ version = "0.1.0"
 [[package]]
 name = "rustty-zf"
 version = "0.1.0"
+
+[[package]]
+name = "rustty-zigimg"
+version = "0.1.0"
+dependencies = [
+ "allocator-api2",
+ "rustty-wuffs",
+ "zlib-sys",
+]
 
 [[package]]
 name = "rustty-zigstd"

@@ -47,6 +47,16 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 - `ghostty_*` alias layer + signed xcframework xtask — DONE (app links & runs).
 - GTK inspector — DONE (2026-07-19 OpenGL3 inspector).
 - VD:V1 (rustty-xev never compiled on macOS) — DISCHARGED 2026-07-23.
+- **The WS12 row was STALE in two of its three clauses** (recorded 2026-07-29 so the next
+  planner does not re-derive it — the same pattern already found in WS16's and WS9's rows).
+  Its "uucode fork — decision REQUIRED" clause described a decision that had been made AND
+  SHIPPED 19 days earlier at `e0abb03`; its "verify `boo` end-to-end" clause implied `boo`
+  might be unported when it had been live since `e7e5a8c`. Only the zigimg-image-tier clause
+  was accurate. **Lesson: a ROADMAP scope cell is a snapshot, and a shipped-but-unratified
+  decision reliably rots into a contradictory ledger row** — DEFERRALS.md was simultaneously
+  presenting the uucode fork as an open human decision AND (240 lines apart) calling `boo`
+  both "STILL DEFERRED" and "✅ RESOLVED". Both are now banner-resolved in place with the
+  original analysis retained as marked history.
 - Shell-integration/themes: real content exists in `zig-out/share/rustty/` and
   the current app bundle, but is NOT reproducible — xtask still emits the
   deferral placeholder (`xtask/src/res_terminfo.rs:216-245`). WS1 makes it
@@ -84,7 +94,7 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 |----|-----------|-------|
 | **WS10 perf series (BL-4)** | `2026-07-23-ws10-perf-series.md` | SIMD scans, bulk CSI/print, pty pipelining. Guarded by the benchmark suite (goal: hold or extend the 14/14 wins). |
 | **WS11 font glyph resize** | `2026-07-23-ws11-font-glyph-resize.md` | ~~`stb_image_resize` parity for the FreeType glyph-resize path (stb-sys cc build for bit-exactness), wired on the non-macOS path, KAT vs oracle rasterization.~~ **CORRECTED [WS19 T14, 2026-07-29 — audit row O17]: the PORT ALREADY SHIPPED at `2e82776` (2026-06-30)** — `crates/rustty-font-shaper/src/stb.rs:18`, `build.rs` `cc::Build` over `vendor/stb_impl.c`, `vendor/stb_image_resize.h` byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806`. Two further corrections: (1) the gating is `cfg(not(target_arch = "wasm32"))`, **not** `not(target_os = "macos")` — the seam is LIVE ON macOS (`nm -g` shows `T _stbir_resize_uint8` in the macOS archive), so "wired on the non-macOS path" is wrong; (2) **do NOT chase bit-exactness by changing `build.rs` flags** — ghostty's own Debug and ReleaseFast builds of the identical C disagree (9/512 bytes, maxdelta 1, ReleaseFast's loop vectorizer), rustty sits on the consensus side across 5 toolchain/optimization combos on 2 OSes, and since the seam is live on macOS a flag change would *create* divergence and violate R5. **WS11's real scope is that the coverage is VACUOUS**: every test reaching the resize runs at scale 1.0 (`8x16→8x16`, `136x128→136x128`) and `render_and_resize` never enters the bitmap arm (Inconsolata is an outline font) — swapping stb for nearest-neighbour leaves all 9 tests green. |
-| **WS12 vaxis completion** | `2026-07-23-ws12-vaxis-completion.md` | Resolve the uucode width-table fork (presents Option A extend rustty-unicode vs Option B vendor uucode-0.1.0 tables to the human — decision REQUIRED in-plan, not deferred); zigimg image tier (`transmit_image`/`load_image`/`Image::draw`/`cell_size`); verify `boo` end-to-end. |
+| **WS12 vaxis completion** | `2026-07-23-ws12-vaxis-completion.md` | **DELIVERED 2026-07-29.** `rustty-vaxis` now has **zero non-`#[cfg(windows)]` `unimplemented!()`**. (1) uucode width-table fork **RATIFIED as Option B, as shipped** (`e0abb03`) — recorded in `VAXIS_C1B_DESIGN.md`, and its gate PROVEN non-vacuous (perturb one generated table entry ⇒ `spot_check` + `gwidth_missing_wide_anchor` RED), plus UCD SHA-256 provenance pins and a ≥1000-case floor on the UAX #29 corpus. (2) Image tier LIVE (`transmit_image`/`load_image`/`Image::draw`/`cell_size`) via the new **`crates/rustty-zigimg`** — Option Z-C, re-homing the six zigimg operations libvaxis instantiates onto ghostty's own vendored codecs (~840 src LOC, vs 18,316 for a faithful zigimg port). One bounded PORT-NOTE divergence: `load_image` takes PNG+JPEG, not 15 formats. (3) `boo` verified end-to-end by a committed pty KAT with a DSR responder and a no-DSR negative control. |
 | **WS13 i18n & docs** | `2026-07-23-ws13-i18n-docs.md` | Vendor the `.po` corpus + msgfmt step (real `share/locale`); mdgen man-page pipeline (markdown→roff); `rustty_translate` live. |
 | **WS14 wasm/WebGL renderer** | `2026-07-23-ws14-wasm-webgl.md` | Port the WebGL backend + wasm entry (`main_wasm`, `Atlas.Wasm` C-ABI/JS surface); build `wasm32` target green; **validate live in Chrome via the browser automation tools** (load harness page, screenshot the rendered canvas, assert glyph output). |
 
@@ -180,8 +190,12 @@ loud RED rather than an infinite CI wait.
   `stb_image_resize` port itself SHIPPED at `2e82776`; what WS11 owns is that its test
   coverage is **vacuous** (all reaching tests at scale 1.0; the bitmap arm is never
   entered). Do NOT change the stb `build.rs` flags — see the WS11 scope cell.
-- [x] WS12 vaxis completion — authored (`c7c93f7`); **NOT executed**. Open. Consumes
-  WS19 T1's `.port/tools/restore_zig_deps.sh`.
+- [x] WS12 vaxis completion — authored (`c7c93f7`); **EXECUTED 2026-07-29** (all 13
+  tasks, no deferrals taken). Discharges the DEFERRALS.md "rustty-vaxis Chunk 1b"
+  uucode row and the whole "Chunks 4a/4b" image-tier row (both now carry ✅ RESOLVED
+  banners), and deletes the `boo` double-entry. Does NOT touch the `#[cfg(windows)]`
+  family (Chunk 3b items 1/3), which stays correctly open. Also HARDENED WS19 T1's
+  `.port/tools/restore_zig_deps.sh`, whose only restore path was dead under Zig 0.16.0.
 - [x] WS13 i18n & docs — authored (`39355ff`); **NOT executed**. Open. Owns audit rows
   **N8** (3 `.blp` msgids + the unwrapped code-side call sites) and **O13b**
   (`main_build_data` + the `+gen-*` file-emit wiring).
@@ -221,7 +235,7 @@ loud RED rather than an infinite CI wait.
 | WS1–WS9 | authored | **merged** | DONE |
 | WS10 perf (BL-4) | **NOT authored** | no | open; inherits O3 (pin-sequenced) |
 | WS11 font glyph resize | authored 2026-07-29 (WS11 lane, 10 tasks) | **no** | open; inherits O17 **as reclassified** — the port shipped at `2e82776`, the VACUOUS COVERAGE is the work |
-| WS12 vaxis completion | authored (`c7c93f7`) | **no** | open; consumes WS19 T1's restore script |
+| WS12 vaxis completion | authored (`c7c93f7`) | **executed 2026-07-29 (13/13 tasks); branch `ws12-vaxis-completion`, not yet merged** | image tier LIVE via new `rustty-zigimg`; uucode Option B ratified + gate proven non-vacuous; `boo` pty KAT committed |
 | WS13 i18n & docs | authored (`39355ff`) | **no** | open; owns N8, O13b |
 | WS14 wasm/WebGL | **NOT authored** | no | open; inherits O13a/O14/O15/O16 |
 | WS15 GTK GlobalShortcuts | authored | **merged `e8a9f59`** | DONE |

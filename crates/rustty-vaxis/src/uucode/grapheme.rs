@@ -513,6 +513,11 @@ mod tests {
         ));
 
         let mut success = true;
+        // WS12 T4 vacuity guard: a corpus-driven test that silently iterates ZERO lines
+        // is the classic vacuous check — it would stay green if the `include_str!` path
+        // ever resolved to an empty or comment-only file. Count the cases actually
+        // driven and assert a non-zero floor below.
+        let mut cases = 0usize;
         for (i, line) in content.split('\n').enumerate() {
             let line_num = i + 1;
             let trimmed = test_trim(line);
@@ -524,6 +529,7 @@ mod tests {
             let start = parts.next().unwrap();
             assert_eq!(start, "÷");
 
+            cases += 1;
             let mut state = BreakState::Default;
             let mut cp1 = test_parse_cp(parts.next().unwrap());
             let mut expected_str = parts.next().unwrap();
@@ -556,6 +562,16 @@ mod tests {
 
             assert_eq!(next_expected_str, "÷");
         }
+
+        // UAX #29 `GraphemeBreakTest.txt` for Unicode 16.0.0 carries 1093 non-comment
+        // cases. Pin a floor (not the exact number, so a legitimate Unicode bump does not
+        // spuriously fail) that is high enough that a truncated or wrong corpus is caught.
+        assert!(
+            cases >= 1000,
+            "UAX #29 conformance corpus drove only {cases} cases — expected >= 1000. \
+             The GraphemeBreakTest.txt embed is empty, truncated or misparsed, which \
+             would make this test vacuously green."
+        );
 
         assert!(success);
     }

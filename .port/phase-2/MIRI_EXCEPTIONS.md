@@ -863,6 +863,39 @@ The W4-2 blur sub-KAT does NOT spawn a surface, so it runs GREEN headless and pr
 the realized blur leaf (real `windowNumber` msg_send + the private CGS SPI, incl. the
 `#[link] CoreGraphics` symbol resolution) end-to-end.
 
+## rustty-vaxis / rustty-zigimg — WS12 image tier + UCD provenance
+
+Three narrow additions from WS12, all of the already-established "Miri cannot do this
+particular thing" class. **Everything else added by WS12 stays Miri-primary**, including
+every `Image::draw` / `Image::cell_size` KAT (pure `Window` geometry, zero FFI, zero
+file I/O) and the whole pre-existing 97-test `rustty-vaxis` lib suite.
+
+- **`crates/rustty-vaxis/tests/ucd_provenance.rs::ucd_corpus_matches_recorded_digests`
+  — Miri EXCEPTED (file I/O).** It `std::fs::read`s the six vendored UCD 16.0.0 inputs to
+  check them against the SHA-256 digests in `ucd/PROVENANCE.md`; Miri's isolation forbids
+  file I/O. `#[cfg_attr(miri, ignore)]`. Note the *deliberate contrast* with the UAX #29
+  conformance corpus in `src/uucode/grapheme.rs`, which is `include_str!`-embedded at
+  compile time precisely so it DOES run under Miri isolation — the provenance test is the
+  one thing that inherently needs the bytes on disk. The sibling
+  `sha256_matches_nist_vectors` test is pure computation and stays Miri-live.
+
+- **`crates/rustty-zigimg/tests/codec.rs` — Miri EXCEPTED (wuffs + zlib FFI).**
+  `rustty-zigimg` re-homes the six-operation zigimg surface onto ghostty's own vendored
+  codecs (WS12 Decision 2, Option Z-C): decode calls into `rustty-wuffs`
+  (`wuffs_png__decoder` / `wuffs_jpeg__decoder`) and PNG encode calls into `zlib-sys`
+  (`deflateInit2_`/`deflate`/`deflateEnd`). Miri fails only when a foreign function is
+  actually *called*, so each decode/encode test carries `#[cfg_attr(miri, ignore)]`.
+  **Precedent:** `rustty-vt` links `zlib-sys` and still runs a Miri lane
+  (`.port/phase-2/mirihar-pagelist-compress`). The crate's non-FFI logic — the magic-byte
+  format sniff, the rgba32↔rgb24 converter, the PNG chunk framing and the CRC-32 table —
+  is covered by tests that stay Miri-live, so the excepted set is exactly "the tests that
+  cross into C", not "the tests that cover the crate".
+
+- **`crates/rustty-vaxis/tests/image_tier.rs` PNG arms — Miri EXCEPTED (transitive FFI).**
+  The `transmit_image(..., Png)` and `load_image` KATs reach the encoder/decoder above.
+  The RGB/RGBA transmit arms and the `Image::draw`/`cell_size` geometry KATs do not touch
+  C and stay Miri-live, as does the `NoGraphicsCapability` negative control.
+
 ## rustty-vaxis Chunk 3b — the `tty.rs` termios/ioctl/sigaction FFI
 
 Chunk 3b (`crates/rustty-vaxis/src/{queue,tty,loop_}.rs`) adds the IMPURE half of the
