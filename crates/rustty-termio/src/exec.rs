@@ -3819,11 +3819,14 @@ impl ReadThread {
         // so instead we use this code to name the thread instead.
         // if (builtin.os.tag.isDarwin()) {
         //     internal_os.macos.pthread_setname_np(&"io-reader".*);
+        //     setQosClass();
         // }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         unsafe {
             rustty_os::macos::pthread_setname_np(c"io-reader".as_ptr());
         }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Self::setQosClass();
 
         // Setup our crash metadata
         // crash.sentry.thread_state = .{
@@ -4009,6 +4012,41 @@ impl ReadThread {
                 // log.info("pty fd closed, read thread exiting", .{});
                 return;
             }
+        }
+    }
+
+    /// Sets the QoS class of the calling thread for the read pipeline
+    /// (macOS only). Both pipeline threads feed content the user is
+    /// actively watching, and at default QoS the scheduler may place
+    /// them on efficiency cores with wakeup latencies that are large
+    /// compared to the ~10us cadence of the pty producer/consumer
+    /// dance. Measured on an M4 Max, this results in a 15% throughput
+    /// difference (on the change, not 15% total).
+    //
+    // fn setQosClass() void {
+    //     internal_os.macos.setQosClass(.user_initiated) catch |err| {
+    //         log.warn("error setting QoS class err={}", .{err});
+    //     };
+    // }
+    //
+    // PORT NOTE (2f0e6659d, WS10 T8): this helper is the ONE hunk of the pty
+    // pipeline commit that is separable from the pipeline itself — it applies
+    // verbatim to the single read thread rustty has today, which is why
+    // `E-os-termio-platform.md` row E4 calls it out on its own. The reference
+    // calls it from BOTH `threadMainPosix` and the new `gatherMainPosix`; only
+    // the former exists here, so only the former call site lands. When the
+    // pipeline lands, `gatherMainPosix` calls this same fn.
+    //
+    // The reference's `catch |err| log.warn(...)` is LOAD-BEARING, not
+    // decoration: `setQosClass` returns `SetQosClassError::ThreadIncompatible`
+    // on EPERM, and swallowing it is what keeps a QoS failure from killing the
+    // read thread. The port swallows it identically (the `log.warn` itself is
+    // the tree-wide log-as-comment convention).
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[allow(non_snake_case)]
+    fn setQosClass() {
+        if rustty_os::macos::setQosClass(rustty_os::macos::QosClass::user_initiated).is_err() {
+            // log.warn("error setting QoS class err={}", .{err});
         }
     }
 
@@ -5667,6 +5705,116 @@ mod tests {
         assert!(
             found,
             "pty bytes did not land in the terminal Screen within the deadline"
+        );
+    }
+
+    // KAT (rustty-only margin; NOT a mapped Zig `test{}`) for 2f0e6659d's
+    // separable `setQosClass` hunk — WS10 T8. `E-os-termio-platform.md` row E4
+    // measures it at 15% throughput on an M4 Max, and the reference ships it
+    // with no test at all.
+    //
+    // WHY THIS IS NOT A UNIT TEST OF `setQosClass`. Calling the helper on any
+    // old thread and reading the class back would pass whether or not
+    // `threadMainPosix` ever calls it — the vacuity trap. So this drives the
+    // REAL read thread over a REAL pty, exactly as
+    // `readthread_pty_bytes_land_in_screen` does, and interrogates THAT
+    // thread's QoS class from outside via its `pthread_t`
+    // (`JoinHandleExt::as_pthread_t`). `pthread_get_qos_class_np` is the
+    // thread-addressed reader (`pthread_set_qos_class_self_np`, which the
+    // helper wraps, is self-only), so no assertion has to be smuggled into the
+    // thread body.
+    //
+    // The default for a thread spawned from a default-QoS thread is
+    // QOS_CLASS_DEFAULT (0x15); the assertion is QOS_CLASS_USER_INITIATED
+    // (0x19). Those differ, so the test cannot pass by accident on an
+    // unmodified thread — verified by deleting the `Self::setQosClass()` call,
+    // which turns it RED with `qos=0x15`.
+    //
+    // Real openpty + a spawned thread -> Miri-excluded, same as the KAT above,
+    // and it takes FORK_KAT_SERIAL for the same reason (it holds pty fds open
+    // while other in-process KATs may `fork()`).
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_sets_user_initiated_qos() {
+        use std::os::unix::thread::JoinHandleExt;
+        use std::time::{Duration, Instant};
+
+        // int pthread_get_qos_class_np(pthread_t, qos_class_t *, int *);
+        //
+        // Hand-rolled per the `mem.rs`/`page.rs` convention: `libc` 0.2 exposes
+        // `pthread_set_qos_class_self_np` but NOT the thread-addressed getter,
+        // and the constraint is "no NEW `libc` surface elsewhere", not "no
+        // extern blocks". `qos_class_t` is an unsigned enum.
+        unsafe extern "C" {
+            fn pthread_get_qos_class_np(
+                thread: libc::pthread_t,
+                qos_class: *mut libc::c_uint,
+                relative_priority: *mut libc::c_int,
+            ) -> libc::c_int;
+        }
+        const QOS_CLASS_USER_INITIATED: libc::c_uint = 0x19;
+        const QOS_CLASS_DEFAULT: libc::c_uint = 0x15;
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let t = TestTermio::build();
+        let io = t.io;
+
+        let pty = Pty::open(ptypkg::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        })
+        .expect("Pty::open");
+        let master = pty.master;
+        let slave = pty.slave;
+
+        let mut pipefds = [0 as std::os::fd::RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipefds.as_mut_ptr()) }, 0, "pipe()");
+        let quit_read = pipefds[0];
+        let quit_write = pipefds[1];
+
+        let read_args = ReadThreadArgs::<TestMailbox>(master, io, quit_read);
+        let handle = std::thread::spawn(move || {
+            let args = read_args;
+            ReadThread::threadMainPosix::<TestMailbox>(args.0, args.1, args.2);
+        });
+        let tid = handle.as_pthread_t();
+
+        // The helper runs at the very top of the thread body, but "the very top"
+        // is still after the spawn returns, so poll rather than race.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut qos: libc::c_uint = 0;
+        let mut rel: libc::c_int = 0;
+        let mut observed = false;
+        loop {
+            let rc = unsafe { pthread_get_qos_class_np(tid, &mut qos, &mut rel) };
+            assert_eq!(rc, 0, "pthread_get_qos_class_np failed");
+            if qos == QOS_CLASS_USER_INITIATED {
+                observed = true;
+                break;
+            }
+            if Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        // Teardown BEFORE asserting, so a failure does not leak the thread/fds.
+        let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
+        handle.join().expect("read thread join");
+        unsafe {
+            libc::close(quit_write);
+            libc::close(master);
+            libc::close(slave);
+        }
+        t.teardown();
+
+        assert!(
+            observed,
+            "the io-reader thread must run at QOS_CLASS_USER_INITIATED (0x19); \
+             observed 0x{qos:x} (0x{QOS_CLASS_DEFAULT:x} is the un-set default)"
         );
     }
 }
