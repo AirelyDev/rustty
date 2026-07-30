@@ -12541,3 +12541,87 @@ fn pagelist_pin_rejects_columns_beyond_mixed_width_page_bounds() {
 
     s.deinit();
 }
+
+// -- P3-W1 T2: the PageIterator count limit (oracle 9b466e9c5) ----------------
+
+// ref: test "PageList PageIterator reverse count includes row zero"
+#[test]
+fn pagelist_PageIterator_reverse_count_includes_row_zero() {
+    let mut s = PageList::init(2, 2, None).unwrap();
+
+    let mut it = super::iter::PageIterator {
+        row: Some(s.get_top_left(point::Tag::Screen)),
+        limit: super::iter::Limit::Count(1),
+        direction: super::iter::Direction::LeftUp,
+    };
+    let chunk = it.next().unwrap();
+    assert_eq!(0 as size::CellCountInt, chunk.start);
+    assert_eq!(1 as size::CellCountInt, chunk.end);
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList PageIterator count crosses page boundaries"
+#[test]
+fn pagelist_PageIterator_count_crosses_page_boundaries() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    let first = s.pages.first;
+    unsafe { (*super::Node::page(first)).pause_integrity_checks(true) };
+    while unsafe { super::Node::rows(first) } < unsafe { super::Node::capacity(first) }.rows {
+        let _ = s.grow().unwrap();
+    }
+    unsafe { (*super::Node::page(first)).pause_integrity_checks(false) };
+    let second = s.grow().unwrap().unwrap();
+
+    let mut down = super::iter::PageIterator {
+        row: Some(Pin {
+            node: first,
+            y: unsafe { super::Node::rows(first) } - 1,
+            x: 0,
+            garbage: false,
+        }),
+        limit: super::iter::Limit::Count(2),
+        direction: super::iter::Direction::RightDown,
+    };
+    {
+        let chunk = down.next().unwrap();
+        assert!(core::ptr::eq(first, chunk.node));
+        assert_eq!(unsafe { super::Node::rows(first) } - 1, chunk.start);
+        assert_eq!(unsafe { super::Node::rows(first) }, chunk.end);
+    }
+    {
+        let chunk = down.next().unwrap();
+        assert!(core::ptr::eq(second, chunk.node));
+        assert_eq!(0 as size::CellCountInt, chunk.start);
+        assert_eq!(1 as size::CellCountInt, chunk.end);
+    }
+    assert!(down.next().is_none());
+
+    let mut up = super::iter::PageIterator {
+        row: Some(Pin {
+            node: second,
+            y: 0,
+            x: 0,
+            garbage: false,
+        }),
+        limit: super::iter::Limit::Count(2),
+        direction: super::iter::Direction::LeftUp,
+    };
+    {
+        let chunk = up.next().unwrap();
+        assert!(core::ptr::eq(second, chunk.node));
+        assert_eq!(0 as size::CellCountInt, chunk.start);
+        assert_eq!(1 as size::CellCountInt, chunk.end);
+    }
+    {
+        let chunk = up.next().unwrap();
+        assert!(core::ptr::eq(first, chunk.node));
+        assert_eq!(unsafe { super::Node::rows(first) } - 1, chunk.start);
+        assert_eq!(unsafe { super::Node::rows(first) }, chunk.end);
+    }
+    assert!(up.next().is_none());
+
+    s.deinit();
+}
