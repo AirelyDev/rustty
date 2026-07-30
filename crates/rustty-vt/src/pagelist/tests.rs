@@ -27,7 +27,7 @@ use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError
 use super::resize::Resize;
 use super::scroll::Scroll;
 use super::{std_capacity, std_size, NodeData, Owned, PageList, Pin, Storage, Viewport};
-use crate::page::{Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
+use crate::page::{Capacity, Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
 use rustty_render_types::term_size as size;
@@ -12335,4 +12335,209 @@ fn pagelist_pagepool_no_leak_reset_then_deinit() {
         s.deinit();
     }
     scope.assert_returned_to_baseline();
+}
+
+// -- P3-W1 T1: width-aware pin traversal (oracle d6e24d985, tests 0ff4e41b2) --
+
+// ref: fn mixedWidthPinListForTest
+//
+// PORT NOTE: the reference fixture builds one arm as
+// `Node{ .data = .{ .resident = undefined } }`; we do NOT port that as
+// `MaybeUninit`. Every page here is a real page built with `create_page`,
+// exactly as the mixed-width arm of the reference fixture does.
+fn mixed_width_pin_list_for_test() -> PageList {
+    let mut result = PageList::init(2, 1, None).unwrap();
+
+    // This deliberately constructs a layout that normal PageList operations
+    // do not expose yet. Keep integrity checks paused through deinit so the
+    // fixture can exercise mixed-width traversal in isolation.
+    result.pause_integrity_checks(true);
+
+    for cols in [4u16, 3u16] {
+        let node = result
+            .create_page(super::CreatePage::new(Capacity {
+                cols,
+                rows: 1,
+                ..Capacity::default()
+            }))
+            .unwrap();
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+        unsafe { result.pages.append(node) };
+        result.total_rows += 1;
+    }
+
+    // Desired geometry is wider than the first and last stored pages.
+    result.cols = 4;
+    result
+}
+
+// ref: test "PageList Pin rightWrap exact row multiple"
+#[test]
+fn pagelist_pin_rightWrap_exact_row_multiple() {
+    let mut s = PageList::init(10, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 5, y: 0 }))
+        .unwrap();
+    let wrapped = start.right_wrap(14).unwrap();
+    let _ = wrapped.row_and_cell();
+
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 9, y: 1 }),
+        s.point_from_pin(point::Tag::Active, wrapped).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin leftWrap exact row multiple"
+#[test]
+fn pagelist_pin_leftWrap_exact_row_multiple() {
+    let mut s = PageList::init(10, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 5, y: 2 }))
+        .unwrap();
+    let wrapped = start.left_wrap(15).unwrap();
+    let _ = wrapped.row_and_cell();
+
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+        s.point_from_pin(point::Tag::Active, wrapped).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin rightWrap maximum distance"
+#[test]
+fn pagelist_pin_rightWrap_maximum_distance() {
+    let mut s = PageList::init(1, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+    assert_eq!(None, start.right_wrap(usize::MAX));
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin leftWrap maximum distance"
+#[test]
+fn pagelist_pin_leftWrap_maximum_distance() {
+    let mut s = PageList::init(1, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 0, y: 2 }))
+        .unwrap();
+    assert_eq!(None, start.left_wrap(usize::MAX));
+
+    s.deinit();
+}
+
+/// `P3-W1` row 1b: a ONE-COLUMN pagelist is constructible in production
+/// (`GridSize::update` floors the column count at 1, and `grid_size.columns`
+/// flows straight into `Terminal::resize`). At `cols == 1` the four
+/// `selection_gesture.rs` callers' literal `n = 1` DOES reach the wrap
+/// remainder path, so rows 1/2 of `REACHABILITY.md` are LIVE, not LATENT.
+/// This is the production-shaped reproducer: `right_wrap(1)` from the single
+/// column of row 0 must land on the single column of row 1.
+#[test]
+fn pagelist_pin_wrap_one_column_selection_gesture_shape() {
+    let mut s = PageList::init(1, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+    let right = start.right_wrap(1).expect("row 1 exists");
+    let _ = right.row_and_cell();
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+        s.point_from_pin(point::Tag::Active, right).unwrap()
+    );
+
+    let back = right.left_wrap(1).expect("row 0 exists");
+    let _ = back.row_and_cell();
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+        s.point_from_pin(point::Tag::Active, back).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin row movement clamps across mixed-width pages"
+#[test]
+fn pagelist_pin_row_movement_clamps_across_mixed_width_pages() {
+    let mut s = mixed_width_pin_list_for_test();
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let third = unsafe { (*second).next };
+
+    let mk = |node: *mut super::Node, x: u16| Pin {
+        node,
+        y: 0,
+        x,
+        garbage: false,
+    };
+
+    assert!(mk(third, 2).eql(mk(second, 3).down(1).unwrap()));
+    assert!(mk(first, 1).eql(mk(second, 3).up(1).unwrap()));
+
+    match mk(second, 3).down_overflow(10) {
+        super::pin::PinOverflow::Offset(_) => panic!("expected overflow"),
+        super::pin::PinOverflow::Overflow { end, .. } => assert!(mk(third, 2).eql(end)),
+    }
+    match mk(second, 3).up_overflow(10) {
+        super::pin::PinOverflow::Offset(_) => panic!("expected overflow"),
+        super::pin::PinOverflow::Overflow { end, .. } => assert!(mk(first, 1).eql(end)),
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin wrapping crosses mixed-width pages"
+#[test]
+fn pagelist_pin_wrapping_crosses_mixed_width_pages() {
+    let mut s = mixed_width_pin_list_for_test();
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let third = unsafe { (*second).next };
+
+    let mk = |node: *mut super::Node, x: u16| Pin {
+        node,
+        y: 0,
+        x,
+        garbage: false,
+    };
+
+    assert!(mk(third, 2).eql(mk(first, 1).right_wrap(7).unwrap()));
+    assert!(mk(second, 0).eql(mk(third, 2).left_wrap(6).unwrap()));
+    assert!(mk(first, 0).left_wrap(1).is_none());
+    assert!(mk(third, 2).right_wrap(1).is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin rejects columns beyond mixed-width page bounds"
+#[test]
+fn pagelist_pin_rejects_columns_beyond_mixed_width_page_bounds() {
+    let mut s = mixed_width_pin_list_for_test();
+
+    assert!(s
+        .pin(point::Point::Screen(point::Coordinate { x: 1, y: 0 }))
+        .is_some());
+    assert!(s
+        .pin(point::Point::Screen(point::Coordinate { x: 2, y: 0 }))
+        .is_none());
+    assert!(s
+        .pin(point::Point::Screen(point::Coordinate { x: 3, y: 1 }))
+        .is_some());
+    assert!(s
+        .pin(point::Point::Screen(point::Coordinate { x: 3, y: 2 }))
+        .is_none());
+
+    s.deinit();
 }
