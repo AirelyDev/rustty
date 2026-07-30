@@ -701,10 +701,11 @@ impl IncompletePlacement {
 // `u24` fields which we model as `u32`).
 fn color_to_id(c: crate::style::Color) -> u32 {
     // u24
-    match c {
-        crate::style::Color::None => 0,
-        crate::style::Color::Palette(v) => v as u32,
-        crate::style::Color::Rgb(rgb) => {
+    match c.tag() {
+        crate::style::ColorTag::None => 0,
+        crate::style::ColorTag::Palette => c.palette() as u32,
+        crate::style::ColorTag::Rgb => {
+            let rgb = c.rgb();
             let r: u32 = rgb.r as u32;
             let g: u32 = rgb.g as u32;
             let b: u32 = rgb.b as u32;

@@ -5633,13 +5633,42 @@ From **WS7 Phase B review (I2 harness run)**:
    assertion as `leakcheck`, and the gate is required to exit non-zero and report the
    leaked bytes — measured 27402 bytes, gate exit 101, self-test RC=0.
 
-**Still open after Phase E (new, narrower, for WS8):** make `style::Color` padding-free
+~~**Still open after Phase E (new, narrower, for WS8):** make `style::Color` padding-free
 (byte-complete `#[repr(C)]` value with accessors instead of a Rust enum whose `None`/
 `Palette` variants do not cover their whole slot) so that storing a non-default `Style`
 into a page's style set no longer leaves uninitialized bytes in the mapping that
 `CompressedPage::init` compresses. 163 sites across 17 files; reproduction is the
 committed `mapinit_styled` harness scenario (seconds); 4-criterion acceptance basis is in
-`MIRI_EXCEPTIONS.md`'s WS7 Phase E section.
+`MIRI_EXCEPTIONS.md`'s WS7 Phase E section.~~
+
+**RESOLVED — WS19 T5 (2026-07-29).** `style::Color` is now a byte-complete
+`#[repr(C)] { tag: u8, data: [u8; 3] }` with `Color::None` / `Color::Palette(idx)` /
+`Color::Rgb(rgb)` kept as an associated const + two associated constructors (so the
+construction sites are untouched) and reads routed through `tag()` + tag-checked
+`palette()` / `rgb()` accessors. `const _: () = assert!(size_of::<Color>() == 4 &&
+align_of::<Color>() == 1)` pins the no-padding property. Fidelity is *improved*: the four
+bytes are exactly the reference's own `Color.Tag` + 24-bit `PackedStyle.Data` per-tag
+content (`none => 0`, `palette => idx` with `_padding: u16 = 0`, `rgb => r|g<<8|b<<16`),
+so `data_from_color` is now a plain little-endian widening and `color_key` a plain
+4-byte load — see the PORT NOTE at the type. Re-measured blast radius: **160**
+`Color::{None,Palette,Rgb}` occurrences across **18** files (the 163/17 above was stale),
+of which only the ~22 *pattern-match* sites needed edits — in `rustty-vt`
+(`style.rs`, `terminal.rs`, `screen.rs`, `kitty/graphics_unicode.rs`), `rustty-vt-c`
+(`style.rs`, `render.rs`) and `rustty-inspector` (`widgets/style.rs`). All the
+`rustty-cli` / `rustty-vaxis` / `rustty-font-shaper` hits were either a *different*
+`Color` type (vaxis's own `cell::Color`) or expression-only, so they needed no change.
+
+**The same run found and fixed one more instance of the class, not previously known:**
+`RefCountedSet::insert` performed *whole-`Item` typed writes* (`*item = Item::default()`
+when reaping a dead item, and `*items.add(chosen_id) = new_item` when placing the new
+one). `Item<Style, u16, u16>` is 28 bytes with `meta` at 0..6 and `value` at 6..27, i.e.
+it has **1 trailing padding byte** (`meta` is align-2, `Style` is align-1), and a typed
+whole-struct write de-initializes that byte even though `init` had zeroed it. Both writes
+are now FIELD-WISE (`value` then `meta`), the same accommodation `init` already documents.
+Measured before/after on the `mapinit_styled` probe: uninit at `[0x17c]` → after the
+`Color` reshape, uninit at `[0x187]` (= that padding byte) → after the field-wise writes,
+`styled mapping of 16384 bytes fully initialized`. **This closes the whole
+uninit-in-page-mapping class**; `mapinit` and `mapinit_styled` are both GREEN.
 
 
 **[WS19 T2, 2026-07-29 — audit §E.1] Items 3 and 4 below were physically MIS-FILED:**
@@ -6426,7 +6455,7 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 
 | # | Ledger row | Verified state (evidence) | Disposition | Cost |
 |---|---|---|---|---|
-| O1 | `D:5080` make `style::Color` padding-free, "listed for WS8" | **OPEN, real.** `crates/rustty-vt/src/style.rs:143` is a plain Rust `enum Color { None, Palette(u8), Rgb(RGB) }` — no `#[repr]`, payload-sized, so a typed write leaves the inactive payload uninit. Site count re-measured: **160** `Color::{None,Palette,Rgb}` occurrences across **18** files (ledger said 163/17 — mildly stale). Reproduction is the committed `mapinit_styled` harness scenario (seconds). | **fix in WS19 T5** — no other open WS touches vt style | **L** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T5** (`style::Color` padding-free). The `mapinit_styled` uninit read is still reproducible; this is the row `MIRI_EXCEPTIONS.md`'s WS7-Phase-B OPEN FINDING points at. |
+| O1 | `D:5080` make `style::Color` padding-free, "listed for WS8" | **OPEN, real.** `crates/rustty-vt/src/style.rs:143` is a plain Rust `enum Color { None, Palette(u8), Rgb(RGB) }` — no `#[repr]`, payload-sized, so a typed write leaves the inactive payload uninit. Site count re-measured: **160** `Color::{None,Palette,Rgb}` occurrences across **18** files (ledger said 163/17 — mildly stale). Reproduction is the committed `mapinit_styled` harness scenario (seconds). | **fix in WS19 T5** — no other open WS touches vt style | **L** | **WS19 EXECUTION STATUS:** **RESOLVED — WS19 T5 (2026-07-29).** `style::Color` is a byte-complete `#[repr(C)] { tag: u8, data: [u8; 3] }` (size/align pinned by a `const _` assert); the ~160 construction sites are unchanged (associated const + associated constructors), only the ~22 pattern sites moved to `tag()` + `palette()`/`rgb()`. The same pass also fixed a NEWLY-FOUND second instance of the class: `RefCountedSet::insert`'s two whole-`Item` typed writes de-initialized `Item`'s 1 trailing padding byte, and are now field-wise. `mapinit_styled` before `[0x17c]` uninit → intermediate `[0x187]` uninit → after: "styled mapping of 16384 bytes fully initialized". vt suite unchanged at 2159/0/2. |
 | O2 | `D:5357` add a `-C debug-assertions=off` vt Miri lane, "NEW WS8 item" | **OPEN, real.** `check_leaks.sh` runs `cargo +nightly miri test -p rustty-vt --lib` with debug assertions ON; no second lane exists (`grep -rn 'debug-assertions' .port/tools/` → only `check_release_lane.sh` prose and this ledger). The 10 `cfg_attr(miri, ignore)` annotations are correct only *for the lane as it runs today*. | **fix in WS19 T6** | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T6** (the `-C debug-assertions=off` vt Miri lane). Blocked on T5 by design: T6 re-measures the `cfg_attr(miri, ignore)` inventory that T5 changes. |
 | O3 | `D:4981`/`:5011` WS7 Phase C divergence #11 — `Screen::cursor_scroll_region_up` unported; "belongs to the WS8 upstream-sweep backlog (BL-4)" | **OPEN, real, and DOUBLY mis-filed.** `grep -rn 'cursor_scroll_region_up\|cursorScrollRegionUp' crates/` → **zero hits**. But BL-4 is the **perf series**, which is **WS10**'s scope, not WS8's — so the row names a closed WS *and* the wrong backlog. The blocking commit `77190bd02` is beyond the pin. | **route to WS10** (BL-4). Because `77190bd02` is beyond-pin, the port is **cheaper AFTER Phase 3 advances the pin** — WS19 T2 rewrites the row to say exactly that instead of leaving it in a closed WS. | **S** (row) / **M** (port, in WS10) | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** Owner is now **WS10** (BL-4), pin-sequenced; `77190bd02` is beyond-pin. |
 | O4 | `D:4960` inspector `pagelist.rs` CELL-detail path still restores compressed pages; "D6 must port that end state" | **OPEN — and WS7 D6 MERGED (`b8c40f9`) without closing it.** `crates/rustty-inspector/src/widgets/pagelist.rs` still calls `Node::page(cell.node)` at **6** sites (`:1701,:1703,:1759,:1889,:2163,:2379`). The guard at `:2414` asserts `!loop_src.contains("Node::page(")` over the **page-tree loop source only** — exactly the weaker form the deferral predicted — so the file-wide property is still unproven. | **fix in WS19 T7** (port the oracle `pages.pin` + `InspectedCell` restructure; tighten the guard to whole-file) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T7.** Ported the oracle `pin` + `InspectedCell` restructure; whole-file guard in a SIBLING file; FAIL arm mutation-proven. |

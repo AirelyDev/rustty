@@ -408,12 +408,18 @@ fn mapping_is_fully_initialized() {
 /// `style::Style` is stored in the page's style set first.
 ///
 /// `RefCountedSet::add` must place the caller's `T` in the item slot with a
-/// typed write, and `style::Style` is three `style::Color` values — a Rust enum
-/// whose `None`/`Palette` variants do not cover all four bytes of their slot. So
-/// a typed store of a `Style` re-introduces uninitialized bytes into the
-/// mapping, and this scenario is EXPECTED to abort until `style::Color` becomes
-/// a padding-free type. It exists so the residual is measurable rather than
-/// asserted; see `.port/phase-2/MIRI_EXCEPTIONS.md`.
+/// typed write. Historically that re-introduced uninitialized bytes into the
+/// mapping — `style::Style` is three `style::Color` values, and `Color` was a
+/// Rust enum whose `None`/`Palette` variants did not cover all four bytes of
+/// their slot — so this scenario was EXPECTED to abort (at `[0x17c]`).
+///
+/// **FIXED in WS19 T5**, in two parts: `style::Color` is now a byte-complete
+/// `#[repr(C)] { tag: u8, data: [u8; 3] }`, and `RefCountedSet::insert` writes
+/// an item's `value`/`meta` fields individually instead of assigning the whole
+/// `Item` (which has 1 trailing padding byte a typed write de-initializes —
+/// that was the `[0x187]` abort left after the `Color` reshape). It is now the
+/// PASSING regression probe for the whole uninit-in-page-mapping class; see
+/// `.port/phase-2/MIRI_EXCEPTIONS.md`.
 fn styled_mapping_is_fully_initialized() {
     let cap = Capacity {
         cols: 4,

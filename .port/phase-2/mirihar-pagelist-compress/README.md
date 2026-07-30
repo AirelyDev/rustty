@@ -70,10 +70,12 @@ Scenarios:
   uninitialized byte AND NAMES ITS OFFSET, in **seconds** — this is the cheap
   probe to use, not the multi-ten-minute `roundtrip`/`leak`.
 * `mapinit_styled` — same, but stores one non-default `style::Style` first. This
-  is the KNOWN RESIDUAL and is EXPECTED TO ABORT: `RefCountedSet::add` must place
-  the caller's `T` with a typed write, and `style::Color` is a Rust enum whose
-  `None`/`Palette` variants do not cover all four bytes of their slot. See
-  `../MIRI_EXCEPTIONS.md`.
+  was the KNOWN RESIDUAL and used to abort at `[0x17c]`, because `RefCountedSet::add`
+  must place the caller's `T` with a typed write. **FIXED in WS19 T5** (`style::Color`
+  is now a byte-complete `#[repr(C)]` value, and `RefCountedSet::insert` writes an
+  `Item`'s fields individually rather than the whole padded struct), so it must now
+  report the mapping fully initialized. It is the regression probe for the whole
+  uninit-in-page-mapping class. See `../MIRI_EXCEPTIONS.md`.
 
 ### WS7 Phase E — `leakcheck` is now a real gate, with a negative control
 

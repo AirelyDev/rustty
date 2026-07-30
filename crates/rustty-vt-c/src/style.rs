@@ -51,21 +51,27 @@ impl Color {
         //     .palette => |idx| .{ .tag = .palette, .value = .{ .palette = idx } },
         //     .rgb => |rgb| .{ .tag = .rgb, .value = .{ .rgb = rgb.cval() } },
         // };
-        match c {
-            style_pkg::Color::None => Color {
+        // PORT NOTE (WS19 T5): `style_pkg::Color` is a byte-complete `{ tag, data }`
+        // value rather than a Rust enum (it lives inside the page mapping, which is
+        // compressed as raw bytes), so the reference's `switch (c)` is a switch on
+        // `c.tag()` with tag-checked payload accessors.
+        match c.tag() {
+            style_pkg::ColorTag::None => Color {
                 tag: ColorTag::None,
                 value: ColorValue { _padding: 0 },
             },
-            style_pkg::Color::Palette(idx) => Color {
+            style_pkg::ColorTag::Palette => Color {
                 tag: ColorTag::Palette,
-                value: ColorValue { palette: idx },
+                value: ColorValue {
+                    palette: c.palette(),
+                },
             },
             // PORT NOTE: `rgb.cval()` yields `color.RGB.C`; in rustty `RGB` already
             // IS that `#[repr(C)] { r, g, b: u8 }` C-ABI type, so `cval()` is the
             // identity on `RGB`.
-            style_pkg::Color::Rgb(rgb) => Color {
+            style_pkg::ColorTag::Rgb => Color {
                 tag: ColorTag::Rgb,
-                value: ColorValue { rgb },
+                value: ColorValue { rgb: c.rgb() },
             },
         }
     }
