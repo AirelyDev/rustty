@@ -1700,3 +1700,63 @@ fn render_row_cells_get_multi_null_returns_invalid_value() {
         )
     });
 }
+
+// test "render: begin/end update invalid value"
+#[test]
+fn render_begin_end_update_invalid_value() {
+    with_test_allocator(|alloc| {
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+        // defer free(state);
+
+        // try testing.expectEqual(Result.invalid_value, begin_update(null, null));
+        assert_eq!(Result::InvalidValue, unsafe {
+            begin_update(std::ptr::null_mut(), std::ptr::null_mut())
+        });
+        // try testing.expectEqual(Result.invalid_value, begin_update(state, null));
+        assert_eq!(Result::InvalidValue, unsafe {
+            begin_update(state, std::ptr::null_mut())
+        });
+        // try testing.expectEqual(Result.invalid_value, end_update(null));
+        assert_eq!(Result::InvalidValue, unsafe {
+            end_update(std::ptr::null_mut())
+        });
+
+        // End without a begin is safe.
+        assert_eq!(Result::Success, unsafe { end_update(state) });
+
+        unsafe { free(state) };
+    });
+}
+
+// test "render: begin/end update"
+#[test]
+fn render_begin_end_update() {
+    with_test_allocator(|alloc| {
+        with_terminal_state(alloc, 10, 3, |t_res, terminal, s_res, state| {
+            assert_eq!(Result::Success, t_res);
+            assert_eq!(Result::Success, s_res);
+
+            // Write some styled text so that the update has deferred work.
+            // const t = terminal.?.terminal; var s = t.vtStream();
+            // s.nextSlice("\x1b[1mAB"); // Bold
+            let t = unsafe { (*terminal).terminal };
+            {
+                let mut s = unsafe { (*t).vt_stream() };
+                s.next_slice(b"\x1b[1mAB");
+                s.deinit();
+            }
+
+            // Begin should record pending work, end should complete it.
+            assert_eq!(Result::Success, unsafe { begin_update(state, terminal) });
+            assert!(!unsafe { (*state).state.pending_styles.is_empty() });
+            assert_eq!(Result::Success, unsafe { end_update(state) });
+            assert_eq!(0, unsafe { (*state).state.pending_styles.len() });
+
+            // The cell styles should be complete.
+            let row_data = unsafe { &(*state).state.row_data };
+            assert!(row_data[0].cells.get(0).style.flags.bold);
+            assert!(row_data[0].cells.get(1).style.flags.bold);
+        });
+    });
+}

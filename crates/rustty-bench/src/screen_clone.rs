@@ -18,7 +18,7 @@ use crate::terminal_options;
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
 use core::hint::black_box;
-use rustty_vt::pagelist::OutOfMemory;
+use rustty_vt::pagelist::{OutOfMemory, PageList};
 use rustty_vt::point::{Coordinate, Point};
 use rustty_vt::render::RenderState;
 use rustty_vt::screen::Screen;
@@ -96,17 +96,29 @@ pub enum Mode {
     /// RenderState rather than a screen clone.
     // render,
     Render,
+
+    /// Like render, but only the portion of the render state update
+    /// that requires holding a terminal lock (begin_update). The
+    /// deferred work (end_update) is excluded since it happens outside
+    /// of any locks.
+    // @"render-locked",
+    RenderLocked,
+
+    /// RenderState update with no changes to the terminal. This is
+    /// the common case for a renderer that is redrawing frames (e.g.
+    /// cursor blink, mouse movement) without terminal changes.
+    // @"render-clean",
+    RenderClean,
+
+    /// RenderState update where a single row is dirty. This models the
+    /// common case of a shell prompt or TUI updating a small portion
+    /// of the screen between frames.
+    // @"render-partial",
+    RenderPartial,
     //
-    // DEFERRED TO T19 (decided per T12 Step 2's own criterion, recorded here
-    // rather than in a ledger because it is discharged inside this same
-    // workstream): `446f80f4e` also adds `render-locked`, `render-clean` and
-    // `render-partial`. All three call `RenderState::beginUpdate`, and
-    // `grep -n "fn begin_update" crates/rustty-vt/src/render.rs` -> 0 hits: the
-    // begin/end split IS `446f80f4e`'s Rust-side substance and lands in T19.
-    // Landing the three variants now would mean either stubbing them (a
-    // `Mode` that cannot run is worse than an absent one) or duplicating T19's
-    // API. `--loops` is landed now because it is independent of that API and is
-    // the instrument T12 exists to provide.
+    // T12 recorded the three modes above as DEFERRED TO T19, because all three
+    // call `RenderState::beginUpdate`, which did not exist yet. T19 landed the
+    // begin/end split, so they are landed here — the deferral is discharged.
 }
 
 impl Mode {
@@ -115,6 +127,9 @@ impl Mode {
             b"noop" => Some(Mode::Noop),
             b"clone" => Some(Mode::Clone),
             b"render" => Some(Mode::Render),
+            b"render-locked" => Some(Mode::RenderLocked),
+            b"render-clean" => Some(Mode::RenderClean),
+            b"render-partial" => Some(Mode::RenderPartial),
             _ => None,
         }
     }
@@ -197,6 +212,9 @@ impl ScreenClone {
                     Mode::Noop => Self::step_noop,
                     Mode::Clone => Self::step_clone,
                     Mode::Render => Self::step_render,
+                    Mode::RenderLocked => Self::step_render_locked,
+                    Mode::RenderClean => Self::step_render_clean,
+                    Mode::RenderPartial => Self::step_render_partial,
                 },
                 setup_fn: Some(Self::setup),
                 teardown_fn: Some(Self::teardown),
@@ -385,6 +403,106 @@ impl ScreenClone {
 
             // Note: we purposely do not free memory because we don't want
             // to benchmark that. We'll free when the benchmark exits.
+        }
+        Ok(())
+    }
+
+    // fn stepRenderLocked(ptr: *anyopaque) Benchmark.Error!void {
+    unsafe fn step_render_locked(ptr: *mut c_void) -> Result<(), Error> {
+        let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
+
+        // We do this once out of the loop because a significant slowdown
+        // on the first run is allocation. After that first run, even with
+        // a full rebuild, it is much faster. Let's ignore that first run
+        // slowdown.
+        let alloc = unsafe { (*self_.terminal.screens.active).alloc };
+        let mut state: RenderState = RenderState::empty();
+        if let Err(err) = state.update(alloc, &mut self_.terminal) {
+            eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+            return Err(Error::BenchmarkFailed);
+        }
+
+        // We loop because its so fast that a single benchmark run doesn't
+        // properly capture our speeds.
+        for _ in 0..(50_000u64 * u64::from(self_.opts.loops)) {
+            // Forces a full rebuild because it thinks our screen changed
+            state.screen = Key::Alternate;
+            if let Err(err) = state.begin_update(alloc, &mut self_.terminal) {
+                eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+                return Err(Error::BenchmarkFailed);
+            }
+            black_box(&state);
+
+            // Note: we purposely do not free memory because we don't want
+            // to benchmark that. We'll free when the benchmark exits.
+        }
+        Ok(())
+    }
+
+    // fn stepRenderClean(ptr: *anyopaque) Benchmark.Error!void {
+    unsafe fn step_render_clean(ptr: *mut c_void) -> Result<(), Error> {
+        let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
+
+        // Initial update so that subsequent updates are clean (nothing
+        // dirty, no rebuilds).
+        let alloc = unsafe { (*self_.terminal.screens.active).alloc };
+        let mut state: RenderState = RenderState::empty();
+        if let Err(err) = state.update(alloc, &mut self_.terminal) {
+            eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+            return Err(Error::BenchmarkFailed);
+        }
+
+        // We loop because its so fast that a single benchmark run doesn't
+        // properly capture our speeds.
+        for _ in 0..(3_000_000u64 * u64::from(self_.opts.loops)) {
+            if let Err(err) = state.update(alloc, &mut self_.terminal) {
+                eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+                return Err(Error::BenchmarkFailed);
+            }
+            black_box(&state);
+        }
+        Ok(())
+    }
+
+    // fn stepRenderPartial(ptr: *anyopaque) Benchmark.Error!void {
+    unsafe fn step_render_partial(ptr: *mut c_void) -> Result<(), Error> {
+        let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
+
+        // Initial update so that subsequent updates are incremental.
+        let alloc = unsafe { (*self_.terminal.screens.active).alloc };
+        let mut state: RenderState = RenderState::empty();
+        if let Err(err) = state.update(alloc, &mut self_.terminal) {
+            eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+            return Err(Error::BenchmarkFailed);
+        }
+
+        // Grab a pin roughly in the middle of the active area that we
+        // dirty on every iteration to simulate a small screen update.
+        // const pages = &self.terminal.screens.active.pages;
+        // const pin = pages.pin(.{ .active = .{ .x = 0, .y = rows / 2 } }).?;
+        let pages: *mut PageList =
+            unsafe { core::ptr::addr_of_mut!((*self_.terminal.screens.active).pages) };
+        let pin = unsafe {
+            (*pages)
+                .pin(Point::Active(Coordinate {
+                    x: 0,
+                    y: u32::from(self_.terminal.rows / 2),
+                }))
+                .unwrap()
+        };
+
+        // We loop because its so fast that a single benchmark run doesn't
+        // properly capture our speeds.
+        for _ in 0..(2_000_000u64 * u64::from(self_.opts.loops)) {
+            // Mark a single row dirty. `update` clears this so each
+            // iteration rebuilds exactly one row.
+            // pin.markDirty();
+            pin.mark_dirty();
+            if let Err(err) = state.update(alloc, &mut self_.terminal) {
+                eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+                return Err(Error::BenchmarkFailed);
+            }
+            black_box(&state);
         }
         Ok(())
     }
