@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """negative_control.py — prove the D10 tolerance envelope still DISCRIMINATES.
 
-WHY THIS FILE EXISTS. `run.sh` allows ghostty's `ReleaseFast` build to differ from
-the consensus by max delta 1 on <= 2 % of bytes. Any tolerance is a hole until you
-show what it does NOT admit. This script builds the consensus with the host `cc`,
+WHY THIS FILE EXISTS. `run.sh` allows ghostty's `ReleaseFast` build (and the host
+`cc`'s other optimization levels) to differ from the -O2 reference by max delta 1 on
+<= 3 % of bytes -- the bound is set from measurement: 9/512 = 1.76 % and 3/136 =
+2.21 % are the largest observed, across two compiler families and two operating
+systems. Any tolerance is a hole until you show what it does NOT admit. This script builds the consensus with the host `cc`,
 then computes two *wrong* resamplings of the same source — nearest neighbour (the
 exact substitution that left all 9 pre-WS11 `face::freetype` tests green, because
 they only ever resized at scale 1.0) and bilinear (a plausible near-miss) — and
@@ -14,7 +16,7 @@ the envelope, this exits non-zero, and D10 goes RED. It also exits non-zero if t
 consensus cannot be built at all, so it can never report a silent green.
 
 Assertions, per case and per wrong resampler:
-  1. NOT (maxdelta <= 1 and differing_fraction <= 0.02)   -- outside the envelope
+  1. NOT (maxdelta <= 1 and differing_fraction <= 0.03)   -- outside the envelope
   2. differing_fraction > 0.5                              -- margin, ~40x
   3. maxdelta >= 10                                        -- margin, ~14x
 
@@ -35,7 +37,7 @@ ROOT = DIR.parent.parent.parent
 VENDOR = ROOT / "crates" / "rustty-font-shaper" / "vendor"
 
 ENVELOPE_MAX_DELTA = 1
-ENVELOPE_MAX_FRACTION = 0.02
+ENVELOPE_MAX_FRACTION = 0.03
 MARGIN_MIN_FRACTION = 0.5
 MARGIN_MIN_DELTA = 10
 

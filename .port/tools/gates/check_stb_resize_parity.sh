@@ -14,33 +14,43 @@
 # (`face::freetype::tests::stb_resize_kat_*`) close the pipeline half.
 #
 # HOW. `.port/tools/stb-resize-oracle/run.sh`:
-#   ARM 1  our vendored header via host `cc` at -O0/-O1/-O2/-O3/-Os; all five must
-#          agree byte-for-byte => the "consensus".
+#   ARM 1  our vendored header via host `cc` at -O0/-O1/-O2/-O3/-Os. -O2 is the
+#          reference; the other levels must be within the codegen envelope below. When
+#          a `--expect` fixture is given it must be reproduced EXACTLY by all five.
 #   ARM 2  ghostty's own recipe (`src/build/SharedDeps.zig`: -I src/stb + stb.c,
 #          NO extra flags on non-MSVC), read with `git show` — NEVER a checkout,
 #          several lanes depend on that tree staying pinned — built at all four Zig
-#          optimize modes and diffed against the consensus.
+#          optimize modes and diffed against the reference. Debug/ReleaseSafe/
+#          ReleaseSmall must be EXACT; ReleaseFast gets the envelope.
 # then `.port/tools/stb-resize-oracle/negative_control.py`, which proves the
 # tolerance envelope still REJECTS a wrong resampler.
 #
-# THE ENVELOPE, AND WHY IT IS NOT A FUDGE FACTOR. Debug/ReleaseSafe/ReleaseSmall
-# must be EXACT. ReleaseFast is allowed max delta 1 on <= 2 % of bytes because
-# ghostty is not self-consistent: its own Debug and ReleaseFast builds of the
-# identical header disagree by that much (measured 9/512 bytes, max delta 1, on the
-# 16x32 case). Cause identified, not guessed: ReleaseFast's loop vectorizer.
-# `zig cc -O2 -fno-vectorize` restores the consensus EXACTLY; `zig cc -O2`/`-O3`
-# are byte-identical to the ReleaseFast recipe; `-fno-slp-vectorize` alone and
-# `-ffp-contract=off` do NOT restore it. The same +/-1 also appears between aarch64
-# and x86_64 builds of the same compiler at the same -O, so it is a property of the
-# resampler's float summation order, not a port defect. See the permanent-divergence
-# entry in `.port/phase-2/DEFERRALS.md`.
+# THE ENVELOPE, AND WHY IT IS NOT A FUDGE FACTOR. It is `max delta 1 on <= 3 % of
+# bytes`, and both numbers come from measurement, not from taste.
 #
-# The envelope is 14x narrower in max delta than a wrong resampler:
+# The delta bound of 1 is the whole observed spread of the +/-1 codegen axis. The
+# cause is identified, not guessed: whether the compiler vectorizes the resampler's
+# float summation loop. `zig cc -O2 -fno-vectorize` restores the reference EXACTLY;
+# `zig cc -O2`/`-O3` are byte-identical to ghostty's ReleaseFast; `-fno-slp-vectorize`
+# alone and `-ffp-contract=off` do NOT restore it. The same +/-1 appears (a) between
+# ghostty's own Debug and ReleaseFast builds of the identical header — so "bit-exact
+# with the oracle" has no unique referent; (b) between aarch64 and x86_64 builds of
+# the same compiler at the same -O; and (c) between Fedora gcc 16 -O0/-O1 and its own
+# -O2/-O3/-Os. It is a property of the resampler's float summation order, not a port
+# defect. See the permanent-divergence entry in `.port/phase-2/DEFERRALS.md`.
+#
+# The 3 % fraction bound is the smallest round number above the largest observed rate.
+# Measured: 9/512 = 1.76 % (ghostty ReleaseFast, and Fedora gcc -O0 vs -O2, 16x32) and
+# 3/136 = 2.21 % (Fedora gcc -O0 vs -O2, 8x17 — a small buffer, so one extra differing
+# byte moves the rate a lot). A hard 2.00 % bound would have made this gate
+# permanently and falsely RED on any Linux box whose `cc` is gcc, i.e. CI.
+#
+# The envelope stays ~18-20x away from a wrong resampler in BOTH dimensions:
 #   stb vs nearest  501/512 (98 %) maxdelta 89  |  124/136 (91 %) maxdelta 192
 #   stb vs bilinear 374/512 (73 %) maxdelta 28  |   75/136 (55 %) maxdelta 14
-# `negative_control.py` asserts that machine-checkably (and its own `--self-test`
-# proves its RED arm is reachable), so this gate cannot degrade into "any resampler
-# passes" the way the pre-WS11 tests had.
+# `negative_control.py` asserts that machine-checkably against the SAME bound this
+# gate enforces (and its own `--self-test` proves its RED arm is reachable), so the
+# gate cannot degrade into "any resampler passes" the way the pre-WS11 tests had.
 #
 # WHY NO FLAGS ARE PINNED (locked decision, WS11 Task 3): the only construction that
 # would match ReleaseFast is compiling the C with `zig cc -O3`, i.e. making the Zig
@@ -112,8 +122,8 @@ if [[ "$rc_nc" != "0" ]]; then
 fi
 
 case "$rc_run" in
-  0) echo "D10: GREEN — consensus exact across 5 opt levels; ghostty Debug/ReleaseSafe/"
-     echo "     ReleaseSmall byte-exact; ReleaseFast within the measured +/-1-on-2 %"
+  0) echo "D10: GREEN — fixtures exact at every opt level; ghostty Debug/ReleaseSafe/"
+     echo "     ReleaseSmall byte-exact; ReleaseFast within the measured +/-1-on-3 %"
      echo "     envelope; negative control discriminating."
      exit 0 ;;
   3) echo "D10: BLOCKED — the ghostty-recipe arm could not run (no zig / no oracle repo)."

@@ -2230,7 +2230,7 @@ mod tests {
 
         // The tolerated cross-toolchain envelope, verbatim from gate D10.
         const ENVELOPE_MAX_DELTA: u8 = 1;
-        const ENVELOPE_MAX_FRACTION: f64 = 0.02;
+        const ENVELOPE_MAX_FRACTION: f64 = 0.03;
         // The margin a WRONG resampler must clear to be unambiguously outside it.
         const MARGIN_MIN_DELTA: u8 = 10;
 
