@@ -1254,7 +1254,44 @@ AFTER:
 mappings — also runs to completion post-fix (`ok, 1631.36s`, zero UB, zero leaks). Both
 would abort in `lz4::compress` within seconds before the fix.
 
-### KNOWN RESIDUAL — storing a non-default `style::Style` still poisons its slot
+### ~~KNOWN RESIDUAL~~ — RESOLVED in WS19 T5 (2026-07-29)
+
+> **RESOLVED — WS19 T5.** The residual described below is FIXED, and its 4-criterion
+> acceptance basis is therefore retired (kept verbatim for the record, struck through at
+> the end of this subsection). `style::Color` is now a byte-complete
+> `#[repr(C)] { tag: u8, data: [u8; 3] }` — a `u8` tag plus the reference's own 24-bit
+> `PackedStyle.Data` payload — with `Color::None` / `Color::Palette(idx)` /
+> `Color::Rgb(rgb)` preserved as an associated const and two associated constructors, so
+> the ~160 construction sites did not move; only the ~22 pattern-match sites changed, to
+> `tag()` + tag-checked `palette()` / `rgb()` accessors. `const _` asserts pin
+> `size_of == 4`, `align_of == 1`. This is a fidelity *improvement*, not a weakening: the
+> four bytes are exactly what the reference specifies per tag (`none => 0`,
+> `palette => idx` with `_padding: u16 = 0`, `rgb => r|g<<8|b<<16`), so `data_from_color`
+> is now a little-endian widening of the type's own bytes.
+>
+> Fixing `Color` exposed a **second, previously unknown instance of the same class**:
+> `RefCountedSet::insert` wrote whole `Item`s (`*item = Item::default()` on reaping a dead
+> item; `*items.add(chosen_id) = new_item` on placement). `Item<Style, u16, u16>` is 28
+> bytes (`meta` at 0..6, `value` at 6..27) and so carries **1 trailing padding byte**,
+> which a typed whole-struct write de-initializes even over the zeroes `init` wrote. Both
+> writes are now FIELD-WISE, the same accommodation `init` already documents.
+>
+> **Measured, on the committed `mapinit_styled` probe (seconds, primary signal):**
+>
+> | state | `mapinit_styled` |
+> |---|---|
+> | before WS19 T5 | `error: Undefined Behavior: reading memory at alloc1412[0x17c..0x17d], but memory is uninitialized` |
+> | after the `Color` reshape only | `error: … at alloc1412[0x187..0x188] …` — i.e. the colour slots were clean and the *`Item` padding byte* was the next offender (0x187 = item base 0x16c + 27) |
+> | after the field-wise `Item` writes | `styled mapping of 16384 bytes fully initialized (checksum 57545)` — CLEAN |
+> | `mapinit` (regression check) | `mapping of 16384 bytes fully initialized (checksum 57974)` — CLEAN |
+> | `cargo test -p rustty-vt --lib` | 2159 passed / 0 failed / 2 ignored — unchanged |
+>
+> **The whole uninit-in-page-mapping class is now closed**, so no exception remains for it.
+> `roundtrip`/`leak` were NOT used as acceptance (they were host-killed at ~45 and ~65
+> minutes and never finished); the production-test acceptance run is recorded in the
+> WS19 T6 section below.
+
+<details><summary>Retired 4-criterion basis (historical record)</summary>
 
 `RefCountedSet::add` must place the caller's `T` into the item slot with a typed write, so
 a page that has stored at least one non-default `style::Style` (or hyperlink `PageEntry`)
@@ -1288,6 +1325,8 @@ slot* only — never cell data, never an offset, never a length (worst realistic
 remains a spurious verify failure, which leaves the page resident: a SAFE failure);
 (4) *documented here with the exact required change* and carried as a WS8 work item, not
 left silently red.
+
+</details>
 
 ## WS7 Phase E — the page-compression test family, measured per test (2026-07-29)
 

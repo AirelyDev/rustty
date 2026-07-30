@@ -20,7 +20,7 @@ use core::ffi::{c_int, CStr};
 // PORT NOTE: `terminal.Style` / `terminal.Style.Color` live in rustty-vt's
 // `style` module; `terminal.color.Palette` in its `color` module.
 use rustty_vt::color::Palette;
-use rustty_vt::style::{Color, Style};
+use rustty_vt::style::{Color, ColorTag, Style};
 // const widgets = @import("../widgets.zig");
 // PORT NOTE: `widgets.helpMarker` is the parent module's shared helper
 // (`super::helpMarker`, Task 7).
@@ -232,12 +232,17 @@ pub fn color(id: &CStr, c: Color, palette: Option<&Palette>) {
     let _pop_id = Defer(|| unsafe { dcimgui_sys::ImGui_PopID() });
 
     // switch (c) {
-    match c {
+    // PORT NOTE (WS19 T5): `style::Color` is a byte-complete `{ tag, data }` value
+    // rather than a Rust enum (it is stored inside the page mapping, which is
+    // compressed as raw bytes), so the reference's `switch (c)` is a switch on
+    // `c.tag()` with tag-checked payload accessors.
+    match c.tag() {
         // .none => cimgui.c.ImGui_Text("default"),
-        Color::None => unsafe { dcimgui_sys::ImGui_Text(c"default".as_ptr()) },
+        ColorTag::None => unsafe { dcimgui_sys::ImGui_Text(c"default".as_ptr()) },
 
         // .palette => |idx| {
-        Color::Palette(idx) => {
+        ColorTag::Palette => {
+            let idx = c.palette();
             // cimgui.c.ImGui_Text("Palette %d", idx);
             unsafe { dcimgui_sys::ImGui_Text(c"Palette %d".as_ptr(), idx as c_int) };
             // if (palette) |p| {
@@ -275,7 +280,8 @@ pub fn color(id: &CStr, c: Color, palette: Option<&Palette>) {
         }
 
         // .rgb => |rgb| {
-        Color::Rgb(rgb) => {
+        ColorTag::Rgb => {
+            let rgb = c.rgb();
             // var data: [3]f32 = .{
             //     @as(f32, @floatFromInt(rgb.r)) / 255,
             //     @as(f32, @floatFromInt(rgb.g)) / 255,

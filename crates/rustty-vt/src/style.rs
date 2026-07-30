@@ -136,30 +136,131 @@ impl Eq for Flags {}
 /// The color for an SGR attribute. A color can come from multiple
 /// sources so we use this to track the source plus color value so that
 /// we can properly react to things like palette changes.
-// PORT NOTE: the reference is `union(Tag)` with `Tag = enum(u8) { none, palette,
-// rgb }`. Ported as a Rust enum; the explicit `Tag` u8 values are reproduced by
-// `ColorTag` below (used by PackedStyle).
-#[derive(Clone, Copy, Debug)]
-pub enum Color {
-    None,
-    Palette(u8),
-    Rgb(color::RGB),
+// PORT NOTE: the reference is
+//   pub const Color = union(Tag) {
+//       none: void,
+//       palette: u8,
+//       rgb: color.RGB,
+//       pub const Tag = enum(u8) { none, palette, rgb };
+//   };
+// The explicit `Tag` u8 values are reproduced by `ColorTag` below.
+//
+// PORT NOTE (WS19 T5 — uninit-in-page-mapping): this was originally ported as a
+// Rust `enum Color { None, Palette(u8), Rgb(color::RGB) }`. That is a faithful
+// *value* model but NOT a faithful *byte* model, and here the byte model is
+// load-bearing: `Style` is stored in a `RefCountedSet` whose item array lives
+// inside the terminal page's backing mapping, and `compress::CompressedPage::init`
+// compresses that whole mapping as one `&[u8]` — exactly as the oracle's
+// `compress/Page.zig` compresses `page.memory`. A typed Rust write of an enum
+// initializes only the *active* variant's payload and actively DE-initializes
+// the remainder of the payload slot, even over freshly-zeroed memory. So storing
+// a `Color::None` / `Color::Palette` left 3 / 2 bytes of the page mapping
+// uninitialized, and the compressor then read them (Miri: "reading memory at
+// alloc…[0x17c..0x17d], but memory is uninitialized").
+//
+// `Color` is therefore now a byte-complete `#[repr(C)]` value: a `u8` tag
+// followed by a 3-byte payload that is ALWAYS fully written. This *improves*
+// fidelity rather than weakening it — those 4 bytes are exactly what the
+// reference itself specifies for a color, because the reference's own
+// `PackedStyle` pairs `Color.Tag` with a 24-bit `Data` union whose per-tag
+// content is `none => 0`, `palette => idx` in the low byte with the high 16
+// bits `_padding: u16 = 0`, and `rgb => r | g<<8 | b<<16` (see
+// `PackedStyle::data_from_color`). A `Color` is now literally `{ Tag, Data }`,
+// and the unused payload bytes carry precisely the zero that `_padding = 0`
+// mandates. Type safety at the API is preserved: the payload is private and
+// every read goes through a tag-checked accessor (`palette()` / `rgb()`), which
+// is the analogue of the reference's checked union-field access.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Color {
+    /// A `ColorTag` held as a raw `u8`. Raw, not `ColorTag`, so that a `Color`
+    /// read back out of a page mapping can never be an invalid-enum-value UB;
+    /// the mapping arrives zeroed, and `0` is `ColorTag::None`.
+    tag: u8,
+    /// The reference's 24-bit `PackedStyle.Data`, little-endian: `none => 0`,
+    /// `palette => [idx, 0, 0]`, `rgb => [r, g, b]`. Always fully initialized.
+    data: [u8; 3],
 }
+
+// `Color` must have no padding at all, or the whole point of the reshape above
+// is lost. 1 + 3 bytes at align 1 == 4.
+const _: () = assert!(core::mem::size_of::<Color>() == 4);
+const _: () = assert!(core::mem::align_of::<Color>() == 1);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ColorTag {
+pub enum ColorTag {
     None = 0,
     Palette = 1,
     Rgb = 2,
 }
 
 impl Color {
-    fn tag(self) -> ColorTag {
-        match self {
-            Color::None => ColorTag::None,
-            Color::Palette(_) => ColorTag::Palette,
-            Color::Rgb(_) => ColorTag::Rgb,
+    /// The reference's `.none`. An associated const rather than an enum
+    /// variant, so that the ~160 `Color::None` construction sites are unchanged
+    /// by the byte-complete reshape (see the PORT NOTE on `Color`).
+    #[allow(non_upper_case_globals)]
+    pub const None: Color = Color {
+        tag: ColorTag::None as u8,
+        data: [0, 0, 0],
+    };
+
+    /// The reference's `.{ .palette = idx }`. Named like the former enum
+    /// variant it replaces, for the same reason as `Color::None`.
+    #[allow(non_snake_case)]
+    #[inline(always)]
+    pub const fn Palette(idx: u8) -> Color {
+        Color {
+            tag: ColorTag::Palette as u8,
+            // high 16 data bits are the reference's `_padding: u16 = 0`
+            data: [idx, 0, 0],
+        }
+    }
+
+    /// The reference's `.{ .rgb = rgb }`. Named like the former enum variant it
+    /// replaces, for the same reason as `Color::None`.
+    #[allow(non_snake_case)]
+    #[inline(always)]
+    pub const fn Rgb(rgb: color::RGB) -> Color {
+        Color {
+            tag: ColorTag::Rgb as u8,
+            data: [rgb.r, rgb.g, rgb.b],
+        }
+    }
+
+    /// The active tag — the reference's `@as(Tag, self)`.
+    // PERF(port): no panic path; `tag()` is on `PackedStyle::from_style`'s hot
+    // hash path. Only 0/1/2 are constructible (all writes go through the
+    // constructors above, and a zeroed mapping reads as `.none`), so the
+    // fallback arm is unreachable and is `debug_assert`ed rather than trapping.
+    #[inline(always)]
+    pub fn tag(self) -> ColorTag {
+        debug_assert!(self.tag <= ColorTag::Rgb as u8);
+        match self.tag {
+            1 => ColorTag::Palette,
+            2 => ColorTag::Rgb,
+            _ => ColorTag::None,
+        }
+    }
+
+    /// The reference's `self.palette` union-field access. Only valid when
+    /// `self.tag() == ColorTag::Palette`, which the reference also requires
+    /// (Zig checks it in safe modes; we `debug_assert` it).
+    #[inline(always)]
+    pub fn palette(self) -> u8 {
+        debug_assert!(self.tag == ColorTag::Palette as u8);
+        self.data[0]
+    }
+
+    /// The reference's `self.rgb` union-field access. Only valid when
+    /// `self.tag() == ColorTag::Rgb` (see `palette`).
+    #[inline(always)]
+    pub fn rgb(self) -> color::RGB {
+        debug_assert!(self.tag == ColorTag::Rgb as u8);
+        color::RGB {
+            r: self.data[0],
+            g: self.data[1],
+            b: self.data[2],
         }
     }
 
@@ -171,15 +272,11 @@ impl Color {
     /// the reference relation (tag equal && payload equal).
     // PERF(port): branch-free comparable key; the previous nested-match compare
     // carried `unreachable!()` panic paths into `Style::eql`'s hot loop.
+    // Post-WS19-T5 this is a straight little-endian read of the type's own four
+    // bytes: the reshaped layout *is* the normalization it used to compute.
     #[inline(always)]
     fn color_key(c: Color) -> u32 {
-        match c {
-            Color::None => 0,
-            Color::Palette(p) => 1 | ((p as u32) << 8),
-            Color::Rgb(rgb) => {
-                2 | ((rgb.r as u32) << 8) | ((rgb.g as u32) << 16) | ((rgb.b as u32) << 24)
-            }
-        }
+        u32::from_le_bytes([c.tag, c.data[0], c.data[1], c.data[2]])
     }
 
     /// True if the color is equal to another color.
@@ -201,10 +298,26 @@ impl Color {
     // PORT NOTE: the reference `format` writes "Color.none" / "Color.palette{ N }"
     // / "Color.rgb{ r, g, b }". Ported via `core::fmt::Write`.
     pub fn format<W: core::fmt::Write>(self, writer: &mut W) -> core::fmt::Result {
-        match self {
-            Color::None => writer.write_str("Color.none"),
-            Color::Palette(p) => write!(writer, "Color.palette{{ {} }}", p),
-            Color::Rgb(rgb) => write!(writer, "Color.rgb{{ {}, {}, {} }}", rgb.r, rgb.g, rgb.b),
+        match self.tag() {
+            ColorTag::None => writer.write_str("Color.none"),
+            ColorTag::Palette => write!(writer, "Color.palette{{ {} }}", self.palette()),
+            ColorTag::Rgb => {
+                let rgb = self.rgb();
+                write!(writer, "Color.rgb{{ {}, {}, {} }}", rgb.r, rgb.g, rgb.b)
+            }
+        }
+    }
+}
+
+// PORT NOTE (WS19 T5): hand-written to reproduce exactly what `#[derive(Debug)]`
+// on the former `enum Color { None, Palette(u8), Rgb(color::RGB) }` printed, so
+// the reshape is invisible to `{:?}` output.
+impl core::fmt::Debug for Color {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.tag() {
+            ColorTag::None => f.write_str("None"),
+            ColorTag::Palette => f.debug_tuple("Palette").field(&self.palette()).finish(),
+            ColorTag::Rgb => f.debug_tuple("Rgb").field(&self.rgb()).finish(),
         }
     }
 }
@@ -251,10 +364,10 @@ impl Style {
                 })
             }
 
-            _ => match self.bg_color {
-                Color::None => None,
-                Color::Palette(idx) => Some(palette[idx as usize]),
-                Color::Rgb(rgb) => Some(rgb),
+            _ => match self.bg_color.tag() {
+                ColorTag::None => None,
+                ColorTag::Palette => Some(palette[self.bg_color.palette() as usize]),
+                ColorTag::Rgb => Some(self.bg_color.rgb()),
             },
         }
     }
@@ -268,8 +381,8 @@ impl Style {
         // we don't want to duplicate the conditional multiple times since
         // certain colors require more checks (e.g. `bold_is_bright`).
 
-        match self.fg_color {
-            Color::None => {
+        match self.fg_color.tag() {
+            ColorTag::None => {
                 if self.flags.bold {
                     if let Some(bold) = opts.bold {
                         match bold {
@@ -282,7 +395,8 @@ impl Style {
                 opts.default
             }
 
-            Color::Palette(idx) => {
+            ColorTag::Palette => {
+                let idx = self.fg_color.palette();
                 if self.flags.bold && opts.bold.is_some() {
                     let bright_offset = color::Name::BrightBlack.cval();
                     if idx < bright_offset {
@@ -293,7 +407,8 @@ impl Style {
                 opts.palette[idx as usize]
             }
 
-            Color::Rgb(rgb) => {
+            ColorTag::Rgb => {
+                let rgb = self.fg_color.rgb();
                 if self.flags.bold && rgb.eql(opts.default) {
                     if let Some(bold) = opts.bold {
                         match bold {
@@ -310,10 +425,10 @@ impl Style {
 
     /// Returns the underline color for this style.
     pub fn underline_color(self, palette: &color::Palette) -> Option<color::RGB> {
-        match self.underline_color {
-            Color::None => None,
-            Color::Palette(idx) => Some(palette[idx as usize]),
-            Color::Rgb(rgb) => Some(rgb),
+        match self.underline_color.tag() {
+            ColorTag::None => None,
+            ColorTag::Palette => Some(palette[self.underline_color.palette() as usize]),
+            ColorTag::Rgb => Some(self.underline_color.rgb()),
         }
     }
 
@@ -321,15 +436,16 @@ impl Style {
     // PORT NOTE (vt-2b seam wired): `page.Cell` is now ported, so this is the
     // verbatim translation of the reference `bgCell`.
     pub fn bg_cell(self) -> Option<crate::page::Cell> {
-        match self.bg_color {
-            Color::None => None,
-            Color::Palette(idx) => {
+        match self.bg_color.tag() {
+            ColorTag::None => None,
+            ColorTag::Palette => {
                 let mut cell = crate::page::Cell::zeroed();
                 cell.set_content_tag(crate::page::ContentTag::BgColorPalette);
-                cell.set_content_color_palette(idx);
+                cell.set_content_color_palette(self.bg_color.palette());
                 Some(cell)
             }
-            Color::Rgb(rgb) => {
+            ColorTag::Rgb => {
+                let rgb = self.bg_color.rgb();
                 let mut cell = crate::page::Cell::zeroed();
                 cell.set_content_tag(crate::page::ContentTag::BgColorRgb);
                 cell.set_content_color_rgb(crate::page::CellRgb {
@@ -557,9 +673,10 @@ impl<'a> VtFormatter<'a> {
         prefix: u8,
         value: Color,
     ) -> core::fmt::Result {
-        match value {
-            Color::None => Ok(()),
-            Color::Palette(idx) => {
+        match value.tag() {
+            ColorTag::None => Ok(()),
+            ColorTag::Palette => {
+                let idx = value.palette();
                 if let Some(p) = self.palette {
                     let rgb = p[idx as usize];
                     write!(writer, "\x1b[{};2;{};{};{}m", prefix, rgb.r, rgb.g, rgb.b)
@@ -567,7 +684,8 @@ impl<'a> VtFormatter<'a> {
                     write!(writer, "\x1b[{};5;{}m", prefix, idx)
                 }
             }
-            Color::Rgb(rgb) => {
+            ColorTag::Rgb => {
+                let rgb = value.rgb();
                 write!(writer, "\x1b[{};2;{};{};{}m", prefix, rgb.r, rgb.g, rgb.b)
             }
         }
@@ -649,9 +767,10 @@ impl<'a> HtmlFormatter<'a> {
         property: &str,
         c: Color,
     ) -> core::fmt::Result {
-        match c {
-            Color::None => Ok(()),
-            Color::Palette(idx) => {
+        match c.tag() {
+            ColorTag::None => Ok(()),
+            ColorTag::Palette => {
+                let idx = c.palette();
                 if let Some(p) = self.palette {
                     let rgb = p[idx as usize];
                     write!(
@@ -663,7 +782,8 @@ impl<'a> HtmlFormatter<'a> {
                     write!(writer, "{}: var(--vt-palette-{});", property, idx)
                 }
             }
-            Color::Rgb(rgb) => {
+            ColorTag::Rgb => {
+                let rgb = c.rgb();
                 write!(
                     writer,
                     "{}: rgb({}, {}, {});",
@@ -712,12 +832,15 @@ impl PackedStyle {
     // PORT NOTE: `Data` is a 24-bit union. For each color tag the 24 data bits
     // are: none => 0, palette => idx in low 8 bits (high 16 padding), rgb =>
     // r|g<<8|b<<16. `data_from_color` reproduces this.
+    // PORT NOTE (WS19 T5): since the reshape, `Color`'s own 3 payload bytes ARE
+    // this 24-bit `Data` — `none => 0`, `palette => idx` with the high 16 bits
+    // zero, `rgb => r|g<<8|b<<16` — so this is a plain little-endian widening
+    // rather than a per-tag reconstruction. Kept as a named function because the
+    // reference has `Data.fromColor` and the bit contract documented above is
+    // what makes the reshape byte-faithful.
     fn data_from_color(c: Color) -> u32 {
-        match c {
-            Color::None => 0,
-            Color::Palette(idx) => idx as u32, // idx in low 8 bits, high 16 = 0
-            Color::Rgb(rgb) => (rgb.r as u32) | (rgb.g as u32) << 8 | (rgb.b as u32) << 16,
-        }
+        let d = c.data;
+        u32::from_le_bytes([d[0], d[1], d[2], 0])
     }
 
     #[inline]
@@ -871,11 +994,10 @@ mod tests {
         //   }
         fn reference_eql(a: Color, b: Color) -> bool {
             a.tag() == b.tag()
-                && match (a, b) {
-                    (Color::None, Color::None) => true,
-                    (Color::Palette(p), Color::Palette(op)) => p == op,
-                    (Color::Rgb(rgb), Color::Rgb(orgb)) => rgb == orgb,
-                    _ => unreachable!(),
+                && match a.tag() {
+                    ColorTag::None => true,
+                    ColorTag::Palette => a.palette() == b.palette(),
+                    ColorTag::Rgb => a.rgb() == b.rgb(),
                 }
         }
 

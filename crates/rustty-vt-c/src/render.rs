@@ -48,7 +48,7 @@ use rustty_vt::render::{
     CellList, Dirty as RenderDirty, RenderState as ZigRenderState, Row as RenderRow,
 };
 use rustty_vt::size;
-use rustty_vt::style::{Color, Fg, Style};
+use rustty_vt::style::{ColorTag, Fg, Style};
 
 // const log = std.log.scoped(.render_state_c);
 
@@ -1216,7 +1216,7 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
             } else {
                 Style::default()
             };
-            if matches!(s.fg_color, Color::None) {
+            if matches!(s.fg_color.tag(), ColorTag::None) {
                 return Result::InvalidValue;
             }
             // SAFETY: `cells.palette` is a valid palette pointer installed by

@@ -1448,7 +1448,7 @@ impl Screen {
 
             // Clear the new row so it gets our bg color. We only do this
             // if we have a bg color at all.
-            if !matches!(self.cursor.style.bg_color, style::Color::None) {
+            if !matches!(self.cursor.style.bg_color.tag(), style::ColorTag::None) {
                 let page: *mut Page =
                     unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
                 let row = self.cursor.page_row;

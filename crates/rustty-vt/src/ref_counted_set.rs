@@ -1132,7 +1132,17 @@ where
                 // Reap the dead item.
                 self.psl_stats[item.meta.psl.to_usize()] =
                     self.psl_stats[item.meta.psl.to_usize()].sub(Id::ONE);
-                *item = Item::default();
+                // `*item = Item.default()` — but FIELD-WISE. See the PORT NOTE
+                // in `init`: `Item<T, ..>` has 1 byte of trailing struct padding
+                // (`meta` is align-2, `value` is align-1), and this array lives
+                // inside the page mapping that `CompressedPage::init` compresses
+                // as raw bytes. A whole-`Item` typed write de-initializes that
+                // padding byte even though `init` zeroed it, so the compressor
+                // would read uninitialized memory. A field-wise write touches
+                // only the fields' own bytes and leaves the padding zeroed.
+                let d = Item::<T, Id, RefCount>::default();
+                item.value = d.value;
+                item.meta = d.meta;
 
                 // Only resurrect this item if it has a
                 // smaller id than the one we were given.
@@ -1200,8 +1210,16 @@ where
         }
 
         // Finally place our new item in to our array.
+        //
+        // FIELD-WISE, not `*items.add(..) = new_item` — see the PORT NOTE in
+        // `init` and the reap above: a whole-`Item` typed write would
+        // de-initialize the type's 1 trailing padding byte inside the page
+        // mapping, and `CompressedPage::init` compresses that mapping as raw
+        // bytes. The two field writes copy exactly the same value bytes.
         unsafe {
-            *items.add(chosen_id.to_usize()) = new_item;
+            let dst = items.add(chosen_id.to_usize());
+            (*dst).value = new_item.value;
+            (*dst).meta = new_item.meta;
         }
 
         unsafe { self.assert_integrity(base) };

@@ -4484,9 +4484,10 @@ impl Terminal {
         }
 
         // switch (pen.fg_color) {
-        match pen.fg_color {
-            style::Color::None => {}
-            style::Color::Palette(idx) => {
+        match pen.fg_color.tag() {
+            style::ColorTag::None => {}
+            style::ColorTag::Palette => {
+                let idx = pen.fg_color.palette();
                 if idx >= 16 {
                     write_print!(";38:5:{}", idx)
                 } else if idx >= 8 {
@@ -4495,13 +4496,17 @@ impl Terminal {
                     write_print!(";3{}", idx)
                 }
             }
-            style::Color::Rgb(rgb) => write_print!(";38:2::{}:{}:{}", rgb.r, rgb.g, rgb.b),
+            style::ColorTag::Rgb => {
+                let rgb = pen.fg_color.rgb();
+                write_print!(";38:2::{}:{}:{}", rgb.r, rgb.g, rgb.b)
+            }
         }
 
         // switch (pen.bg_color) {
-        match pen.bg_color {
-            style::Color::None => {}
-            style::Color::Palette(idx) => {
+        match pen.bg_color.tag() {
+            style::ColorTag::None => {}
+            style::ColorTag::Palette => {
+                let idx = pen.bg_color.palette();
                 if idx >= 16 {
                     write_print!(";48:5:{}", idx)
                 } else if idx >= 8 {
@@ -4510,7 +4515,10 @@ impl Terminal {
                     write_print!(";4{}", idx)
                 }
             }
-            style::Color::Rgb(rgb) => write_print!(";48:2::{}:{}:{}", rgb.r, rgb.g, rgb.b),
+            style::ColorTag::Rgb => {
+                let rgb = pen.bg_color.rgb();
+                write_print!(";48:2::{}:{}:{}", rgb.r, rgb.g, rgb.b)
+            }
         }
 
         // return stream.getWritten();
