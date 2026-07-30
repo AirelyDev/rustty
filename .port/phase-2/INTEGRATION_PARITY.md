@@ -231,6 +231,28 @@ Ranked by severity, then reachability.
 
 ---
 
+- **WS13 follow-through (2026-07-30).** WS9 made `dgettext` LINKABLE; WS13 made
+  it REACHABLE. `rustty_translate` (`crates/rustty-apprt-c/src/lib.rs`) no
+  longer returns the identity stub — it forwards to
+  `rustty_os::i18n::gettext_`, proven by
+  `crates/rustty-apprt-c/tests/i18n_translate.rs`, which compiles `po/de.po` and
+  `po/ja.po` with `msgfmt`, binds the domain, and asserts a German hit, a
+  Japanese hit that differs from it, a `LANG=C` passthrough, and a
+  stale-`Ghostty`-msgid passthrough. FAIL arm demonstrated: restoring the
+  identity stub makes it fail with `left: "About Rustty" right: "Über Rustty"`.
+  Also fixed in the same pass: three `.blp` msgids still spelled "Ghostty" and
+  therefore matched NO catalog, and all 25 code-side strings the reference wraps
+  in `i18n._()` were unwrapped literals — measured, `xgettext` extracted **0**
+  msgids from any `.rs` file before WS13 and **25** after.
+  Homebrew `msgfmt` remains the build-TIME tool this section already sanctions;
+  **no link-line change was made**, so `.port/tools/gates/no_homebrew_gettext_gate.sh`
+  was deliberately NOT re-run — it renames Homebrew's `libintl` host-wide, has
+  already broken two concurrent lanes mid-run, and two lanes were live. The
+  property was confirmed statically instead: `grep -rn homebrew
+  crates/rustty-os/build.rs macos/build-rustty.sh` → no match (no link search),
+  and the only `opt/homebrew` reference in `xtask/src/res_misc.rs` is
+  `msgfmt_path()`'s PATH prepend.
+
 ## 3. Sanctioned Divergences (deliberate R2 / R4 / Branch-A restructures)
 
 Each attested behavior-preserving unless flagged.
