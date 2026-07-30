@@ -85,6 +85,15 @@ pub enum Highlight {
 
 impl Link {
     /// Returns a new oni.Regex that can be used to match the link.
+    //
+    // PORT NOTE (WS14 T6, `#[cfg(feature = "oniguruma")]`): the reference
+    // `Link.oniRegex` is UNCONDITIONAL — `src/input/` is always built with
+    // oniguruma present. The default-ON cargo feature exists solely because the
+    // `oniguruma-sys` C build script cannot target `wasm32-unknown-unknown` (no
+    // libc sysroot), and this method is unreachable there regardless: link
+    // highlighting is a renderer concern and the wasm module has no renderer. Every
+    // native build enables the feature by default, so nothing changes off-wasm.
+    #[cfg(feature = "oniguruma")]
     // PORT NOTE: `!oni.Regex` maps to `Result<oni::Regex, oni::Error>`; the
     // `.{}` (2nd arg) is the default `RegexOptions`, `null` (5th arg) the absent
     // `?*ErrorInfo` -> `None`. `oni.Encoding.utf8`/`oni.Syntax.default` are the

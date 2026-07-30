@@ -7107,7 +7107,12 @@ impl Config {
                             }
                         }
                     }
-                    #[cfg(not(target_os = "windows"))]
+                    // WS14 T6 (wasm32 arm): a browser has no passwd database, so neither
+                    // arm runs on wasm — `command`/`wd` keep the values set above,
+                    // exactly as they would when `pw.shell`/`pw.home` are absent. The
+                    // reference never analyses this on wasm (Zig analyses
+                    // `config.zig.Wasm` lazily); Rust compiles whole crates.
+                    #[cfg(not(any(target_os = "windows", target_family = "wasm")))]
                     {
                         // We need the passwd entry for the remainder
                         // const pw = try internal_os.passwd.get(alloc);

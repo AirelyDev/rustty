@@ -63,7 +63,15 @@ impl Default for Backend {
         // Loop/Async no-op types in `lib.rs`'s non-macOS seam stand in for it);
         // `default()`/`candidates()` still name it faithfully so the crate
         // compiles for wasm32 (backend selection is comptime here).
-        #[cfg(target_os = "wasi")]
+        // WS14 T6 (cfg widening ONLY — no logic change): also select this arm for
+        // freestanding wasm. The reference's target enum distinguishes `.wasi` from
+        // bare `wasm32-freestanding`; the port treats BOTH as the single-candidate
+        // wasi arm, because rustty's wasm builds (wasip1 AND the freestanding
+        // browser cdylib) run the SYNCHRONOUS C-ABI with no event loop — the same
+        // no-op Loop/Async seam either way. Without this a
+        // `wasm32-unknown-unknown` build hits the `compile_error!` below even
+        // though nothing in the wasm module ever constructs a Loop.
+        #[cfg(all(target_family = "wasm", not(target_os = "emscripten")))]
         {
             Backend::WasiPoll
         }
@@ -73,7 +81,7 @@ impl Default for Backend {
             target_os = "freebsd",
             target_os = "linux",
             target_os = "windows",
-            target_os = "wasi"
+            all(target_family = "wasm", not(target_os = "emscripten"))
         )))]
         {
             compile_error!("no default backend for this target")
@@ -103,7 +111,8 @@ impl Backend {
         }
         // PORT NOTE: `.wasi => &.{.wasi_poll}` — the single-candidate wasi arm
         // (mirrors the macOS single-candidate shape; WasiPoll body deferred).
-        #[cfg(target_os = "wasi")]
+        // WS14 T6: same cfg widening as `default()` above.
+        #[cfg(all(target_family = "wasm", not(target_os = "emscripten")))]
         {
             &[Backend::WasiPoll]
         }
@@ -113,7 +122,7 @@ impl Backend {
             target_os = "freebsd",
             target_os = "linux",
             target_os = "windows",
-            target_os = "wasi"
+            all(target_family = "wasm", not(target_os = "emscripten"))
         )))]
         {
             compile_error!("no candidate backends for this target")

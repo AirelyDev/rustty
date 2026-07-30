@@ -26,8 +26,16 @@
 // `global_state.resources_dir.app()`.
 
 use rustty_args::diagnostics::{Diagnostic, DiagnosticList};
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
 use rustty_os as internal_os;
+// WS14 T6 (wasm32 arm): a browser has no filesystem, no XDG base dirs, no user
+// database and no home directory, and the reference's own wasm build never
+// reaches this path (Zig analyses `config.zig.Wasm` LAZILY, so it never forces
+// these decls; Rust compiles whole crates, so an arm must exist). The wasm arm
+// takes the SAME branch this code already takes when the lookup fails.
+#[cfg(not(target_family = "wasm"))]
 use rustty_os::ResourcesDir;
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
 use std::sync::OnceLock;
 
 /// PORT NOTE (BREAK #1 seam): the process-global resources directory the
@@ -36,11 +44,13 @@ use std::sync::OnceLock;
 /// Until set, the `.resources` location reports no directory — identical to the
 /// reference behavior when `resources_dir.app()` is null (a perfectly valid state
 /// per `Location.dir`'s own docs).
+#[cfg(not(target_family = "wasm"))]
 static RESOURCES_DIR: OnceLock<ResourcesDir> = OnceLock::new();
 
 /// Inject the process-global resources directory (BREAK #1 seam). Called once by
 /// `rustty-core` during global-state init. Mirrors the reference's
 /// `global_state.resources_dir` being populated in `GlobalState.init`.
+#[cfg(not(target_family = "wasm"))]
 pub fn set_resources_dir(dir: ResourcesDir) -> Result<(), ResourcesDir> {
     RESOURCES_DIR.set(dir)
 }
@@ -49,7 +59,16 @@ pub fn set_resources_dir(dir: ResourcesDir) -> Result<(), ResourcesDir> {
 /// seam is unset or the dir has no app path. Equivalent to the reference's
 /// `global_state.resources_dir.app()`.
 fn resources_dir_app() -> Option<String> {
-    RESOURCES_DIR.get().and_then(|d| d.app().map(String::from))
+    // WS14 T6 (wasm32 arm): no resources directory exists in a browser — the same
+    // "seam unset" state the doc comment above already describes as valid.
+    #[cfg(target_family = "wasm")]
+    {
+        None
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        RESOURCES_DIR.get().and_then(|d| d.app().map(String::from))
+    }
 }
 
 /// Location of possible themes. The order of this enum matters because it
@@ -133,6 +152,14 @@ impl Location {
                 //     }
                 // };
                 let subdir_str = String::from_utf8_lossy(&subdir);
+                // WS14 T6 (wasm32 arm): no XDG config directory in a browser — the
+                // same `None` the error arm below already yields.
+                #[cfg(target_family = "wasm")]
+                {
+                    let _ = subdir_str;
+                    None
+                }
+                #[cfg(not(target_family = "wasm"))]
                 match internal_os::xdg::config(internal_os::xdg::Options {
                     subdir: Some(&subdir_str),
                     ..Default::default()

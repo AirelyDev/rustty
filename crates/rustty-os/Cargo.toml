@@ -26,6 +26,12 @@ workspace = true
 # is disabled. It will be wired to the real `pty`/`flatpak` modules when those
 # groups land. No behavior is added or lost.
 flatpak = []
+# The pre-`9dc2e5978` `os/wasm.zig` host-ownership allocation tracker
+# (malloc/free/toHostOwned/isHostOwned/toModuleOwned). Resurrected reference code,
+# needed by `font/Atlas.zig`'s `Wasm` block; OFF by default so the desktop build is
+# byte-identical. Host-buildable (the map is target-agnostic) so the two reference
+# tests run under plain `cargo test`.
+wasm-host-owned = []
 
 [dependencies]
 rustty-datastruct = { workspace = true }

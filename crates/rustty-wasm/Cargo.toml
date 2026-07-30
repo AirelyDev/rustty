@@ -1,10 +1,10 @@
 # rustty-wasm — WASM/web target module (port of ghostty src/main_wasm.zig)
 #
 # Crate IDENTITY is `rustty-wasm` (R4). This is the headless C-ABI wasm module
-# entry: a TOP SINK (nothing depends on it) that force-retains the config wasm
-# C-ABI exports and installs the `os/wasm/log` freestanding sink, mirroring the
-# reference `comptime { _ = @import(...); }` retention block. NO dependency on
-# the ghostty tree (R3) — reference is an external oracle only.
+# entry: a TOP SINK (nothing depends on it) that force-retains the config + font
+# atlas wasm C-ABI exports and installs the `os/wasm/log` freestanding sink,
+# mirroring the reference `comptime { _ = @import(...); }` retention block. NO
+# dependency on the ghostty tree (R3) — reference is an external oracle only.
 [package]
 name = "rustty-wasm"
 version.workspace = true
@@ -19,21 +19,44 @@ publish = false
 workspace = true
 
 [lib]
-# cdylib: emits the `.wasm` artifact bearing the unmangled `config_*` C-ABI
-# exports for the JS host. rlib: lets the retention/logging logic be built and
-# unit-checked on the host (`cargo build -p rustty-wasm`).
+# cdylib: emits the `rustty_wasm.wasm` bearing the unmangled `config_*`/`atlas_*`
+# C-ABI exports for the JS host (the `main_wasm.zig` artifact — build it with
+# `.port/tools/build-main-wasm.sh --release`). rlib: keeps the retention/logging
+# logic host-buildable so native `cargo build --workspace` stays green.
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# `_ = @import("os/wasm.zig");` — the wasm allocator/shared-mem helpers + the
-# `os/wasm/log.zig` freestanding log sink installed as `std_options.logFn`.
-rustty-os = { workspace = true }
+# `_ = @import("os/wasm.zig");` — the wasm allocator/shared-mem helpers, the
+# `os/wasm/log.zig` freestanding log sink installed as `std_options.logFn`, and
+# (WS14 T3) the resurrected host-ownership tracker `Atlas.Wasm` calls.
+rustty-os = { workspace = true, features = ["wasm-host-owned"] }
 # `_ = @import("config.zig").Wasm;` — the `config_new`/`config_free`/
 # `config_load_string`/`config_finalize` C-ABI exports (behind the `wasm` feature).
-rustty-config = { workspace = true, features = ["wasm"] }
+# `default-features = false` (WS14 T6): the renderer accessor-trait impl and the
+# `oniguruma` link highlighting are NOT part of the wasm module — their C/C++
+# `-sys` deps (glslang, spirv-cross, wuffs, sentry, oniguruma) cannot target
+# `wasm32-unknown-unknown`, which has no libc sysroot.
+#
+# Declared by PATH rather than `workspace = true`: cargo IGNORES a member's
+# `default-features = false` on an inherited workspace dependency (it warns, and
+# that may become a hard error), and turning those defaults off is the whole point
+# of this edge.
+rustty-config = { path = "../rustty-config", default-features = false, features = [
+    "wasm",
+] }
 # `_ = @import("terminal/main.zig");` — the VT core (the wasm module re-exports
 # the terminal C-ABI surface; retained by depending on the crate).
 rustty-vt = { workspace = true }
-# `_ = @import("App.zig").Wasm;` — the App wasm C-ABI block (currently a
-# documented-deferral; the crate is retained so the block joins when it lands).
-rustty-core = { workspace = true }
+# `_ = @import("font/main.zig");` — the `Atlas.Wasm` C-ABI/JS surface (WS14 T4).
+# This edge was MISSING before WS14: the reference retains `font/main.zig`, so the
+# `atlas_*` exports belong in this artifact.
+rustty-font = { workspace = true, features = ["wasm"] }
+
+# NOT depended on: `_ = @import("App.zig").Wasm;`. The reference's `App.Wasm` is an
+# EMPTY struct whose three exports are commented out upstream (App.zig:577-604), so
+# retaining it emits zero symbols and pulls no App implementation. A `rustty-core`
+# edge would over-retain an entire application tier (and transitively drag
+# rustty-inspector → dcimgui-sys → freetype-sys → zlib-sys into a freestanding wasm
+# link, which cannot build at all). The block itself IS ported, in
+# `rustty-core/src/app.rs` (WS14 T5) — dropping the edge is the MORE faithful
+# choice, not a shortcut.
