@@ -70,6 +70,24 @@
 //! shared `rustty-xev` crate since D6/Milestone B resolved).
 
 // const stream_handler = @import("termio/stream_handler.zig");
+// TEST-ONLY (WS10 T20): the tally of every byte `Termio::processOutput` is
+// handed, used by `readthread_pipeline_sustains_saturated_producer` to witness
+// the pipeline's "no lost or duplicated batch" property. `#[cfg(test)]`, so it
+// does not exist in any shipped build.
+#[cfg(test)]
+pub(crate) static PROCESSED_BYTES: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+// TEST-ONLY (WS10 T20): the number of `processOutput` CALLS, i.e. the number of
+// batches the parse stage was handed. With `PROCESSED_BYTES` this gives the mean
+// batch size, which is the pipeline's structural signature: the pre-pipeline
+// loop read into a `[u8; 1024]`, so its batches CANNOT exceed 1 KiB, while the
+// pipeline's are up to `BUFFER_CAPACITY` (64 KiB). Unlike a throughput number
+// that is a timing measurement, this one is immune to machine contention.
+#[cfg(test)]
+pub(crate) static PROCESSED_CALLS: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
 pub mod stream_handler;
 
 // const message = @import("termio/message.zig");

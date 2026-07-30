@@ -461,6 +461,45 @@ it is Miri-excluded rather than Miri-checked; the borrow scoping itself is
 Stacked-Borrows-clean (transient borrows under the mutex, no `&mut` retag spanning the
 loop).
 
+### WS10 T20 amendment — the two-stage pipeline (Category 2)
+
+`2f0e6659d` + `bb0ac4c72` replaced the single read loop with a **gather/parse
+pipeline**: an `io-gather` thread drains the pty into a 4 x 64 KiB ring while the
+`io-reader` thread parses the previous batch. The real-`poll`/`read` arms stay in
+this exception for the same reason as above (Category 2: live syscalls Miri
+cannot execute), joined by the three new KATs
+`readthread_pipeline_{sustains_saturated_producer,keeps_interactive_latency,shuts_down_cleanly_from_both_stages}`.
+
+**But the pipeline's core claim is NOT a syscall claim and is NOT exempted.** The
+upstream comment "a buffer is owned by exactly one stage at a time, so buffer
+contents need no locking" is, in Rust, an aliasing claim about ONE allocation
+with two live threads inside it. That claim is proven under Miri, on an isolated
+non-FFI model of the ring in **`.port/phase-2/mirihar-ws10-pipeline`** (two real
+threads, the same mutex + `batch_ready`/`slot_free` condvars + `head`/`tail`/
+`count`/`lens`/`done` protocol, a fake producer/consumer, zero fds):
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `shipped` | the shipped raw-pointer slot handoff (`Pipeline::slot_ptr`) | **CLEAN** | **CLEAN** |
+| `naive_mutslice` | per-slot `&mut (*bufs)[i]` reborrow | clean | clean |
+| `naive_copyfield` | "hold no reference, just copy the bytes out" | **UB** (data race) | **UB** |
+| `naive_wholeref` | the literal transliteration: `&mut *bufs` then index | **UB** (tag not in borrow stack) | **UB** (write forbidden) |
+
+Candidate selection is by **argv**, not an env var: Miri does not forward the
+host environment, so an env switch would collapse every candidate onto the
+default and make the negative controls vacuous.
+
+Two results worth stating plainly. First, `naive_wholeref` — which is what a
+careful reader of the Zig naturally writes — is UB under both models, so the raw
+`slot_ptr` discipline is load-bearing, not defensive styling. Second,
+`naive_mutslice` is CLEAN: a per-element `&mut` reborrow through the raw pointer
+is narrow enough. The hazard is specifically the WHOLE-OBJECT reference or copy,
+which matches the standing `rust-mut-args-strongly-protected` finding that a
+by-value read of a `Copy` field is still a foreign access on the owning
+allocation. The shipped code uses `slot_ptr` anyway, because the narrower shape
+costs nothing and does not depend on that distinction holding in a future
+aliasing model.
+
 ## rustty-termio B5 (live-shell KAT: real /bin/sh round-trip) — MIRI exception
 
 B5's live-shell KAT (`crates/rustty-termio/tests/live_shell.rs`,

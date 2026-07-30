@@ -1434,6 +1434,17 @@ impl<M: AppMailbox> Termio<M> {
     /// shared render `State`; the read thread is its sole `processOutput` toucher
     /// for the pointer's lifetime.
     pub unsafe fn processOutput(io: *mut Termio<M>, buf: &[u8]) {
+        // TEST-ONLY instrumentation (WS10 T20). The pipeline's throughput
+        // property is "every byte the producer wrote reaches processOutput
+        // exactly once", and an 80x24 screen physically cannot retain 8 MiB, so
+        // the screen alone cannot witness it. This tally is the witness. It is
+        // `#[cfg(test)]`, so it does not exist in any shipped build.
+        #[cfg(test)]
+        {
+            crate::PROCESSED_BYTES.fetch_add(buf.len(), core::sync::atomic::Ordering::Relaxed);
+            crate::PROCESSED_CALLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+
         // We are modifying terminal state from here on out and we need
         // the lock to grab our read data.
         // self.renderer_state.mutex.lock();

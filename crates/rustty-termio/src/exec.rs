@@ -3641,23 +3641,208 @@ fn killCommandFlatpak(command: &mut FlatpakHostCommand) -> Result<(), crate::Err
 #[cfg(feature = "flatpak")]
 const SIGHUP: i32 = 1;
 
-/// The read thread sits in a loop doing the following pseudo code:
+/// The read thread works with a companion gather thread to form a two-stage
+/// pipeline that moves pty output into the terminal:
+///
+///   io-gather:  read()/poll() the pty into one of a few rotating
+///               buffers, batching bulk output.
+///   io-reader:  hand each filled buffer to processOutput (terminal
+///               lock, VT parse, state update, render scheduling).
+///
+/// This used to be a single serial loop (and still is on Windows):
 ///
 ///   while (true) { blocking_read(); exit_if_eof(); process(); }
 ///
-/// Almost all terminal-modifying activity is from the pty read, so
-/// putting this on a dedicated thread keeps performance very predictable
-/// while also almost optimal. "Locking is fast, lock contention is slow."
-/// and since we rarely have contention, this is fast.
+/// I found on macOS that the kernel tty output queue caps every read
+/// on the master at 1 KB no matter how large the read buffer is. This means
+/// that producers (e.g. `cat`) stall with the above architecture because
+/// there are windows in the `process()` part where we aren't draining
+/// the kernel pty fd.
 ///
-/// This is also empirically fast compared to putting the read into
-/// an async mechanism like io_uring/epoll because the reads are generally
-/// small.
+/// Instead, having a separate thread gather and drain the kernel pty
+/// into a rotating set of preallocated buffers minimizes this stall
+/// period to effectively zero: while the io-reader thread parses
+/// one batch, the gather thread is draining the kernel queue. There is
+/// still stalling (our VT parse is a bottleneck now), but we don't stall
+/// between them.
 ///
-/// We use a basic poll syscall here because we are only monitoring two
-/// fds and this is still much faster and lower overhead than any async
-/// mechanism.
+/// Interactive latency is preserved: a batch is delivered on the
+/// first EAGAIN unless the stream is saturated (>= 1 KiB gathered
+/// means the writer filled the kernel queue), in which case we bridge
+/// the producer's microsecond refill gaps with a short poll, bounded
+/// by a small total budget per batch that is well under a display
+/// frame. This means that small outputs that are more typical continue
+/// to be interactive.
+///
+/// We use basic poll/read syscalls here because we are only
+/// monitoring two fds and this is still much faster and lower
+/// overhead than any async mechanism.
 //
+// PORT NOTE (2f0e6659d + bb0ac4c72, WS10 T20) — THE ALIASING SEAM.
+// The reference documents the ring as "A buffer is owned by exactly one stage
+// at a time, so buffer contents need no locking. Only the ring metadata is
+// guarded by the mutex." In Zig that is a comment. In Rust it is an aliasing
+// claim about ONE allocation with two live threads inside it, so it is stated
+// here as a binding invariant and it is PROVEN, not asserted:
+//
+//   INV-P1  `Pipeline::bufs` is an `UnsafeCell` and is NEVER referenced as a
+//           whole. Each stage derives a `*mut u8` for ITS OWN SLOT ONLY, from
+//           the base pointer, via `Pipeline::slot_ptr` — pointer arithmetic,
+//           no place expression over the array.
+//   INV-P2  Slot ownership transfers only under `mutex`: the gather stage owns
+//           `head` from the claim to the publish; the parse stage owns `tail`
+//           from the take to the tail advance. Those windows are disjoint per
+//           slot and the mutex pairs are the happens-before edges.
+//   INV-P3  No `&mut [u8]`/`&[u8]` spanning more than the owned slot is ever
+//           formed, and the storage is never read by value.
+//
+// PROOF: `.port/phase-2/mirihar-ws10-pipeline` is an isolated non-FFI model of
+// this exact ring (two real threads, same mutex + condvars + head/tail/count/
+// lens/done protocol, no fds). Candidate `shipped` — this shape — is CLEAN
+// under BOTH Stacked Borrows and Tree Borrows. Candidate `naive_wholeref` —
+// the literal transliteration `let bufs = &mut *p.bufs.get(); &mut bufs[slot]`
+// — is UB under BOTH ("tag does not exist in the borrow stack" / "write access
+// forbidden"). Candidate `naive_copyfield` — the tempting "hold no reference,
+// just copy the bytes out" cure — is ALSO UB under both, because a by-value
+// read of the storage is still a foreign access on the owning allocation.
+// See that harness's README for the full table and the run recipe.
+//
+/// The ring metadata. Everything in here is guarded by [`Pipeline::mutex`];
+/// the buffer STORAGE deliberately is not (see INV-P1..P3 on [`ReadThread`]).
+//
+// PORT NOTE: the reference keeps these fields directly on `Pipeline` next to
+// the mutex. Rust's `Mutex<T>` owns its data, so the guarded fields move into
+// `Meta` and the unguarded storage stays beside it — which also makes the
+// guarded/unguarded split a TYPE-LEVEL fact rather than a comment.
+#[cfg(not(windows))]
+#[derive(Default)]
+struct PipelineMeta {
+    /// The number of valid bytes in each buffer. Set at publish
+    /// time by the gather stage, read by the parse stage.
+    // lens: [buffer_count]usize = @splat(0),
+    lens: [usize; ReadThread::BUFFER_COUNT],
+
+    /// Ring state: head is the next slot the gather stage fills,
+    /// tail is the next slot the parse stage consumes, count is
+    /// the number of published, unconsumed batches.
+    // head: usize = 0, tail: usize = 0, count: usize = 0,
+    head: usize,
+    tail: usize,
+    count: usize,
+
+    /// Set by the gather stage (under the mutex) while it sleeps
+    /// in a bridge poll. The parse stage only writes to the idle
+    /// pipe when this is set, so an interactive terminal never
+    /// pays the pipe syscalls.
+    // bridging: bool = false,
+    bridging: bool,
+
+    /// Set by the gather stage when the stream is over (quit
+    /// signal, EOF, or pty error). The parse stage drains any
+    /// remaining batches and then exits.
+    // done: bool = false,
+    done: bool,
+}
+
+/// The state shared between the gather and parse stages. This is
+/// a fixed ring of buffers plus the metadata to rotate ownership
+/// between the two threads. A buffer is owned by exactly one
+/// stage at a time, so buffer contents need no locking. Only the
+/// ring metadata is guarded by the mutex.
+//
+// const Pipeline = struct { ... };
+#[cfg(not(windows))]
+struct Pipeline {
+    // mutex: std.Thread.Mutex = .{},
+    mutex: std::sync::Mutex<PipelineMeta>,
+
+    /// Signaled when a batch is published or the gather stage is
+    /// done. Waited on by the parse stage.
+    // batch_ready: std.Thread.Condition = .{},
+    batch_ready: std::sync::Condvar,
+
+    /// Signaled when a batch has been consumed. Waited on by the
+    /// gather stage when all buffers are in flight (backpressure).
+    // slot_free: std.Thread.Condition = .{},
+    slot_free: std::sync::Condvar,
+
+    /// A self-pipe the parse stage uses to interrupt the gather
+    /// stage's bridge poll the moment it runs out of batches.
+    /// Bridging a refill gap is only free while the parse stage
+    /// is busy; once it goes idle, every additional microsecond
+    /// spent bridging is added straight to output latency. The
+    /// write end is used by the parse stage, the read end is
+    /// polled by the gather stage. -1 when unavailable, in which
+    /// case bridge polls are bounded by their timeout only.
+    //
+    // PORT NOTE: the reference stores these next to the guarded fields but
+    // never mutates them after setup, so they are plain (unguarded) fields
+    // here; they are written once before the gather thread is spawned.
+    // idle_read_fd: posix.fd_t = -1, idle_write_fd: posix.fd_t = -1,
+    idle_read_fd: std::os::fd::RawFd,
+    idle_write_fd: std::os::fd::RawFd,
+
+    /// The buffer storage itself.
+    // bufs: [buffer_count][buffer_capacity]u8 = undefined,
+    //
+    // INV-P1: NEVER referenced as a whole. Reach a slot only via `slot_ptr`.
+    // The `Box` keeps 256 KiB off the read thread's stack (the reference's
+    // `Pipeline` is a stack local in `threadMainPosix`, which is fine for Zig's
+    // 16 MiB default but not for a Rust thread's 2 MiB).
+    bufs: Box<std::cell::UnsafeCell<[[u8; ReadThread::BUFFER_CAPACITY]; ReadThread::BUFFER_COUNT]>>,
+}
+
+// SAFETY (INV-P1..P3 on `ReadThread`, proven by
+// `.port/phase-2/mirihar-ws10-pipeline`): a slot is owned by exactly one stage
+// at a time, ownership transfers only under `mutex`, and no reference spanning
+// more than the owned slot is ever formed. The mutex acquire/release pairs that
+// transfer ownership are the happens-before edges for the buffer contents.
+#[cfg(not(windows))]
+unsafe impl Sync for Pipeline {}
+
+#[cfg(not(windows))]
+impl Pipeline {
+    fn new() -> Pipeline {
+        Pipeline {
+            mutex: std::sync::Mutex::new(PipelineMeta::default()),
+            batch_ready: std::sync::Condvar::new(),
+            slot_free: std::sync::Condvar::new(),
+            idle_read_fd: -1,
+            idle_write_fd: -1,
+            // `vec![0; N].into_boxed_slice()`-style zeroing rather than a stack
+            // temporary: a 256 KiB array literal would be materialized on the
+            // stack first and blow the thread stack.
+            bufs: unsafe {
+                let layout = std::alloc::Layout::new::<
+                    [[u8; ReadThread::BUFFER_CAPACITY]; ReadThread::BUFFER_COUNT],
+                >();
+                let p = std::alloc::alloc_zeroed(layout);
+                if p.is_null() {
+                    std::alloc::handle_alloc_error(layout);
+                }
+                Box::from_raw(p.cast())
+            },
+        }
+    }
+
+    /// The base address of slot `i` — pointer arithmetic from the storage base,
+    /// forming NO reference to the array or to any other slot (INV-P1).
+    ///
+    /// The deliberate absence of `(*self.bufs.get())[i]` is the whole point:
+    /// that indexes through a place expression over the array, which
+    /// materializes a reference covering every slot — including the one the
+    /// other stage is concurrently using. The `naive_wholeref` candidate in
+    /// `.port/phase-2/mirihar-ws10-pipeline` is exactly that mistake and Miri
+    /// reports UB under both Stacked and Tree Borrows.
+    #[inline]
+    fn slot_ptr(&self, i: usize) -> *mut u8 {
+        debug_assert!(i < ReadThread::BUFFER_COUNT);
+        let base: *mut [u8; ReadThread::BUFFER_CAPACITY] = self.bufs.get().cast();
+        // SAFETY: `i < BUFFER_COUNT`, so this stays inside the allocation.
+        unsafe { base.add(i).cast::<u8>() }
+    }
+}
+
 // pub const ReadThread = struct {
 pub struct ReadThread;
 
@@ -3683,6 +3868,77 @@ pub(crate) struct ReadThreadArgs<M: rustty_apprt_api::surface::AppMailbox>(
 unsafe impl<M: rustty_apprt_api::surface::AppMailbox> Send for ReadThreadArgs<M> {}
 
 impl ReadThread {
+    /// The number of buffers rotated between the gather and parse
+    /// stages. The gather stage can run at most this many batches
+    /// ahead of the parse stage before it blocks, which (via the
+    /// kernel pty queue) is also what preserves flow control to the
+    /// child.
+    ///
+    /// The Darwin value was empirically chosen through measurements on
+    /// an M4 Max. Less than 4 there are minor slowdowns, above 4 there
+    /// are no improvements.
+    ///
+    /// Other POSIX platforms keep fewer batches in flight so terminal
+    /// parsing applies backpressure to bulk writers before frame-style
+    /// output can queue stale frames.
+    // const buffer_count = if (builtin.os.tag.isDarwin()) 4 else 2;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub(crate) const BUFFER_COUNT: usize = 4;
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub(crate) const BUFFER_COUNT: usize = 2;
+
+    /// The capacity of each gather buffer. One batch is also the unit
+    /// of work the parse stage does per terminal lock acquisition, so
+    /// this bounds both gather latency and lock hold time.
+    // const buffer_capacity = if (builtin.os.tag.isDarwin()) 64 * 1024 else 8 * 1024;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub(crate) const BUFFER_CAPACITY: usize = 64 * 1024;
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub(crate) const BUFFER_CAPACITY: usize = 8 * 1024;
+
+    /// How many gathered bytes mark a stream as saturated. The macOS
+    /// kernel tty output queue hands the master at most about 1 KiB
+    /// per read, so gathering a full 1 KiB means the writer filled
+    /// the queue (a bulk stream worth briefly waiting on), while
+    /// anything smaller is an interactive trickle that must be
+    /// delivered with no added latency.
+    // const bridge_threshold = 1024;
+    const BRIDGE_THRESHOLD: usize = 1024;
+
+    /// How many times an EAGAIN on a saturated stream is retried
+    /// with an immediate read before we're willing to sleep in poll.
+    /// Basically, a spin retry.
+    ///
+    /// The writer refills the drained kernel queue within a few
+    /// microseconds, while a sleep and wakeup through poll costs
+    /// several more. If the gather stage sleeps on every refill gap,
+    /// the whole pipeline degenerates to lockstep with the writer at
+    /// about 1 KiB per wakeup. A short burst of nonblocking reads
+    /// bridges nearly all refill gaps without sleeping. Measured, 8
+    /// to 16 retries catches over 90% of the gaps and nearly doubles
+    /// the saturated drain rate, and larger values helped little.
+    /// The cost is bounded to at most this many extra ~0.5us read
+    /// syscalls per gap, and we only spin on streams that already
+    /// gathered a full kernel queue, so an idle or interactive
+    /// terminal never spins.
+    // const bridge_spin_max = 16;
+    const BRIDGE_SPIN_MAX: usize = 16;
+
+    /// How long one bridge poll waits for the writer's next refill
+    /// once the spin retries above have failed. If the stream is
+    /// quiet for this long the burst is over and we deliver what we
+    /// have.
+    // const bridge_poll_timeout_ms = 1;
+    const BRIDGE_POLL_TIMEOUT_MS: libc::c_int = 1;
+
+    /// The longest one batch may spend bridging refill gaps before it
+    /// is delivered regardless. This bounds output latency for
+    /// streams that produce just enough to keep bridging. Three
+    /// milliseconds is well under one display frame, so batching is
+    /// invisible on screen.
+    // const gather_budget_ns = 3 * std.time.ns_per_ms;
+    pub(crate) const GATHER_BUDGET_NS: u64 = 3 * 1_000_000;
+
     // DEFERRED (D6 thread lifecycle, 0 tests — R1-safe): spawned only by the
     // deferred threadEnter; drives the deferred `Termio.processOutput` and the
     // crash-sentry thread_state (whose `surface` field reads the reference
@@ -3790,8 +4046,10 @@ impl ReadThread {
     //         }
     //     }
     // }
-    // PORTED (xev B3, 0 reference tests — R1-safe): the real raw `poll(2)`/`read`/
-    // `processOutput` read loop, below the preserved verbatim comment above.
+    // PORTED (xev B3, then rewritten as the two-stage pipeline by 2f0e6659d +
+    // bb0ac4c72 in WS10 T20): the real raw `poll(2)`/`read`/`processOutput`
+    // pipeline, below the preserved verbatim comment above. This function is
+    // the PARSE stage; `gatherMainPosix` below is the gather stage.
     #[cfg(not(windows))]
     fn threadMainPosix<M: rustty_apprt_api::surface::AppMailbox>(
         fd: std::os::fd::RawFd,
@@ -3802,7 +4060,11 @@ impl ReadThread {
         // defer posix.close(quit);
         //
         // PORT NOTE: `defer` -> a Drop guard (the `CloseHandleGuard` precedent) so the
-        // quit-pipe read end is closed on EVERY return path below.
+        // quit-pipe read end is closed on EVERY return path below — including the
+        // two NEW early returns this commit adds (the `setNonblock` failure and
+        // the gather-thread spawn failure), and including a panic unwind.
+        // Declared BEFORE the scoped gather thread so it drops AFTER the join:
+        // the gather stage polls `quit` for its whole life.
         struct QuitFdCloser(std::os::fd::RawFd);
         impl Drop for QuitFdCloser {
             fn drop(&mut self) {
@@ -3842,37 +4104,237 @@ impl ReadThread {
         // impl — see `crash.sentry` + the ReadThread deferral note above).
         // Preserved verbatim above; wired when core lands.
 
-        // First thing, we want to set the fd to non-blocking. We do this
-        // so that we can try to read from the fd in a tight loop and only
-        // check the quit fd occasionally.
-        // if (posix.fcntl(fd, posix.F.GETFL, 0)) |flags| {
-        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
-        if flags != -1 {
-            // _ = posix.fcntl(
-            //     fd,
-            //     posix.F.SETFL,
-            //     flags | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })),
-            // ) catch |err| {
-            //     log.warn("read thread failed to set flags err={}", .{err});
-            //     log.warn("this isn't a fatal error, but may cause performance issues", .{});
-            // };
-            let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-            if rc == -1 {
-                // log.warn("read thread failed to set flags err={}", .{err});
-                // log.warn("this isn't a fatal error, but may cause performance issues", .{});
-            }
-        } else {
-            // log.warn("read thread failed to get flags err={}", .{err});
-            // log.warn("this isn't a fatal error, but may cause performance issues", .{});
+        // Set the fd to non-blocking so the gather stage can drain it
+        // in a tight loop and fall back to poll for readiness. The
+        // pipeline can't run with a blocking fd (a blocking read
+        // would hang the gather stage on a quiet pty), but this also
+        // can't realistically fail on a valid pty master.
+        // if (!setNonblock(fd)) {
+        //     log.err("read thread exiting, pty fd must be non-blocking", .{});
+        //     return;
+        // }
+        if !Self::setNonblock(fd) {
+            // log.err("read thread exiting, pty fd must be non-blocking", .{});
+            return;
         }
 
-        // Build up the list of fds we're going to poll. We are looking
-        // for data on the pty and our quit notification.
-        // var pollfds: [2]posix.pollfd = .{
-        //     .{ .fd = fd, .events = posix.POLL.IN, .revents = undefined },
-        //     .{ .fd = quit, .events = posix.POLL.IN, .revents = undefined },
-        // };
-        let mut pollfds: [libc::pollfd; 2] = [
+        // Shared pipeline
+        // var pipeline: Pipeline = .{};
+        let mut pipeline = Pipeline::new();
+
+        // The idle self-pipe (see the Pipeline field docs). If we
+        // can't create it we still run correctly, bridge polls are
+        // just bounded by their timeout instead of being interrupted
+        // when the parse stage goes idle.
+        // if (posix.pipe2(.{ .CLOEXEC = true, .NONBLOCK = true })) |fds| { ... }
+        //
+        // PORT NOTE: `pipe2(2)` is Linux-only; macOS has no such call, so this
+        // is `pipe(2)` + the two `fcntl` flag sets, which is what Zig's
+        // `posix.pipe2` itself falls back to on Darwin.
+        let mut idle_fds = [-1 as std::os::fd::RawFd; 2];
+        if unsafe { libc::pipe(idle_fds.as_mut_ptr()) } == 0 {
+            for fd in idle_fds {
+                unsafe {
+                    let fl = libc::fcntl(fd, libc::F_GETFL, 0);
+                    if fl != -1 {
+                        libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+                    }
+                    let fd_fl = libc::fcntl(fd, libc::F_GETFD, 0);
+                    if fd_fl != -1 {
+                        libc::fcntl(fd, libc::F_SETFD, fd_fl | libc::FD_CLOEXEC);
+                    }
+                }
+            }
+            pipeline.idle_read_fd = idle_fds[0];
+            pipeline.idle_write_fd = idle_fds[1];
+        } else {
+            // log.warn("read thread failed to create idle pipe err={}", .{err});
+        }
+        // defer if (pipeline.idle_read_fd >= 0) { close both };
+        struct IdlePipeCloser(std::os::fd::RawFd, std::os::fd::RawFd);
+        impl Drop for IdlePipeCloser {
+            fn drop(&mut self) {
+                if self.0 >= 0 {
+                    unsafe {
+                        libc::close(self.0);
+                        libc::close(self.1);
+                    }
+                }
+            }
+        }
+        let _idle_closer = IdlePipeCloser(pipeline.idle_read_fd, pipeline.idle_write_fd);
+
+        // const gather_thread = std.Thread.spawn(.{}, gatherMainPosix, .{ fd, quit, &pipeline });
+        //
+        // PORT NOTE: `spawn` + `defer gather_thread.join()` becomes
+        // `std::thread::scope`, which IS the join — including on a panic unwind,
+        // which the reference's `defer` also covers. The scope is what lets the
+        // gather stage borrow `&pipeline` without an `Arc`, matching the
+        // reference's stack-local `Pipeline`.
+        //
+        // The reference treats a spawn failure as fatal ("if we can't spawn a
+        // thread the process is already doomed"); `std::thread::scope` has no
+        // fallible spawn, so the failure mode it guards against surfaces as the
+        // same abort Rust already uses for thread-spawn failure.
+        let pipeline = &pipeline;
+        std::thread::scope(|scope| {
+            let gather_fd = fd;
+            let gather_quit = quit;
+            let mut builder = std::thread::Builder::new();
+            if cfg!(not(any(target_os = "macos", target_os = "ios"))) {
+                // if (comptime !builtin.os.tag.isDarwin()) gather_thread.setName("io-gather");
+                builder = builder.name("io-gather".to_string());
+            }
+            builder
+                .spawn_scoped(scope, move || {
+                    Self::gatherMainPosix(gather_fd, gather_quit, pipeline);
+                })
+                .expect("spawn io-gather");
+
+            // This thread is the parse stage. We consume batches in ring
+            // order until the gather stage reports the stream is over and
+            // the ring is drained.
+            loop {
+                // const batch: []const u8 = batch: { ... };
+                //
+                // INV-P1/P3: only the ring METADATA is read under the guard. The
+                // slot INDEX and LENGTH are copied out and the guard is dropped
+                // before the buffer is touched, and the buffer is reached only
+                // through `slot_ptr` — never `(*bufs)[slot]`.
+                let (slot, len) = {
+                    let mut m = pipeline.mutex.lock().unwrap_or_else(|e| e.into_inner());
+                    // while (pipeline.count == 0) { if (pipeline.done) return;
+                    //     pipeline.batch_ready.wait(&pipeline.mutex); }
+                    while m.count == 0 {
+                        if m.done {
+                            return;
+                        }
+                        m = pipeline
+                            .batch_ready
+                            .wait(m)
+                            .unwrap_or_else(|e| e.into_inner());
+                    }
+                    // const slot = pipeline.tail;
+                    // break :batch pipeline.bufs[slot][0..pipeline.lens[slot]];
+                    (m.tail, m.lens[m.tail])
+                };
+
+                // The batch buffer is owned by this stage until we advance
+                // the tail below, so it is safe to read outside the lock.
+                // io.processOutput(batch);
+                //
+                // SAFETY (INV-P2): this stage owns `slot` from the take above to
+                // the tail advance below; `len <= BUFFER_CAPACITY` was written by
+                // the gather stage under the same mutex. `io` is the read
+                // thread's sole `processOutput` toucher (the `ReadThreadArgs`
+                // contract); its `renderer_state` is live for the pointer's
+                // lifetime (joined in `threadExit` before teardown).
+                unsafe {
+                    let batch = core::slice::from_raw_parts(pipeline.slot_ptr(slot), len);
+                    crate::Termio::processOutput(io, batch);
+                }
+
+                {
+                    let wake = {
+                        let mut m = pipeline.mutex.lock().unwrap_or_else(|e| e.into_inner());
+                        // pipeline.tail = (pipeline.tail + 1) % buffer_count;
+                        m.tail = (m.tail + 1) % Self::BUFFER_COUNT;
+                        // pipeline.count -= 1;
+                        m.count -= 1;
+                        // const wake = pipeline.count == 0 and pipeline.bridging and
+                        //     pipeline.idle_write_fd >= 0;
+                        m.count == 0 && m.bridging && pipeline.idle_write_fd >= 0
+                    };
+                    // pipeline.slot_free.signal();
+                    pipeline.slot_free.notify_one();
+
+                    // We ran out of batches while the gather stage is
+                    // bridging a refill gap: interrupt its poll so it
+                    // delivers what it has instead of sleeping out the
+                    // timeout while we sit idle.
+                    // if (wake) { _ = posix.write(pipeline.idle_write_fd, "i") catch {}; }
+                    if wake {
+                        unsafe {
+                            libc::write(
+                                pipeline.idle_write_fd,
+                                b"i".as_ptr().cast::<std::ffi::c_void>(),
+                                1,
+                            );
+                        }
+                    }
+                }
+
+                // Batch boundary: hand the renderer state mutex off if the
+                // renderer is waiting. See renderer::State::lock_demand.
+                //
+                // PORT NOTE (D4, oracle d34b54e9b): the oracle inserts this at the
+                // end of the parse-stage loop of exactly this pipeline
+                // (`io.renderer_state.yieldToDemand()` after the batch's slot is
+                // returned) — a LATER upstream commit than the two this task
+                // ports. rustty landed it early against the then-current
+                // single-loop shape; now that the pipeline exists it moves to the
+                // position the oracle gives it, immediately after the slot is
+                // returned. `processOutput` locks AND unlocks
+                // `renderer_state.mutex` internally, so the mutex is NOT held
+                // here, as `yield_to_demand` requires.
+                //
+                // SAFETY: `io` and its `renderer_state` are live for the read
+                // thread's whole lifetime (the `ReadThreadArgs` contract, as for
+                // the `processOutput` call above).
+                unsafe {
+                    (*(*io).renderer_state).yield_to_demand();
+                }
+            }
+        });
+    }
+
+    /// The gather stage. This drains the pty into rotating buffers,
+    /// bridging the kernel queue's refill gaps for saturated streams,
+    /// and publishes each batch to the parse stage. This thread owns
+    /// all fd monitoring, including the quit fd.
+    //
+    // fn gatherMainPosix(fd: posix.fd_t, quit: posix.fd_t, pipeline: *Pipeline) void {
+    #[cfg(not(windows))]
+    fn gatherMainPosix(fd: std::os::fd::RawFd, quit: std::os::fd::RawFd, pipeline: &Pipeline) {
+        // if (builtin.os.tag.isDarwin()) {
+        //     internal_os.macos.pthread_setname_np(&"io-gather".*);
+        //     setQosClass();
+        // }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        unsafe {
+            rustty_os::macos::pthread_setname_np(c"io-gather".as_ptr());
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Self::setQosClass();
+
+        // However we exit, tell the parse stage the stream is over so
+        // it drains the ring and joins us.
+        //
+        // defer { pipeline.mutex.lock(); pipeline.done = true;
+        //         pipeline.mutex.unlock(); pipeline.batch_ready.signal(); }
+        //
+        // PORT NOTE: a Drop guard, so this fires on EVERY exit path INCLUDING a
+        // panic unwind. Without it the parse stage would wait on `batch_ready`
+        // forever and `thread::scope` would never join (E1's "return early in
+        // two new places" hazard, generalized).
+        struct DoneSignal<'a>(&'a Pipeline);
+        impl Drop for DoneSignal<'_> {
+            fn drop(&mut self) {
+                {
+                    let mut m = self.0.mutex.lock().unwrap_or_else(|e| e.into_inner());
+                    m.done = true;
+                }
+                self.0.batch_ready.notify_one();
+            }
+        }
+        let _done = DoneSignal(pipeline);
+
+        // The fds we poll: data on the pty, our quit notification,
+        // and the parse stage's idle wake. The idle fd only
+        // participates in bridge polls (the parse stage only writes
+        // while we're bridging), so the outer poll slices it off.
+        // var pollfds: [3]posix.pollfd = .{ ... };
+        let mut pollfds: [libc::pollfd; 3] = [
             libc::pollfd {
                 fd,
                 events: libc::POLLIN,
@@ -3883,120 +4345,262 @@ impl ReadThread {
                 events: libc::POLLIN,
                 revents: 0,
             },
+            libc::pollfd {
+                fd: pipeline.idle_read_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
 
-        // var buf: [1024]u8 = undefined;
-        let mut buf = [0u8; 1024];
-        // while (true) {
         loop {
-            // We try to read from the file descriptor as long as possible
-            // to maximize performance. We only check the quit fd if the
-            // main fd blocks. This optimizes for the realistic scenario that
-            // the data will eventually stop while we're trying to quit. This
-            // is always true because we kill the process.
-            // while (true) {
-            'tight: loop {
-                // const n = posix.read(fd, &buf) catch |err| {
-                //     switch (err) {
-                //         // This means our pty is closed. We're probably
-                //         // gracefully shutting down.
-                //         error.NotOpenForReading,
-                //         error.InputOutput,
-                //         => { log.info("io reader exiting", .{}); return; },
-                //         // No more data, fall back to poll and check for
-                //         // exit conditions.
-                //         error.WouldBlock => break,
-                //         else => { log.err("io reader error err={}", .{err}); unreachable; },
-                //     }
-                // };
+            // Claim the next free buffer. This blocks only when the
+            // parse stage is a full ring behind, which is exactly when
+            // we should stop reading and let the kernel queue exert
+            // backpressure on the child.
+            //
+            // INV-P1/P3: the guard yields only the slot INDEX; the buffer is
+            // reached below through `slot_ptr` alone.
+            // const buf: *[buffer_capacity]u8 = buf: { ... &pipeline.bufs[pipeline.head] };
+            let slot = {
+                let mut m = pipeline.mutex.lock().unwrap_or_else(|e| e.into_inner());
+                while m.count == Self::BUFFER_COUNT {
+                    m = pipeline
+                        .slot_free
+                        .wait(m)
+                        .unwrap_or_else(|e| e.into_inner());
+                }
+                m.head
+            };
+            let buf: *mut u8 = pipeline.slot_ptr(slot);
+
+            // var total: usize = 0;
+            let mut total: usize = 0;
+            // var bridge_start: ?std.time.Instant = null;
+            let mut bridge_start: Option<std::time::Instant> = None;
+            // var spins: usize = 0;
+            let mut spins: usize = 0;
+            // var fatal = false;
+            let mut fatal = false;
+
+            // Fill the buffer from the pty. For a saturated stream the
+            // kernel queue momentarily runs dry while the writer
+            // refills it in parallel, so we bridge those gaps with
+            // spin retries and a short poll instead of delivering a
+            // tiny batch.
+            // gather: while (total < buffer_capacity) {
+            'gather: while total < Self::BUFFER_CAPACITY {
+                // const n = posix.read(fd, buf[total..]) catch |err| switch (err) { ... };
                 //
-                // (PORT NOTE: `posix.read` wraps `read(2)` and retries EINTR internally
-                // (Zig std) — modeled by the inner retry loop; the Zig error set
-                // maps EBADF -> NotOpenForReading, EIO -> InputOutput, EAGAIN ->
-                // WouldBlock.)
-                let n: usize = 'read: loop {
-                    let rc = unsafe {
-                        libc::read(fd, buf.as_mut_ptr().cast::<std::ffi::c_void>(), buf.len())
-                    };
-                    if rc >= 0 {
-                        break 'read rc as usize;
-                    }
+                // SAFETY (INV-P2): this stage owns `slot` until the publish
+                // below, and `total < BUFFER_CAPACITY`, so the destination range
+                // is inside this slot.
+                let rc = unsafe {
+                    libc::read(
+                        fd,
+                        buf.add(total).cast::<std::ffi::c_void>(),
+                        Self::BUFFER_CAPACITY - total,
+                    )
+                };
+                if rc < 0 {
                     let e = errno();
                     // (posix.read retries on EINTR.)
                     if e == libc::EINTR {
-                        continue 'read;
+                        continue 'gather;
                     }
-                    // error.NotOpenForReading, error.InputOutput => graceful shutdown.
-                    if e == libc::EBADF || e == libc::EIO {
-                        // log.info("io reader exiting", .{});
-                        return;
-                    }
-                    // error.WouldBlock => break (fall back to poll below).
+
+                    // error.WouldBlock
                     if e == libc::EAGAIN {
-                        break 'tight;
+                        // Anything below the threshold is interactive.
+                        // if (total < bridge_threshold) break :gather;
+                        if total < Self::BRIDGE_THRESHOLD {
+                            break 'gather;
+                        }
+
+                        // The stream is saturated, so we bridge the
+                        // gap. First retry the read directly a bounded
+                        // number of times, since the refill usually
+                        // lands within microseconds.
+                        // if (spins < bridge_spin_max) { spins += 1; continue :gather; }
+                        if spins < Self::BRIDGE_SPIN_MAX {
+                            spins += 1;
+                            continue 'gather;
+                        }
+
+                        // Still dry, so we want to sleep in poll for
+                        // the next refill, within our latency budget.
+                        // const now = std.time.Instant.now() catch break :gather;
+                        // if (bridge_start) |start| {
+                        //     if (now.since(start) >= gather_budget_ns) break :gather;
+                        // } else bridge_start = now;
+                        let now = std::time::Instant::now();
+                        match bridge_start {
+                            Some(start) => {
+                                if now.duration_since(start).as_nanos()
+                                    >= u128::from(Self::GATHER_BUDGET_NS)
+                                {
+                                    break 'gather;
+                                }
+                            }
+                            None => bridge_start = Some(now),
+                        }
+
+                        // Bridging a refill gap is only free while the
+                        // parse stage is busy, since the wait hides
+                        // behind parse time. Once the parser is idle,
+                        // every microsecond we hold this batch is
+                        // added straight to output latency, and for a
+                        // request/response producer (a burst ending
+                        // in a query, e.g. frame + cursor position
+                        // report) the writer is blocked on a reply to
+                        // data sitting in this buffer, so a poll here
+                        // would always sleep its full timeout. Deliver
+                        // now if the parser is idle, and otherwise arm
+                        // the idle wake so it can interrupt our poll
+                        // the moment that changes.
+                        // (bb0ac4c72)
+                        {
+                            let mut m = pipeline.mutex.lock().unwrap_or_else(|e| e.into_inner());
+                            if m.count == 0 {
+                                break 'gather;
+                            }
+                            m.bridging = true;
+                        }
+
+                        // const r = posix.poll(&pollfds, bridge_poll_timeout_ms) catch { ... };
+                        let r = unsafe {
+                            libc::poll(
+                                pollfds.as_mut_ptr(),
+                                pollfds.len() as libc::nfds_t,
+                                Self::BRIDGE_POLL_TIMEOUT_MS,
+                            )
+                        };
+                        if r < 0 {
+                            let pe = errno();
+                            Self::clearBridging(pipeline);
+                            if pe == libc::EINTR {
+                                continue 'gather;
+                            }
+                            // log.warn("bridge poll failed err={}", .{poll_err});
+                            break 'gather;
+                        }
+                        // clearBridging(pipeline);
+                        Self::clearBridging(pipeline);
+
+                        // Quiet for a full timeout means the burst ended.
+                        // if (r == 0) break :gather;
+                        if r == 0 {
+                            break 'gather;
+                        }
+
+                        // On a quit signal we deliver what we have and stop.
+                        if pollfds[1].revents & libc::POLLIN != 0 {
+                            // log.info("read thread got quit signal", .{});
+                            fatal = true;
+                            break 'gather;
+                        }
+
+                        // The parse stage went idle: drain the wake
+                        // and deliver what we have. The pty may have
+                        // data as well, but the next batch can pick
+                        // that up; an idle parser means delivery must
+                        // not wait.
+                        if pollfds[2].revents & libc::POLLIN != 0 {
+                            // var trash: [16]u8 = undefined;
+                            let mut trash = [0u8; 16];
+                            loop {
+                                let drained = unsafe {
+                                    libc::read(
+                                        pipeline.idle_read_fd,
+                                        trash.as_mut_ptr().cast::<std::ffi::c_void>(),
+                                        trash.len(),
+                                    )
+                                };
+                                if drained < 0 || (drained as usize) < trash.len() {
+                                    break;
+                                }
+                            }
+                            break 'gather;
+                        }
+
+                        // HUP without IN means no more data is
+                        // coming. Deliver and let the outer poll
+                        // decide what to do.
+                        if pollfds[0].revents & libc::POLLIN == 0 {
+                            break 'gather;
+                        }
+
+                        continue 'gather;
                     }
-                    // else => { log.err("io reader error err={}", .{err}); unreachable; }
-                    unreachable!("io reader error");
-                };
+
+                    // The pty is closed. We're probably gracefully
+                    // shutting down.
+                    // error.NotOpenForReading, error.InputOutput =>
+                    if e == libc::EBADF || e == libc::EIO {
+                        // log.info("io gather exiting", .{});
+                        fatal = true;
+                        break 'gather;
+                    }
+
+                    // else => { log.err("io gather error err={}", .{err}); unreachable; }
+                    unreachable!("io gather error");
+                }
+                let n = rc as usize;
 
                 // This happens on macOS instead of WouldBlock when the
-                // child process dies. To be safe, we just break the loop
-                // and let our poll happen.
-                // if (n == 0) break;
+                // child process dies. Deliver what we have and let the
+                // outer poll detect HUP.
+                // if (n == 0) break :gather;
                 if n == 0 {
-                    break 'tight;
+                    break 'gather;
                 }
 
-                // log.info("DATA: {d}", .{n});
-                // @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
-                //
-                // SAFETY: `io` is the read thread's sole `processOutput` toucher
-                // (the `ReadThreadArgs` contract); its `renderer_state` is live for
-                // the pointer's lifetime (joined in `threadExit` before teardown).
-                unsafe {
-                    crate::Termio::processOutput(io, &buf[..n]);
-                }
+                // total += n;
+                total += n;
 
-                // Batch boundary: hand the renderer state mutex off if the
-                // renderer is waiting. See renderer::State::lock_demand.
-                //
-                // PORT NOTE (D4, oracle d34b54e9b): the oracle inserts this at the
-                // end of the parse-stage loop of its gather/parse PIPELINE
-                // `threadMainPosix` (`io.renderer_state.yieldToDemand()` after the
-                // batch's slot is returned) — a later upstream rewrite that rustty
-                // has NOT ported yet. rustty's read thread is still the older
-                // single-loop shape (`read` -> `processOutput` in a tight loop), for
-                // which the equivalent batch boundary is right here, after
-                // `processOutput` returns — which is exactly where the oracle's
-                // OTHER hunk (`threadMainWindows`, whose loop has this same older
-                // shape) puts it. `processOutput` locks AND unlocks
-                // `renderer_state.mutex` internally, so the mutex is NOT held here,
-                // as `yield_to_demand` requires.
-                //
-                // SAFETY: `io` and its `renderer_state` are live for the read
-                // thread's whole lifetime (the `ReadThreadArgs` contract, as for the
-                // `processOutput` call above).
-                unsafe {
-                    (*(*io).renderer_state).yield_to_demand();
-                }
+                // Each refill gap gets a fresh spin budget.
+                // spins = 0;
+                spins = 0;
             }
 
-            // Wait for data.
-            // _ = posix.poll(&pollfds, -1) catch |err| {
-            //     log.warn("poll failed on read thread, exiting early err={}", .{err});
-            //     return;
-            // };
-            let rc = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1) };
+            // Publish the batch (if any) to the parse stage and rotate
+            // to the next buffer.
+            // if (total > 0) { ... }
+            if total > 0 {
+                {
+                    let mut m = pipeline.mutex.lock().unwrap_or_else(|e| e.into_inner());
+                    m.lens[slot] = total;
+                    m.head = (m.head + 1) % Self::BUFFER_COUNT;
+                    m.count += 1;
+                }
+                pipeline.batch_ready.notify_one();
+            }
+
+            // if (fatal) return;
+            if fatal {
+                return;
+            }
+
+            // A full buffer means the stream is still hot, so go
+            // claim the next buffer without an intervening poll.
+            // if (total == buffer_capacity) continue;
+            if total == Self::BUFFER_CAPACITY {
+                continue;
+            }
+
+            // Wait for data. The idle fd is sliced off: the parse
+            // stage only writes to it while we're bridging.
+            // _ = posix.poll(pollfds[0..2], -1) catch |err| { ... return; };
+            let rc = unsafe { libc::poll(pollfds.as_mut_ptr(), 2, -1) };
             if rc < 0 {
+                if errno() == libc::EINTR {
+                    continue;
+                }
                 // log.warn("poll failed on read thread, exiting early err={}", .{err});
                 return;
             }
 
             // If our quit fd is set, we're done.
-            // if (pollfds[1].revents & posix.POLL.IN != 0) {
-            //     log.info("read thread got quit signal", .{});
-            //     return;
-            // }
+            // if (pollfds[1].revents & posix.POLL.IN != 0) { ... return; }
             if pollfds[1].revents & libc::POLLIN != 0 {
                 // log.info("read thread got quit signal", .{});
                 return;
@@ -4004,15 +4608,37 @@ impl ReadThread {
 
             // If our pty fd is closed, then we're also done with our
             // read thread.
-            // if (pollfds[0].revents & posix.POLL.HUP != 0) {
-            //     log.info("pty fd closed, read thread exiting", .{});
-            //     return;
-            // }
+            // if (pollfds[0].revents & posix.POLL.HUP != 0) { ... return; }
             if pollfds[0].revents & libc::POLLHUP != 0 {
                 // log.info("pty fd closed, read thread exiting", .{});
                 return;
             }
         }
+    }
+
+    /// Clears the bridging flag armed before a bridge poll, closing
+    /// the window in which the parse stage writes idle wakes.
+    //
+    // fn clearBridging(pipeline: *Pipeline) void { ... }
+    #[cfg(not(windows))]
+    fn clearBridging(pipeline: &Pipeline) {
+        let mut m = pipeline.mutex.lock().unwrap_or_else(|e| e.into_inner());
+        m.bridging = false;
+    }
+
+    /// Set `fd` to non-blocking. Returns false if it could not be done.
+    //
+    // PORT NOTE: the reference factors this out of `threadMainPosix` as part of
+    // 2f0e6659d because the failure is now FATAL (the pipeline cannot run on a
+    // blocking fd), where the pre-pipeline loop only logged a perf warning.
+    #[cfg(not(windows))]
+    fn setNonblock(fd: std::os::fd::RawFd) -> bool {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
+        if flags == -1 {
+            // log.warn("read thread failed to get flags err={}", .{err});
+            return false;
+        }
+        unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) != -1 }
     }
 
     /// Sets the QoS class of the calling thread for the read pipeline
@@ -5277,6 +5903,12 @@ mod tests {
         mutex: *mut rustty_zigstd::thread::Mutex,
         renderer_mailbox: *mut rustty_renderer::thread::Mailbox,
         renderer_wakeup: xev::Async,
+        /// The `PROCESSED_BYTES` value when this harness was built, so
+        /// `processed_bytes` is per-harness even though the counter is global
+        /// (the KATs are serialized by `FORK_KAT_SERIAL`).
+        processed_base: usize,
+        /// The `PROCESSED_CALLS` value when this harness was built.
+        calls_base: usize,
     }
 
     #[cfg(target_os = "macos")]
@@ -5424,11 +6056,26 @@ mod tests {
                 mutex,
                 renderer_mailbox,
                 renderer_wakeup,
+                processed_base: crate::PROCESSED_BYTES.load(core::sync::atomic::Ordering::Relaxed),
+                calls_base: crate::PROCESSED_CALLS.load(core::sync::atomic::Ordering::Relaxed),
             }
         }
 
         // The active Screen text, read under the renderer mutex (matching the read
         // thread's `processOutput` lock discipline).
+        /// The running tally of bytes handed to `Termio::processOutput` since
+        /// this harness was built. See `crate::PROCESSED_BYTES`.
+        fn processed_bytes(&self) -> usize {
+            crate::PROCESSED_BYTES.load(core::sync::atomic::Ordering::Relaxed) - self.processed_base
+        }
+
+        /// The number of `processOutput` CALLS since this harness was built —
+        /// i.e. batches delivered by the read pipeline. See
+        /// `crate::PROCESSED_CALLS`.
+        fn processed_calls(&self) -> usize {
+            crate::PROCESSED_CALLS.load(core::sync::atomic::Ordering::Relaxed) - self.calls_base
+        }
+
         fn screen_dump(&self) -> Vec<u8> {
             use allocator_api2::alloc::Global;
             unsafe { (*self.mutex).lock() };
@@ -5816,5 +6463,438 @@ mod tests {
             "the io-reader thread must run at QOS_CLASS_USER_INITIATED (0x19); \
              observed 0x{qos:x} (0x{QOS_CLASS_DEFAULT:x} is the un-set default)"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // WS10 T20 — the two properties `E-os-termio-platform.md` row E1 says do
+    // not exist, plus the shutdown property for the new early returns.
+    //
+    // `readthread_pty_bytes_land_in_screen` above passes with EITHER the
+    // pre-pipeline single loop or the two-stage pipeline (it writes 18 bytes and
+    // looks for them), so it is NOT a guard for this commit. These three are.
+    //
+    // Real openpty + poll/read syscalls + spawned threads -> Miri-excluded
+    // (MIRI_EXCEPTIONS.md, "rustty-termio B3"); the pure ring logic is proven
+    // under Miri by `.port/phase-2/mirihar-ws10-pipeline` instead.
+    // ---------------------------------------------------------------------
+
+    /// Drive a real pty through a real `ReadThread::threadMainPosix` and return
+    /// `(handle, master, slave, quit_write, TestTermio)` wired for teardown.
+    #[cfg(target_os = "macos")]
+    fn spawn_readthread_over_pty() -> (
+        std::thread::JoinHandle<()>,
+        std::os::fd::RawFd,
+        std::os::fd::RawFd,
+        std::os::fd::RawFd,
+        TestTermio,
+    ) {
+        let t = TestTermio::build();
+        let io = t.io;
+
+        let pty = Pty::open(ptypkg::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        })
+        .expect("Pty::open");
+        let master = pty.master;
+        let slave = pty.slave;
+
+        let mut pipefds = [0 as std::os::fd::RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipefds.as_mut_ptr()) }, 0, "pipe()");
+        let quit_read = pipefds[0];
+        let quit_write = pipefds[1];
+
+        let read_args = ReadThreadArgs::<TestMailbox>(master, io, quit_read);
+        let handle = std::thread::spawn(move || {
+            let args = read_args;
+            ReadThread::threadMainPosix::<TestMailbox>(args.0, args.1, args.2);
+        });
+
+        (handle, master, slave, quit_write, t)
+    }
+
+    /// A saturated producer must be fully drained into the terminal with no
+    /// lost or duplicated bytes, and the pipeline must be measurably FASTER at
+    /// it than the pre-pipeline shape.
+    ///
+    /// This is the THROUGHPUT property `2f0e6659d` exists for. Two assertions,
+    /// deliberately different in kind:
+    ///
+    /// 1. COMPLETENESS (both profiles). Every byte the producer wrote reaches
+    ///    `processOutput` exactly once. This catches a dropped, duplicated or
+    ///    stalled batch — the ways the ring can be wrong. It does NOT
+    ///    distinguish the pipeline from the old loop: measured, the old shape
+    ///    is equally correct. Stating that plainly matters, because a test that
+    ///    passes either way is not a guard, and this half is not one.
+    ///
+    /// 2. BATCHING (both profiles). The MEAN BATCH SIZE floor below. THIS is
+    ///    the guard, and it is deliberately NOT a throughput number.
+    ///
+    /// WHY NOT THROUGHPUT. The obvious assertion is bytes/second, and the
+    /// pipeline does win on it: measured on this host (M4 Pro, 2 MiB through a
+    /// real pty, `--release`, N=9 each, both shapes built from this same tree)
+    /// the old loop ran at 87.5 MiB/s median and this pipeline at 123.8 MiB/s,
+    /// +41%. But a wall-clock floor is not a sound ASSERTION here: run inside
+    /// the full crate suite on a box under load ~9 the same pipeline measured
+    /// 71.7 MiB/s — below the old shape's median. A floor that a healthy build
+    /// fails under contention is a flaky gate, and a flaky gate gets ignored,
+    /// which is the failure mode this whole workstream exists to avoid. The
+    /// throughput number is therefore PRINTED, not asserted.
+    ///
+    /// The mean batch size measures the same mechanism without the clock. The
+    /// pre-pipeline loop read into a `[u8; 1024]`, so its batches cannot exceed
+    /// 1024 bytes — a HARD ceiling, not a measurement. The pipeline gathers into
+    /// 64 KiB slots. Measured, saturated: old shape exactly **1024.0** bytes,
+    /// this shape exactly **65536** bytes. The floor is 4096 — 4x above the old
+    /// shape's structural ceiling and 16x below this shape's observed value, and
+    /// it does not move when the machine is busy.
+    ///
+    /// PROVEN TO FAIL AGAINST THE PRE-PIPELINE SHAPE: the old
+    /// `read`-into-`[u8; 1024]`/`processOutput` loop was spliced back into this
+    /// same tree and this test re-run — mean batch 1024, RED.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_pipeline_sustains_saturated_producer() {
+        use std::time::{Duration, Instant};
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A saturating write: many multiples of one 64 KiB gather buffer, so the
+        // ring rotates repeatedly and the gather stage hits its backpressure
+        // wait. Printable, non-control bytes only, so every byte lands in the
+        // screen as itself (no VT interpretation, no OPOST translation).
+        //
+        // 2 MiB through an 80x24 screen scrolls ~1000 times and the SCREEN
+        // cannot retain it, so the byte-exact assertion is made on what the
+        // parse stage was handed (`processed_bytes`), and the screen is used
+        // only as the liveness proof that the bytes really went through
+        // `processOutput` rather than into a counter.
+        const TOTAL: usize = 2 * 1024 * 1024;
+
+        // The mean-batch-size floor, and how many samples we take. See the doc
+        // comment for the measurements these come from.
+        const MEAN_BATCH_FLOOR: f64 = 4096.0;
+        #[cfg(not(debug_assertions))]
+        const REPS: usize = 5;
+        // One rep in dev: the same work takes ~22s there and the throughput
+        // assertion is disabled anyway.
+        #[cfg(debug_assertions)]
+        const REPS: usize = 1;
+
+        let mut best_mib_s = 0.0f64;
+        let mut best_mean_batch = 0.0f64;
+        for _ in 0..REPS {
+            let (handle, master, slave, quit_write, t) = spawn_readthread_over_pty();
+            let chunk: Vec<u8> = (0..4096u32).map(|i| b'a' + (i % 26) as u8).collect();
+
+            let t0 = Instant::now();
+            let writer = std::thread::spawn(move || {
+                let mut written = 0usize;
+                while written < TOTAL {
+                    let want = core::cmp::min(chunk.len(), TOTAL - written);
+                    let rc = unsafe {
+                        libc::write(slave, chunk.as_ptr().cast::<std::ffi::c_void>(), want)
+                    };
+                    if rc <= 0 {
+                        let e = std::io::Error::last_os_error();
+                        if e.raw_os_error() == Some(libc::EINTR)
+                            || e.raw_os_error() == Some(libc::EAGAIN)
+                        {
+                            continue;
+                        }
+                        break;
+                    }
+                    written += rc as usize;
+                }
+                written
+            });
+
+            // Bounded wait for the parse stage to consume everything the writer
+            // produced. `processed_bytes` is the harness's tally of every byte
+            // `processOutput` was handed.
+            let written = writer.join().expect("writer join");
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let mut processed = 0usize;
+            while Instant::now() < deadline {
+                processed = t.processed_bytes();
+                if processed >= written {
+                    break;
+                }
+                std::thread::sleep(Duration::from_micros(200));
+            }
+            let elapsed = t0.elapsed();
+            let mib_s = processed as f64 / (1024.0 * 1024.0) / elapsed.as_secs_f64();
+            if mib_s > best_mib_s {
+                best_mib_s = mib_s;
+            }
+            let calls = t.processed_calls();
+            let mean_batch = processed as f64 / calls.max(1) as f64;
+            if mean_batch > best_mean_batch {
+                best_mean_batch = mean_batch;
+            }
+
+            // Teardown BEFORE asserting, so a failure never leaks threads/fds.
+            let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
+            handle.join().expect("read thread join");
+            unsafe {
+                libc::close(quit_write);
+                libc::close(master);
+                libc::close(slave);
+            }
+            // The bytes must actually reach the Screen, not just a counter.
+            let dump = t.screen_dump();
+            let inked = dump.iter().any(|&b| b.is_ascii_lowercase());
+            t.teardown();
+
+            assert!(
+                written >= TOTAL / 2,
+                "the writer stalled: only {written} of {TOTAL} bytes reached the pty"
+            );
+            assert_eq!(
+                processed, written,
+                "every byte the producer wrote must reach processOutput exactly once \
+                 (lost/duplicated batch, or a stalled ring)"
+            );
+            assert!(inked, "the drained bytes must actually reach the Screen");
+        }
+
+        eprintln!(
+            "PIPELINE: best of {REPS} = {best_mib_s:.2} MiB/s, \
+             best mean batch = {best_mean_batch:.0} bytes"
+        );
+
+        assert!(
+            best_mean_batch >= MEAN_BATCH_FLOOR,
+            "mean batch size {best_mean_batch:.0} bytes is below the \
+             {MEAN_BATCH_FLOOR} byte floor. The pre-pipeline loop read into a \
+             [u8; 1024], so it CANNOT exceed 1024 here (measured: 1024.0); a \
+             number in that range means the gather stage's batching is gone."
+        );
+    }
+
+    /// A single sub-1 KiB write must reach the screen with interactive latency.
+    ///
+    /// This is the LATENCY property `2f0e6659d` + `bb0ac4c72` exist for, and the
+    /// throughput suite cannot see it: a pipeline that batched aggressively
+    /// would ace throughput and ruin interactivity. Anything under
+    /// `bridge_threshold` (1 KiB) is by construction an interactive trickle that
+    /// must be delivered on the FIRST EAGAIN with no bridging at all, so the
+    /// only added latency is one condvar hop.
+    ///
+    /// TWO BOUNDS, and the reason there are two:
+    ///
+    /// * LIVENESS, on the worst of 8 writes: `gather_budget_ns` (3 ms) x 50 =
+    ///   150 ms. Deliberately loose. This one only says "a small write is not
+    ///   lost or wedged", and it is the bound a single scheduler hiccup on a
+    ///   contended box must not trip.
+    /// * BATCHING, on the MEDIAN of 8 writes: `gather_budget_ns` / 10 = 300 us.
+    ///   THIS is the guard. Median, not worst, because the regression it catches
+    ///   moves EVERY write while contention moves one — so the median separates
+    ///   the two causes that a worst-case bound conflates.
+    ///
+    /// The 300 us figure is measured, not chosen (M4 Pro, real pty, `--release`,
+    /// box under load ~9, N=9 runs of 8 writes each):
+    ///
+    ///     healthy (this shape):        medians 22..46 us
+    ///     bridging-always (mutated):   medians 1176..1212 us
+    ///
+    /// 300 us sits ~6x above the healthy tail and ~4x below the degraded floor.
+    ///
+    /// PROVEN TO FAIL: disabling BOTH early-delivery paths — the
+    /// `total < bridge_threshold` break (2f0e6659d) and the `count == 0` idle
+    /// break (bb0ac4c72) — moves the median to ~1.18 ms, over the bound.
+    /// Disabling only the first is NOT caught, and that is a real finding
+    /// recorded here rather than papered over: with an idle parser,
+    /// `bb0ac4c72`'s guard delivers immediately anyway, so the two paths are
+    /// genuinely redundant for THIS scenario and only their conjunction is
+    /// observable from outside.
+    ///
+    /// RELEASE-ONLY for the batching bound: in a `dev` build the VT parse
+    /// dominates (see `readthread_pipeline_sustains_saturated_producer`) and the
+    /// microsecond-scale signal is buried. The liveness bound runs in both.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_pipeline_keeps_interactive_latency() {
+        use std::time::{Duration, Instant};
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (handle, master, slave, quit_write, t) = spawn_readthread_over_pty();
+
+        // The two bounds. See the doc comment for the measurements behind them.
+        const LIVENESS_FACTOR: u32 = 50;
+        const BATCHING_DIVISOR: u32 = 10;
+        let bound = Duration::from_nanos(ReadThread::GATHER_BUDGET_NS) * LIVENESS_FACTOR;
+        let batching_bound = Duration::from_nanos(ReadThread::GATHER_BUDGET_NS) / BATCHING_DIVISOR;
+
+        // Several separate small writes, each well under bridge_threshold, so
+        // one lucky delivery cannot carry the test.
+        let mut worst = Duration::ZERO;
+        let mut lats: Vec<Duration> = Vec::new();
+        for i in 0..8u8 {
+            let needle: Vec<u8> = format!("LAT{i}").into_bytes();
+            let start = Instant::now();
+            let w = unsafe {
+                libc::write(
+                    slave,
+                    needle.as_ptr().cast::<std::ffi::c_void>(),
+                    needle.len(),
+                )
+            };
+            assert_eq!(w, needle.len() as isize, "wrote the needle");
+
+            let deadline = start + bound;
+            let mut seen = false;
+            while Instant::now() < deadline {
+                let dump = t.screen_dump();
+                if dump.windows(needle.len()).any(|c| c == needle.as_slice()) {
+                    seen = true;
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            let elapsed = start.elapsed();
+            lats.push(elapsed);
+            if elapsed > worst {
+                worst = elapsed;
+            }
+            if !seen {
+                // Teardown before failing.
+                let _ =
+                    unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
+                handle.join().expect("read thread join");
+                unsafe {
+                    libc::close(quit_write);
+                    libc::close(master);
+                    libc::close(slave);
+                }
+                t.teardown();
+                panic!(
+                    "interactive write {i} ({} bytes, under the {} byte bridge threshold) \
+                     did not reach the screen within {bound:?}",
+                    needle.len(),
+                    1024,
+                );
+            }
+        }
+
+        let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
+        handle.join().expect("read thread join");
+        unsafe {
+            libc::close(quit_write);
+            libc::close(master);
+            libc::close(slave);
+        }
+        t.teardown();
+
+        lats.sort();
+        let median = lats[lats.len() / 2];
+        eprintln!("PIPELINE-LATENCY: median = {median:?} worst = {worst:?}");
+        assert!(
+            worst < bound,
+            "LIVENESS: worst interactive latency {worst:?} exceeded the bound \
+             {bound:?} (gather_budget_ns x {LIVENESS_FACTOR})"
+        );
+        #[cfg(not(debug_assertions))]
+        assert!(
+            median < batching_bound,
+            "BATCHING: median interactive latency {median:?} exceeded \
+             {batching_bound:?} (gather_budget_ns / {BATCHING_DIVISOR}). Healthy \
+             is 22-46us on this host; a bridging-always pipeline measures \
+             ~1.18ms. Interactive writes are being batched."
+        );
+        #[cfg(debug_assertions)]
+        let _ = batching_bound;
+    }
+
+    /// Both pipeline stages must shut down cleanly, from either side.
+    ///
+    /// `E-os-termio-platform.md` row E1 warns that the parse stage gained two
+    /// new early returns. The hazards are (a) the `QuitFdCloser` Drop guard not
+    /// firing on one of them, and (b) the gather stage exiting without setting
+    /// `done`, which would leave the parse stage blocked on `batch_ready`
+    /// forever and hang the join. Both directions are exercised:
+    ///
+    ///   quit-during-gather: quit with the pty idle, so the gather stage is
+    ///     asleep in its outer `poll` and the parse stage is asleep on
+    ///     `batch_ready`. The gather stage's `DoneSignal` guard is the ONLY
+    ///     thing that wakes the parse stage.
+    ///   quit-during-parse: quit while a bulk stream is in flight, so the ring
+    ///     is non-empty and the parse stage is mid-`processOutput`.
+    ///
+    /// A regression in either direction hangs, so the join is bounded by the
+    /// test harness's own timeout via a watchdog channel rather than blocking
+    /// forever.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_pipeline_shuts_down_cleanly_from_both_stages() {
+        use std::time::{Duration, Instant};
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        for scenario in ["quit-during-gather", "quit-during-parse"] {
+            let (handle, master, slave, quit_write, t) = spawn_readthread_over_pty();
+
+            if scenario == "quit-during-parse" {
+                // Put a bulk stream in flight so the ring is non-empty and the
+                // parse stage is busy when the quit arrives.
+                let chunk = vec![b'z'; 64 * 1024];
+                for _ in 0..8 {
+                    let _ = unsafe {
+                        libc::write(
+                            slave,
+                            chunk.as_ptr().cast::<std::ffi::c_void>(),
+                            chunk.len(),
+                        )
+                    };
+                }
+            } else {
+                // Idle pty: let both stages settle into their waits.
+                std::thread::sleep(Duration::from_millis(20));
+            }
+
+            let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
+
+            // Bounded join: a hang here IS the regression, so surface it as a
+            // failure rather than wedging the suite.
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            let joiner = std::thread::spawn(move || {
+                handle.join().expect("read thread join");
+                let _ = tx.send(());
+            });
+            let joined = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+
+            if joined {
+                joiner.join().expect("joiner join");
+            }
+            unsafe {
+                libc::close(quit_write);
+                libc::close(master);
+                libc::close(slave);
+            }
+            if joined {
+                t.teardown();
+            } else {
+                // The read thread is still alive and still owns `io`, so
+                // `teardown()` (which moves the Termio out of its box and
+                // invalidates its self-pointers) would be UB. Leaking the
+                // harness is the only safe option on this path.
+                //
+                // `TestTermio` is not `Drop` — its `teardown` is an explicit
+                // consuming method — so clippy is right that `mem::forget` is a
+                // no-op here. The no-op IS the point: NOT calling `teardown` is
+                // the leak, and the explicit forget documents that at the site.
+                #[allow(clippy::forget_non_drop)]
+                std::mem::forget(t);
+            }
+
+            assert!(
+                joined,
+                "{scenario}: the read pipeline did not shut down within 10s \
+                 (a stage exited without waking the other)"
+            );
+            let _ = Instant::now();
+        }
     }
 }
