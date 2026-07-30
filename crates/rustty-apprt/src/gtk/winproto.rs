@@ -171,6 +171,19 @@ impl App {
         }
     }
 
+    /// Test-observability seam (rustty-specific): the X11 arm's XKB base event
+    /// code, or `None` on any other arm. Lets the live X11 KAT prove
+    /// `XkbQueryExtension` ran without exposing the arm's internals.
+    #[cfg(feature = "x11")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn x11_xkb_base_event_code(&self) -> Option<std::os::raw::c_int> {
+        match self {
+            App::X11(v) => Some(v.xkb_base_event_code()),
+            _ => None,
+        }
+    }
+
     /// PORTS: `winproto.zig:55-63` `App.eventMods`. Dispatch to the active arm's
     /// `eventMods`; when it returns `None` (always, for the noop arm), fall back
     /// to [`crate::gtk::key::translate_mods`] (`winproto.zig:62`).
@@ -327,6 +340,22 @@ impl Window {
             Window::Wayland(v) => v.sync_appearance(),
             #[cfg(feature = "x11")]
             Window::X11(v) => v.sync_appearance(),
+        }
+    }
+
+    /// PORTS: `winproto.zig:144-148` `Window.addSubprocessEnv`. Dispatch to the
+    /// active arm; only the X11 arm contributes anything (`WINDOWID`). Called from
+    /// `class::Surface::default_termio_env` (`surface.zig:1633`).
+    pub fn add_subprocess_env(
+        &mut self,
+        env: &mut std::collections::HashMap<String, String>,
+    ) -> Result<(), WinprotoError> {
+        match self {
+            Window::None(v) => v.add_subprocess_env(env),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(v) => v.add_subprocess_env(env),
+            #[cfg(feature = "x11")]
+            Window::X11(v) => v.add_subprocess_env(env),
         }
     }
 

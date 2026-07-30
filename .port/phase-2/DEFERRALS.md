@@ -4773,9 +4773,34 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
 > `OpenURI` call site is also open; see "GTK portal OpenURI (L6)" above. Read this entry as
 > covering the winproto-x11 and dcimgui divergences only.
 
-- **`gtk/winproto/x11.rs` — the x11 window-protocol arm (L6).** The reference
-  `winproto/x11.zig` is unported; the x11 arm of the `App`/`Window` unions stays `#[cfg]`-gated
-  off. Non-gap on Wayland sessions. Un-defers with `gdk4-x11` + an X11 session to verify.
+- ~~**`gtk/winproto/x11.rs` — the x11 window-protocol arm (L6).**~~ **RESOLVED.** The
+  arm landed 2026-07-19 (`aae9536`) behind the `x11` cargo feature (`gdk4-x11` with
+  the `xlib` feature, which re-exports `x11-dl`) — this bullet's "unported" wording
+  was written one day earlier and was stale from 2026-07-19 onward. **WS16
+  [2026-07-29] closed the three residual sub-deferrals the arm carried** and verified
+  it live: XKB extension init in `App::init` (`x11.zig:71-101`), the `eventMods` XKB
+  modifier peek (`x11.zig:114-159`), and `addSubprocessEnv`/`WINDOWID`
+  (`x11.zig:320-329`) — the last of which also added the missing
+  `winproto::Window::add_subprocess_env` dispatch (no-op on the `noop`/`wayland`
+  arms, exactly as the reference), a `class::window::Window::winproto_mut()`
+  accessor (`window.zig:386-388`), and the `class/surface.rs` `default_termio_env`
+  call site (`surface.zig:1629-1638`, including the `<ENV_PREFIX>_QUICK_TERMINAL`
+  var). The whole arm now matches `x11.zig` at the pin with ONE intentional
+  non-gap: `supportsQuickTerminal` is `false`, which is what the reference itself
+  returns (the quick terminal is a wlr-layer-shell/Wayland feature, `x11.zig:161`).
+  `crates/rustty/Cargo.toml` gained `wayland`/`x11` pass-through features so the
+  shipped binary can actually select an arm — without them the live app could only
+  ever be the noop arm. VERIFIED live on the VM under `GDK_BACKEND=x11` (rootless
+  XWayland, GNOME/mutter session): four KATs (`tests/gtk_x11_{winproto,xkb_init,
+  event_mods,windowid}.rs`) plus the running binary logging `windowing protocol=X11`
+  and `xprop` reads of `WM_CLASS`, `_MOTIF_WM_HINTS` (decorations word `0x0` with
+  CSD vs `0x1` with `--window-decoration=server`), `_KDE_NET_WM_BLUR_BEHIND_REGION`
+  (a well-formed CARDINAL rect list with `--background-blur=true`, absent without
+  it), `WINDOWID` round-tripped through a real child process, and the `WM_HINTS`
+  urgency bit appearing only after a bell on an unfocused window. Residual
+  verification scope — NOT an implementation deferral — is ledgered in
+  `VERIFICATION_DEBT.md` V5.
+  Plan: `docs/superpowers/plans/2026-07-29-ws16-x11-winproto.md`.
 - **`gtk/winproto/wayland.rs` — the wayland arm LANDED [2026-07-19], with two sub-deferrals.**
   `winproto/{wayland.rs, wayland/globals.rs, blur_region.rs}` are now ported behind the `wayland`
   cargo feature (`gdk4-wayland` + `wayland-client`/`wayland-backend`/`wayland-protocols`/

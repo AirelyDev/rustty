@@ -161,3 +161,62 @@ cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_winproto \
   -- --ignored --exact wayland_set_urgent_dispatches_activation_token
 ```
 **Expected:** `ok` in ~1 s (bounded at ~10 s — a broken seam fails, never hangs).
+
+## V5. X11 winproto residuals: no native X11 session, no KWin, and NO synthetic keyboard input on this VM [WS16, 2026-07-29]
+
+**Context.** The x11 winproto arm is complete and verified live (WS16) but ONLY under
+`GDK_BACKEND=x11` against the VM's rootless `Xwayland :0` inside a GNOME/mutter
+Wayland session. That environment provides a real X server, real XIDs, real
+properties, and mutter as the X window manager — so the arm selection
+(`windowing protocol=X11` in the app log), `WM_CLASS`, `_MOTIF_WM_HINTS` (CSD `0x0`
+vs SSD `0x1`), `WINDOWID`, XKB extension init (`base_event_code = 85`), the
+blur-property write/delete, and the `WM_HINTS` urgency bit are all genuinely
+exercised, each against a negative control. THREE things it cannot show:
+
+1. **`App::event_mods` returning `Some(mods)` — the pending-`XkbStateNotify` half.**
+   This needs a real keypress still queued when `event_mods` runs.
+   **NO form of synthetic keyboard input reaches ANY application on this session.**
+   Proven, not assumed: `xdotool type --window` (XSendEvent) is ignored by GTK as
+   synthetic; plain `xdotool type` (XTEST) with the target window holding confirmed X
+   focus (`xdotool getwindowfocus` == the window's XID) also delivered nothing — and
+   the same injection into an INDEPENDENT X client (`zenity --entry`, likewise
+   focused) captured an empty string. So the observed `0` occurrences of
+   `debug(gtk-x11): found extra XkbStateNotify event w/lookup_mods: …` says nothing
+   about the port: no keystroke ever arrived. (mutter routes XTEST through
+   libei/RemoteDesktop, which an SSH session cannot obtain.) The code path itself IS
+   live, not dead: `gtk/key.rs:206` `event_mods` calls
+   `app_winproto.event_mods(device, gtk_mods)`, reached from
+   `class/surface.rs:2602`, matching the reference's `key.zig:153` /
+   `surface.zig:1382`. The idle-queue half IS automated
+   (`tests/gtk_x11_event_mods.rs`), and it also guards the load-bearing
+   `XEventsQueued` check — without it `XPeekEvent` blocks forever and that KAT hangs.
+2. **A native X11 login session.** The VM has no GNOME X11 session installed
+   (`/usr/share/xsessions/` holds only `xfce.desktop`; `gnome-session-xsession` is
+   absent) and `Xvfb` is not installed; selecting the Xfce-on-Xorg session requires a
+   human at the GDM greeter. Anything that differs between "GTK app forced onto the
+   X11 backend inside a Wayland session" and "GTK app in a real X11 session"
+   (XSETTINGS/xrdb scale factors, session-type-dependent portal behavior) is
+   untested. Nothing in `winproto/x11.zig` reads those, so this is
+   belt-and-suspenders.
+3. **KWin blur.** `_KDE_NET_WM_BLUR_BEHIND_REGION` is a KDE protocol; under mutter
+   only the property write is observable, never the visual effect. Same limitation as
+   V3 for the Wayland arm.
+
+**Recipe (a machine with a real X11 session and a console keyboard; KDE Plasma X11
+covers all three):**
+```
+cargo build -p rustty --features gtk,x11
+RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/debug/rustty
+```
+1. `xprop -id $(xdotool search --class rustty | tail -1) WM_CLASS` →
+   `"rustty-debug", "io.airely.rustty-debug"` (release build: `"rustty"`,
+   `"io.airely.rustty"`).
+2. `--window-decoration=server` → `_MOTIF_WM_HINTS` decorations word (3rd) `0x1` AND
+   a WM-drawn title bar; default → `0x0` AND the app's CSD header bar.
+3. On KDE/KWin: `--background-blur=true --background-opacity=0.8` → VISIBLE blur
+   behind the window.
+4. **Press Shift, then Ctrl, on a PHYSICAL keyboard in the focused window** and
+   confirm the ported XKB peek fires — stderr shows
+   `debug(gtk-x11): found extra XkbStateNotify event w/lookup_mods: 1` (bit 0 =
+   Shift) / `... : 100` (bit 2 = Control). This is item 1 above and is the only one
+   of the four that needs real hardware input rather than just a different session.

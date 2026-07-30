@@ -34,6 +34,14 @@ path = "src/main.rs"
 # headless / deferred-leaf build.
 default = ["gtk"]
 gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
+# Windowing-protocol arms of the GTK apprt's `winproto` union, passed through to
+# rustty-apprt. Both imply `gtk` and are OFF by default (R5: the macOS/embedded
+# build never selects them, and a plain `--features gtk` build stays noop-only,
+# pulling zero protocol crates). A Linux distro build enables the arms its target
+# sessions need — typically both. `x11` additionally makes `GDK_BACKEND=x11` runs
+# land on the real X11 arm rather than falling through to noop.
+wayland = ["gtk", "rustty-apprt/wayland"]
+x11 = ["gtk", "rustty-apprt/x11"]
 
 [dependencies]
 # Entry points fan out only: cli, apprt, core.

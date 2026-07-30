@@ -347,3 +347,16 @@ libadwaita = { version = "0.9", features = ["v1_5"] }
 # the KAT's direct `Backend` match needs this dev edge; it resolves to the same
 # rustty-termio instance as the transitive one.
 rustty-termio = { workspace = true }
+# `rustty_vt::input::key_mods::Mods` in scope for the X11 winproto KATs
+# (`tests/gtk_x11_event_mods.rs`), which compare the dispatched modifier state.
+# Integration tests reach only dev-dependencies, not the lib's `[dependencies]`
+# edge; this resolves to the SAME rustty-vt instance as the library's.
+rustty-vt = { workspace = true }
+# `gdk4_x11::X11Surface` in scope for the same KATs, which read the realized
+# window's XID to check `WINDOWID`. Same version + features as the library's
+# Linux-gated optional edge so cargo unifies to ONE instance. Unconditional here
+# (like `gtk4`/`libadwaita` above) — the test files are
+# `#[cfg(all(target_os = "linux", feature = "x11"))]`, so nothing of them compiles on
+# a non-x11 build; the cost is that a Linux `cargo test -p rustty-apprt` needs
+# `libX11-devel` present (it is, on the VM).
+gdk4-x11 = { version = "0.11", features = ["xlib"] }

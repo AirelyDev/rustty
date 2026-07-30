@@ -585,6 +585,16 @@ impl Window {
         }
     }
 
+    /// PORTS: `wayland.zig:228-231` `Window.addSubprocessEnv`. The Wayland arm adds
+    /// nothing — there is no Wayland analogue of the `WINDOWID` XID convention.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub fn add_subprocess_env(
+        &mut self,
+        _env: &mut std::collections::HashMap<String, String>,
+    ) -> Result<(), WinprotoError> {
+        Ok(())
+    }
+
     /// PORTS: `wayland.zig:233-246` `Window.setUrgent`.
     pub fn set_urgent(&mut self, urgent: bool) -> Result<(), WinprotoError> {
         // `self.globals.get(.xdg_activation) orelse return` (`wayland.zig:234`).

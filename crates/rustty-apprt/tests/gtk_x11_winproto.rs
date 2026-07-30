@@ -1,26 +1,49 @@
-//! X11 WINPROTO KAT — verifies `winproto::App::init` selects the X11 arm on a
-//! live X11 (XWayland) display. This is the ground-truth check for the wayland winproto
-//! port: reaching `Protocol::X11` proves the whole FFI chain worked on the real
-//! compositor — downcast of the GDK display to `WaylandDisplay`, `wl_display_raw()`,
-//! wrapping it in a `wayland-backend` foreign-display Backend + Connection, binding a
-//! fresh `wl_registry`, and the two-phase roundtrip that enumerates/binds globals
-//! (`wl_compositor` + `xdg_activation_v1` are present on GNOME/mutter; the KDE globals
-//! are gracefully absent). If any step failed or crashed, `App::init` would return
-//! `.none`/`Err` rather than the X11 arm.
+//! X11 WINPROTO KATs — the live ground truth for the `gtk/winproto/x11.rs` arm.
 //!
-//! R5: gated `all(target_os = "linux", feature = "x11")` (wayland implies gtk).
+//! Reaching `Protocol::X11` proves the whole FFI chain worked against a real X
+//! server: the downcast of the GDK display to `gdk4_x11::X11Display`, the
+//! `xdisplay()` hinge, `g_set_prgname` + `gdk_x11_display_set_program_class`, the
+//! XKB extension init, and the atom interning. If any step failed or crashed,
+//! `App::init` would land on `.none`/`Err` instead of the X11 arm.
+//!
+//! RUN (on the Fedora VM, inside its live GNOME session; XWayland provides the X
+//! server — `GDK_BACKEND=x11` is REQUIRED, it is what makes GTK open a
+//! `GdkX11Display` instead of the Wayland one):
+//!
+//! ```sh
+//! export XDG_RUNTIME_DIR=/run/user/$(id -u)
+//! export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+//! export DISPLAY=:0
+//! export XAUTHORITY=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* | head -1)
+//! export GDK_BACKEND=x11 LIBGL_ALWAYS_SOFTWARE=1
+//! cargo test -p rustty-apprt --features gtk,x11 --test gtk_x11_winproto -- --ignored
+//! ```
+//!
+//! NEGATIVE CONTROL (what makes these KATs falsifiable): run the same binary with
+//! `GDK_BACKEND` unset against the native Wayland display and every test here
+//! FAILS at its `Protocol::X11` assertion with `left: None` — the union falls
+//! through to the noop arm. So a pass is evidence the X11 arm really ran.
+//!
+//! ONE HEADED TEST PER BINARY (structural, verified empirically on the VM):
+//! `gtk4::init()` binds GTK to the calling thread, and libtest runs every `#[test]`
+//! on its own spawned thread — even under `--test-threads=1`. A second
+//! `gtk4::init()` in the same process therefore panics with
+//! `"Attempted to initialize GTK from two different threads"` (or
+//! `"Failed to acquire default main context"` when the two race). So each X11 KAT
+//! lives in its OWN integration-test file / process:
+//! `gtk_x11_winproto.rs` (this file, arm selection), `gtk_x11_xkb_init.rs`,
+//! `gtk_x11_event_mods.rs`, `gtk_x11_windowid.rs`.
+//!
+//! R5: gated `all(target_os = "linux", feature = "x11")` (the `x11` feature implies
+//! `gtk`).
 #![cfg(all(target_os = "linux", feature = "x11"))]
 #![allow(non_snake_case)]
-
-use gtk4::prelude::*;
 
 use rustty_apprt::gtk::winproto::{App, Protocol};
 use rustty_config::Config as CoreConfig;
 
 #[test]
-#[ignore = "headed GTK + a live X11 (XWayland) display; run (do NOT set GDK_BACKEND=x11): \
-            cargo test -p rustty-apprt --features gtk,x11 --test gtk_wayland_winproto \
-            -- --ignored --exact x11_app_init_selects_x11_arm"]
+#[ignore = "headed GTK + a live X server; run under GDK_BACKEND=x11 — see the module docs"]
 fn x11_app_init_selects_x11_arm() {
     gtk4::init().expect("gtk init");
     let display = gtk4::gdk::Display::default().expect("a default GDK display");
@@ -31,8 +54,8 @@ fn x11_app_init_selects_x11_arm() {
     assert_eq!(
         app.protocol(),
         Protocol::X11,
-        "on a live X11 (XWayland) session, winproto must select the X11 arm — proving the \
-         WaylandDisplay downcast + wl_display_raw + foreign-backend registry bind + \
-         two-phase roundtrip all succeeded on the real compositor without crashing"
+        "under GDK_BACKEND=x11 the winproto union must select the X11 arm — proving \
+         the X11Display downcast + xdisplay() + set_program_class + atom intern all \
+         succeeded against the real X server without crashing"
     );
 }

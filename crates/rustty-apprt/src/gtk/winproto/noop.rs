@@ -134,6 +134,16 @@ impl Window {
         Ok(())
     }
 
+    /// PORTS: `noop.zig:70` `Window.addSubprocessEnv`. The no-op backend adds
+    /// nothing to the child environment.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub fn add_subprocess_env(
+        &mut self,
+        _env: &mut std::collections::HashMap<String, String>,
+    ) -> Result<(), WinprotoError> {
+        Ok(())
+    }
+
     /// PORTS: `noop.zig:62-68` `Window.clientSideDecorationEnabled`. Returns
     /// `true` — the no-op backend always reports client-side decorations enabled.
     /// This should be the ACTUAL present state of the window, not the desired

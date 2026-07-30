@@ -1299,6 +1299,15 @@ impl Window {
         win
     }
 
+    /// PORTS: `window.zig:386-388` `winproto`. Mutable access to this window's
+    /// per-window windowing-protocol state. `pub(crate)` because the only consumer
+    /// is [`crate::gtk::class::Surface::default_termio_env`] (`surface.zig:1633`);
+    /// the reference returns a raw `*winproto.Window`, which a `RefMut` models
+    /// faithfully here.
+    pub(crate) fn winproto_mut(&self) -> std::cell::RefMut<'_, winproto::Window> {
+        self.imp().winproto.borrow_mut()
+    }
+
     /// PORTS: `window.zig:897-899` `isQuickTerminal`.
     #[must_use]
     pub fn is_quick_terminal(&self) -> bool {

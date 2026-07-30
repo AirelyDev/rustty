@@ -135,7 +135,7 @@ loud RED rather than an infinite CI wait.
 | WS | Plan file | Scope |
 |----|-----------|-------|
 | **WS15 GTK GlobalShortcuts** | `2026-07-23-ws15-gtk-globalshortcuts.md` | XDG-portal DBus round-trip (`refresh`/`close`/`request`) on the VM's GNOME session; `global:` keybinds functional. |
-| **WS16 X11 winproto** | `2026-07-23-ws16-x11-winproto.md` | Port `gtk/winproto/x11.rs` (gdk4-x11), runtime-verified under XWayland on the VM. |
+| **WS16 X11 winproto** | `2026-07-29-ws16-x11-winproto.md` | DONE [2026-07-29]. The arm itself had already landed at `aae9536` (2026-07-19) — the "unported" premise in this row and in `DEFERRALS.md` was STALE. WS16 closed its three residual sub-deferrals (XKB init, `eventMods` XKB peek, `addSubprocessEnv`/`WINDOWID` + the missing dispatch seam), added the `rustty` binary's `wayland`/`x11` pass-through features, and verified live under `GDK_BACKEND=x11` on the VM (4 KATs + `xprop` on `WM_CLASS`/`_MOTIF_WM_HINTS`/blur/`WINDOWID`/urgency, each with a negative control). Residual verification scope in `VERIFICATION_DEBT.md` V5. |
 | **WS17 verification debt** | `2026-07-23-ws17-verification-debt.md` | VD:V2 real-GPU rendering sign-off under virgl (VM display set to GPU-accelerated); VD:V4 mutter `set_urgent` KAT on the VM's real GNOME session; VD:V3 KDE/KWin quick-terminal (install `plasma-workspace` in the VM, run the slide/blur checks). |
 
 ## Out of scope (platform-impossible, NOT deferrals of choice)
