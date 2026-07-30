@@ -222,6 +222,7 @@ fn bpp_of(pixel_format: api::MTLPixelFormat) -> usize {
         // FAITHFULNESS QUIRK (R1): ghostty returns `128` here (not `16`), an
         // inconsistency with the byte-per-pixel values above (8-bit→1, 16→2,
         // 32→4, 64→8). Reproduced verbatim, NOT corrected.
+        // RE-AFFIRMED (P3-W0 T5): checked against oracle range 4749c4e93..6ad1fe7d8 — src/renderer/metal/Texture.zig is UNTOUCHED there, so this quirk is still faithful. Ledger: .port/tools/gates/stale-comments-D9.tsv.
         P::RGBA32Uint | P::RGBA32Sint | P::RGBA32Float => 128,
 
         // Weird formats I was too lazy to get the sizes of

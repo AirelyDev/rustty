@@ -100,6 +100,7 @@ mod tests {
 
         // `Buffer.initFill` (`buffer.zig:50-64`). FAITHFULNESS QUIRK: its `len` is
         // `data.len * @sizeOf(T)` (BYTES), unlike `init`'s element count — pinned.
+        // RE-AFFIRMED (P3-W0 T5): checked against oracle range 4749c4e93..6ad1fe7d8 — src/renderer/opengl/buffer.zig is UNTOUCHED there, so this quirk is still faithful. Ledger: .port/tools/gates/stale-comments-D9.tsv.
         let filled = buffer::Buffer::<u32>::init_fill(buffer::Options::default(), &[1u32, 2, 3])
             .expect("Buffer::init_fill");
         assert_eq!(filled.len, 3 * std::mem::size_of::<u32>());

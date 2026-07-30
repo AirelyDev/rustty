@@ -10,3 +10,28 @@
 #
 # --- worked examples (spot-reviewed during D9 bring-up) ---------------------
 crates/rustty-cli/src/ssh_cache.rs	612	contract-ok	comment already states "Saturating so a garbage timestamp can't overflow" — the Rust saturating_sub contract is stated; heuristic tripped on the primitive+"overflow" proximity.
+
+# --- P3-W0 T5: faithfully-carried oracle bugs ("FAITHFULNESS QUIRK") --------
+# These rows are NOT stale-comment candidates from the heuristic. They are the
+# deliberately-carried oracle bugs, recorded here so the NEXT resync sweep is a
+# diff against a named oracle path + SHA range rather than a rediscovery. This
+# is the only failure class in the program that is invisible in BOTH directions:
+# the quirk comment asserts intentionality, so a reviewer reads it and moves on,
+# and no gate can see when upstream FIXES one.
+# Columns as above; `note` carries: ORACLE=<path> RANGE=<a..b> VERDICT=<...>.
+crates/rustty-renderer/src/metal/buffer.rs	150	contract-ok	QUIRK RECONCILED+FIXED. ORACLE=src/renderer/metal/buffer.zig RANGE=4749c4e93..6ad1fe7d8 VERDICT=upstream FIXED it in 4a22eed6d (8 lines); the quirk comment was DELETED, not amended, and the fix ported (len tracked in units of T, and the stale-len-on-realloc half). Covered by metal::buffer::p3_buffer_alloc_tests.
+crates/rustty-renderer/src/metal/buffer.rs	214	contract-ok	QUIRK RECONCILED+FIXED. Same commit; syncFromArrayLists half. See the row above.
+crates/rustty-renderer/src/metal/texture.rs	222	contract-ok	QUIRK RE-AFFIRMED. ORACLE=src/renderer/metal/Texture.zig RANGE=4749c4e93..6ad1fe7d8 VERDICT=file UNTOUCHED in the range (absent from .port/phase-3/UPSTREAM_DIFF_STAT.txt); the 128-vs-16 bytes-per-pixel inconsistency is still upstream's, still faithful.
+crates/rustty-renderer/src/opengl.rs	101	contract-ok	QUIRK RE-AFFIRMED. ORACLE=src/renderer/opengl/buffer.zig RANGE=4749c4e93..6ad1fe7d8 VERDICT=file UNTOUCHED in the range; initFill's BYTE-valued len is still upstream's.
+crates/rustty-renderer/src/opengl/buffer.rs	82	contract-ok	QUIRK RE-AFFIRMED. ORACLE=src/renderer/opengl/buffer.zig RANGE=4749c4e93..6ad1fe7d8 VERDICT=file UNTOUCHED in the range; init (elements) vs init_fill (bytes) inconsistency preserved.
+crates/rustty-renderer/src/opengl/buffer.rs	177	contract-ok	QUIRK RE-AFFIRMED. Same oracle file and range as the row above.
+crates/rustty-xev/src/epoll.rs	992	contract-ok	QUIRK RE-AFFIRMED. ORACLE=pkg/libxev (vendored dependency, NOT a src/ file in this diff) RANGE=4749c4e93..6ad1fe7d8 VERDICT=out of scope for the source diff; the libxev version bump is P3-W9 T6's to re-check, and that task owns re-validating every rustty-xev quirk row.
+crates/rustty-xev/src/epoll.rs	1119	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
+crates/rustty-xev/src/epoll.rs	1158	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
+crates/rustty-xev/src/epoll.rs	1823	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
+crates/rustty-xev/src/io_uring.rs	1645	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
+crates/rustty-xev/src/io_uring.rs	1751	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
+crates/rustty-xev/src/io_uring.rs	2359	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
+crates/rustty-xev/src/dynamic.rs	142	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
+crates/rustty-xev/src/dynamic.rs	2263	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
+crates/rustty-termio/tests/live_shell.rs	304	contract-ok	QUIRK RE-AFFIRMED. ORACLE=src/termio/Exec.zig RANGE=4749c4e93..6ad1fe7d8 VERDICT=a test-harness quirk note, not a carried oracle bug; re-read and still accurate.

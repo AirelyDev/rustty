@@ -147,18 +147,14 @@ impl<T: Copy> Buffer<T> {
             // `self.buffer = …` assignment below (old `Retained`'s `Drop`).
 
             // Allocate a new buffer with enough to hold double what we require.
-            let size = req_bytes * 2;
+            // The length is tracked in units of `T`, so the byte count passed to
+            // Metal is `self.len * size_of::<T>()` exactly once.
+            self.len = data.len() * 2;
             self.buffer = self
                 .opts
                 .device
                 .newBufferWithLength_options(
-                    // FAITHFULNESS QUIRK (R1): ghostty passes `size * @sizeOf(T)`
-                    // === `req_bytes * 2 * size_of::<T>()`, over-allocating by a
-                    // `size_of::<T>()` factor (a latent reference quirk; harmless
-                    // — the buffer is always ≥ required). Reproduced byte-for-byte
-                    // as the exact `size * size_of::<T>()` expression, NOT
-                    // corrected.
-                    size * std::mem::size_of::<T>(),
+                    self.len * std::mem::size_of::<T>(),
                     self.opts.resource_options.resolve(),
                 )
                 .ok_or(Error::MetalFailed)?;
@@ -216,14 +212,13 @@ impl<T: Copy> Buffer<T> {
             // `self.buffer = …` assignment below (old `Retained`'s `Drop`).
 
             // Allocate a new buffer with enough to hold double what we require.
-            let size = req_bytes * 2;
+            // See `sync`: the length is tracked in units of `T`.
+            self.len = total_len * 2;
             self.buffer = self
                 .opts
                 .device
                 .newBufferWithLength_options(
-                    // FAITHFULNESS QUIRK (R1): see `sync` — the `size * @sizeOf(T)`
-                    // over-allocation is reproduced verbatim, NOT corrected.
-                    size * std::mem::size_of::<T>(),
+                    self.len * std::mem::size_of::<T>(),
                     self.opts.resource_options.resolve(),
                 )
                 .ok_or(Error::MetalFailed)?;
@@ -266,5 +261,105 @@ impl<T: Copy> Buffer<T> {
     /// (ghostty reads the `buffer.buffer` field directly; §B).
     pub fn raw(&self) -> &ProtocolObject<dyn MTLBuffer> {
         &self.buffer
+    }
+}
+
+// =============================================================================
+// P3-W0 T5 step 4 — the NEGATIVE CONTROL for the `4a22eed6d` buffer fix.
+//
+// `MTLCreateSystemDefaultDevice()` works in a headless test process on the
+// macOS dev host, so this is a real unit gate, not un-gateable GPU work. On a
+// host with no Metal device the test SKIPS with a printed reason rather than
+// passing silently.
+//
+// On the pre-fix code this test failed for TWO independent reasons, which is
+// the non-vacuity proof:
+//   1. `newBufferWithLength_options(size * size_of::<T>())` where `size` was
+//      already a BYTE count — a `size_of::<T>()`-squared over-allocation, 64x
+//      for the 32-byte CellTextGpu buffers and 8x for CellBg, per swap-chain
+//      frame (~9.4 MB instead of ~300 KB for a 120x40 screen);
+//   2. `self.len` was never updated on realloc, so the tracked length stayed at
+//      whatever `init` was given. The `len` assertions below catch that half.
+// =============================================================================
+#[cfg(all(test, target_os = "macos"))]
+mod p3_buffer_alloc_tests {
+    use super::*;
+    use crate::metal::gpu_abi::CellTextGpu;
+
+    fn device() -> Option<Retained<ProtocolObject<dyn MTLDevice>>> {
+        api::MTLCreateSystemDefaultDevice()
+    }
+
+    fn zeroed_cell_text() -> CellTextGpu {
+        // SAFETY: CellTextGpu is a #[repr(C)] plain-old-data vertex of integer
+        // arrays; the all-zero bit pattern is a valid value of every field.
+        unsafe { std::mem::zeroed() }
+    }
+
+    #[test]
+    fn sync_grows_by_element_count_not_by_size_of_squared() {
+        let Some(dev) = device() else {
+            eprintln!("SKIP: no Metal device on this host");
+            return;
+        };
+        let opts = BufferOptions {
+            device: dev,
+            resource_options: api::MTLResourceOptions::new(api::StorageMode::Shared),
+        };
+
+        let elem = std::mem::size_of::<CellTextGpu>();
+        assert_eq!(elem, 32, "CellTextGpu is the 32-byte per-instance vertex");
+
+        let mut buf: Buffer<CellTextGpu> = Buffer::init(opts, 1).unwrap();
+        assert_eq!(buf.len, 1);
+
+        // Grow: 100 elements needs 3200 bytes, so it reallocates to double the
+        // ELEMENT count.
+        let data = vec![zeroed_cell_text(); 100];
+        buf.sync(&data).unwrap();
+
+        // The fix: 200 * 32 bytes. The bug: 3200 * 2 * 32 = 204,800 bytes.
+        assert_eq!(
+            buf.buffer.length(),
+            200 * elem,
+            "buffer must be 200 elements, not (bytes * 2 * size_of) — the \
+             size_of-squared over-allocation"
+        );
+        // The second, independent half of `4a22eed6d`: `len` tracks the new
+        // capacity in units of T. Pre-fix this stayed at 1.
+        assert_eq!(buf.len, 200, "self.len must be updated on realloc");
+
+        // 150 elements fits inside the 200-element buffer, so NO realloc may
+        // happen. On the pre-fix code the buffer was 204,800 bytes so this
+        // also held — the assertion that discriminates is the `len` one above.
+        let before = buf.buffer.length();
+        let data2 = vec![zeroed_cell_text(); 150];
+        buf.sync(&data2).unwrap();
+        assert_eq!(
+            buf.buffer.length(),
+            before,
+            "150 elements fit in a 200-element buffer; no realloc expected"
+        );
+        assert_eq!(buf.len, 200, "len unchanged when no realloc happens");
+    }
+
+    #[test]
+    fn sync_from_array_lists_grows_by_element_count() {
+        let Some(dev) = device() else {
+            eprintln!("SKIP: no Metal device on this host");
+            return;
+        };
+        let opts = BufferOptions {
+            device: dev,
+            resource_options: api::MTLResourceOptions::new(api::StorageMode::Shared),
+        };
+        let elem = std::mem::size_of::<CellTextGpu>();
+
+        let mut buf: Buffer<CellTextGpu> = Buffer::init(opts, 1).unwrap();
+        let lists = vec![vec![zeroed_cell_text(); 40], vec![zeroed_cell_text(); 60]];
+        let n = buf.sync_from_array_lists(&lists).unwrap();
+        assert_eq!(n, 100);
+        assert_eq!(buf.buffer.length(), 200 * elem);
+        assert_eq!(buf.len, 200);
     }
 }
