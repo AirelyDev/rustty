@@ -5558,7 +5558,48 @@ heading, restoring the 1–2–3–4 numbering. Not one word of their text is ch
    the Phase 2 Closure Audit below (owner: WS19 T6).**
 ---
 
-## `threadEnter` error arms should drain the pty master BEFORE `stop()` — residual cure for the teardown wedge [added 2026-07-29, WS-hang review I3]
+## ~~`threadEnter` error arms should drain the pty master BEFORE `stop()`~~ — ✅ RESOLVED (2026-07-29, WS19 T17a; audit row N9) [added 2026-07-29, WS-hang review I3]
+
+**RESOLVED — the fix is applied, and it is RECLASSIFIED as a `[R1-DIVERGENCE]`**
+(entry: "`threadEnter` error arms drain the pty master before `stop()`", in the
+Justified R1 Divergences section, next to the bounded `killPid` it shares its
+reasoning with). `crates/rustty-termio/src/exec.rs` gains
+`drain_pty_master_once(fd)` — a bounded, synchronous, discard-the-bytes drain (a
+`DRAIN_BUDGET` = 50 ms deadline re-checked every iteration, and a **zero-timeout
+`poll` gate before every `read`** so it can never park on the blocking master) —
+and all **six** live `self.subprocess.stop()` call sites in `threadEnter` call it
+first: `ProcessNotStarted`, `ProcessNoPid`, `xev::Process::init`, `pipe()`,
+`xev::Timer::init`, read-thread `spawn`. (The turnaround the deferral predicted —
+"a restructuring, not a local edit" — proved unnecessary: the drain does not need
+the read thread's machinery, only the master fd, which every arm already has as
+`pty_fds.read`.) `threadExit` is untouched: it already gets the invariant for
+free.
+
+Re-verified against upstream head before implementing
+(`.port/phase-3/assessments/E-os-termio-platform.md` §5.3): those `errdefer`s are
+**unchanged context lines** upstream, so the ordering defect really is shared and
+this really is a deliberate divergence we intend to upstream. Area E's §5.3
+recommended folding this into the E1 read-pipeline port instead; that advice is
+recorded and NOT followed, because (a) N9 blocks Phase-2 closure now, and (b) the
+implementation turned out to be ~40 lines with no dependency on E1's gather stage.
+**E1 still owes the two NEW no-reader windows** §5.1/§5.3 identify (`setNonblock`
+failure and `io-gather` spawn failure abort the reader from INSIDE the read thread,
+after `threadEnter` returned success) — those are not `threadEnter` arms and are
+NOT covered here; see the divergence entry's own note.
+
+**Guard:** `exec::tests::drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master`
+— a real `openpty`, asserting BOTH that the drain consumes what was already
+written AND that it returns promptly on a quiet master. Mutation-verified twice
+(each RED, then reverted): making the `poll` timeout blocking (5 s) fails the
+promptness assertion; making the `read` a no-op fails the consumption assertion.
+Deliberately NOT a reproduction of the wedge — see the `killPid` entry for why the
+previous such test was deleted. Out-of-suite evidence unchanged:
+`.port/tools/repro_subprocess_hang.sh` (6/6 runs, 0 hangs, no residual `?Es`
+child).
+
+The historical finding text is retained below for provenance.
+
+---
 
 **What is outstanding.** `Exec::threadEnter`
 (`crates/rustty-termio/src/exec.rs`) has several failure arms — `pipe()`,
@@ -5598,7 +5639,38 @@ the child in `?Es` and the parent spinning inside `killPid`.
 
 ---
 
-## `posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race [added 2026-07-29, WS-hang review M1]
+## ~~`posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race~~ — ✅ RESOLVED (2026-07-29, WS19 T17b; audit row N9) [added 2026-07-29, WS-hang review M1]
+
+**RESOLVED, and NOT as a divergence — the premise below went STALE.** The entry
+(and the WS19 plan) both said to record the fix as an `[R1-DIVERGENCE]` alongside
+the bounded `killPid`, on the grounds that the verbatim
+`unreachable!("waitpid: unexpected errno")` was FAITHFUL to Zig std's
+`.CHILD => unreachable`. That was true at the pin and is **no longer true at
+upstream head**: by dropping the std wrapper for the raw syscall (`a77c706a1` /
+`e8525c0fd`), upstream's `killPid` now breaks on `rc == -1`, so an `ECHILD` ends
+its loop **gracefully** — exactly the behavior this item proposed. Implementing it
+therefore **REMOVES a divergence instead of adding one**, and no divergence entry
+is warranted. (Established by `.port/phase-3/assessments/E-os-termio-platform.md`
+§5.2, which rates it the best cost/benefit item in area E, cost S, risk LOW.)
+
+**Applied.** `command.rs` gains `posix_waitpid_checked(pid, flags) ->
+Option<WaitPidResult>` — `EINTR` still retries, every other errno returns `None`
+(upstream's `rc == -1` makes no finer distinction either). `killPid` is its ONLY
+caller and treats `None` as "the child is gone" → `break`, which is what the loop
+was waiting for. The verbatim `posix_waitpid` is left untouched on the
+`Command::wait` path, so the Zig-std shim contract this port reproduces elsewhere
+is preserved.
+
+**Guard:** `exec::tests::posix_waitpid_checked_reports_echild_instead_of_aborting`
+— waits on pid 1 (never our child ⇒ deterministic `ECHILD`, no fork, nothing left
+behind). Mutation-verified: restoring the `unreachable!()` arm makes it RED with
+`internal error: entered unreachable code: waitpid: unexpected errno`, which is
+also the direct proof that the race really was a reachable panic on the teardown
+path.
+
+The historical finding text is retained below for provenance.
+
+---
 
 **What is outstanding.** `crates/rustty-termio/src/command.rs`'s
 `posix_waitpid` treats every non-`EINTR` errno as `unreachable!("waitpid:
@@ -6053,6 +6125,70 @@ oracle and the port. It is left verbatim — it terminates as soon as the child
 `setsid`s or dies, and a wedged `?Es` child still reports a valid pgid, so it is
 not a hang site (confirmed by `sample`: the hang is inside `killPid`).
 
+**Related, NOT part of this divergence:** the `ECHILD` handling in this same loop
+is **NOT** a divergence — `killPid` now uses `posix_waitpid_checked` and breaks on
+`None`, which is what upstream head's raw-syscall `killPid` does. See the resolved
+`posix_waitpid`/`ECHILD` entry above (WS19 T17b). Do not fold it in here.
+
+---
+
+## `threadEnter` error arms drain the pty master before `stop()` (`crates/rustty-termio/src/exec.rs`) [WS19 T17a, 2026-07-29, audit row N9]
+
+**Oracle:** `ghostty/src/termio/Exec.zig`'s `threadEnter` registers
+`errdefer self.subprocess.stop();` right after `Subprocess.start`, and every later
+fallible step (`internal_os.pipe`, `xev.Timer.init`, `xev.Process.init`, the
+`std.Thread.spawn` of the read thread) unwinds through it. None of them drains the
+pty master first, because on those arms the io-reader thread does not exist yet.
+
+**Divergence:** each of the six corresponding rustty arms calls
+`drain_pty_master_once(pty_fds.read)` immediately before `self.subprocess.stop()`
+— a bounded, synchronous read-and-discard of whatever the child has already
+written. Nothing else changes: same signals, same cleanup order, same return
+values, and **no effect whatsoever on any path that succeeds**.
+
+**Why fidelity is overruled (liveness > R1) — the same trade the bounded `killPid`
+made, and a strictly weaker one:**
+
+1. **It cures a real, if narrow, unrecoverable hang.** On these arms the child is a
+   freshly-forked `login(1)` — a session leader — with output queued on the pty
+   slave and **nobody reading the master**. SIGHUP'ing it in that state wedges it
+   uninterruptibly in the macOS kernel exit path (state `?Es`): SIGKILL-immune,
+   never reapable. That is precisely the mechanism the bounded `killPid` entry
+   documents; draining the master is what un-wedges it, and it is exactly what the
+   *normal* close path gets for free (`threadExit` calls `stop()` while the reader
+   is still draining — upstream orders it that way deliberately).
+2. **Upstream has the same defect, verified twice.** The deferral said so at the
+   pin, and the Phase-3 area-E rebase check re-confirmed it at upstream head:
+   `.port/phase-3/assessments/E-os-termio-platform.md` §5.3 — those `errdefer`s are
+   **unchanged context lines**; the only nearby edits are cosmetic
+   (`posix.exit` → `std.process.exit`, `posix.close` → `posix.system.close`). So
+   this is a bug to fix and upstream, not a fidelity gap to close.
+3. **The behavior change is unobservable outside the failing arm.** The bytes
+   consumed were about to be discarded anyway (the arm is tearing the subprocess
+   down and returning an error), so nothing that could have read them still exists.
+   Contrast the bounded `killPid`, which DOES have an observable consequence (a slow
+   child is abandoned): this one has none.
+4. **It is bounded, so it cannot become the hang it prevents.** A `DRAIN_BUDGET`
+   (50 ms) deadline is re-checked every iteration, and every `read` is gated by a
+   **zero-timeout `poll`**, so a quiet master returns immediately instead of parking
+   on the blocking fd. The promptness property is the second half of the guard KAT,
+   and mutation-verified (a blocking poll timeout makes it RED).
+
+**Guard:** `exec::tests::drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master`
+(real `openpty`; both properties; 2 mutation experiments) plus the out-of-suite
+`.port/tools/repro_subprocess_hang.sh` (6/6 runs, 0 hangs, no residual `?Es`
+child). Deliberately NOT an in-suite reproduction of the wedge — see the `killPid`
+entry above for why the previous such test was deleted.
+
+**Known residual, owned by Phase 3 area E (E1), not by this entry.** Upstream's
+read-pipeline commits (`2f0e6659d`, `bb0ac4c72`) add TWO NEW no-reader windows that
+are *not* `threadEnter` arms: `setNonblock(fd)` failure and `io-gather` spawn
+failure abort the reader from INSIDE the read thread, after `threadEnter` has
+already returned success, so `threadExit`'s `stop()` then runs into the same
+wedging condition. When E1 is ported, those two arms need the same drain (and the
+bounded `killPid` entry's "Reachability in PRODUCTION" paragraph needs them added).
+See area E §5.1/§5.3.
+
 ---
 
 # PHASE 2 CLOSURE AUDIT (WS19) — every open item, verified against code [2026-07-29]
@@ -6145,7 +6281,7 @@ a vacuous gate means every "green" claim it ever made is unproven.**
 | **N6** | **G3b comment-coverage counts RISE as an ARTIFACT of porting beyond-pin commits** — the gate diffs against the pin, so a sentence upstream DELETED beyond the pin still exists at the pin and is reported "missing" | `.port/tools/gates/check_comment_coverage.py:34` reads `GHOSTTY_SRC`, defaulting to `/Users/gael/projects/ghostty/src` — the oracle **working tree, pinned at `4749c4e93`**. WS7 D2 saw the config lane go 5→9 for exactly this reason. **VERDICT (the question this audit was asked to settle): advancing the pin in Phase 3 resolves it WHOLESALE, and is the only correct fix.** Once `GHOSTTY_SRC` is the resynced tree, the deleted sentences are absent from the reference side and the counts drop by construction — no per-file exception list, no gate change, no R5 exposure. **Do NOT paper over it with a per-file `GHOSTTY_SRC` override**: that is precisely the spoof hole `ci.sh:114-129` killed for G1b (a probe redirected away from what the script actually reads yields a vacuous green). Until the pin advances, beyond-pin G3b deltas are EXPECTED and must be recorded per-lane. | **no code change; WS19 T2 records the verdict**, Phase 3 realizes it | **S** | **WS19 EXECUTION STATUS:** **DONE (verdict recorded) — WS19 T2.** G3b subsection in the gates README + Phase 3 **P3-RV2**; per-file `GHOSTTY_SRC` override explicitly FORBIDDEN. |
 | **N7** | **`example/*/build.sh` (all 23) link `target/release/librustty_vt_c.dylib` but build it only IF ABSENT, so a stale release dylib silently fails or mis-links** | `example/c-vt-colors/build.sh:11`: `[ -f "$lib" ] \|\| ( cd "$root" && cargo build … )`. Identical in all 23 (`ls example/*/build.sh \| wc -l` → 23). | **WS19 T16** — ~~open~~ **RESOLVED 2026-07-29**: guard replaced with an unconditional `cargo build` in all 23 (cargo is already incremental, so the avoid-rebuild motive was void). Hazard demonstrated concretely, not argued: with the old guard and a present-but-bogus dylib, `ld: unknown file type in .../librustty_vt_c.dylib`; with the new one the rebuild replaces it and the example runs. All 23 build+run green (`ok=23 fail=0`), including after `touch -t 200001010000` on the dylib. Repo-wide sweep for the same idiom: no other occurrence. | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T16.** All 23 `example/*/build.sh` rebuild unconditionally; hazard demonstrated (`ld: unknown file type`), all 23 build+run. |
 | **N8** | **3 `.blp` msgids still spell "Ghostty" and ZERO code-side i18n call sites are wrapped**, so `xgettext` extracts no msgid from any `.rs` file | `assets/ui/1.3/debug-warning.blp:6`, `assets/ui/1.5/inspector-window.blp:5`, `assets/ui/1.5/window.blp:307`. `grep -rn 'gettext_' crates/rustty-apprt/src crates/rustty-core/src` finds only the `i18n::init`/`initGlobalDomain` wiring, never a wrapped literal. **LEDGERED?** Yes — the WS13 plan documents both as findings F3/F4 with exact file:line tables and owns them in its T2/T3. This row is the `DEFERRALS.md` cross-reference so a ledger grep finds them too. | **WS13** (already planned) | **M** | **WS19 EXECUTION STATUS:** **DONE (routed) — already WS13's**; cross-referenced. |
-| **N9** | **`threadEnter` error arms should drain the pty master BEFORE `stop()`** (`D:5090`) and **`posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race** (`D:5130`) — both filed 2026-07-29 with **NO owner** | Both verified as described. `posix_waitpid`'s `unreachable!("waitpid: unexpected errno")` is FAITHFUL (Zig std does the same), so the exposure is inherited — but Rust's `unreachable!` always panics where Zig's is a no-op in `ReleaseFast`, so the *consequence* diverges. The second reaper is real: `crates/rustty-xev/src/process.rs` calls `waitpid` in the `.proc` completion trampoline. | **WS19 T17** (one teardown-ordering fix + one shim-signature change; BOTH must be recorded as `[R1-DIVERGENCE]` alongside the bounded `killPid`) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T17** (`threadEnter` drain ordering + `posix_waitpid` `ECHILD`). Two `[R1-DIVERGENCE]`s to record with the fix. |
+| **N9** | **`threadEnter` error arms should drain the pty master BEFORE `stop()`** (`D:5090`) and **`posix_waitpid` aborts on `ECHILD` where a concurrent reaper can win the race** (`D:5130`) — both filed 2026-07-29 with **NO owner** | Both verified as described. `posix_waitpid`'s `unreachable!("waitpid: unexpected errno")` is FAITHFUL (Zig std does the same), so the exposure is inherited — but Rust's `unreachable!` always panics where Zig's is a no-op in `ReleaseFast`, so the *consequence* diverges. The second reaper is real: `crates/rustty-xev/src/process.rs` calls `waitpid` in the `.proc` completion trampoline. | **WS19 T17** (one teardown-ordering fix + one shim-signature change; BOTH must be recorded as `[R1-DIVERGENCE]` alongside the bounded `killPid`) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T17.** BOTH fixed, but the disposition is **ONE** `[R1-DIVERGENCE]`, not two — this row's own "`posix_waitpid` is FAITHFUL" premise went STALE. Upstream head dropped the Zig-std wrapper for the raw syscall (`a77c706a1`/`e8525c0fd`), so its `killPid` now breaks on `rc == -1`, i.e. an `ECHILD` ends the loop gracefully upstream too; the fix therefore REMOVES a divergence and warrants no divergence entry (`.port/phase-3/assessments/E-os-termio-platform.md` §5.2). (a) `drain_pty_master_once` + all **6** live `stop()` arms in `threadEnter` → recorded as a `[R1-DIVERGENCE]` next to the bounded `killPid`, with the E-§5.3 upstream-head re-verification. (b) `posix_waitpid_checked` used ONLY by `killPid`; the verbatim shim untouched on the `Command::wait` path. 2 new KATs, 3 mutation experiments; `repro_subprocess_hang.sh` 6/6 runs 0 hangs. The bounded `killPid` divergence itself is UNCHANGED (area E: KEEP). |
 | **N11** | **`ci.sh` STEPS 1 AND 2 — `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` — WERE BOTH RED ON `main`.** Not vacuous: genuinely FAILING, and evidently never run. Every lane that reported "gates green" reported it without these two. | Reproduced on the pristine `/Users/gael/projects/rustty` checkout at the pinned `rustc 1.93.1`: `cargo fmt --check` → **317 diffs across 76 files**; `cargo clippy --workspace --all-targets -- -D warnings` → **RED in 8 crates** (`rustty-z2d` 5, `gettext-sys` 1, `rustty-vt` 6, `rustty-vaxis` 1, `rustty-renderer` 4, `rustty-web-canvas` 6, `rustty-termio` 1, `xtask` 3). Found while running WS19 T7's per-crate clippy, not by looking for it. **Two root causes worth naming: (1) five of the "doc list item" failures share ONE bug — a doc-comment line beginning with `+ `, which markdown reads as a list bullet, making the lines after it lazy continuations (`rustty-z2d/src/lib.rs`, `rustty-renderer/src/generic.rs`, `rustty-termio/tests/subprocess_drop_repro.rs`); (2) the `not_unsafe_ptr_arg_deref` cluster in `rustty-web-canvas` is a REAL C-ABI signature gap — four `extern "C"` exports dereference caller-supplied pointers without being `unsafe fn`, unlike the `rustty-vt-c`/`rustty-apprt-c` convention. The rest are fidelity-preserving constructs (`(n + 7) / 8` ceil-div, reference-shaped large enum variants, ordering-marker `drop()` of a non-`Drop` value) now allowed AT THE SITE with a written reason, never crate-wide, and one genuinely useless assertion (`gettext-sys`'s `assert!(!(f as *const ()).is_null())` on a function pointer, replaced by `black_box` since only the linker reference was ever load-bearing). | **WS19 T7** (fixed in-line; both steps now green) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T7 (in-line).** `cargo fmt --check` 317 diffs → 0; `clippy --workspace --all-targets -D warnings` RED in 8 crates → clean. |
 | **N10** | **DOCUMENTATION finding (not a defect): a fresh `Terminal::compress(.incremental)` right after a COMPLETED pass returns `Pending`, not `Complete`**, because the incremental traversal restarts — this invalidates the obvious "work is done" probe | `crates/rustty-vt/src/terminal.rs:2861-2894` forwards straight to `PageList::compress(Incremental)` and maps the result 1:1; the doc comment (`:2847-2860`) says only "the return value tells callers whether they should continue calling it" and never states the restart. `renderer_seam.rs:1990-1997` already depends on the distinction (it schedules another tick on `Pending`, stops on `Complete`/`Unsupported`). Nothing anywhere records the gotcha, so the next test author will read `Pending` as "not finished". | **WS19 T18** — ~~open~~ **RESOLVED 2026-07-29.** Behavior CONFIRMED by scratch probe before documenting anything: driving `compress(Incremental)` to `Complete` and calling once more printed `WS19-T18-PROBE: after Complete, next incremental = Pending`. Landed as (a) a `PORT NOTE` on `Terminal::compress` stating that `Pending` means "call me again", never "work is outstanding", and that `Complete` is not a durable probe; (b) `terminal_compress_incremental_restarts_after_complete`, which also asserts the pass took >1 step so a one-call convergence cannot make it vacuous; (c) a cross-reference in `MIRI_EXCEPTIONS.md`'s compression-coverage argument, where the same misreading would corrupt a coverage claim. | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T18.** Restart CONFIRMED by probe, then documented in 3 places and pinned by a test that cannot go vacuous. |
 
