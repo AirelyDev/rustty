@@ -17,6 +17,7 @@ mod archives;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
+mod main_build_data;
 mod res_editor;
 mod res_misc;
 mod res_shell;
@@ -67,9 +68,13 @@ SUBCOMMANDS:
     update-translations
                        Regenerate po/io.airely.rustty.pot from the GTK-apprt + Nautilus
                        sources and msgmerge every po/*.po catalog (needs xgettext+msgmerge
-                       on PATH; on macOS prepend /opt/homebrew/opt/gettext/bin). NOTE: the
-                       GTK apprt is a placeholder, so running this now would gut the ported
-                       catalogs — deferred until the GTK UI is live (see translations.rs).
+                       on PATH; on macOS prepend /opt/homebrew/opt/gettext/bin). LIVE since
+                       WS13: after running it, `cargo test -p rustty-apprt --test
+                       i18n_msgid_coverage` must stay green (it gates msgid-set drift).
+    gen <+action>      Emit one build-time data artifact to stdout: bash, fish, zsh,
+                       sublime, vim-syntax, vim-ftdetect, vim-ftplugin, vim-compiler,
+                       terminfo. Port of ghostty's `src/main_build_data.zig` `+gen-*`
+                       CLI; the same bytes `resources` writes into zig-out/share.
     dist               Build the source tarball at dist/rustty-<version>.tar.gz (git archive)
     distcheck          Build the source tarball, extract it, and build it to validate self-containment
     wasm-patch-growable-table <in.wasm> <out.wasm>
@@ -107,6 +112,13 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: xcframework failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("gen") => match main_build_data::run(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("xtask: gen failed: {e}");
                 ExitCode::FAILURE
             }
         },

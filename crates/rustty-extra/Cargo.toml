@@ -25,3 +25,19 @@ workspace = true
 [dependencies]
 rustty-config = { workspace = true }
 rustty-cli = { workspace = true }
+# WS13 mdgen/webgen: `help_strings.KeybindAction` (`keybind_help`) +
+# `binding::Action::FIELD_NAMES`, the reflected union the reference's
+# `genKeybindActions` walks (`mdgen.zig:85-117`). rustty-config already depends on
+# rustty-input, so this adds no new graph LEVEL — the acyclic gate is unaffected.
+rustty-input = { workspace = true }
+# `build_config.version_string`, substituted for the fixtures' `@@VERSION@@`
+# marker (`mdgen.zig:8-19`).
+rustty-build-config = { workspace = true }
+# WS13 webgen: the invocation lines in `commands.mdx` spell the actual command
+# name (`ghostty +<action>` in the reference), so they must follow the R2/Task-14
+# identity profile rather than being hardcoded. Leaf identity crate — no new
+# graph level.
+rustty-identity = { workspace = true }
+# WS13 webgen: `AllocatingWriter`/`Writer`, the ports of `std.Io.Writer.Allocating`
+# that `helpgen_actions::generate` writes through (`main_actions.zig:5-9`).
+rustty-cfg-fmt = { workspace = true }

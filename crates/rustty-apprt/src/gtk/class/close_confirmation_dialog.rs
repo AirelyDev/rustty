@@ -19,6 +19,7 @@ use libadwaita::subclass::prelude::*;
 
 use crate::gtk::class::dialog::{Dialog, DialogImpl};
 use crate::gtk::gresource;
+use crate::gtk::i18n::tr;
 
 /// The target of a close dialog.
 ///
@@ -45,32 +46,34 @@ impl Target {
     /// PORTS: `close_confirmation_dialog.zig:182-189` `title`.
     ///
     /// PORT NOTE (R2 identity): the reference's `.app` title is "Quit Ghostty?";
-    /// rustty rebrands it to "Quit Rustty?". The other three are verbatim.
+    /// rustty rebrands it to "Quit Rustty?" — and so do all 31 catalogs, whose
+    /// msgid is `Quit Rustty?` (`po/io.airely.rustty.pot`), so the rebranded
+    /// spelling is also the lookup KEY. The other three are verbatim.
     ///
-    /// PORT NOTE (i18n): the reference wraps each string in `i18n._(...)`
-    /// (gettext); rustty has no runtime `_()` binding yet (the `.blp` responses
-    /// are translated at compile time by blueprint-compiler, but source-side
-    /// strings elsewhere in this port — e.g. `window.rs` `add_toast` — are plain
-    /// literals). We match that and emit the untranslated literal.
+    /// PORTS the reference's `i18n._(...)` wrapping (`:182-189`) via
+    /// [`crate::gtk::i18n::tr`]. This is a function, not a `const` table, for the
+    /// same reason the reference's is: gettext cannot run at comptime.
     #[must_use]
     pub fn title(self) -> &'static str {
         match self {
-            Target::App => "Quit Rustty?",
-            Target::Tab => "Close Tab?",
-            Target::Window => "Close Window?",
-            Target::Surface => "Close Split?",
+            Target::App => tr(c"Quit Rustty?"),
+            Target::Tab => tr(c"Close Tab?"),
+            Target::Window => tr(c"Close Window?"),
+            Target::Surface => tr(c"Close Split?"),
         }
     }
 
-    /// PORTS: `close_confirmation_dialog.zig:191-198` `body`. (See `title` for the
-    /// i18n PORT NOTE.)
+    /// PORTS: `close_confirmation_dialog.zig:191-198` `body`, including its
+    /// `i18n._(...)` wrapping. (See `title` for the R2/msgid note.)
     #[must_use]
     pub fn body(self) -> &'static str {
         match self {
-            Target::App => "All terminal sessions will be terminated.",
-            Target::Tab => "All terminal sessions in this tab will be terminated.",
-            Target::Window => "All terminal sessions in this window will be terminated.",
-            Target::Surface => "The currently running process in this split will be terminated.",
+            Target::App => tr(c"All terminal sessions will be terminated."),
+            Target::Tab => tr(c"All terminal sessions in this tab will be terminated."),
+            Target::Window => tr(c"All terminal sessions in this window will be terminated."),
+            Target::Surface => {
+                tr(c"The currently running process in this split will be terminated.")
+            }
         }
     }
 }

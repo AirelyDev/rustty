@@ -72,6 +72,7 @@ use rustty_vt::mouse::Shape as MouseShape;
 use crate::gtk::app::App;
 use crate::gtk::ext;
 use crate::gtk::gsettings;
+use crate::gtk::i18n::tr;
 use crate::gtk::key;
 use crate::gtk::surface::Surface as ApprtSurface;
 
@@ -1926,13 +1927,12 @@ impl Surface {
         // `if (action.notify) { ... sendDesktopNotification(title, body) }`
         // (`:1167-1200`).
         if action.notify {
-            // Title (`:1170-1178`). PORT NOTE (i18n): the reference wraps each in
-            // `i18n._(...)`; rustty has no runtime `_()` binding yet (see the i18n
-            // PORT NOTE in `close_confirmation_dialog.rs`) and emits the literal.
+            // Title (`:1170-1178`), PORTING the reference's `i18n._(...)` wrapping
+            // of all three msgids via [`crate::gtk::i18n::tr`].
             let title = match value.exit_code {
-                None => "Command Finished",
-                Some(0) => "Command Succeeded",
-                Some(_) => "Command Failed",
+                None => tr(c"Command Finished"),
+                Some(0) => tr(c"Command Succeeded"),
+                Some(_) => tr(c"Command Failed"),
             };
 
             // Body (`:1180-1196`): `"Command took {f}."` / `"Command took {f} and

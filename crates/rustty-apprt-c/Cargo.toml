@@ -111,6 +111,13 @@ rustty-datastruct = { workspace = true }
 # rustty-build-config supplies `VERSION_STRING` + `mode_string()`. Forward edge (member 2,
 # far below apprt-c the top sink) — check_acyclic.sh stays GREEN.
 rustty-build-config = { workspace = true }
+# WS13: `rustty_translate` forwards to the gettext `_` wrapper
+# (`main_c.zig:150` -> `internal_os.i18n._`), i.e. `rustty_os::i18n::gettext_`, which
+# WS9's vendored libintl (`crates-sys/gettext-sys` -> `librustty_intl.a`) makes
+# linkable. Forward edge to a far-lower crate (already transitively present via
+# rustty-renderer/rustty-core); apprt-c stays the top sink, so check_acyclic.sh
+# stays GREEN.
+rustty-os = { workspace = true }
 # The benchmark C-ABI export (`ghostty_benchmark_cli` / canonical `rustty_benchmark_cli`)
 # lives in rustty-bench (`benchmark/CApi.zig`). The reference `main_c.zig` force-references
 # it via `comptime { _ = @import("benchmark/main.zig").CApi; }` so the export is linked into

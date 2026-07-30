@@ -475,3 +475,55 @@ RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/debug/rustty
    `debug(gtk-x11): found extra XkbStateNotify event w/lookup_mods: 1` (bit 0 =
    Shift) / `... : 100` (bit 2 = Control). This is item 1 above and is the only one
    of the four that needs real hardware input rather than just a different session.
+
+
+---
+
+## V7. RTL (Hebrew) UI layout sign-off (blocked: no RTL session; human visual judgment) — **OWNER: Phase 3**
+
+> **Why Phase 3 and not WS13.** WS13's IMPLEMENTATION work is complete and merged —
+> nothing here is unported, and every mechanical property that CAN be asserted is
+> asserted (see below). What remains needs a desktop session with `he_IL.UTF-8`
+> generated and a human looking at a mirrored layout, which is exactly the class of
+> environment-gated GUI verification the Phase-3 windowing/integration tier carries
+> (alongside V2's bare-metal GPU sign-off and V5's native-X11 residuals). Routing it
+> to a workstream that has no such environment would be a fiction.
+
+**What IS shown.** The Hebrew catalog `po/he.po` ships, compiles
+(`msgfmt --check` clean, enforced at build time by
+`crates/rustty-apprt/build.rs`'s `check_translations`), and is installed by
+`xtask resources` into `share/locale/he/LC_MESSAGES/io.airely.rustty.mo`. Every
+runtime msgid is proven to EXIST in the catalogs in both directions by
+`crates/rustty-apprt/tests/i18n_msgid_coverage.rs`, and the lookup mechanism
+itself is proven locale-generic and non-vacuous by
+`crates/rustty-apprt-c/tests/i18n_translate.rs`, which spawns a child with
+`LANG`/`LC_ALL` set and asserts a German hit, a JAPANESE hit that differs from
+it (a non-Latin catalog — the same code path `he` takes), an `LANG=C`
+passthrough, and a stale-`Ghostty`-msgid passthrough. Nothing about the
+translation path is Latin-script-specific.
+
+**What is NOT shown.** That GTK's right-to-left MIRRORING of the ported widget
+tree reads correctly: header bar, tab strip and split-pane order flipping, while
+the terminal grid itself stays LTR-ordered (the VT layer is direction-agnostic).
+
+**Why it is blocked here.** `he_IL.UTF-8` is not in the VM's generated locale
+set as a SESSION locale; the VM's only graphical session is GNOME/Wayland driven
+over SSH; and judging whether a mirrored layout reads correctly is a human
+visual task, not an assertable one. This is scope-of-VERIFICATION only — no code
+path is unported and no gate is weakened.
+
+**Recipe (a machine with `he_IL.UTF-8` generated and a graphical session):**
+```
+cargo run -p xtask -- resources
+LANG=he_IL.UTF-8 LC_ALL=he_IL.UTF-8 \
+  RUSTTY_RESOURCES_DIR=$PWD/zig-out/share/rustty target/debug/rustty
+```
+1. The window chrome renders in Hebrew (the `po/he.po` `msgstr`s) — e.g. the
+   About menu item, and with `--confirm-close-surface=true` the close dialog
+   heading.
+2. The header bar, tab strip and split panes mirror right-to-left.
+3. Terminal CONTENT stays LTR-ordered.
+4. **Negative control (this is what makes it non-vacuous):** repeat with
+   `LANG=C LC_ALL=C` and confirm the same chrome renders in English and
+   left-to-right. Hebrew in both runs would mean the text is baked in; English
+   in both would mean the lookup never fired.

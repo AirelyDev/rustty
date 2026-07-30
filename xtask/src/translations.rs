@@ -12,25 +12,30 @@
 //!   * template output     `po/com.mitchellh.ghostty.pot` -> `po/io.airely.rustty.pot`
 //!   * Nautilus script     `dist/linux/ghostty_nautilus.py` -> `dist/linux/rustty_nautilus.py`
 //!   * GTK sources: ghostty walks the hardcoded `.blp` blueprint list plus
-//!     every `.zig` under `src/apprt/gtk`. rustty's GTK apprt is not live yet,
-//!     so we glob whatever GTK source exists under `crates/rustty-apprt`
-//!     (`*.blp` + `*.rs`). The gettext keywords `_` and `C_:1c,2` match
-//!     rustty-os's `_()` / `C_()` wrappers exactly as upstream.
+//!     every `.zig` under `src/apprt/gtk` (`GhosttyI18n.zig:80-141`). rustty's
+//!     equivalents are `crates/rustty-apprt/assets/ui/**/*.blp` and
+//!     `crates/rustty-apprt/src/gtk/**/*.rs`; the walk is scoped to exactly those
+//!     two subtrees (see `collect_gtk_sources`).
 //!
-//! ── DEFERRED-REGENERATION REALITY (read before running) ──────────────────
-//! rustty's GTK apprt is a placeholder: none of the translatable UI call sites
-//! (`.blp` widgets, `_()`-wrapped labels) exist yet, so `xgettext` over the
-//! current tree finds essentially no strings. Running THIS command now would
-//! therefore overwrite `po/io.airely.rustty.pot` with a near-empty template
-//! and then `msgmerge` would mark every already-translated message in all 31
-//! catalogs as obsolete (`#~`), effectively gutting the ported translations.
+//! ── REGENERATION IS LIVE (WS13, 2026-07-29) ──────────────────────────────
+//! The GTK apprt is no longer a placeholder: 21 `.blp` templates carry 51 unique
+//! msgids and the code-side sites go through `rustty_os::i18n::gettext_` (via the
+//! `crate::gtk::i18n::tr` wrapper). The old header warned that running this
+//! command would gut the catalogs because extraction found nothing; that is no
+//! longer true, and the guard is now mechanical rather than advisory:
 //!
-//! The 31 catalogs + template were ported directly (rebranded, msgfmt-clean)
-//! and must be preserved AS-IS until the GTK UI is live. Regeneration only
-//! becomes meaningful once the GTK apprt grows real translatable widgets and
-//! `_()` call sites. Until then this subcommand exists and is proven to build
-//! and invoke the right tools, but should NOT be run against the tracked `po/`.
-//! To exercise the pipeline safely, run it against a throwaway copy of `po/`.
+//!   * `crates/rustty-apprt/tests/i18n_msgid_coverage.rs` asserts every runtime
+//!     msgid exists in the `.pot` and every oracle code-side catalog entry is
+//!     actually looked up somewhere. Run it after any regeneration.
+//!   * After running this command, `msgcmp po/<l>.po po/io.airely.rustty.pot`
+//!     must be silent for all 31 locales and `msgattrib --only-obsolete` must
+//!     produce an empty body — i.e. no translation was orphaned.
+//!
+//! Rust-side keywords: `_` is not a legal Rust fn name, so `os/i18n.zig`'s `_()`
+//! is ported as `rustty_os::i18n::gettext_()` and the GTK apprt calls it through
+//! the `&str`-returning wrapper `crate::gtk::i18n::tr()`. BOTH names must be
+//! passed as `--keyword`s; without them every Rust call site is invisible to
+//! extraction (measured: 0 `.rs` references before, 26 after).
 //!
 //! ── TOOLS ────────────────────────────────────────────────────────────────
 //! `xgettext` and `msgmerge` are resolved from `PATH`. On macOS the Homebrew
@@ -65,11 +70,31 @@ const LOCALES: &[&str] = &[
 /// checkout path and churns on every commit. Sorting mirrors ghostty's explicit
 /// sort of the directory walk (walk order is not guaranteed).
 fn collect_gtk_sources(root: &Path) -> Result<Vec<PathBuf>, String> {
+    // The reference walks `src/apprt/gtk/**.zig` plus its hardcoded `.blp` list
+    // (`GhosttyI18n.zig:80-141`). The port's equivalents are
+    // `crates/rustty-apprt/src/gtk/**/*.rs` and `crates/rustty-apprt/assets/ui/**/*.blp`.
+    // Scoping to these two subtrees (rather than the whole crate) keeps
+    // `embedded.rs`, the C-ABI surface, and the winproto arms — none of which the
+    // reference scans — out of the extraction, and roughly halves the xgettext
+    // C-lexer noise (Rust lifetimes read as unterminated char constants).
     let apprt = root.join("crates/rustty-apprt");
     let mut out: Vec<PathBuf> = Vec::new();
-    if apprt.is_dir() {
-        collect_recursive(&apprt, &mut out)?;
+    for sub in ["src/gtk", "assets/ui"] {
+        let dir = apprt.join(sub);
+        if dir.is_dir() {
+            collect_recursive(&dir, &mut out)?;
+        }
     }
+    // Exclude the file that DEFINES the `tr` wrapper. xgettext's C lexer reads a
+    // Rust lifetime (`&'static`) as an unterminated character constant, so at the
+    // *definition* `pub fn tr(msgid: &'static CStr)` the lexer desynchronizes and
+    // binds the next string literal it sees in the file as `tr`'s first argument —
+    // extracting a msgid that no runtime call site ever looks up (measured: the
+    // wrapper's own test probe leaked into the `.pot`). Real call sites pass the
+    // literal directly, so they are unaffected. This file contains no runtime
+    // msgid, so nothing is lost by skipping it.
+    let wrapper_def = apprt.join("src/gtk/i18n.rs");
+    out.retain(|p| p != &wrapper_def);
     // Make relative to the workspace root.
     let mut rel: Vec<PathBuf> = out
         .iter()
@@ -167,6 +192,15 @@ pub fn update_translations() -> Result<PathBuf, String> {
             .arg("--from-code=UTF-8")
             .arg("--force-po")
             .arg("--keyword=_")
+            // rustty-specific: `_` is not a legal Rust fn name, so `os/i18n.zig`'s
+            // `_()` is ported as `rustty_os::i18n::gettext_()`, called from the GTK
+            // apprt through the `&str`-returning wrapper `crate::gtk::i18n::tr()`.
+            // xgettext's C lexer tokenizes `i18n::gettext_(c"…")` / `tr(c"…")` such
+            // that these keywords match (the `c"…"` literal prefix is harmless to
+            // the C lexer). WITHOUT them every Rust call site is invisible to
+            // extraction — measured: 0 `.rs:` references before, 26 after.
+            .arg("--keyword=gettext_")
+            .arg("--keyword=tr")
             .arg("--keyword=C_:1c,2")
             .arg("-o")
             .arg(&gtk_pot);

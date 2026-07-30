@@ -10,7 +10,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
-"POT-Creation-Date: 2026-03-25 16:24-0700\n"
+"POT-Creation-Date: 2026-07-29 22:04-0700\n"
 "PO-Revision-Date: 2026-02-12 15:50+0000\n"
 "Last-Translator: Hanna Rose <me@hanna.lol>\n"
 "Language-Team: Norwegian Bokmal <l10n-no@lister.huftis.org>\n"
@@ -24,47 +24,22 @@ msgstr ""
 msgid "Open in Rustty"
 msgstr "Åpne i Rustty"
 
-#: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:12
-#: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:12
-#: src/apprt/gtk/class/clipboard_confirmation_dialog.zig:197
-#: src/apprt/gtk/class/clipboard_confirmation_dialog.zig:201
-msgid "Authorize Clipboard Access"
-msgstr "Gi tilgang til utklippstavlen"
-
-#: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:17
-#: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:17
-msgid "Deny"
-msgstr "Avslå"
-
-#: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:18
-#: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:18
-msgid "Allow"
-msgstr "Tillat"
-
-#: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:92
-msgid "Remember choice for this split"
-msgstr "Husk valget for dette delte vinduet?"
-
-#: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:93
-msgid "Reload configuration to show this prompt again"
-msgstr "Last inn konfigurasjonen på nytt for å vise denne meldingen igjen"
-
-#: src/apprt/gtk/ui/1.2/close-confirmation-dialog.blp:7
-#: src/apprt/gtk/ui/1.5/title-dialog.blp:8
+#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:7
+#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:8
 msgid "Cancel"
 msgstr "Avbryt"
 
-#: src/apprt/gtk/ui/1.2/close-confirmation-dialog.blp:8
-#: src/apprt/gtk/ui/1.2/search-overlay.blp:85
-#: src/apprt/gtk/ui/1.3/surface-child-exited.blp:17
+#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:8
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:85
+#: crates/rustty-apprt/assets/ui/1.3/surface-child-exited.blp:17
 msgid "Close"
 msgstr "Lukk"
 
-#: src/apprt/gtk/ui/1.2/config-errors-dialog.blp:6
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:6
 msgid "Configuration Errors"
 msgstr "Konfigurasjonsfeil"
 
-#: src/apprt/gtk/ui/1.2/config-errors-dialog.blp:7
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:7
 msgid ""
 "One or more configuration errors were found. Please review the errors below, "
 "and either reload your configuration or ignore these errors."
@@ -72,46 +47,37 @@ msgstr ""
 "Én eller flere konfigurasjonsfeil ble funnet. Vennligst gjennomgå feilene "
 "under, og enten last konfigurasjonen din på nytt eller ignorer disse feilene."
 
-#: src/apprt/gtk/ui/1.2/config-errors-dialog.blp:10
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:10
 msgid "Ignore"
 msgstr "Ignorer"
 
-#: src/apprt/gtk/ui/1.2/config-errors-dialog.blp:11
-#: src/apprt/gtk/ui/1.2/surface.blp:371 src/apprt/gtk/ui/1.5/window.blp:300
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:11
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:373
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:300
 msgid "Reload Configuration"
 msgstr "Last konfigurasjon på nytt"
 
-#: src/apprt/gtk/ui/1.2/debug-warning.blp:7
-#: src/apprt/gtk/ui/1.3/debug-warning.blp:6
-msgid ""
-"⚠️ You're running a debug build of Rustty! Performance will be degraded."
-msgstr "⚠️ Du kjører et debug-bygg av Rustty. Debug-bygg har redusert ytelse."
-
-#: src/apprt/gtk/ui/1.5/inspector-window.blp:5
-msgid "Rustty: Terminal Inspector"
-msgstr "Rustty: Terminalinspektør"
-
-#: src/apprt/gtk/ui/1.2/search-overlay.blp:29
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:29
 msgid "Find…"
 msgstr "Finn…"
 
-#: src/apprt/gtk/ui/1.2/search-overlay.blp:64
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:64
 msgid "Previous Match"
 msgstr "Forrige treff"
 
-#: src/apprt/gtk/ui/1.2/search-overlay.blp:74
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:74
 msgid "Next Match"
 msgstr "Neste treff"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:6
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:6
 msgid "Oh, no."
 msgstr "Å, nei."
 
-#: src/apprt/gtk/ui/1.2/surface.blp:7
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:7
 msgid "Unable to acquire an OpenGL context for rendering."
 msgstr "Kan ikke hente en OpenGL-kontekst for rendering."
 
-#: src/apprt/gtk/ui/1.2/surface.blp:97
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:99
 msgid ""
 "This terminal is in read-only mode. You can still view, select, and scroll "
 "through the content, but no input events will be sent to the running "
@@ -121,141 +87,191 @@ msgstr ""
 "bla gjennom innholdet, men ingen inndatahendelser vil bli sendt til den "
 "kjørende applikasjonen."
 
-#: src/apprt/gtk/ui/1.2/surface.blp:107
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:109
 msgid "Read-only"
 msgstr "Skrivebeskyttet"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:260 src/apprt/gtk/ui/1.5/window.blp:200
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:262
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:200
 msgid "Copy"
 msgstr "Kopier"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:265 src/apprt/gtk/ui/1.5/window.blp:205
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:267
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:205
 msgid "Paste"
 msgstr "Lim inn"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:270
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:272
 msgid "Notify on Next Command Finish"
 msgstr "Varsle når neste kommandoen fullføres"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:277 src/apprt/gtk/ui/1.5/window.blp:273
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:279
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:273
 msgid "Clear"
 msgstr "Fjern"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:282 src/apprt/gtk/ui/1.5/window.blp:278
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:284
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:278
 msgid "Reset"
 msgstr "Nullstill"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:289 src/apprt/gtk/ui/1.5/window.blp:242
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:291
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:242
 msgid "Split"
 msgstr "Del vindu"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:292 src/apprt/gtk/ui/1.5/window.blp:245
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:294
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:245
 msgid "Change Title…"
 msgstr "Endre tittel…"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:297 src/apprt/gtk/ui/1.5/window.blp:177
-#: src/apprt/gtk/ui/1.5/window.blp:250
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:299
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:177
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:250
 msgid "Split Up"
 msgstr "Del oppover"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:303 src/apprt/gtk/ui/1.5/window.blp:182
-#: src/apprt/gtk/ui/1.5/window.blp:255
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:305
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:182
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:255
 msgid "Split Down"
 msgstr "Del nedover"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:309 src/apprt/gtk/ui/1.5/window.blp:187
-#: src/apprt/gtk/ui/1.5/window.blp:260
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:311
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:187
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:260
 msgid "Split Left"
 msgstr "Del til venstre"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:315 src/apprt/gtk/ui/1.5/window.blp:192
-#: src/apprt/gtk/ui/1.5/window.blp:265
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:317
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:192
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:265
 msgid "Split Right"
 msgstr "Del til høyre"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:321
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:323
 msgid "Close Split"
 msgstr ""
 
-#: src/apprt/gtk/ui/1.2/surface.blp:327
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:329
 msgid "Tab"
 msgstr "Fane"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:330 src/apprt/gtk/ui/1.5/window.blp:224
-#: src/apprt/gtk/ui/1.5/window.blp:320
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:332
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:224
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:320
 msgid "Change Tab Title…"
 msgstr "Endre fanetittel…"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:335 src/apprt/gtk/ui/1.5/window.blp:57
-#: src/apprt/gtk/ui/1.5/window.blp:107 src/apprt/gtk/ui/1.5/window.blp:229
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:337
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:57
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:107
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:229
 msgid "New Tab"
 msgstr "Ny fane"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:340 src/apprt/gtk/ui/1.5/window.blp:234
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:342
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:234
 msgid "Close Tab"
 msgstr "Lukk fane"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:347
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:349
 msgid "Window"
 msgstr "Vindu"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:350 src/apprt/gtk/ui/1.5/window.blp:212
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:352
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:212
 msgid "New Window"
 msgstr "Nytt vindu"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:355 src/apprt/gtk/ui/1.5/window.blp:217
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:357
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:217
 msgid "Close Window"
 msgstr "Lukk vindu"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:363
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:365
 msgid "Config"
 msgstr "Konfigurasjon"
 
-#: src/apprt/gtk/ui/1.2/surface.blp:366 src/apprt/gtk/ui/1.5/window.blp:295
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:368
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:295
 msgid "Open Configuration"
 msgstr "Åpne konfigurasjon"
 
-#: src/apprt/gtk/ui/1.5/title-dialog.blp:5
-msgid "Leave blank to restore the default title."
-msgstr "Blank verdi gjenoppretter standardtittelen."
+#: crates/rustty-apprt/assets/ui/1.3/debug-warning.blp:6
+msgid "⚠️ You're running a debug build of Rustty! Performance will be degraded."
+msgstr "⚠️ Du kjører et debug-bygg av Rustty. Debug-bygg har redusert ytelse."
 
-#: src/apprt/gtk/ui/1.5/title-dialog.blp:9
-msgid "OK"
-msgstr "OK"
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:12
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:269
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:273
+msgid "Authorize Clipboard Access"
+msgstr "Gi tilgang til utklippstavlen"
 
-#: src/apprt/gtk/ui/1.5/window.blp:58 src/apprt/gtk/ui/1.5/window.blp:108
-msgid "New Split"
-msgstr "Del opp vindu"
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:17
+msgid "Deny"
+msgstr "Avslå"
 
-#: src/apprt/gtk/ui/1.5/window.blp:68 src/apprt/gtk/ui/1.5/window.blp:126
-msgid "View Open Tabs"
-msgstr "Se åpne faner"
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:18
+msgid "Allow"
+msgstr "Tillat"
 
-#: src/apprt/gtk/ui/1.5/window.blp:78 src/apprt/gtk/ui/1.5/window.blp:140
-msgid "Main Menu"
-msgstr "Hovedmeny"
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:92
+msgid "Remember choice for this split"
+msgstr "Husk valget for dette delte vinduet?"
 
-#: src/apprt/gtk/ui/1.5/window.blp:285
-msgid "Command Palette"
-msgstr "Kommandopalett"
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:93
+msgid "Reload configuration to show this prompt again"
+msgstr "Last inn konfigurasjonen på nytt for å vise denne meldingen igjen"
 
-#: src/apprt/gtk/ui/1.5/window.blp:290
-msgid "Terminal Inspector"
-msgstr "Terminalinspektør"
-
-#: src/apprt/gtk/ui/1.5/window.blp:307 src/apprt/gtk/class/window.zig:1772
-msgid "About Rustty"
-msgstr "Om Rustty"
-
-#: src/apprt/gtk/ui/1.5/window.blp:312
-msgid "Quit"
-msgstr "Avslutt"
-
-#: src/apprt/gtk/ui/1.5/command-palette.blp:17
+#: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
 msgid "Execute a command…"
 msgstr "Kjør en kommando…"
 
-#: src/apprt/gtk/class/clipboard_confirmation_dialog.zig:198
+#: crates/rustty-apprt/assets/ui/1.5/inspector-window.blp:5
+msgid "Rustty: Terminal Inspector"
+msgstr "Rustty: Terminalinspektør"
+
+#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:5
+msgid "Leave blank to restore the default title."
+msgstr "Blank verdi gjenoppretter standardtittelen."
+
+#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:9
+msgid "OK"
+msgstr "OK"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:58
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:108
+msgid "New Split"
+msgstr "Del opp vindu"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:68
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:126
+msgid "View Open Tabs"
+msgstr "Se åpne faner"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:78
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:140
+msgid "Main Menu"
+msgstr "Hovedmeny"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:285
+msgid "Command Palette"
+msgstr "Kommandopalett"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:290
+msgid "Terminal Inspector"
+msgstr "Terminalinspektør"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:307
+msgid "About Rustty"
+msgstr "Om Rustty"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:312
+msgid "Quit"
+msgstr "Avslutt"
+
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:270
 msgid ""
 "An application is attempting to write to the clipboard. The current "
 "clipboard contents are shown below."
@@ -263,7 +279,7 @@ msgstr ""
 "En applikasjon forsøker å skrive til utklippstavlen. Gjeldende "
 "utklippstavleinnhold er vist nedenfor."
 
-#: src/apprt/gtk/class/clipboard_confirmation_dialog.zig:202
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:274
 msgid ""
 "An application is attempting to read from the clipboard. The current "
 "clipboard contents are shown below."
@@ -271,11 +287,11 @@ msgstr ""
 "En applikasjon forsøker å lese fra utklippstavlen. Gjeldende "
 "utklippstavleinnhold er vist nedenfor."
 
-#: src/apprt/gtk/class/clipboard_confirmation_dialog.zig:205
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:277
 msgid "Warning: Potentially Unsafe Paste"
 msgstr "Adarsel: Lim inn kan være utrygt"
 
-#: src/apprt/gtk/class/clipboard_confirmation_dialog.zig:206
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:278
 msgid ""
 "Pasting this text into the terminal may be dangerous as it looks like some "
 "commands may be executed."
@@ -283,78 +299,78 @@ msgstr ""
 "Det ser ut som at kommandoer vil bli kjørt hvis du limer inn dette, vurder "
 "om du mener det er trygt."
 
-#: src/apprt/gtk/class/close_confirmation_dialog.zig:184
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:59
 msgid "Quit Rustty?"
 msgstr "Avslutt Rustty?"
 
-#: src/apprt/gtk/class/close_confirmation_dialog.zig:185
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:60
 msgid "Close Tab?"
 msgstr "Lukk fane?"
 
-#: src/apprt/gtk/class/close_confirmation_dialog.zig:186
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:61
 msgid "Close Window?"
 msgstr "Lukk vindu?"
 
-#: src/apprt/gtk/class/close_confirmation_dialog.zig:187
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:62
 msgid "Close Split?"
 msgstr "Lukk delt vindu?"
 
-#: src/apprt/gtk/class/close_confirmation_dialog.zig:193
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:71
 msgid "All terminal sessions will be terminated."
 msgstr "Alle terminaløkter vil bli avsluttet."
 
-#: src/apprt/gtk/class/close_confirmation_dialog.zig:194
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:72
 msgid "All terminal sessions in this tab will be terminated."
 msgstr "Alle terminaløkter i denne fanen vil bli avsluttet."
 
-#: src/apprt/gtk/class/close_confirmation_dialog.zig:195
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:73
 msgid "All terminal sessions in this window will be terminated."
 msgstr "Alle terminaløkter i dette vinduet vil bli avsluttet."
 
-#: src/apprt/gtk/class/close_confirmation_dialog.zig:196
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:75
 msgid "The currently running process in this split will be terminated."
 msgstr "Den kjørende prosessen for denne splitten vil bli avsluttet."
 
-#: src/apprt/gtk/class/surface.zig:1141
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1933
 msgid "Command Finished"
 msgstr "Kommandoen fullført"
 
-#: src/apprt/gtk/class/surface.zig:1142
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
 msgid "Command Succeeded"
 msgstr "Kommandoen lyktes"
 
-#: src/apprt/gtk/class/surface.zig:1143
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
 msgid "Command Failed"
 msgstr "Kommandoen mislyktes"
 
-#: src/apprt/gtk/class/surface_child_exited.zig:109
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:154
 msgid "Command succeeded"
 msgstr "Kommando lyktes"
 
-#: src/apprt/gtk/class/surface_child_exited.zig:113
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:158
 msgid "Command failed"
 msgstr "Kommando mislyktes"
 
-#: src/apprt/gtk/class/title_dialog.zig:225
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:43
 msgid "Change Terminal Title"
 msgstr "Endre terminaltittel"
 
-#: src/apprt/gtk/class/title_dialog.zig:226
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:44
 msgid "Change Tab Title"
 msgstr "Endre fanetittel"
 
-#: src/apprt/gtk/class/window.zig:1067
-msgid "Reloaded the configuration"
-msgstr "Konfigurasjonen ble lastet på nytt"
-
-#: src/apprt/gtk/class/window.zig:1611
-msgid "Copied to clipboard"
-msgstr "Kopiert til utklippstavlen"
-
-#: src/apprt/gtk/class/window.zig:1613
+#: crates/rustty-apprt/src/gtk/class/window.rs:1019
 msgid "Cleared clipboard"
 msgstr "Utklippstavle tømt"
 
-#: src/apprt/gtk/class/window.zig:1753
+#: crates/rustty-apprt/src/gtk/class/window.rs:1021
+msgid "Copied to clipboard"
+msgstr "Kopiert til utklippstavlen"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1744
+msgid "Reloaded the configuration"
+msgstr "Konfigurasjonen ble lastet på nytt"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1901
 msgid "Rustty Developers"
 msgstr "Rustty-utviklere"

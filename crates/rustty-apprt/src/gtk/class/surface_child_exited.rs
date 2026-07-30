@@ -26,6 +26,8 @@ use gtk4::subclass::prelude::*;
 use gtk4::CompositeTemplate;
 use libadwaita::subclass::prelude::*;
 
+use crate::gtk::i18n::tr;
+
 /// PORTS: `apprt.surface.Message.ChildExited` boxed as `"GhosttyApprtChildExited"`
 /// (`surface_child_exited.zig:40`, `gobject.ext.defineBoxed`). The apprt-api crate
 /// defines the plain struct (its `getGObjectType` is "deferred to rustty-apprt's
@@ -141,20 +143,19 @@ impl SurfaceChildExited {
         let Some(ChildExited(data)) = data.as_ref() else {
             // Not localized on purpose (`:104-106`). Matches the blp default
             // (`surface-child-exited.blp:16`, which the port keeps verbatim).
-            banner.set_title("This is a bug in Ghostty. Please report it.");
+            banner.set_title("This is a bug in Rustty. Please report it.");
             return;
         };
 
         // `data.exit_code == 0` (`:108-116`). CSS classes toggle on the widget,
-        // not the banner. See the i18n PORT NOTE in `close_confirmation_dialog.rs`
-        // (rustty emits untranslated literals; `.blp` strings are translated at
-        // compile time).
+        // not the banner. PORTS the reference's `i18n._(...)` wrapping of both
+        // banner titles (`:109`, `:113`) via [`crate::gtk::i18n::tr`].
         if data.exit_code == 0 {
-            banner.set_title("Command succeeded");
+            banner.set_title(tr(c"Command succeeded"));
             widget.add_css_class("normal");
             widget.remove_css_class("abnormal");
         } else {
-            banner.set_title("Command failed");
+            banner.set_title(tr(c"Command failed"));
             widget.remove_css_class("normal");
             widget.add_css_class("abnormal");
         }

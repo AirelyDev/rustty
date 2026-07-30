@@ -3237,8 +3237,11 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   >   (and registered as the `rustty-synthetic` bin, `Cargo.toml:26-28`). Strike it.
   > * **`main_wasm.zig` → OWNER: WS14** (wasm/WebGL). Re-derived repo-wide:
   >   `grep -rn 'main_wasm' crates/ --include='*.rs'` → 0 hits, so genuinely OPEN.
-  > * **`main_build_data.zig` + the `+gen-*` file-emit wiring → OWNER: WS13** (i18n &
-  >   docs), which already owns the generated-artifact tooling. Also 0 hits, genuinely OPEN.
+  > * ~~**`main_build_data.zig` + the `+gen-*` file-emit wiring → OWNER: WS13** (i18n &
+  >   docs), which already owns the generated-artifact tooling. Also 0 hits, genuinely OPEN.~~
+  >   **PORTED (WS13, 2026-07-30)** at `xtask/src/main_build_data.rs`, exposed as
+  >   `xtask gen +<action>`; see the sub-project #3 entry for the full disposition
+  >   and the anti-drift test that pins it to the installed bytes.
   >
   > Gate **G-P2** FAILS on any open row without an owner in an OPEN workstream.
 
@@ -3963,30 +3966,134 @@ vim anon) ported + additive golden tests; Miri-clean. Required reflection surfac
 added faithfully next to the reified types (config_struct `config_fields()` +
 `config_completion_kind()` parallel to `value_type`; `VALUE_NAMES` on the enum
 macro; `PackedStruct::field_names()` mirroring `AutoStruct`; rustty-cli
-`Action::option_specs()` reifying the commented-out `options()`). **Residual
-deferral:** the `+gen-*` CLI/build.rs file-emit wiring (writes the scripts to disk
-at packaging time) stays deferred with `main_build_data` (C6). 2 `test{}` ported.
+`Action::option_specs()` reifying the commented-out `options()`). 2 `test{}` ported.
+~~**Residual deferral:** the `+gen-*` CLI/build.rs file-emit wiring (writes the
+scripts to disk at packaging time) stays deferred with `main_build_data` (C6).~~
+**RESOLVED (WS13, 2026-07-30).**
 
-> **OWNER [WS19 T19, 2026-07-29 — audit row O13b]: WS13 (i18n & docs).** Flagged by gate
-> G-P2 as an open claim with no owner. This is the SAME item as the `main_build_data.zig`
-> + `+gen-*` file-emit wiring routed to WS13 above, seen from the shell-completion side:
-> the generators are ported and tested, only the write-to-disk-at-packaging-time wiring
-> is outstanding, and WS13 owns the generated-artifact/xtask emission axis. Added to
-> WS13's plan.
+> **RESOLVED [WS13, 2026-07-30 — audit rows O13a/O13b].** Both halves now exist and
+> are pinned to each other:
+> * **The file-emit half** was in fact already shipping — `xtask resources`
+>   (`res_shell::gen_shell`, `res_editor::gen_editor`, `res_terminfo::gen_terminfo`)
+>   writes every one of these artifacts into `zig-out/share`, which is what
+>   `build.zig` does with `main_build_data`'s stdout.
+> * **The `+gen-*` CLI half** was genuinely missing (`grep -rn main_build_data
+>   crates/ --include='*.rs'` → 0 hits) and is now `xtask/src/main_build_data.rs`,
+>   the line-for-line port of `src/main_build_data.zig`'s `Action` enum and `main`,
+>   exposed as `cargo run -p xtask -- gen +<action>` for all nine actions
+>   (`bash`, `fish`, `zsh`, `sublime`, `vim-syntax`, `vim-ftdetect`,
+>   `vim-ftplugin`, `vim-compiler`, `terminfo`). It is an `xtask` subcommand rather
+>   than a separate binary because the reference splits it out purely to stop
+>   `build.zig` rebuilding when its data dependencies change — a Zig build-graph
+>   concern cargo does not have — and because `xtask` is the only crate already
+>   depending on BOTH `rustty-extra` and `rustty-terminfo`, so no new edge appears.
+> * **Anti-drift:** `main_build_data::tests::gen_actions_match_the_installed_bytes`
+>   asserts the stdout bytes of seven actions are byte-identical to the files
+>   `xtask resources` installs, so the two surfaces cannot diverge.
+>   `every_action_emits_distinct_non_empty_bytes` catches a wrong `switch` arm;
+>   `detect_matches_exactly_the_reference_action_set` carries five negative
+>   controls. FAIL arm: `xtask gen bogus` exits 1 with `NoAction`.
 
 
-## `src/build/mdgen/**` + `src/build/webgen/**` — man-page + website doc generators (low priority)
+## ~~`src/build/mdgen/**` + `src/build/webgen/**` — man-page + website doc generators (low priority)~~ **RESOLVED (WS13 T6/T7/T8, 2026-07-30)**
 
 **Ghostty source:** `src/build/mdgen/**` (`mdgen.zig`, `main_ghostty_1.zig`,
 `main_ghostty_5.zig`, the `ghostty_{1,5}_{header,footer}.md` fixtures) +
 `src/build/webgen/**` (`main_actions.zig`, `main_commands.zig`,
 `main_config.zig`) — ~345 LOC of `.zig` (plus the `.md` header/footer fixtures).
-**Rustty counterpart:** NONE. **Why deferred:** build-time documentation
-generators (man pages + website config/action/command reference) — pure packaging
-tooling, never linked into the terminal, and dependent on the same `help_strings`
-codegen the CLI already defers (C6). **What unblocks it:** LOW priority; port with
-the doc/codegen tooling milestone if/when man-page + website generation is wanted.
-0-test impact.
+
+**Rustty counterpart (all of it, ported):**
+
+* `crates/rustty-extra/src/mdgen.rs` — `substitute` (`mdgen.zig:8-19`),
+  `gen_config` (`:21-48`), `gen_actions` (`:50-83`), `gen_keybind_actions`
+  (`:85-117`), `man_1_markdown`/`man_5_markdown` (`main_ghostty_{1,5}.zig`).
+  The reference's `inline for` over reflected fields becomes a runtime loop over
+  the reified tables (`config_fields()`, `Action::ALL`,
+  `binding::Action::FIELD_NAMES`) plus the build-generated help corpora.
+* `crates/rustty-extra/src/mdgen/rustty_{1,5}_{header,footer}.md` — the four
+  prose fixtures, rebranded per R2 and DE-SNARKED (memory:
+  strip-ghostty-gag-prose). Deviations are enumerated in `mdgen.rs`'s module
+  header: the "We aim to be the best in this category, and competitive in the
+  rest." boast is dropped, "you'll see a lot of weird blank configurations" is
+  reworded, the ghostty-users community pointer is dropped, the upstream
+  `--Use the system log CLI` typo is fixed, and `# BUGS`/`# AUTHOR` carry
+  rustty's maintainer identity instead of upstream GitHub links (the precedent
+  the GTK About dialog already set by dropping `website`/`issue-url`).
+* `crates/rustty-extra/src/mdgen/render.rs` — a Rust markdown→roff and
+  markdown→HTML renderer standing in for the reference's `pandoc --to man` /
+  `--to html` (`GhosttyDocs.zig:60-88`).
+* `crates/rustty-extra/src/webgen.rs` — `config_mdx` (`main_config.zig:12-125`,
+  including the undocumented-field grouping and the `code`/`<Note>`/`<Warning>`
+  block detection), `actions_mdx` (`main_actions.zig:5-9`, delegating to the
+  already-ported `rustty_input::helpgen_actions::generate` rather than growing a
+  second implementation — a test asserts the two are byte-identical), and
+  `commands_mdx` (`main_commands.zig:14-52`).
+* `xtask/src/res_misc.rs` — `gen_man` (`share/man/man{1,5}/{APP}.{1,5}`),
+  `gen_doc` (`share/{APP}/doc/{APP}.{1,5}.{md,html}`), `gen_webdata`
+  (`share/{APP}/webdata/{config,actions,commands}.mdx`). The hand-written
+  `MAN1_BODY`/`MAN5_BODY` roff transcription and its PARTIAL note are deleted;
+  the pages now carry the FULL generated `COMMAND LINE ACTIONS` /
+  `CONFIGURATION OPTIONS` / `KEYBIND ACTIONS` catalogs instead of pointing
+  readers at `+show-config`.
+
+**The `pandoc` tradeoff, recorded so it is not re-litigated:** `pandoc` is
+installed on NEITHER build host (macOS workstation, Fedora VM). Requiring it
+would make `xtask resources` — a step every packaging run needs — fail on a
+stock machine; that option was rejected on exactly the grounds WS9 used to
+reject linking Homebrew's libintl (vendor, do not depend). Emitting roff
+directly from `mdgen` was also rejected: it would discard the `.md`/`.html`
+artifacts the reference installs and make the generator's output un-diffable
+against the reference's markdown. The chosen option generates the reference's
+markdown verbatim (modulo R2) and converts it in Rust over the small, CLOSED
+subset `mdgen` can produce. Full argument in `render.rs`'s module header.
+
+**Intentional divergences from the reference:** (1) rustty ALWAYS emits real
+pages, never `GhosttyDocs.installDummy`'s `share/man/.placeholder`, because the
+macOS Copy-Resources phase ships `share/man` unconditionally; (2) the `.TH`
+title derives from `crate::APP`, so `--features identity-oracle` yields
+`.TH "GHOSTTY" "1"` matching the `ghostty.1` FILENAME — before WS13 the filename
+flipped but the title still said `RUSTTY`; (3) the `.TH` date field is populated
+from a committed constant rather than left empty as pandoc leaves it, because an
+empty date makes `mandoc -Tlint` warn unconditionally.
+
+**Verification actually run (WS13 T7/T8):**
+
+* `mandoc -Tlint` on macOS: **rc=0, zero diagnostics** on both pages — no ERROR,
+  no WARNING, no STYLE. FAIL arm demonstrated: injecting an unbalanced `.RE` and
+  a raw non-ASCII byte into a copy makes mandoc report
+  `ERROR: skipping end of block that is not open: RE` and exit 3.
+* `groff -man -Tutf8 -ww` on the Fedora VM (a DIFFERENT formatter — the VM has
+  no mandoc, macOS has no groff): rc=0 for both pages. This cross-check found
+  two real defects mandoc had accepted: raw UTF-8 in the page (groff reported
+  `invalid input character code 134` per continuation byte and DROPPED the
+  character — fixed by emitting `\[uXXXX]` escapes) and a `[text](url)` link
+  split across source lines that the per-line inline pass left as RAW MARKDOWN
+  in the man page (fixed by joining filled runs before the inline pass). FAIL
+  arm demonstrated: the same injected raw-UTF-8 byte makes groff report
+  `invalid input character code 128`.
+* Residual, honestly recorded: 5 `cannot adjust line` notices at groff's
+  MAXIMUM warning level (`-ww`), all long URLs inside an indented `.RS` region.
+  A `\:` break-opportunity experiment was tried and REVERTED — measured, it
+  raised the count 5 → 7, because breaking a URL yields lines with a single long
+  chunk and no inter-word space left to stretch, which is the very condition the
+  notice reports. No input-side markup can make a token wider than the measure
+  justify, and `pandoc --to man` emits the same `\(la…\(ra` construct. Both
+  formatters exit 0.
+* `man -M <share>/man` renders 4761 (man1) and 5019 (man5) lines; probed option
+  names (`font-family`, `background-opacity`, `keybind`, `window-decoration`,
+  `confirm-close-surface`) all present with their real doc bodies, `new_split`
+  present in man5's KEYBIND ACTIONS, `show-config` in man1's COMMAND LINE
+  ACTIONS. Negative controls: 0 occurrences of `ghostty` (case-insensitive) in
+  either page, 0 of `not-a-real-option`, 0 of the stripped `competitive in the
+  rest` marketing line.
+* HTML: both `share/rustty/doc/*.html` parse with a balanced tag stack, 215 and
+  279 `<dt>` terms respectively, `&lt;` present (escaping exercised) and no raw
+  `<script`.
+* webdata: 206 `## ` headings in `config.mdx`, 18 in `commands.mdx`, callout and
+  code-fence counts balanced with all three block kinds actually produced, and
+  0 occurrences of `ghostty` or `ghostty-org` in any of the three files.
+* 36 unit tests in `rustty-extra` cover the generators and the renderer, each
+  with at least one negative control.
 
 ## ~~`src/stb/stb_image_resize.h` — glyph resize (`stbir_resize_uint8`); rustty-font does NOT yet cover it~~ **PORTED 2026-06-30 at `2e82776`; RECLASSIFIED to VACUOUS TEST COVERAGE → CLOSED by WS11, 2026-07-29** [row corrected WS19 T14 — audit row O17; coverage closed WS11]
 

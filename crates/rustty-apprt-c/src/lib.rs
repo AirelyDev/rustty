@@ -995,33 +995,36 @@ pub extern "C" fn rustty_info() -> Info {
 
 /// C: rustty_translate
 ///
-/// Translate a string maintained by libghostty into the current
+/// Translate a string maintained by librustty into the current
 /// application language. This will return the same string (same pointer)
 /// if no translation is found, so the pointer must be stable through
 /// the function call.
 ///
-/// This should only be used for singular strings maintained by Ghostty.
+/// This should only be used for singular strings maintained by Rustty.
 //
 // pub export fn ghostty_translate(msgid: [*:0]const u8) [*:0]const u8 {
 //     return internal_os.i18n._(msgid);
 // }
 //
-// PORT NOTE (i18n deferred → faithful identity degradation): the reference forwards to
-// the gettext `_` wrapper (`internal_os.i18n._`, os/i18n.zig:65), which is
-// `if (!build_config.i18n) return msgid; return dgettext(bundle_id, msgid);`. That
-// wrapper IS ported (`rustty_os::i18n::gettext_`, `_` renamed since it is not a valid
-// Rust fn name), BUT the whole gettext RUNTIME is a BREAK #1 deferred seam: `i18n.init`
-// (the `bindtextdomain` bind) is never called (DEFERRALS.md — it stays in the deferred
-// `GlobalState::init` set alongside `ensureLocale`/`glslang.init`/`oni.init`), and the
-// `dgettext` symbol `gettext_` calls is NOT provided by the reduced vendored `gettext-sys`
-// (which exports only the gnulib `locale_name_canonicalize`), so linking `gettext_` into
-// this C-ABI staticlib/cdylib fails on `_dgettext`. Until the full libintl link lands with
-// the i18n seam, this returns `msgid` UNCHANGED — the identity translation. This is
-// behavior-equivalent to the deferred state anyway: with no domain ever bound, real
-// `dgettext` returns `msgid` verbatim too, so callers observe the exact
-// "same string (same pointer) if no translation is found" contract the doc-comment above
-// promises. `[*:0]const u8` ↔ `*const c_char`; the returned pointer IS `msgid`, so the
-// "pointer must be stable through the function call" contract holds trivially.
+// PORT NOTE (WS13): this used to return `msgid` unchanged. The two reasons the old
+// note gave are both resolved: (1) `_dgettext` IS now defined by rustty's own
+// vendored libintl (`crates-sys/gettext-sys` -> `librustty_intl.a`, WS9 `9af41cc`,
+// merged `509b1e3`), so linking `gettext_` no longer fails on `_dgettext`; (2)
+// `i18n::init`'s `bindtextdomain` IS called during app bootstrap
+// (`rustty-apprt/src/lib.rs:322`, WS4), right after `ensureLocale()`. So this now
+// forwards for real, exactly as the reference does. The "same string (same pointer)
+// if no translation is found" contract is gettext's OWN behavior, preserved
+// verbatim: `dgettext` returns its `msgid` argument on a miss.
+//
+// DG5 (C-ABI panic policy is ABORT, so no unwind may cross this boundary):
+// `rustty_os::i18n::gettext_` performs one `CString::new(BUNDLE_ID)` — infallible
+// on a compile-time constant with no interior NUL, though it is spelled `expect` —
+// and one `dgettext` call, which never panics. There is therefore no panic edge to
+// catch, and no `catch_unwind` is added (that would be the only alternative).
+//
+// `[*:0]const u8` ↔ `*const c_char`. `dgettext`'s return points into
+// gettext-managed storage valid for the program lifetime, so handing it back across
+// the ABI is sound.
 ///
 /// # Safety
 /// `msgid` must be a valid NUL-terminated C string that stays valid through the call
@@ -1030,9 +1033,8 @@ pub extern "C" fn rustty_info() -> Info {
 #[no_mangle]
 pub unsafe extern "C" fn rustty_translate(msgid: *const c_char) -> *const c_char {
     // return internal_os.i18n._(msgid);
-    //   i18n deferred (see PORT NOTE): return the msgid unchanged — the identity path
-    //   the reference `_` itself takes when no translation domain is bound.
-    msgid
+    let msgid_c = unsafe { std::ffi::CStr::from_ptr(msgid) };
+    rustty_os::i18n::gettext_(msgid_c).as_ptr()
 }
 
 // ===================================================================

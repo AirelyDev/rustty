@@ -172,3 +172,33 @@ must print `debug(gtk): windowing protocol=X11`.
 `gtk_first_light`, `gtk_window_live`, `gtk_glyph_dump` (rendering); `gtk_input_focus` (overlays don't
 capture input); `gtk_close_confirmation`, `gtk_title_dialog`, `gtk_clipboard`, `gtk_clipboard_confirm`
 (dialogs/clipboard); `gtk_parity_callbacks` (the newly-wired callbacks don't abort).
+
+## I. Internationalisation (WS13)
+
+The automated gates cover msgid PARITY (`cargo test -p rustty-apprt --test
+i18n_msgid_coverage`) and the LOOKUP MECHANISM (`cargo test -p rustty-apprt-c
+--test i18n_translate`, which spawns a child with `LANG` set and includes a
+wrong-locale negative control). What is left for a human is that the translated
+strings actually reach the rendered widgets.
+
+Build the catalogs first: `cargo run -p xtask -- resources`, then run with
+`RUSTTY_RESOURCES_DIR=$PWD/zig-out/share/rustty`.
+
+- [ ] **I.1:** launch with `LANG=de_DE.UTF-8 LC_ALL=de_DE.UTF-8` — the debug
+  banner reads `⚠️ Du verwendest einen Debug Build von Rustty!…` and the primary
+  menu's About item reads `Über Rustty`. **Control:** with `LANG=C LC_ALL=C`
+  both read English. German in both runs would mean the text is baked in;
+  English in both would mean the lookup never fired.
+- [ ] **I.2:** with `--confirm-close-surface=true` under `LANG=de_DE.UTF-8`, the
+  close dialog is headed `Rustty beenden?`. This is a code-side `gettext_` call
+  site (`gtk::i18n::tr`), a DIFFERENT path from I.1's `.blp` string, which
+  GtkBuilder translates through the global domain. **Control:** `LANG=C` shows
+  `Quit Rustty?`.
+- [ ] **I.3:** `man -M $PWD/zig-out/share/man 5 rustty` lists real options —
+  `font-family`, `keybind`, `window-decoration` — each with its full doc text,
+  not a pointer to `+show-config`. Likewise `man -M … 1 rustty` lists the CLI
+  actions. **Control:** neither page contains the string `ghostty`.
+- [ ] **I.4:** `LANG=he_IL.UTF-8` renders Hebrew AND mirrors the chrome
+  right-to-left while the terminal grid stays LTR
+  (`.port/phase-2/VERIFICATION_DEBT.md` **V7** — open, needs a machine with the
+  `he_IL.UTF-8` locale generated).
