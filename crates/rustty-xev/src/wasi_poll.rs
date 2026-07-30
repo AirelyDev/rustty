@@ -1069,8 +1069,7 @@ impl Completion {
                 let (ptr, len) = buffer.as_parts();
                 let iovs = [wasi::iovec_const { base: ptr, len }];
                 let mut n: usize = 0;
-                let errno =
-                    unsafe { wasi::sock_send(*fd, iovs.as_ptr(), iovs.len(), 0, &mut n) };
+                let errno = unsafe { wasi::sock_send(*fd, iovs.as_ptr(), iovs.len(), 0, &mut n) };
                 Result::Send(if errno == wasi::ERRNO_SUCCESS {
                     Ok(n)
                 } else {
@@ -1536,7 +1535,10 @@ mod tests {
         }
 
         let mut bad = Completion::default();
-        assert_eq!(unsafe { b.get(&mut bad) }.unwrap_err(), BatchError::BatchFull);
+        assert_eq!(
+            unsafe { b.get(&mut bad) }.unwrap_err(),
+            BatchError::BatchFull
+        );
 
         // Put one back
         let old = cs[4].batch_idx;

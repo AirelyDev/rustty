@@ -6,7 +6,15 @@
 //! `Api()`, since `Backend::candidates()` has one element, so `dynamic.zig` is
 //! comptime-elided/deferred, not weakened) and Linux/`{io_uring, epoll}` behind
 //! the real `Dynamic` selector (§1 Linux port, tasks L1 LT1-LT8 — two candidates,
-//! so nothing elides). `wasi_poll`/`iocp` remain whole follow-up ports.
+//! so nothing elides). WS20 adds the remaining two reference backends —
+//! WASI/`wasi_poll` (`wasi_poll.rs` + `wasi.rs`) and Windows/`iocp` (`iocp.rs` +
+//! `windows.rs`, itself the port of libxev's own `src/windows.zig`) — each a
+//! single-candidate target, so each is the flat static `Api()` exactly as
+//! macOS/kqueue is. Those two are CROSS-COMPILE-VERIFIED ONLY on this host
+//! (`cargo check --target {x86_64-pc-windows-msvc, wasm32-wasip1}`); their
+//! reference tests are ported and compile but cannot be EXECUTED here — that is
+//! verification debt with a runnable recipe in
+//! `.port/phase-2/VERIFICATION_DEBT.md`, NOT a scope exclusion.
 //!
 //! Every termio reference file (and, with the core tier, renderer/Thread.zig +
 //! core Surface.zig) imports `const xev = @import("../global.zig").xev` — the
@@ -121,12 +129,12 @@ mod linux;
 // are, and each is a SINGLE-candidate target (backend.rs: `.wasi =>
 // &.{.wasi_poll}`, `.windows => &.{.iocp}`), so — like macOS/kqueue (§0) — the
 // Dynamic layer comptime-elides and the crate surface IS the backend's `Api()`.
+#[cfg(target_os = "windows")]
+mod iocp;
 #[cfg(target_os = "wasi")]
 mod wasi;
 #[cfg(target_os = "wasi")]
 mod wasi_poll;
-#[cfg(target_os = "windows")]
-mod iocp;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -534,7 +542,7 @@ pub use wasi_poll::{
 pub use iocp::{
     noop_callback, AcceptError, AsyncError, Callback, CancelError, CloseError, Completion,
     ConnectError, JobObjectError, JobObjectResult, Loop, Operation, ReadBuffer, ReadError, Result,
-    ShutdownError, TimerError, TimerTrigger, WriteBuffer, WriteError,
+    ShutdownError, ShutdownHow, TimerError, TimerTrigger, WriteBuffer, WriteError,
 };
 #[cfg(target_os = "windows")]
 pub use windows::{CallbackAction, CompletionState, Options, RunMode};
