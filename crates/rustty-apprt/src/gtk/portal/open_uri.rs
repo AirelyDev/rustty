@@ -619,22 +619,31 @@ mod tests {
         assert_eq!(open_uri.observed(), Observed::default());
     }
 
-    /// Non-UTF-8 URI bytes are reported rather than smuggled into a `"s"` variant —
-    /// see [`Error::UriNotUtf8`]. Ordered BEFORE the connection check would matter:
-    /// this asserts the check happens even though no connection is set... so it is
-    /// deliberately paired with the test above, which proves the connection check
-    /// fires for VALID UTF-8. Together they pin the ordering: the UTF-8 check must
-    /// run first, or this test would see `DBusConnectionRequired`.
+    /// The connection check runs FIRST, before the URI is inspected at all — so a
+    /// non-UTF-8 URI with no connection set reports `DBusConnectionRequired`, not
+    /// `UriNotUtf8`.
+    ///
+    /// PORTS: `oracle@main:src/apprt/gtk/portal/OpenURI.zig:149` — `start` opens
+    /// with `const dbus = self.dbus orelse return error.DBusConnectionRequired;`
+    /// and performs NO UTF-8 validation anywhere (Zig carries `value.url` as
+    /// `[]const u8` and passes the bytes straight through). [`Error::UriNotUtf8`]
+    /// is therefore a rustty-only guard, added because the D-Bus `"s"` variant
+    /// requires UTF-8; R1 pins it AFTER the connection check.
+    ///
+    /// An earlier version of this test asserted the opposite ordering and FAILED
+    /// on Linux from the day it landed (WS19 T8) — its rationale ("the UTF-8 check
+    /// must run first") had no oracle basis. The `UriNotUtf8` path itself is
+    /// exercised by the live-gated portal KAT, where a connection exists.
     #[test]
-    fn open_uri_non_utf8_uri_is_rejected() {
+    fn open_uri_connection_check_precedes_uri_validation() {
         let open_uri = OpenUri::new();
         let err = open_uri
             .start(OpenUrl {
                 kind: OpenUrlKind::Unknown,
                 url: b"https://example.invalid/\xff\xfe",
             })
-            .expect_err("non-utf8 uri");
-        assert_eq!(err, Error::UriNotUtf8);
+            .expect_err("no dbus connection was set");
+        assert_eq!(err, Error::DBusConnectionRequired);
         assert_eq!(open_uri.in_flight(), 0);
     }
 
