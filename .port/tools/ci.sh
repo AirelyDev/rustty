@@ -72,6 +72,9 @@
 #   D6  check_sanitizer_canary.sh     ASan-visibility canary + cfg   -> PROGRESS
 #   D8  check_clone_injection.sh      clone-injection review list    -> PROGRESS (advisory)
 #   D9  check_stale_comments.sh       stale-comment contract check   -> PROGRESS (advisory)
+#   D10 check_stb_resize_parity.sh    vendored stb_image_resize output vs ghostty's
+#                                     own build recipe (4 zig optimize modes) +
+#                                     a machine-checked negative control  -> PROGRESS
 #          Registered PROGRESS not HARD (R5): brand-new, fail-closed against
 #          hand-maintained audit ledgers; PROGRESS avoids a transiently
 #          un-passable CI while a new hit precedes its ledger row by a commit.
@@ -239,6 +242,12 @@ GATE_REGISTRY=(
   "D6|PROGRESS|bash $GATES/check_sanitizer_canary.sh"
   "D8|PROGRESS|bash $GATES/check_clone_injection.sh"
   "D9|PROGRESS|bash $GATES/check_stale_comments.sh"
+  # D10 — the vendored stb_image_resize glyph resampler vs ghostty's OWN build of the
+  # byte-identical header, at all four Zig optimize modes, plus a negative control
+  # proving the +/-1-on-2% envelope still rejects nearest/bilinear. PROGRESS because
+  # it reports BLOCKED (exit 3) on a box without `zig` or the oracle checkout; a
+  # genuine mismatch is still escalated by run_gate's PROGRESS-went-RED branch.
+  "D10|PROGRESS|bash $GATES/check_stb_resize_parity.sh"
   # A3 — the rustty-embed.h product-umbrella ABI gate (rebrand Task 4; formerly
   # the ghostty.h byte-freeze). Asserts include/rustty-embed.h is EXACTLY
   # ghostty's upstream include/ghostty.h (read from the pinned $ORACLE_HEADER_PATH
