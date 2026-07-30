@@ -3831,11 +3831,11 @@ codegen the CLI already defers (C6). **What unblocks it:** LOW priority; port wi
 the doc/codegen tooling milestone if/when man-page + website generation is wanted.
 0-test impact.
 
-## `src/stb/stb_image_resize.h` — glyph resize (`stbir_resize_uint8`); rustty-font does NOT yet cover it
+## ~~`src/stb/stb_image_resize.h` — glyph resize (`stbir_resize_uint8`); rustty-font does NOT yet cover it~~ **PORTED 2026-06-30 at `2e82776`; RECLASSIFIED to VACUOUS TEST COVERAGE → OWNER: WS11** [corrected WS19 T14, 2026-07-29 — audit row O17]
 
 **Ghostty source:** `src/stb/stb_image_resize.h` (single-header stb library),
 invoked as `stb.stbir_resize_uint8(...)` in the FreeType glyph-resize path
-(`src/font/face/freetype.zig:640`, "resizes the glyph"). **Rustty counterpart:**
+(`src/font/face/freetype.zig:640`, "resizes the glyph"). ~~**Rustty counterpart:**
 NOT covered — `grep -rn 'stbir|stb_image_resize' crates/rustty-font/src` finds
 only `Vec::resize`/`atlas.resized` (unrelated). The glyph/atlas resize seam has no
 Rust analogue yet. **Why deferred:** the live FreeType glyph-rasterization path
@@ -3844,7 +3844,49 @@ where this resize is called; the offscreen port did not need it. **What unblocks
 it:** when the live glyph-rasterization path lands, wire glyph resize — either a
 pure-Rust resize (e.g. an image-resize crate) or a `stb-sys` cc build compiling
 `stb_image_resize.h` (a `cc` build.rs, the -sys precedent). Note a **stb-sys cc
-build may be needed** if bit-exact parity with stb's resampler is required.
+build may be needed** if bit-exact parity with stb's resampler is required.~~
+
+**THE PORT SHIPPED — 2026-06-30, commit `2e82776`** [corrected WS19 T14,
+2026-07-29 — audit row O17]. Independently verified:
+* `crates/rustty-font-shaper/src/stb.rs:18` declares `stbir_resize_uint8`;
+* `crates/rustty-font-shaper/build.rs` compiles `vendor/stb_impl.c` via `cc::Build`;
+* `crates/rustty-font-shaper/vendor/stb_image_resize.h` is **byte-identical to the
+  oracle** — md5 `7381a7070120fd5a36d8fb9e3179dd7c` on both sides
+  (`git show origin/main:src/stb/stb_image_resize.h`);
+* call site `crates/rustty-font-shaper/src/face/freetype.rs:806`,
+  argument-for-argument identical to oracle `freetype.zig:639-652`.
+
+**WHY THIS ROW STAYED "OPEN" FOR A MONTH — a methodology finding, recorded so it
+does not recur.** The row's own evidence grep was **scoped to
+`crates/rustty-font/src`**, but the code lives in the **sibling** crate
+`rustty-font-shaper`, created afterwards by the **D1 three-tier split** (memory
+`apc-glyf-font-layering-d1`). *The grep scope WAS the bug.* Re-verifying the row by
+re-running the scope the row supplied could not possibly detect that — it is a
+self-confirming check. **Rule: never verify a ledger row with a search scope the row
+itself provides; use a repo-wide search.** The WS19 audit's own re-verification of
+this row fell into exactly that trap. Every other audit row verified with a
+row-supplied scope has been re-derived repo-wide (see the audit's §G).
+
+**ALSO CORRECTED: the gating is NOT platform-conditional.** The ROADMAP's "wired on
+the non-macOS path" is wrong — `build.rs` gates on
+`cfg(not(target_arch = "wasm32"))`, not `not(target_os = "macos")`. The stb build and
+the FreeType face are **live on macOS too** (`nm -g` shows `T _stbir_resize_uint8`
+in the macOS archive). Any reasoning that treats this seam as Linux-only is wrong.
+
+**WHAT IS ACTUALLY OPEN → OWNER: WS11** (which now has a 10-task plan and owns this).
+The **test coverage of the resize is VACUOUS**: every existing test that reaches the
+call does so at **scale 1.0** (`8x16→8x16`, `136x128→136x128`), and
+`render_and_resize` never enters the bitmap arm at all (Inconsolata is an outline
+font). Proof: substituting a nearest-neighbour loop for stb leaves **all 9 tests
+green** — so nothing in the suite would notice if the resampler were wrong. WS11 owns
+adding coverage that actually discriminates.
+
+**DO NOT "fix" the stb `build.rs` flags.** Bit-exactness against a single oracle
+build is unattainable: ghostty's own Debug and ReleaseFast builds of the identical C
+disagree (9/512 bytes, maxdelta 1 — ReleaseFast's loop vectorizer). rustty sits on
+the **consensus** side across 5 toolchain/optimization combinations on 2 OSes.
+Changing flags would *create* divergence, and since the seam is live on macOS it
+would violate R5.
 
 ## Sub-project #2 (macos-swift-app): the `ghostty_*`→`rustty_*` C-ABI compatibility ALIAS layer
 
@@ -5592,7 +5634,7 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 | O14 | `D:4209` `Atlas.Wasm` `test "happy path"` (4 named assertions) deferred with the wasm atlas surface | **OPEN, correctly described**; target is an unscheduled milestone. | **route to WS14** | **S** |
 | O15 | `D:1894` `App.zig` `Wasm` block preserved verbatim, "Target: the rustty wasm app-runtime" | **OPEN, correctly described** (the block is commented out in the *reference* too). | **route to WS14** | **S** |
 | O16 | `D:571` the **WebGL** renderer backend | **OPEN, correctly described.** | **route to WS14** | **L** |
-| O17 | `D:3741` `stb_image_resize.h` glyph resize has no rustty counterpart | **OPEN, correctly described.** | **route to WS11** | **M** |
+| O17 | `D:3741` `stb_image_resize.h` glyph resize has no rustty counterpart | ~~**OPEN, correctly described.**~~ **THIS AUDIT VERDICT WAS WRONG — corrected 2026-07-29 by the WS11 plan-authoring lane.** The port **SHIPPED at `2e82776` (2026-06-30)**: `rustty-font-shaper/src/stb.rs:18` declares `stbir_resize_uint8`, `build.rs` compiles `vendor/stb_impl.c` via `cc::Build`, `vendor/stb_image_resize.h` is byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806` is argument-for-argument identical to `freetype.zig:639-652`. **Root cause of the miss:** the row's evidence grep was scoped to `crates/rustty-font/src`, but the code lives in the sibling crate `rustty-font-shaper` created by the D1 three-tier split — *the grep scope WAS the bug*, so re-running it could not detect the error (see §G). | **RECLASSIFIED, not closed:** the port is done; what is open is that its test coverage is **VACUOUS** (all reaching tests run at scale 1.0; `render_and_resize` never enters the bitmap arm; swapping stb for nearest-neighbour leaves all 9 tests green). **Route to WS11**, which owns it with a 10-task plan. | **S** (row) / **M** (coverage, in WS11) |
 | O18 | `D:3668` `rustty-synthetic` `cli.rs` 4 binary-entry seams (`main`, `main_action_impl_{ascii,osc,utf8}`) | **OPEN**; un-defer trigger is "the `rustty +synthetic` binary entry", which no WS owns. | **fix in WS19 T13** — wire the entries through the existing `rustty-cli` detection, **or** record as permanent if the acyclic split forbids it. Decide in-plan; do not defer. | **M** |
 | O19 | `D:3697` `rustty-bench` residuals: macOS `os_signpost` interval; `main_bench.zig` binary entry; locally-replicated `detectArgs` | **OPEN, no owner.** | `os_signpost` → **permanent divergence** (Instruments-only instrumentation, zero behavior); the binary entry + local `detectArgs` → **fix in WS19 T13** with O18 (same class) | **S** |
 | O20 | `INTEGRATION_PARITY §2.8` terminfo SOURCE + termcap never emitted (diverges only in Debug builds); fix-list item 8 is marked "(Optional)" | **OPEN, no owner — and "optional" is not a disposition.** | **permanent divergence** — the shipping app is Release, where rustty MATCHES the oracle exactly; WS19 T14 writes the basis and deletes the fix-list row | **S** |
@@ -5671,3 +5713,47 @@ WS15 GlobalShortcuts (merged `e8a9f59`), `D:4776` x11 winproto (merged `07b64db`
 **Out-of-scope-by-platform (NOT deferrals, per `ROADMAP:214`):** every
 `#[cfg(windows)]` seam (`D:3155`, `D:4155`, `D:4169`), the `iocp`/`wasi_poll` xev
 backends, and the iOS device runtime.
+
+## G. Methodology correction — the self-confirming-scope failure mode [added 2026-07-29]
+
+**How this audit got a row wrong.** Row **O17** was recorded as "OPEN, correctly
+described". It was **not open** — `stb_image_resize` shipped on 2026-06-30 at
+`2e82776`. The audit verified the row by re-running the row's own evidence grep,
+which was scoped to `crates/rustty-font/src`. The code lives in the **sibling**
+crate `crates/rustty-font-shaper/`, created afterwards by the **D1 three-tier
+split**. *The grep scope WAS the bug*, so re-running it was a self-confirming check
+that could not detect the error.
+
+**RULE, binding on every future ledger audit: never verify a row with a search
+scope the row itself supplies. Use a repo-wide search, then narrow.** A row that
+names its own scope is exactly the row whose scope may be stale — crate splits,
+renames (`ghostty.rs`→`rustty.rs` at `410c387`, which also broke a G1b mapping) and
+re-homings all invalidate scopes silently while the row's prose stays plausible.
+
+**Re-derivation of every affected verdict [WS19 T14, 2026-07-29].** Each row below
+was re-checked with a **repo-wide** grep instead of the row's own scope. Result: O17
+was the only wrong one, but two further rows were found to be **stale in the
+opposite direction** — claiming open work that has shipped.
+
+| Row | Repo-wide re-derivation | Verdict |
+|---|---|---|
+| **O17** stb glyph resize | `grep -rn 'stbir_resize_uint8' crates/` → `rustty-font-shaper/src/stb.rs:18`, `build.rs`, `face/freetype.rs:806` | **WAS WRONG** — ported at `2e82776`; reclassified to vacuous coverage → **WS11** |
+| **O18** synthetic `cli.rs` "4 live `unimplemented!()` binary-entry seams" | `grep -rn 'unimplemented\|todo!' crates/rustty-synthetic/` → **0 hits**. `cli.rs:97` `main()`, `:245/:274/:297` `main_action_impl_{ascii,osc,utf8}` are all LIVE; `Cargo.toml:26-28` registers the `rustty-synthetic` bin at `src/main_gen.rs`, whose `fn main` calls `cli::main()` | **WAS WRONG (stale)** — all 4 seams filled; only the LOCAL `detectArgs` replica remains, and that is a permanent acyclic-split divergence (see the divergence section) |
+| **O19** bench `main_bench.zig` binary entry | `crates/rustty-bench/Cargo.toml:21-23` registers the `rustty-bench` bin at `src/main_bench.rs`; `main_bench.rs:24` `fn main() -> ExitCode` calls `rustty_bench::cli::main()` | **WAS WRONG (stale)** — shipped. `os_signpost` (`benchmark.rs:81-101`, no-op + verbatim body) and the local `detectArgs` are the real residuals, both permanent divergences |
+| **O14** `Atlas.Wasm` test | `grep -rn 'wasm' crates/rustty-font/src/atlas.rs` → `:740` "PORT NOTE (wasm — feature-gated OFF)", block preserved as comments | confirmed **OPEN** → WS14 |
+| **O15** `App.zig` Wasm block | `grep -rn 'Wasm' crates/rustty-core/src/app.rs` → `:998`–`:1007`, preserved as comments | confirmed **OPEN** → WS14 |
+| **O16** WebGL backend | repo-wide `grep -rni 'webgl'` → only `build_config::renderer::Backend::Webgl` (an enum variant) + prose "WebGL wasm-deferred"; no backend implementation | confirmed **OPEN** → WS14 |
+| **O5** `PageList::Limits` | repo-wide `grep -rn 'struct Limits'` → only `kitty/graphics_image.rs:126` (an unrelated struct); no `PageList::Limits` | confirmed **OPEN** → Phase 3 re-vet P3-RV1 |
+| **O6** GTK portal `OpenURI` | repo-wide `grep -rni 'openuri\|open_uri'` across `crates/` → **0 hits**; the only portal code is `gtk/class/global_shortcuts.rs` (GlobalShortcuts iface) | confirmed **OPEN** → WS19 T8 |
+| **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ends in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | confirmed **OPEN** → WS19 T10 |
+| **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returns `None` unconditionally; `:103` is the unreachable emit | confirmed **OPEN** → WS19 T12 |
+| **O21** `shell_integration.rs` lossy path | `crates/rustty-termio/src/shell_integration.rs:1708` and `:1760` both `to_string_lossy()` | confirmed **OPEN** → WS19 T15 |
+| **O1** `style::Color` | `crates/rustty-vt/src/style.rs:143` is a plain `enum Color { None, Palette(u8), Rgb(RGB) }`, no `#[repr]` | confirmed **OPEN** → WS19 T5 |
+| **O3** `cursor_scroll_region_up` | already repo-wide in the original audit (`grep -rn … crates/` → 0 hits) | confirmed **OPEN** → WS10, pin-sequenced |
+
+**Related gate consequence.** The same class of staleness broke a **gate**, not just a
+ledger row: G1b's `MAP` still pointed at `crates/rustty-cli/src/ghostty.rs` and
+`crates/rustty/src/main_ghostty.rs` after `410c387` renamed both. WS19 T1 added a
+RUST-side existence guard so a mapped-but-absent path is a loud RED instead of a
+silent `rust=0`. Scope staleness is a recurring defect in this program, not a
+one-off; gates that name paths need existence guards.
