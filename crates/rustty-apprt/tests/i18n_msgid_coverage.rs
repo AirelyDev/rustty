@@ -306,10 +306,20 @@ fn code_msgids_all_wrapped_and_in_pot() {
         })
         .map(|(m, _)| m)
         .collect();
-    assert!(
-        expected.len() >= 25,
-        "expected >=25 code-side catalog msgids, got {}",
-        expected.len()
+    // The exact size is pinned so a regeneration that silently DROPPED code-side
+    // references (e.g. a lost `--keyword`) cannot make the rest of this test
+    // vacuous. 24, not the oracle's 25: `About Rustty` is the reference's
+    // `window.zig:1824` string, and rustty's AD-3 collapse means it is supplied by
+    // `window.blp:307` only — after `xtask update-translations` its `.pot` block no
+    // longer carries any code reference. Changing this number is a deliberate act:
+    // add or remove a code-side msgid, regenerate, then update it here.
+    assert_eq!(
+        expected.len(),
+        24,
+        "the code-side catalog msgid set changed (was 24). If you added/removed a \
+         `tr(c\"…\")`/`gettext_(c\"…\")` call site and regenerated the .pot, update \
+         this count deliberately; if you did not, extraction lost a keyword and \
+         every other assertion here just became vacuous. Set: {expected:#?}"
     );
 
     // A handful of oracle code-side strings have no port call site because the
