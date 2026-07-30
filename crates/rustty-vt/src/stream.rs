@@ -1084,8 +1084,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                 locking: false,
             }),
 
-            // else => log.warn("invalid C0 character, ignoring: 0x{x}", .{c}),
-            _ => {}
+            // else => logUnsupportedOnce("invalid C0 character, ignoring: 0x{x}", .{c}, c),
+            _ => {
+                log_unsupported_once(&SEEN_INVALID_C0, u16::from(c));
+            }
         }
     }
 
@@ -1674,7 +1676,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                 if let Some(r) = req {
                     self.handler.device_attributes(r);
                 } else {
-                    // log.warn("invalid device attributes command: {f}", .{input});
+                    // logUnsupportedOnce(
+                    //     "invalid device attributes command: {f}",
+                    //     .{input},
+                    //     if (input.params.len > 0) input.params[0] else 0,
+                    // );
+                    log_unsupported_once(
+                        &SEEN_INVALID_DEVICE_ATTRIBUTES,
+                        if input.params.len() > 0 {
+                            input.params[0]
+                        } else {
+                            0
+                        },
+                    );
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -1776,7 +1790,8 @@ impl<'a, H: Handler> Stream<'a, H> {
                     if let Some(mode) = modes::mode_from_int(mode_int, ansi_mode) {
                         self.handler.set_mode(Mode { mode });
                     } else {
-                        // log.warn("unimplemented mode: {}", .{mode_int});
+                        // logUnsupportedOnce("unimplemented mode: {}", .{mode_int}, mode_int);
+                        log_unsupported_once(&SEEN_UNIMPLEMENTED_MODE, mode_int);
                     }
                 }
             }
@@ -1804,7 +1819,8 @@ impl<'a, H: Handler> Stream<'a, H> {
                     if let Some(mode) = modes::mode_from_int(mode_int, ansi_mode) {
                         self.handler.reset_mode(Mode { mode });
                     } else {
-                        // log.warn("unimplemented mode: {}", .{mode_int});
+                        // logUnsupportedOnce("unimplemented mode: {}", .{mode_int}, mode_int);
+                        log_unsupported_once(&SEEN_UNIMPLEMENTED_MODE, mode_int);
                     }
                 }
             }
@@ -1901,8 +1917,17 @@ impl<'a, H: Handler> Stream<'a, H> {
                             self.handler.modify_key_format(format);
                         }
 
-                        // else => log.warn("unknown CSI m with intermediate: {}", ...),
-                        _ => {}
+                        // else => logUnsupportedOnce(
+                        //     "unknown CSI m with intermediate: {}",
+                        //     .{input.intermediates[0]},
+                        //     input.intermediates[0],
+                        // ),
+                        _ => {
+                            log_unsupported_once(
+                                &SEEN_UNKNOWN_CSI_M_INTERMEDIATE,
+                                u16::from(input.intermediates[0]),
+                            );
+                        }
                     },
 
                     _ => {
@@ -2286,10 +2311,29 @@ impl<'a, H: Handler> Stream<'a, H> {
                                         _ => unreachable!(),
                                     }
                                 }
-                                // else log.warn("ignoring CSI 22/23 t with extra parameters: {f}", ...),
+                                // else logUnsupportedOnce(
+                                //     "ignoring CSI 22/23 t with extra parameters: {f}",
+                                //     .{input},
+                                //     input.params[0],
+                                // ),
+                                else {
+                                    log_unsupported_once(
+                                        &SEEN_CSI_22_23_T_EXTRA_PARAMS,
+                                        input.params[0],
+                                    );
+                                }
                             }
-                            // else => log.warn("ignoring CSI t with unimplemented parameter: {f}", ...),
-                            _ => {}
+                            // else => logUnsupportedOnce(
+                            //     "ignoring CSI t with unimplemented parameter: {f}",
+                            //     .{input},
+                            //     input.params[0],
+                            // ),
+                            _ => {
+                                log_unsupported_once(
+                                    &SEEN_CSI_T_UNIMPLEMENTED_PARAM,
+                                    input.params[0],
+                                );
+                            }
                         }
                     }
                     // else log.err("ignoring CSI t with no parameters: {f}", .{input});
@@ -2491,7 +2535,17 @@ impl<'a, H: Handler> Stream<'a, H> {
             // .change_window_icon => |icon| { ... }
             osc::Command::ChangeWindowIcon(_icon) => {
                 // @branchHint(.likely);
-                // log.info("OSC 1 (change icon) received and ignored icon={s}", .{icon});
+                // logUnsupportedOnce(
+                //     "OSC 1 (change icon) received and ignored icon={s}",
+                //     .{icon},
+                //     0,
+                // );
+                //
+                // b5053153f also moved this site from `log.info` to the
+                // `logUnsupportedOnce` (warn) family. The key is a literal 0, so
+                // this message is emitted at most ONCE per process regardless of
+                // the icon value.
+                log_unsupported_once(&SEEN_OSC1_CHANGE_ICON, 0);
             }
 
             // .clipboard_contents => |clip| { ... }
@@ -2708,7 +2762,12 @@ impl<'a, H: Handler> Stream<'a, H> {
                     _ => {} // fall through
                 }
 
-                // log.warn("unimplemented ESC action: {f}", .{action});
+                // logUnsupportedOnce(
+                //     "unimplemented ESC action: {f}",
+                //     .{action},
+                //     action.final,
+                // );
+                log_unsupported_once(&SEEN_UNIMPLEMENTED_ESC_ACTION, u16::from(action.final_));
             }
 
             // IND - Index
@@ -2947,11 +3006,181 @@ impl<'a, H: Handler> Stream<'a, H> {
                 // @branchHint(.likely);
             }
 
-            // else => log.warn("unimplemented ESC action: {f}", .{action}),
-            _ => {}
+            // else => logUnsupportedOnce(
+            //     "unimplemented ESC action: {f}",
+            //     .{action},
+            //     action.final,
+            // ),
+            _ => {
+                log_unsupported_once(&SEEN_UNIMPLEMENTED_ESC_ACTION, u16::from(action.final_));
+            }
         }
     }
 }
+
+// PORT NOTE (b5053153f, WS10 T7): the reference's `logUnsupportedOnce` is a
+// generic `fn (comptime format, args, key: u16) void` whose dedup table is a
+// `struct { var seen: [16]u32 }` inside the function body. Zig instantiates one
+// such table per `(format, @TypeOf(args))` tuple — NOT per call site. Two sites
+// that pass the same format string and the same argument type therefore SHARE a
+// table, and the commit contains exactly two such pairs: the SM/RM
+// `"unimplemented mode: {}"` sites, and the two `"unimplemented ESC action: {f}"`
+// sites. Rust has no per-instantiation static, so the port makes the table an
+// explicit `&'static UnsupportedOnceTable` argument and declares one static per
+// distinct reference tuple — eight statics for ten call sites, with the two
+// pairs deliberately sharing theirs. That is the reference's own granularity,
+// and it is observable: under the reference, setting then resetting the same
+// unimplemented mode logs ONCE, not twice.
+//
+// PORT NOTE (logging facade): the port carries NO logging facade — every
+// `log.*` call in the tree is preserved as a comment (see e.g.
+// `.port/phase-2/W1_DESIGN.md`'s "no logging facade is wired in the port yet"),
+// and `rustty-vt` does not depend on the `log` crate at all. So the ONE line of
+// this commit that cannot land is its tail, `log.warn(format, args)`. Everything
+// else — the table, the lock-free claim scan, the atomic orderings, the
+// table-full suppression, the per-site key choice, and the call-site
+// conversions — is live code and is exercised by
+// `stream_logs_unsupported_once_per_value`. The claim is performed at each site
+// exactly as the reference performs it, so when a facade is eventually wired the
+// only edit is to emit the message under the returned boolean.
+//
+// Consequence for the commit's PERF claim: upstream measured +3.2% on a 2.6 GB
+// real-session corpus, all of it eliminated `writev`. rustty issues no `writev`
+// here to eliminate, so the ported change is perf-NEUTRAL on this side by
+// construction — it is ported for fidelity and for the facade's benefit, not
+// for a win. Recorded as such rather than claimed as one.
+
+/// The per-`(format, args)` dedup table behind [`log_unsupported_once`].
+///
+/// ```zig
+/// const Static = struct {
+///     var seen: [16]u32 = @splat(empty);
+/// };
+/// ```
+struct UnsupportedOnceTable {
+    seen: [core::sync::atomic::AtomicU32; 16],
+}
+
+impl UnsupportedOnceTable {
+    /// `u32` slots so every `u16` key is representable alongside an empty
+    /// sentinel and so 32-bit targets (e.g. wasm32) have native atomics.
+    const EMPTY: u32 = u32::MAX;
+
+    const fn new() -> Self {
+        // `[AtomicU32; 16]` cannot use the `[expr; N]` repeat form because
+        // `AtomicU32` is not `Copy`; the reference's `@splat(empty)` is spelled
+        // out. `const`-callable so these can be `static`s.
+        Self {
+            seen: [
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+                core::sync::atomic::AtomicU32::new(Self::EMPTY),
+            ],
+        }
+    }
+
+    /// Test-only reader: the number of claimed slots. The table is the only
+    /// observable this change has in a facade-free port, so the test asserts on
+    /// it rather than on captured log output.
+    #[cfg(test)]
+    fn claimed(&self) -> usize {
+        use core::sync::atomic::Ordering;
+        self.seen
+            .iter()
+            .filter(|s| s.load(Ordering::Acquire) != Self::EMPTY)
+            .count()
+    }
+}
+
+/// Logs an unsupported-input message at most once per distinct key
+/// per process.
+///
+/// These messages are emitted in response to input that the terminal
+/// application controls, so a misbehaving (or merely chatty) program
+/// can trigger the same message millions of times, e.g. by toggling
+/// an unimplemented mode on every frame. Each log call has a real
+/// throughput cost (formatting plus a blocking write per message)
+/// while adding no diagnostic value beyond the first occurrence.
+///
+/// The keys seen so far are tracked in a small fixed table (64 bytes)
+/// instantiated per (format, argument type) tuple, i.e. roughly per
+/// call site. Real streams only ever produce a handful of distinct
+/// unsupported values per site, so if the table ever fills, messages
+/// for further new values are suppressed as well: by that point the
+/// log already shows this class of problem and unbounded distinct
+/// values would flood it anyway.
+///
+/// Returns whether the caller should emit the message. The reference emits it
+/// directly (`log.warn(format, args)`); the port has no facade to emit it to,
+/// so the decision is returned instead — see the PORT NOTE above.
+fn log_unsupported_once(table: &UnsupportedOnceTable, key: u16) -> bool {
+    use core::sync::atomic::Ordering;
+
+    let key = u32::from(key);
+
+    // The atomics make concurrent streams safe: slots are only ever
+    // claimed, never changed, so the scan can stop at the first empty
+    // slot. The worst case race is a benign duplicate message.
+    //
+    // for (&Static.seen) |*slot| { ... } else return;  // table full
+    for slot in &table.seen {
+        let cur = slot.load(Ordering::Acquire);
+        if cur == key {
+            return false; // already logged
+        }
+        if cur != UnsupportedOnceTable::EMPTY {
+            continue; // other key, keep scanning
+        }
+
+        // Empty slot: claim it for this key and log below.
+        match slot.compare_exchange(
+            UnsupportedOnceTable::EMPTY,
+            key,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            // `@cmpxchgStrong(...) orelse break` — null means we won.
+            Ok(_) => return true,
+
+            // Lost the race: suppress if it was to the same key, keep
+            // scanning otherwise.
+            Err(actual) => {
+                if actual == key {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // else return;  // table full: suppress new values too
+    false
+}
+
+// The eight reference `(format, @TypeOf(args))` instantiations, in the order
+// they appear in `stream.zig`. `SEEN_UNIMPLEMENTED_MODE` and
+// `SEEN_UNIMPLEMENTED_ESC_ACTION` are each shared by two call sites, exactly as
+// Zig shares them.
+static SEEN_INVALID_C0: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_INVALID_DEVICE_ATTRIBUTES: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_UNIMPLEMENTED_MODE: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_UNKNOWN_CSI_M_INTERMEDIATE: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_CSI_22_23_T_EXTRA_PARAMS: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_CSI_T_UNIMPLEMENTED_PARAM: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_OSC1_CHANGE_ICON: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_UNIMPLEMENTED_ESC_ACTION: UnsupportedOnceTable = UnsupportedOnceTable::new();
 
 // PORT NOTE: the reference test handlers are defined inline within each `test`
 // block as a local struct `H` with a comptime `vt(comptime action, value)`
@@ -2985,6 +3214,79 @@ mod tests {
     #[test]
     fn action() {
         // No C-ABI union in this crate; see PORT NOTE above.
+    }
+
+    // rustty-only test (b5053153f, WS10 T7). The reference ships this commit with
+    // NO test: its observable is the log stream, and Zig's `log.warn` is not
+    // capturable in a `test` block. In the port the observable is better —
+    // `UnsupportedOnceTable` is real state — so the dedup semantics are asserted
+    // directly. Two arms:
+    //
+    //   (1) the MECHANISM, on a table local to this test, so it is deterministic
+    //       and cannot be perturbed by other tests running in parallel;
+    //   (2) the WIRING, i.e. that the dispatch sites really call the helper,
+    //       through the ONE site whose key is a compile-time constant.
+    #[test]
+    fn stream_logs_unsupported_once_per_value() {
+        // ---- (1) mechanism -------------------------------------------------
+        let table = UnsupportedOnceTable::new();
+
+        // First sighting of a key logs; every repeat is suppressed.
+        assert!(log_unsupported_once(&table, 34));
+        assert!(!log_unsupported_once(&table, 34));
+        assert!(!log_unsupported_once(&table, 34));
+        assert_eq!(1, table.claimed());
+
+        // A DISTINCT value logs again — "once per distinct value", not "once".
+        assert!(log_unsupported_once(&table, 35));
+        assert!(!log_unsupported_once(&table, 35));
+        assert!(!log_unsupported_once(&table, 34));
+        assert_eq!(2, table.claimed());
+
+        // Key 0 is a real key, not the empty sentinel (the sentinel is
+        // `u32::MAX`, which no `u16` key can reach — that is why the slots are
+        // `u32`). If 0 were the sentinel this pair would both log.
+        assert!(log_unsupported_once(&table, 0));
+        assert!(!log_unsupported_once(&table, 0));
+
+        // Fill the remaining slots, then assert the reference's table-full rule:
+        // "if a table fills, new values are suppressed too".
+        for k in 100u16..(100 + 13) {
+            assert!(log_unsupported_once(&table, k), "slot {k} should be free");
+        }
+        assert_eq!(16, table.claimed());
+        assert!(
+            !log_unsupported_once(&table, 9999),
+            "table full: new values must be suppressed too"
+        );
+        // ...but an ALREADY-CLAIMED key is still found by the scan even when the
+        // table is full, so a full table does not resurrect duplicate messages.
+        assert!(!log_unsupported_once(&table, 34));
+
+        // ---- (2) wiring ----------------------------------------------------
+        // OSC 1 is the only converted site whose key is a literal (`0`), so its
+        // global table can never hold more than one claimed slot no matter what
+        // any other test does — which makes this arm order- and
+        // parallelism-independent, unlike an arm keyed on a mode number.
+        struct H;
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(H);
+        s.next_slice(b"\x1b]1;icon\x07");
+        assert_eq!(
+            1,
+            SEEN_OSC1_CHANGE_ICON.claimed(),
+            "the OSC 1 dispatch arm must claim its dedup slot"
+        );
+
+        // Driving the same unsupported input a second time must NOT claim
+        // anything further — this is the "once" half of the commit.
+        s.next_slice(b"\x1b]1;other-icon\x07");
+        assert_eq!(1, SEEN_OSC1_CHANGE_ICON.claimed());
+        assert!(
+            !log_unsupported_once(&SEEN_OSC1_CHANGE_ICON, 0),
+            "key 0 was already claimed by the dispatch arm"
+        );
     }
 
     // test "stream: print" { ... }
