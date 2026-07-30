@@ -1245,3 +1245,51 @@ Both were checked by stashing and re-running on the unmodified tree:
   not compile the C++ kernel at all (`crates/rustty-simd/src/vt.rs:14`
   `#[cfg(not(target_arch = "wasm32"))]`), so the wasm roundtrip could never have
   exercised `HWY_SCALAR` anyway.
+
+---
+
+## WS10 — INCOMPLETE WORK at this handoff (2026-07-30)
+
+**This section is NOT a deferral and NOT verification debt.** It is a record of
+BL-4 port work that has not been done. It is deliberately not filed in
+`DEFERRALS.md` or `VERIFICATION_DEBT.md`, because doing so would reclassify
+unwritten code as an accepted gap. WS10 remains OPEN and owns all of it.
+
+### Landed in this lane
+
+| task | upstream commits | commit |
+|---|---|---|
+| T4 | — (gate) | `da2d0e5` G-BENCH lane + count floor |
+| T7 | `b5053153f` | `6d69269` log-unsupported-once |
+| T8 | `2f0e6659d` (QoS hunk only) | `7725606` |
+| T9 | `9c9cf3e82` | `684ac51` |
+| T10 | `258de36d1` + `4c5b1d5d5` | `713cf22` |
+| T12 | `446f80f4e` (ScreenClone hunk) | `a2f0d2c` |
+| T13+T14 | `1a88f3622`, `253e4f9c3`, `300f42c7a` | `ae48e3b` |
+| T15 | `083d9709b` | `ae05b31` |
+
+### NOT started
+
+| task | upstream commits | size |
+|---|---|---|
+| T11 | `7e14347c1` — bound page map probe lengths + HyperlinkMap bench | `hash_map.zig` +472, `page.zig` +37, `Screen.zig` +3, `hyperlink.zig` +2, bench +155. Substance is the in-place rehash + 20% insertion headroom (upstream: 100x on map churn, 47x on full OSC 8 stream). Touches `Page` capacity math, so `check_capacity_saturation.sh` / `check_paired_invariants.sh` are in scope. |
+| T16 | `47e26df60` + `cb2d78587` + `f2a7652ab` — printed-run batching | `Terminal.zig` +675 / +112 / +155; `stream.zig` `Action::PrintSlice` + lane-wise printable-run scan; `simd/main.zig` `lanes(T)`; dispatch arms in `stream_terminal.rs` and `stream_handler.rs`. **`PERF(port)` stop-and-decide pending at `terminal.rs:884`** (r5-print-outline). |
+| T17 | `f6f79acce` + `8c523ed03` — bulk APC slice dispatch + vectorization, `ApcParser` bench, `synthetic/Kitty` generator | includes the union-payload borrow hazard flagged by `D-terminal-subsystems.md` §4.6. |
+| T19 | `446f80f4e` — render-state begin/end split | +1348/−209 across 9 files incl. the vt C ABI (`render.h` +66, `c/render.zig` +74). **`PERF(port)` stop-and-decide pending across `page_impl.rs:1423,1441,1467,1622` and `ref_counted_set.rs:528,652,723`** (r5-clone-style-run, −58.7% on `screen-clone.clone`). T12's three `ScreenClone` render modes land with it. |
+| T20 | `2f0e6659d` (pipeline) + `bb0ac4c72` | the HIGH-risk item: ~350 lines of concurrent code, needs `.port/phase-2/mirihar-ws10-pipeline/` with a raw-pointer slot handoff and a `&mut [u8]` negative control. T8 landed its separable QoS hunk only. |
+| T21 | — | the final paired re-measure. Cannot be authoritative on this box regardless (see the load record below). |
+
+Also still unported and **NOT** in this lane's scope: **T18** (`77190bd02`
+scroll-region optimizations + `Screen::cursor_scroll_region_up`, which carries
+`DEFERRALS.md`'s O3). `grep -rn 'cursor_scroll_region_up' crates/` -> 0 hits.
+It was re-owned to Phase 3 with the `BEYOND-PIN` marker by WS10 T18's ledger
+pass, which is a MEASUREMENT relaxation applied to an IMPLEMENTATION item;
+flagging it here so that reading is not inherited silently.
+
+### Measurement environment during this lane
+
+`uptime` 1-minute load average sampled repeatedly: **4.57, 7.85, 9.00, 10.93**
+against `ws10_suite.py`'s `IDLE_MAX` of 2.0. Every figure recorded in the T10 /
+T12 / T15 sections above is stamped PROVISIONAL for that reason, and no fence
+run was treated as authoritative. That is the harness behaving as designed
+(exit 2), not a failure to work around.
