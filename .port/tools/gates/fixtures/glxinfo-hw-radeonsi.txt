@@ -1,0 +1,26 @@
+SYNTHETIC FIXTURE — NOT A REAL MEASUREMENT.
+Hand-written to exercise the PASS arm of hw_gl_probe.sh on a software-only box, so that
+gate cannot be a never-passing (and therefore untrustworthy) check. It asserts nothing
+about any hardware. Shape copied from a typical `glxinfo -B` on Mesa/radeonsi.
+
+name of display: :0
+Extended renderer info (GLX_MESA_query_renderer):
+    Vendor: AMD (0x1002)
+    Device: AMD Radeon RX 7900 XTX (radeonsi, navi31, LLVM 22.1.8, DRM 3.57) (0x744c)
+    Version: 26.1.4
+    Accelerated: yes
+    Video memory: 24560MB
+    Unified memory: no
+    Preferred profile: core (0x1)
+    Max core profile version: 4.6
+    Max compat profile version: 4.6
+    Max GLES1 profile version: 1.1
+    Max GLES[23] profile version: 3.2
+OpenGL vendor string: AMD
+OpenGL renderer string: AMD Radeon RX 7900 XTX (radeonsi, navi31, LLVM 22.1.8, DRM 3.57)
+OpenGL core profile version string: 4.6 (Core Profile) Mesa 26.1.4
+OpenGL core profile shading language version string: 4.60
+OpenGL version string: 4.6 (Compatibility Profile) Mesa 26.1.4
+OpenGL shading language version string: 4.60
+OpenGL ES profile version string: OpenGL ES 3.2 Mesa 26.1.4
+OpenGL ES profile shading language version string: OpenGL ES GLSL ES 3.20

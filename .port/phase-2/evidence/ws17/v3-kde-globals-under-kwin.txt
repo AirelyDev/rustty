@@ -1,0 +1,19 @@
+WS17 V3 — KDE Wayland globals under a live KWin
+captured: 2026-07-29T22:58:35-07:00
+kwin: 
+parent compositor: wayland-0 (GNOME/mutter session)
+
+--- arm 1: nested KWin (must pass) ---
+bound globals: kde_decoration_manager=true kde_slide_manager=false ext_background_effect=true blur_capability=false xdg_activation=true default_deco_mode_raw=Some(2)
+KAT PASS: org_kde_kwin_server_decoration_manager bound under a live KWin (default_mode=Some(2)), ext_background_effect=true
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+--- arm 2: GNOME/mutter, NEGATIVE CONTROL (must fail) ---
+bound globals: kde_decoration_manager=false kde_slide_manager=false ext_background_effect=false blur_capability=false xdg_activation=true default_deco_mode_raw=None
+thread 'kde_globals_bind_under_kwin' (117945) panicked at crates/rustty-apprt/tests/gtk_wayland_kde_globals.rs:63:5:
+org_kde_kwin_server_decoration_manager did not bind: either this is not KWin, or the port's registry binding missed it
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+--- ledger correction ---
+blur rides ext_background_effect_v1 (oracle wayland.zig:156; rustty Tag::ExtBackgroundEffect).
+org_kde_kwin_blur code sites in crates/*/src/: 0 (prose that explains the correction is excluded)

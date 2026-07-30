@@ -292,6 +292,30 @@ impl App {
     /// compositor's token `done` must have run [`globals`]' handler, bumping this. It
     /// exists ONLY to give that round-trip an assertion point (the reference relies on
     /// GDK's default-queue dispatch and needs no such proof, `Globals.zig:82`).
+    /// OBSERVABILITY (not in the reference): which of the compositor-dependent globals
+    /// actually bound, for the WS17 V3 KDE/KWin verification KAT. The reference reaches
+    /// `app.globals.get(.tag)` at each use site and needs no such summary; the port
+    /// exposes one so a KAT can assert the KDE globals really do bind under a live KWin
+    /// (and, as the negative control, really do NOT under mutter).
+    ///
+    /// Returned in a fixed order: `(kde_decoration_manager, kde_slide_manager,
+    /// ext_background_effect, blur_capability, xdg_activation, default_deco_mode_raw)`,
+    /// where `blur_capability` is `Globals.state.bg_effect_capabilities.blur` and the
+    /// last is the raw `server-decoration.xml` uint (`None` when unset).
+    #[must_use]
+    pub fn bound_globals_summary(&self) -> (bool, bool, bool, bool, bool, Option<u32>) {
+        let pump = self.pump.borrow();
+        let g = &pump.globals;
+        (
+            g.kde_decoration_manager().is_some(),
+            g.kde_slide_manager().is_some(),
+            g.ext_background_effect().is_some(),
+            g.bg_blur_supported(),
+            g.xdg_activation().is_some(),
+            g.default_deco_mode().map(|m| m as u32),
+        )
+    }
+
     /// TEST HOOK (not in the reference, same class as [`App::activation_done_count`]):
     /// write `Globals.state.default_deco_mode` exactly as the
     /// `org_kde_kwin_server_decoration_manager.default_mode` dispatch handler does
