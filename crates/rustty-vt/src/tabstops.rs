@@ -249,7 +249,7 @@ impl<A: Allocator> Tabstops<A> {
 
         // What we need in the dynamic size
         let size = cols - PREALLOC_COLUMNS;
-        if size < self.dynamic_stops.len() {
+        if size <= self.dynamic_stops.len() {
             self.cols = cols;
             return Ok(());
         }
@@ -417,6 +417,49 @@ mod tests {
         t.unset(4);
         // try testing.expect(!t.get(4));
         assert!(!t.get(4));
+
+        t.deinit(Global);
+    }
+
+    // test "Tabstops: resize to existing capacity does not allocate"
+    //
+    // PORT NOTE: the reference proves "no second allocation" with a
+    // `FixedBufferAllocator` sized exactly `prealloc_columns` Units -- the first
+    // resize consumes the whole buffer, so a second allocating resize would fail
+    // with OutOfMemory. rustty's tabstops allocate through the generic `A`
+    // parameter and the module already carries a tripwire fail point at exactly
+    // the allocation site (`ResizeFp::DynamicAlloc`), so we arm THAT instead: it
+    // asserts the same property (the second resize must not reach the allocator)
+    // more directly, and without depending on a fixed-buffer allocator's
+    // exhaustion semantics matching Zig's.
+    #[test]
+    fn tabstops_resize_to_existing_capacity_does_not_allocate() {
+        use rustty_util::tripwire::ResetMode;
+        let mut t: Tabstops = Tabstops::default();
+        let cap = t.capacity();
+
+        // First resize: grows the dynamic buffer to exactly `cap` units.
+        t.resize(Global, cap * 2).unwrap();
+
+        // Second resize to the SAME width must be satisfied by the buffer that
+        // already exists. Arm the allocation fail point: if `resize` reaches it,
+        // this returns Err and the unwrap below panics.
+        resize_tw_error_always(ResizeFp::DynamicAlloc);
+
+        // The resize must SUCCEED -- it is satisfied by the buffer that already
+        // exists. Before `5caf20e3e` the capacity check was `<` rather than
+        // `<=`, so an exactly-sized buffer was treated as insufficient, this
+        // call reached the (armed) allocation point, and the unwrap panicked.
+        t.resize(Global, cap * 2).unwrap();
+
+        // ...and the armed fail point must never have been REACHED. `end`
+        // returns UntrippedError for exactly that case: armed, never fired.
+        // An `Ok(())` here would mean the allocator WAS called -- i.e. the
+        // redundant allocation is back -- so the error is the passing outcome.
+        assert!(
+            resize_tw_end(ResetMode::Reset).is_err(),
+            "resize to an already-sufficient width reached the allocator"
+        );
 
         t.deinit(Global);
     }
