@@ -276,8 +276,51 @@ journal end, no guest OOM/panic — hypervisor-style death; root cause not attri
 so the mutter-session run was deliberately not repeated. mutter implements the same
 `xdg_activation_v1` protocol; this is belt-and-suspenders, not a correctness gap.
 
-**Recipe (any stable GNOME Wayland session):**
+**DISCHARGED against REAL mutter [WS17, 2026-07-29] — without going near the primary
+session.** `.port/tools/gates/ws17_set_urgent_mutter_gate.sh`, GREEN; evidence in
+`.port/phase-2/evidence/ws17/v4-set-urgent-real-mutter.txt`.
+
+The crash risk is removed by running a **SECOND, HEADLESS instance of real mutter** —
+`mutter 50.0 --headless --virtual-monitor 1280x720 --wayland-display wayland-mutterkat` —
+on its own socket. `--headless` needs no DRM device and no seat, so it cannot contend with
+the primary tty2 GNOME session, and GDM and the default systemd target are untouched. This
+is mutter itself, not a stand-in for it, so the "never verified on mutter" gap is closed.
+`wayland_set_urgent_dispatches_activation_token` PASSES there: mutter's real
+`xdg_activation_token_v1.done` dispatched through `WlQueueSource` and bumped
+`App::activation_done_count`. **VM uptime 14:43 before and 14:43 after — no crash, and the
+gate records uptime on both sides of every run.**
+
+**NEGATIVE CONTROL, run by the gate and required to fail:** the same KAT pointed at a
+socket no compositor serves. It fails. **Be precise about what that control proves** — it
+fails at `gtk4::init()` ("Failed to initialize GTK", i.e. no display), so it proves the KAT
+genuinely requires a live compositor; it does NOT independently prove the counter is driven
+by a *token* rather than by connecting. The stronger control — a compositor that serves
+clients but does not implement `xdg_activation_v1` — is not available here (mutter, KWin and
+sway all implement it). The counter's provenance is instead pinned by construction: nothing
+but the `Globals` token handler writes it.
+
+**EXPLICIT REASONED RESIDUAL (not an oversight):** re-running this KAT on the **primary**
+GNOME session is deliberately NOT done. Two hard host crashes correlated with
+primary-session live-compositor KAT activity (abrupt journal end, no guest OOM/panic —
+hypervisor-style death; root cause never attributed). This run exercises the same mutter
+codebase and the same `xdg_activation_v1` implementation, so the marginal information from
+repeating it on the crash-correlated session does not justify the risk to a shared
+development host. If someone does want it, the recipe below is the one to use, on a machine
+that is not shared.
+
+**Recovery procedure, if a host ever does wedge** (from the macOS host, over SSH or
+Terminal — UTM's AppleScript interface survives an unresponsive guest):
 ```
+osascript -e 'tell application "UTM" to stop virtual machine "Fedora Linux"'
+osascript -e 'tell application "UTM" to start virtual machine "Fedora Linux"'
+```
+
+**Recipe (re-run the discharge, or run it on any stable GNOME Wayland session):**
+```
+# Preferred — headless mutter on its own socket, primary session untouched:
+.port/tools/gates/ws17_set_urgent_mutter_gate.sh
+
+# Or directly, against whatever compositor WAYLAND_DISPLAY names:
 cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_set_urgent \
   -- --ignored --exact wayland_set_urgent_dispatches_activation_token
 ```
