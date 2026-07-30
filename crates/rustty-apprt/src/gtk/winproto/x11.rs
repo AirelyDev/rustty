@@ -33,12 +33,8 @@
 //!
 //! # DEFERRALS
 //!
-//! * **XKB modifier snapshot (`App::eventMods`).** The reference initializes the
-//!   XKB extension in `App.init` (`x11.zig:71-101`) and peeks the event queue in
-//!   `eventMods` to recover the just-pressed modifier (`x11.zig:124-159`). rustty
-//!   DEFERS this: [`App::event_mods`] returns `None`, so [`super::App::event_mods`]
-//!   falls back to `key::translate_mods` (identical to the noop/wayland arms). No
-//!   `XkbQueryExtension`/`base_event_code` state is kept.
+//! * **XKB modifier snapshot.** The XKB extension IS initialized in [`App::init`]
+//!   (`x11.zig:71-101`); [`App::event_mods`] is ported in the next task.
 //! * **Quick terminal.** [`App::supports_quick_terminal`] is `false` and
 //!   [`App::init_quick_terminal`] returns unsupported — matching the reference,
 //!   whose X11 `supportsQuickTerminal` is unconditionally `false` (`x11.zig:161-166`;
@@ -48,7 +44,7 @@
 //!   subprocess spawn, which is out of scope for this arm and not on the
 //!   [`super::Window`] dispatch surface.
 
-use std::os::raw::{c_int, c_long, c_uchar, c_ulong, c_void};
+use std::os::raw::{c_int, c_long, c_uchar, c_uint, c_ulong, c_void};
 use std::rc::Rc;
 
 use gdk4::prelude::*;
@@ -80,6 +76,15 @@ const MWM_DECOR_ALL: c_ulong = 1 << 0;
 /// (`_MOTIF_WM_HINTS`, `_KDE_NET_WM_BLUR_BEHIND_REGION`) use format 32.
 const FORMAT_32: c_int = 32;
 
+/// `XkbUseCoreKbd` (`X11/XKBlib.h`, via `X11/extensions/XKB.h`) — the core-keyboard
+/// device spec (`x11.zig:94`). `x11-dl` does not export it, so it is spelled here.
+const XKB_USE_CORE_KBD: c_uint = 0x0100;
+/// `XkbMajorVersion` (`X11/XKBlib.h`) — the XKB version rustty asks for
+/// (`x11.zig:77`). Not exported by `x11-dl`.
+const XKB_MAJOR_VERSION: c_int = 1;
+/// `XkbMinorVersion` (`X11/XKBlib.h`) (`x11.zig:78`). Not exported by `x11-dl`.
+const XKB_MINOR_VERSION: c_int = 0;
+
 /// PORTS: the inferred error set of `x11.zig`'s `!App` / `!Window` returns
 /// (`X11Error` + `GetWindowPropertyError`, `x11.zig:423-431`). Wrapped by
 /// [`super::WinprotoError::X11`].
@@ -90,6 +95,9 @@ pub enum Error {
     /// `x11-dl` could not load `libX11`. rustty-specific: the reference links Xlib
     /// statically via `@cImport`, so it has no analogue (there is nothing to load).
     XlibLoadFailed,
+    /// `error.XkbInitializationError` (`x11.zig:88,100`) — `XkbQueryExtension` or
+    /// `XkbSelectEventDetails` failed.
+    XkbInitializationError,
     /// `error.RequestFailed` (`x11.zig:424`) — an Xlib call reported failure.
     RequestFailed,
     /// `error.PropertyTypeMismatch` (`x11.zig:373,429`).
@@ -105,6 +113,9 @@ impl core::fmt::Display for Error {
         match self {
             Error::NotX11Surface => write!(f, "GTK window has no X11 surface"),
             Error::XlibLoadFailed => write!(f, "failed to load libX11 (x11-dl)"),
+            Error::XkbInitializationError => {
+                write!(f, "failed to initialize the X11 Xkb extension")
+            }
             Error::RequestFailed => write!(f, "X11 request failed"),
             Error::PropertyTypeMismatch => write!(f, "X11 property type mismatch"),
             Error::PropertyFormatMismatch => write!(f, "X11 property format mismatch"),
@@ -175,6 +186,10 @@ pub struct App {
     /// through the static `@cImport`. `Rc` so each [`Window`] shares the one
     /// process-cached table without re-`open`ing.
     xlib: Rc<xlib::Xlib>,
+    /// PORTS: `x11.zig:28` `base_event_code: c_int`. The XKB extension's base event
+    /// code, returned by `XkbQueryExtension` — [`Self::event_mods`] compares a
+    /// peeked event's `type` against it (`x11.zig:141`).
+    base_event_code: c_int,
     /// PORTS: `x11.zig:29` `atoms: Atoms`.
     atoms: Atoms,
 }
@@ -183,6 +198,7 @@ impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("x11::App")
             .field("display", &self.display)
+            .field("base_event_code", &self.base_event_code)
             .finish()
     }
 }
@@ -191,9 +207,8 @@ impl App {
     /// PORTS: `x11.zig:31-108` `App.init`. Probe the GDK display for X11; if it is
     /// not X11, return `Ok(None)` — THE ORDERED-INIT FALLBACK HINGE
     /// (`x11.zig:38-41`). Otherwise reach the xlib `Display`, set the program class
-    /// (WM_CLASS), load the `libX11` function table, and intern the atoms.
-    ///
-    /// DEFERRED: the XKB extension init (`x11.zig:71-101`) — see module DEFERRALS.
+    /// (WM_CLASS), load the `libX11` function table, initialize the XKB extension
+    /// (`x11.zig:71-101`), and intern the atoms.
     pub fn init(
         gdk_display: &gdk4::Display,
         app_id: &str,
@@ -225,11 +240,67 @@ impl App {
         // stands in for the reference's static `@cImport` of Xlib.
         let xlib = xlib::Xlib::open().map_err(|_| Error::XlibLoadFailed)?;
 
+        // XKB (`x11.zig:71-101`). `XkbQueryExtension` reports the extension's base
+        // event code; `XkbSelectEventDetails` then asks the server to deliver
+        // `XkbStateNotify` events whose MODIFIER-state bits changed, which is what
+        // `event_mods` peeks for. Both are FATAL on failure in the reference.
+        let mut opcode: c_int = 0;
+        let mut base_event_code: c_int = 0;
+        let mut base_error_code: c_int = 0;
+        let mut major: c_int = XKB_MAJOR_VERSION;
+        let mut minor: c_int = XKB_MINOR_VERSION;
+        // `if (XkbQueryExtension(...) == 0) return error.XkbInitializationError`
+        // (`x11.zig:79-89`).
+        if unsafe {
+            (xlib.XkbQueryExtension)(
+                display,
+                &raw mut opcode,
+                &raw mut base_event_code,
+                &raw mut base_error_code,
+                &raw mut major,
+                &raw mut minor,
+            )
+        } == 0
+        {
+            eprintln!("err(gtk-x11): error initializing Xkb extension: XkbQueryExtension failed");
+            return Err(Error::XkbInitializationError.into());
+        }
+
+        // `if (XkbSelectEventDetails(display, XkbUseCoreKbd, XkbStateNotify,
+        // XkbModifierStateMask, XkbModifierStateMask) == 0) return
+        // error.XkbInitializationError` (`x11.zig:92-101`).
+        if unsafe {
+            (xlib.XkbSelectEventDetails)(
+                display,
+                XKB_USE_CORE_KBD,
+                xlib::XkbStateNotify as c_uint,
+                xlib::XkbModifierStateMask,
+                xlib::XkbModifierStateMask,
+            )
+        } == 0
+        {
+            eprintln!(
+                "err(gtk-x11): error initializing Xkb extension: XkbSelectEventDetails failed"
+            );
+            return Err(Error::XkbInitializationError.into());
+        }
+
         Ok(Some(App {
             display,
             xlib: Rc::new(xlib),
+            base_event_code,
             atoms: Atoms::init(x11d),
         }))
+    }
+
+    /// Test-observability seam (rustty-specific; the reference reads the field
+    /// directly from the same module). Exposes the XKB base event code
+    /// [`Self::init`] captured (`x11.zig:105`) so the live X11 KAT can prove
+    /// `XkbQueryExtension` actually ran.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn xkb_base_event_code(&self) -> c_int {
+        self.base_event_code
     }
 
     /// PORTS: `x11.zig:110-112` `App.deinit`. Nothing to release — the xlib
