@@ -234,13 +234,18 @@ impl Path {
             'expand: {
                 // Windows isn't supported yet
                 // if (comptime builtin.os.tag == .windows) break :expand;
-                #[cfg(target_os = "windows")]
+                //
+                // WS14 T6 (wasm32 arm): a browser has no home directory either, so
+                // wasm takes the SAME "unsupported, leave the path alone" branch as
+                // Windows. The reference never analyses this on wasm (Zig's lazy
+                // analysis of `config.zig.Wasm`); Rust compiles whole crates.
+                #[cfg(any(target_os = "windows", target_family = "wasm"))]
                 {
                     break 'expand;
                 }
 
                 // const expanded: []const u8 = internal_os.expandHome(path, &buf) catch |err| { ... };
-                #[cfg(not(target_os = "windows"))]
+                #[cfg(not(any(target_os = "windows", target_family = "wasm")))]
                 {
                     let mut buf = [0u8; libc_max_path_bytes()];
                     let expanded: &[u8] = match rustty_os::homedir::expandHome(&path, &mut buf) {

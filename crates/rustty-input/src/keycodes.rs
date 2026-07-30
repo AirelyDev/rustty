@@ -200,6 +200,8 @@ fn code_to_key_get(code: &[u8]) -> Option<Key> {
 // freebsd/linux -> 2 (xkb), else -> @compileError("unsupported platform").
 // The tuple indices here are 0-based fields of `RawEntry`:
 //   .0 usb, .1 evdev, .2 xkb, .3 win, .4 mac, .5 code
+// `raw` is unused on wasm (see the wasm arm below).
+#[cfg_attr(target_family = "wasm", allow(unused_variables))]
 fn native_of(raw: &RawEntry) -> u32 {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
@@ -213,12 +215,32 @@ fn native_of(raw: &RawEntry) -> u32 {
     {
         raw.2 // xkb
     }
+    // PORT NOTE (WS14 T6 — forced divergence, wasm only): the reference's `else`
+    // arm is `@compileError("unsupported platform")`, and wasm falls in it. That
+    // means the reference's OWN wasm module cannot compile: `main_wasm.zig` retains
+    // `config.zig.Wasm`, whose `Config` names the keybind types, which reach
+    // `keycodes.zig` — the same class of upstream rot as `Atlas.Wasm`'s reliance on
+    // the `os/wasm.zig` helpers that `9dc2e5978` deleted (upstream never notices
+    // because `main_wasm.zig` is referenced nowhere in `build.zig`). rustty has to
+    // resolve it to emit a real artifact (O13a), and the only NON-INVENTING
+    // resolution is `0`: there is no numeric native keycode namespace in a browser
+    // at all — the web identifies a physical key by the W3C `code` STRING, which is
+    // `raw.5`, the very field `code_to_key` already consumes. Returning 0 makes
+    // `entries()`'s `native` column mean "no native keycode", so the one lookup that
+    // reads it (`apprt/embedded.rs`'s `entry.native == self.keycode` scan) simply
+    // finds nothing rather than matching a keycode from the wrong platform. No
+    // native target's behavior changes: this arm is unreachable off wasm.
+    #[cfg(target_family = "wasm")]
+    {
+        0
+    }
     #[cfg(not(any(
         target_os = "ios",
         target_os = "macos",
         target_os = "windows",
         target_os = "freebsd",
         target_os = "linux",
+        target_family = "wasm",
     )))]
     {
         compile_error!("unsupported platform")

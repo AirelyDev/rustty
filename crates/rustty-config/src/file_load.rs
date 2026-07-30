@@ -28,6 +28,12 @@ pub enum FileLoadError {
     Io(std::io::Error),
 }
 
+// WS14 T6 (wasm32 arm): a browser has no filesystem, no XDG base dirs, no user
+// database and no home directory, and the reference's own wasm build never
+// reaches this path (Zig analyses `config.zig.Wasm` LAZILY, so it never forces
+// these decls; Rust compiles whole crates, so the arm must exist). The wasm arm
+// takes the SAME branch this code already takes when the lookup fails.
+#[cfg(not(target_family = "wasm"))]
 impl From<rustty_os::xdg::DirError> for FileLoadError {
     fn from(e: rustty_os::xdg::DirError) -> FileLoadError {
         match e {
@@ -57,15 +63,23 @@ impl From<std::io::Error> for FileLoadError {
 // `config.rustty`), flipped back to ghostty's under the `identity-oracle`
 // harness feature.
 pub fn default_xdg_path() -> Result<String, FileLoadError> {
-    let subdir = format!(
-        "{}/{}",
-        rustty_identity::CONFIG_DIR,
-        rustty_identity::CONFIG_FILE
-    );
-    Ok(rustty_os::xdg::config(rustty_os::xdg::Options {
-        subdir: Some(&subdir),
-        ..Default::default()
-    })?)
+    // WS14 T6 (wasm32 arm): no XDG base directory exists in a browser.
+    #[cfg(target_family = "wasm")]
+    {
+        return Err(FileLoadError::NoHomeDir);
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let subdir = format!(
+            "{}/{}",
+            rustty_identity::CONFIG_DIR,
+            rustty_identity::CONFIG_FILE
+        );
+        Ok(rustty_os::xdg::config(rustty_os::xdg::Options {
+            subdir: Some(&subdir),
+            ..Default::default()
+        })?)
+    }
 }
 
 /// Ghostty <1.3.0 default path for the XDG home configuration file.
@@ -79,11 +93,19 @@ pub fn default_xdg_path() -> Result<String, FileLoadError> {
 //
 // PORT NOTE (R2): the legacy subdir literal `"ghostty/config"` -> `<CONFIG_DIR>/config`.
 pub fn legacy_default_xdg_path() -> Result<String, FileLoadError> {
-    let subdir = format!("{}/config", rustty_identity::CONFIG_DIR);
-    Ok(rustty_os::xdg::config(rustty_os::xdg::Options {
-        subdir: Some(&subdir),
-        ..Default::default()
-    })?)
+    // WS14 T6 (wasm32 arm): no XDG base directory exists in a browser.
+    #[cfg(target_family = "wasm")]
+    {
+        return Err(FileLoadError::NoHomeDir);
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let subdir = format!("{}/config", rustty_identity::CONFIG_DIR);
+        Ok(rustty_os::xdg::config(rustty_os::xdg::Options {
+            subdir: Some(&subdir),
+            ..Default::default()
+        })?)
+    }
 }
 
 /// Preferred default path for the XDG home configuration file.

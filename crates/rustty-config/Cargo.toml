@@ -25,6 +25,23 @@ workspace = true
 doctest = false
 
 [features]
+# WS14 T6 — the `impl rustty_renderer::config::RendererConfig for Config`
+# accessor-trait impl (memory: renderer-config-accessor-trait-acyclic) is the ONLY
+# use of the `rustty-renderer` edge in this crate, and that edge transitively pulls
+# glslang / spirv-cross / wuffs / sentry C++ — impossible on
+# `wasm32-unknown-unknown`, which has no libc sysroot for those build scripts to
+# target. DEFAULT-ON, so every native build is byte-identical (R5); the wasm module
+# builds with `--no-default-features --features wasm`.
+default = ["renderer", "input-oniguruma"]
+renderer = ["dep:rustty-renderer"]
+# WS14 T6 — the second of the two edges that gate the freestanding wasm link:
+# `rustty-input`'s own default-on `oniguruma` feature (its `Link::oni_regex`), which
+# pulls `oniguruma-sys`. This crate's `rustty-input` dependency therefore sets
+# `default-features = false` and re-enables it HERE, default-on, so every native
+# build is byte-identical (R5) and only `--no-default-features` (the wasm module)
+# drops it. Distinct from this crate's own `oniguruma` feature below, which gates the
+# `url.zig` regex TEST and its direct `rustty-oniguruma` edge.
+input-oniguruma = ["rustty-input/oniguruma"]
 # The single `url.zig` test uses oniguruma. It is gated behind this off-by-default
 # feature which pulls in the `oni` safe wrapper crate (`rustty-oniguruma`). The url
 # regex string-assembly logic is always compiled; only its test requires this
@@ -52,8 +69,14 @@ rustty-util = { workspace = true }
 rustty-vt = { workspace = true }
 rustty-zigstd = { workspace = true }
 rustty-font = { workspace = true }
-rustty-renderer = { workspace = true }
-rustty-input = { workspace = true }
+rustty-renderer = { workspace = true, optional = true }
+# WS14 T6: declared by PATH rather than `workspace = true` — cargo IGNORES a
+# member's `default-features = false` on an inherited workspace dependency (it
+# warns and may become a hard error), and this is the one edge that must be able to
+# turn rustty-input's default-on `oniguruma` feature OFF so `oniguruma-sys` stays
+# out of a freestanding `wasm32-unknown-unknown` link. The default-on
+# `input-oniguruma` feature above re-enables it for every native build (R5).
+rustty-input = { path = "../rustty-input", default-features = false }
 rustty-args = { workspace = true }
 rustty-cfg-fmt = { workspace = true }
 # The `oni` safe wrapper (lib name `oni`), pulled in only by the `oniguruma`
