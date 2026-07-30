@@ -33,8 +33,6 @@
 //!
 //! # DEFERRALS
 //!
-//! * **XKB modifier snapshot.** The XKB extension IS initialized in [`App::init`]
-//!   (`x11.zig:71-101`); [`App::event_mods`] is ported in the next task.
 //! * **Quick terminal.** [`App::supports_quick_terminal`] is `false` and
 //!   [`App::init_quick_terminal`] returns unsupported — matching the reference,
 //!   whose X11 `supportsQuickTerminal` is unconditionally `false` (`x11.zig:161-166`;
@@ -84,6 +82,9 @@ const XKB_USE_CORE_KBD: c_uint = 0x0100;
 const XKB_MAJOR_VERSION: c_int = 1;
 /// `XkbMinorVersion` (`X11/XKBlib.h`) (`x11.zig:78`). Not exported by `x11-dl`.
 const XKB_MINOR_VERSION: c_int = 0;
+/// `QueuedAfterReading` (`X11/Xlib.h`) — the `XEventsQueued` mode the reference
+/// uses (`x11.zig:136`). Not exported by `x11-dl`.
+const QUEUED_AFTER_READING: c_int = 1;
 
 /// PORTS: the inferred error set of `x11.zig`'s `!App` / `!Window` returns
 /// (`X11Error` + `GetWindowPropertyError`, `x11.zig:423-431`). Wrapped by
@@ -309,17 +310,86 @@ impl App {
     #[allow(clippy::unused_self)]
     pub fn deinit(&mut self) {}
 
-    /// PORTS: `x11.zig:124-159` `App.eventMods`. DEFERRED — returns `None` (the XKB
-    /// modifier snapshot is not ported; see module DEFERRALS), so
-    /// [`super::App::event_mods`] falls back to `key::translate_mods`.
-    #[allow(clippy::unused_self)]
+    /// PORTS: `x11.zig:114-159` `App.eventMods`. Checks for an IMMEDIATE pending XKB
+    /// state-update event and derives the keyboard modifiers from it. This is
+    /// necessary because the standard GTK X11 API (and X11 generally) does not
+    /// include the just-pressed key in the modifier snapshot carried by that key's
+    /// own event — so pressing e.g. Shift does not show `shift` set.
+    ///
+    /// Returns `None` when there is no such event; the caller
+    /// ([`super::App::event_mods`]) then falls back to the plain GDK modifier state
+    /// via `key::translate_mods` (`winproto.zig:62`).
+    ///
+    /// The approach is the reference's, which credits Firefox/Gecko's
+    /// `widget/gtk/nsGtkKeyUtils.cpp` (`x11.zig:132-133`).
     #[must_use]
     pub fn event_mods(
         &self,
         _device: Option<&gdk4::Device>,
         _gtk_mods: gdk4::ModifierType,
     ) -> Option<rustty_vt::input::key_mods::Mods> {
-        None
+        // `if (XEventsQueued(display, QueuedAfterReading) == 0) return null`
+        // (`x11.zig:134-137`). This guard is load-bearing: XPeekEvent BLOCKS when
+        // the queue is empty.
+        if unsafe { (self.xlib.XEventsQueued)(self.display, QUEUED_AFTER_READING) } == 0 {
+            return None;
+        }
+
+        // `var nextEvent: XEvent = undefined; _ = XPeekEvent(display, &nextEvent)`
+        // (`x11.zig:139-140`). PEEK, not next: the event stays queued for GDK.
+        let mut next_event = std::mem::MaybeUninit::<xlib::XEvent>::uninit();
+        unsafe { (self.xlib.XPeekEvent)(self.display, next_event.as_mut_ptr()) };
+        let next_event = unsafe { next_event.assume_init() };
+
+        // `if (nextEvent.type != self.base_event_code) return null` (`x11.zig:141`).
+        if unsafe { next_event.type_ } != self.base_event_code {
+            return None;
+        }
+
+        // `const xkb_event: *XkbEvent = @ptrCast(&nextEvent); if
+        // (xkb_event.any.xkb_type != XkbStateNotify) return null` (`x11.zig:143-144`).
+        // `xlib::XEvent` is a union whose `pad: [c_long; 24]` (192 bytes on LP64) is
+        // the standard Xlib event buffer, which is >= every Xkb*Event — the same
+        // reinterpretation the reference does with `@ptrCast`.
+        let any: xlib::XkbAnyEvent = unsafe {
+            std::ptr::read_unaligned(std::ptr::from_ref(&next_event).cast::<xlib::XkbAnyEvent>())
+        };
+        if any.xkb_type != xlib::XkbStateNotify {
+            return None;
+        }
+
+        // `const xkb_state_notify_event: *XkbStateNotifyEvent = @ptrCast(xkb_event);
+        // const lookup_mods = xkb_state_notify_event.lookup_mods` (`x11.zig:146-148`).
+        let state: xlib::XkbStateNotifyEvent = unsafe {
+            std::ptr::read_unaligned(
+                std::ptr::from_ref(&next_event).cast::<xlib::XkbStateNotifyEvent>(),
+            )
+        };
+        let lookup_mods = c_uint::from(state.lookup_mods);
+
+        // `log.debug("X11: found extra XkbStateNotify event w/lookup_mods: {b}")`
+        // (`x11.zig:151`).
+        eprintln!("debug(gtk-x11): found extra XkbStateNotify event w/lookup_mods: {lookup_mods:b}");
+
+        // `x11.zig:149,152-158` — the XKB mask -> `input.Mods` mapping.
+        let mut mods = rustty_vt::input::key_mods::Mods::default();
+        if lookup_mods & xlib::ShiftMask != 0 {
+            mods.shift = true;
+        }
+        if lookup_mods & xlib::ControlMask != 0 {
+            mods.ctrl = true;
+        }
+        if lookup_mods & xlib::Mod1Mask != 0 {
+            mods.alt = true;
+        }
+        if lookup_mods & xlib::Mod4Mask != 0 {
+            mods.super_ = true;
+        }
+        if lookup_mods & xlib::LockMask != 0 {
+            mods.caps_lock = true;
+        }
+
+        Some(mods)
     }
 
     /// PORTS: `x11.zig:161-164` `App.supportsQuickTerminal`. The quick terminal is
