@@ -1313,6 +1313,194 @@ negative controls failing as required).
 
 ---
 
+---
+
+## WS10 T21 — the final paired re-measure (2026-07-30)
+
+**Status: PROVISIONAL, and that is the correct outcome.** `ws10_suite.py` exited
+**2** (unusable measurement) with a 1-minute load average of **6.08** against
+`IDLE_MAX` 2.0. Per its own contract, that exit is deliberately distinct from a
+fence failure: the verdicts below are real and reproducible, but the absolute
+milliseconds are not authoritative and MUST NOT be recorded as a new baseline.
+The box was not idle at any point in this lane (samples: 4.57, 6.03, 6.70, 7.15,
+9.56, 10.93) and the brief is explicit that killing the user's applications to
+chase a number is not on the table.
+
+Run:
+
+```sh
+cargo build -p rustty-bench --profile release-fast
+python3 .port/tools/perf/ws10_suite.py \
+  --rust target/release-fast/rustty-bench \
+  --self .perf-bins/rustty-bench-ws10-entry-RF \
+  -n 7 --emit-metrics .port/phase-2/perf-ws10/final.json
+python3 .port/tools/gates/check_baseline_regression.py \
+  --metrics .port/phase-2/perf-ws10/final.json
+```
+
+`--self` is the WS10 ENTRY binary: `rustty-bench` built at `--profile
+release-fast` from this same tree with `page.rs`, `page_tests.rs`, `render.rs`
+and `screen_clone.rs` reverted to `d7c3afa` (the WS10-continuation merge). Those
+four files are the entire T19/T20 delta inside `rustty-bench`'s dependency graph
+— `rustty-termio` is not in it — so this is a true entry-vs-final A/B, not an
+approximation.
+
+### FENCE 1 — rustty vs the PINNED oracle (`4749c4e93`, sha256 `0fb47d26…`)
+
+**GREEN. 13/14 configs pass; 1 is INCOMPARABLE (not a loss).**
+
+| config | zig | rust | Δ | arm |
+|---|--:|--:|--:|---|
+| terminal-parser/utf8 | 266.20 ms | 97.86 ms | **−63.2%** | STRICT |
+| terminal-stream/ascii | 566.27 ms | 348.26 ms | **−38.5%** | STRICT |
+| codepoint-width.noop/utf8 | 5.19 ms | 3.70 ms | −28.8% | BANDED |
+| codepoint-width.table/utf8 | 236.04 ms | 209.96 ms | −11.1% | STRICT |
+| codepoint-width.simd/utf8 | 508.18 ms | 468.17 ms | −7.9% | STRICT |
+| codepoint-width.wcwidth/utf8 | 259.68 ms | 236.55 ms | −8.9% | STRICT |
+| grapheme-break.noop/utf8 | 234.35 ms | 215.60 ms | −8.0% | STRICT |
+| grapheme-break.table/utf8 | 256.71 ms | 213.20 ms | −16.9% | STRICT |
+| is-symbol.table/utf8 | 240.06 ms | 200.74 ms | −16.4% | STRICT |
+| is-symbol.uucode/utf8 | 231.12 ms | 206.90 ms | −10.5% | STRICT |
+| osc-parser/osc-parser | 59.23 ms | 51.54 ms | −13.0% | STRICT |
+| screen-clone.noop/small | 7.91 ms | 5.74 ms | −27.4% | BANDED |
+| screen-clone.clone/small | 55.07 ms | 23.75 ms | **−56.9%** | BANDED |
+| screen-clone.render/small | 17.21 ms | 384.67 ms | (+2135%) | **INCOMPARABLE** |
+
+Stated honestly, in the form T21 requires: **13/13 comparable paired configs win
+against the pinned oracle; 1 config (`screen-clone.render/small`) is no longer
+comparable because WS10 T12 made rustty's bench measure strictly more work than
+the pinned oracle binary does.**
+
+### The INCOMPARABLE config — found by this run, not anticipated by the plan
+
+The plan predicted `terminal-stream/ascii` would become incomparable after T10.
+**It did not**: measured here it still wins outright at −38.5%, and it is fenced
+STRICT. The config that actually became incomparable is a different one, and it
+was silently turning the fence RED:
+
+`screen-clone.render/small`. T12 ported `446f80f4e`'s bench hunk, which
+re-scaled `stepRender` from **1 000** to **50 000 × `--loops`** iterations. The
+pinned oracle binary predates that commit, so it is still at 1 000 — verified
+directly:
+
+```
+$ git -C ../ghostty show 4749c4e93:src/benchmark/ScreenClone.zig | sed -n '181p'
+    for (0..1000) |_| {
+```
+
+rustty therefore performs **50×** the oracle's work in this config. The raw
+ratio reports +2135%; normalized, 384.67 ms / 50 = **7.69 ms against the
+oracle's 17.21 ms, i.e. −55%** — a win, and consistent with the −56.9% measured
+on `screen-clone.clone` from the same corpus.
+
+This is recorded as a first-class **INCOMPARABLE** set in `ws10_suite.py`, and
+as **BASIS_CHANGED** in `check_baseline_regression.py`, rather than as a waiver
+or a tolerance bump. The distinction is load-bearing:
+
+* a **waiver** says "rustty is slower here and we accept it", which would let a
+  genuine future regression hide behind the entry;
+* **INCOMPARABLE** says "these two numbers are not a ratio", and the config
+  stays **fully fenced by FENCE 2**, where both sides are rustty binaries
+  running the identical workload by construction.
+
+Both mechanisms print their contents on every run and both have a self-test arm
+asserting the exclusion is not a hole: a listed id cannot turn the gate red at
+50× worse, and an unlisted id with the same delta still does
+(`ws10_suite.py --self-test` arm `[e]`,
+`check_baseline_regression.py --self-test` arm `[e2]`). Comparability returns
+when the oracle pin advances past `446f80f4e` — **Phase 3**.
+
+### FENCE 2 — final vs the WS10 entry binary
+
+**GREEN across all 14.** This is where T19's work is visible.
+
+| config | entry | final | Δ |
+|---|--:|--:|--:|
+| screen-clone.render/small | 456.87 ms | 387.40 ms | **−15.2%** |
+| codepoint-width.table/utf8 | 217.93 ms | 207.85 ms | −4.6% |
+| screen-clone.noop/small | 5.96 ms | 5.74 ms | −3.6% |
+| is-symbol.uucode/utf8 | 208.89 ms | 207.16 ms | −0.8% |
+| codepoint-width.simd/utf8 | 466.17 ms | 465.10 ms | −0.2% |
+| osc-parser/osc-parser | 52.34 ms | 52.35 ms | +0.0% |
+| grapheme-break.table/utf8 | 213.66 ms | 214.45 ms | +0.4% |
+| grapheme-break.noop/utf8 | 216.36 ms | 217.46 ms | +0.5% |
+| screen-clone.clone/small | 24.23 ms | 24.35 ms | +0.5% |
+| terminal-parser/utf8 | 97.19 ms | 97.77 ms | +0.6% |
+| terminal-stream/ascii | 346.07 ms | 347.98 ms | +0.6% |
+| is-symbol.table/utf8 | 202.31 ms | 203.82 ms | +0.7% |
+| codepoint-width.wcwidth/utf8 | 238.32 ms | 239.99 ms | +0.7% |
+| codepoint-width.noop/utf8 | 3.82 ms | 4.11 ms | +7.5% |
+
+`screen-clone.render` −15.2% is the render-state rewrite (T19), measured
+apples-to-apples. Everything else sits inside ±1% except two short configs whose
+process-spawn floor dominates (`codepoint-width.noop` at 3.8 ms and
+`screen-clone.noop` at 5.9 ms), which is why the SELF fence bands them at 15%.
+
+### NEGATIVE RESULTS — ported upstream work that measured neutral or worse here
+
+A perf series with no recorded negative results is an under-reported one.
+
+1. **T19's chunked `update` is neutral on the full-rebuild path, not a win.**
+   The suite's `screen-clone.render` mode forces a full rebuild every iteration
+   (`state.screen = .alternate`), and the T19-local A/B put it at 7109 ns →
+   2693 ns *per update* — but almost all of that is the begin/end SPLIT deferring
+   style denormalization out of the measured phase, not the chunk iteration. On
+   the fence, the same mode moves only −15.2%, because Fence 2 measures
+   `update` (begin **and** end), not `begin_update`. Chunk iteration pays off on
+   CLEAN and PARTIAL frames (11.2× and 5.9×), which the suite does not exercise
+   at all. Stated plainly: **the benchmark suite does not measure the case T19
+   was written for.**
+2. **T19 is invisible on `screen-clone.clone`.** The r5 clone-style-run
+   `PERF(port)` divergence still carries that config (−56.9% vs oracle); the
+   render-state rewrite neither helped nor hurt it (+0.5% entry→final, inside
+   noise). The two optimizations are disjoint, which is the outcome the T19
+   `PERF(port)` enumeration predicted.
+3. **T20 is not measured by the suite at all, and no claim is made that it is.**
+   None of the 14 configs touches a pty. The pipeline's evidence is its three
+   KATs and the mean-batch-size measurement in them (1024 → 65536 bytes), plus
+   the wall-clock A/B recorded in the T20 commit (87.5 → 123.8 MiB/s median).
+   The fence is NEUTRAL here; treating a green fence as evidence for T20 would be
+   exactly the vacuous verification this plan forbids.
+4. **`codepoint-width.noop` moved +7.5% entry→final and it means nothing.** At
+   3.8 ms the config is process-spawn floor; the same config also shows −28.8%
+   against the oracle in the same session. Both numbers are noise and neither is
+   a finding.
+
+### G8 (`check_baseline_regression.py`) — one arm green, one arm structurally red
+
+* `--metrics` (regression arm): **GREEN**. 13 metrics compared, **0
+  regressions**, 1 basis-changed and reported.
+* `--strict`: **RED**, for a **pre-existing, structural** reason unrelated to
+  T19/T20/T21. `--strict` additionally fails when the candidate is missing any
+  baseline row, and 9 of `BASELINE.json`'s rows are `size:` labels for **Zig
+  build artifacts** — `ghostty-bench`, `ghostty-gen`, `libghostty-vt.a`,
+  `libghostty-vt.0.1.0.dylib`, `ghostty-test`, and two lib-vt test executables.
+  `ws10_suite.py --emit-metrics` emits benchmark rows only and has no way to
+  produce a `ghostty-bench` size from a rustty tree, so `--strict` cannot be
+  green for ANY rustty candidate produced by this harness, and never could have
+  been.
+
+  **Not fixed here, deliberately, and flagged rather than absorbed.** It is a
+  third red gate beyond this lane's two, and the fix is a scope call for G8's
+  owner between two real options: (a) teach the emitter to measure the rustty
+  counterparts (`librustty_vt.a`, `librustty_vt.dylib`, the rustty test
+  binaries) and map them onto the oracle labels, or (b) split `--strict`'s
+  missing-metrics arm so that ORACLE-ONLY artifact labels are reported but do
+  not fail. Option (a) is better — it restores a real size axis — and is
+  strictly more work. Recording it as a known-red arm with the diagnosis, rather
+  than quietly running the gate without `--strict`, because a gate that cannot
+  be green is exactly the failure mode this workstream exists to correct.
+
+### Comparability warning (repeated because it is easy to lose)
+
+Every number above is comparable to oracle `4749c4e93` and to **no other oracle
+revision**. `origin/main` requires Zig 0.16.0 and the installed toolchain is
+0.15.2, so it cannot be built on this host; a future run against it will show a
+SMALLER rustty margin on `+terminal-stream` because upstream added
+`quirks_memset.zig` (~2.8× on that config), and that is **the oracle getting
+faster, not rustty regressing**. That comparison is verification debt owned by
+Phase 3 (`BEYOND-PIN`).
+
 ## WS10 — INCOMPLETE WORK at this handoff (2026-07-30)
 
 **This section is NOT a deferral and NOT verification debt.** It is a record of
@@ -1332,6 +1520,9 @@ unwritten code as an accepted gap. WS10 remains OPEN and owns all of it.
 | T12 | `446f80f4e` (ScreenClone hunk) | `a2f0d2c` |
 | T13+T14 | `1a88f3622`, `253e4f9c3`, `300f42c7a` | `ae48e3b` |
 | T15 | `083d9709b` | `ae05b31` |
+| T19 | `446f80f4e` (full: render.zig, page.zig, Terminal.zig, generic.zig, c/render.zig, render.h, lib_vt.zig) | `56dba9c` (gate-repair lane) |
+| T20 | `2f0e6659d` + `bb0ac4c72` | `a788346` (gate-repair lane) |
+| T21 | — (final paired re-measure) | see the T21 section above |
 
 ### NOT started
 
@@ -1340,9 +1531,16 @@ unwritten code as an accepted gap. WS10 remains OPEN and owns all of it.
 | T11 | `7e14347c1` — bound page map probe lengths + HyperlinkMap bench | `hash_map.zig` +472, `page.zig` +37, `Screen.zig` +3, `hyperlink.zig` +2, bench +155. Substance is the in-place rehash + 20% insertion headroom (upstream: 100x on map churn, 47x on full OSC 8 stream). Touches `Page` capacity math, so `check_capacity_saturation.sh` / `check_paired_invariants.sh` are in scope. |
 | T16 | `47e26df60` + `cb2d78587` + `f2a7652ab` — printed-run batching | `Terminal.zig` +675 / +112 / +155; `stream.zig` `Action::PrintSlice` + lane-wise printable-run scan; `simd/main.zig` `lanes(T)`; dispatch arms in `stream_terminal.rs` and `stream_handler.rs`. **`PERF(port)` stop-and-decide pending at `terminal.rs:884`** (r5-print-outline). |
 | T17 | `f6f79acce` + `8c523ed03` — bulk APC slice dispatch + vectorization, `ApcParser` bench, `synthetic/Kitty` generator | includes the union-payload borrow hazard flagged by `D-terminal-subsystems.md` §4.6. |
-| T19 | `446f80f4e` — render-state begin/end split | +1348/−209 across 9 files incl. the vt C ABI (`render.h` +66, `c/render.zig` +74). **`PERF(port)` stop-and-decide pending across `page_impl.rs:1423,1441,1467,1622` and `ref_counted_set.rs:528,652,723`** (r5-clone-style-run, −58.7% on `screen-clone.clone`). T12's three `ScreenClone` render modes land with it. |
-| T20 | `2f0e6659d` (pipeline) + `bb0ac4c72` | the HIGH-risk item: ~350 lines of concurrent code, needs `.port/phase-2/mirihar-ws10-pipeline/` with a raw-pointer slot handoff and a `&mut [u8]` negative control. T8 landed its separable QoS hunk only. |
-| T21 | — | the final paired re-measure. Cannot be authoritative on this box regardless (see the load record below). |
+
+**T19, T20 and T21 have since LANDED** (see the T21 section above and the two
+commits in the table); the three rows above are what remains NOT started.
+
+The `PERF(port)` stop-and-decide this section flagged for T19 was carried out and
+written into `56dba9c`: the `page_impl.rs` / `ref_counted_set.rs`
+r5-clone-style-run markers turned out **not to be inside** `446f80f4e`'s
+rewritten region and are untouched; two markers in the row loop were PRESERVED
+(the SoA raw-column memcpy, the hoisted style-set base) and two were SUBSUMED by
+the chunked rewrite, each with its reason recorded at the site.
 
 Also still unported and **NOT** in this lane's scope: **T18** (`77190bd02`
 scroll-region optimizations + `Screen::cursor_scroll_region_up`, which carries
