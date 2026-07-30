@@ -33,6 +33,7 @@ use rustty_apprt_api::structs::ClipboardRequest;
 
 use crate::gtk::class::dialog::{Dialog, DialogImpl};
 use crate::gtk::gresource;
+use crate::gtk::i18n::tr;
 
 /// A `#[glib::Boxed]` newtype so an [`ClipboardRequest`] can back the `request`
 /// GObject property.
@@ -254,26 +255,27 @@ impl ClipboardConfirmationDialog {
     /// PORTS: `clipboard_confirmation_dialog.zig:188-209` `propRequest`. Set the
     /// AlertDialog heading/body from the current `request` variant.
     ///
-    /// PORT NOTE (i18n): the reference wraps each string in `i18n._(...)`; rustty
-    /// has no runtime `_()` binding yet, so we emit the untranslated literal (see
-    /// `close_confirmation_dialog.rs` `Target::title`). The strings carry no product
-    /// name, so no R2 rebrand applies.
+    /// PORTS the reference's `i18n._(...)` wrapping of all six strings
+    /// (`clipboard_confirmation_dialog.zig:197,198,201,202,205,206`) via
+    /// [`crate::gtk::i18n::tr`]. The msgids are byte-exact against the committed
+    /// catalogs (`po/io.airely.rustty.pot`); none carries a product name, so no R2
+    /// rebrand applies.
     fn apply_request(&self) {
         let Some(boxed) = self.get_request() else {
             return;
         };
         let (heading, body) = match boxed.0 {
             ClipboardRequest::Osc52Write(_) => (
-                "Authorize Clipboard Access",
-                "An application is attempting to write to the clipboard. The current clipboard contents are shown below.",
+                tr(c"Authorize Clipboard Access"),
+                tr(c"An application is attempting to write to the clipboard. The current clipboard contents are shown below."),
             ),
             ClipboardRequest::Osc52Read(_) => (
-                "Authorize Clipboard Access",
-                "An application is attempting to read from the clipboard. The current clipboard contents are shown below.",
+                tr(c"Authorize Clipboard Access"),
+                tr(c"An application is attempting to read from the clipboard. The current clipboard contents are shown below."),
             ),
             ClipboardRequest::Paste => (
-                "Warning: Potentially Unsafe Paste",
-                "Pasting this text into the terminal may be dangerous as it looks like some commands may be executed.",
+                tr(c"Warning: Potentially Unsafe Paste"),
+                tr(c"Pasting this text into the terminal may be dangerous as it looks like some commands may be executed."),
             ),
         };
         self.set_heading(Some(heading));

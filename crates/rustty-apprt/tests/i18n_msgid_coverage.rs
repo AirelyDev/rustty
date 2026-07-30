@@ -10,7 +10,9 @@
 //! msgid sets agree in both directions:
 //!
 //!   * every `_("…")` in `assets/ui/**/*.blp` exists as a msgid in the `.pot`;
-//!   * every `gettext_(c"…")` in `src/gtk/**/*.rs` exists as a msgid in the `.pot`;
+//!   * every literal msgid looked up from `src/gtk/**/*.rs` (through
+//!     `rustty_os::i18n::gettext_` or the `crate::gtk::i18n::tr` wrapper) exists as
+//!     a msgid in the `.pot`;
 //!   * every `.pot` msgid whose reference comment cites a code file (`*.zig:` /
 //!     `*.rs:`, i.e. the oracle's code-side set) is actually looked up somewhere in
 //!     `src/gtk/**/*.rs` or supplied by a `.blp` template — this is the half that
@@ -72,15 +74,16 @@ fn parse_pot(bytes: &[u8]) -> BTreeMap<String, String> {
     let mut msgid: Option<String> = None;
     let mut in_msgid = false;
 
-    let flush = |out: &mut BTreeMap<String, String>, msgid: &mut Option<String>, refs: &mut String| {
-        if let Some(id) = msgid.take() {
-            if !id.is_empty() {
-                out.insert(id, std::mem::take(refs));
-            } else {
-                refs.clear();
+    let flush =
+        |out: &mut BTreeMap<String, String>, msgid: &mut Option<String>, refs: &mut String| {
+            if let Some(id) = msgid.take() {
+                if !id.is_empty() {
+                    out.insert(id, std::mem::take(refs));
+                } else {
+                    refs.clear();
+                }
             }
-        }
-    };
+        };
 
     for line in text.lines() {
         let t = line.trim_end();
@@ -124,7 +127,9 @@ fn parse_pot(bytes: &[u8]) -> BTreeMap<String, String> {
 }
 
 fn walk(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
@@ -143,8 +148,17 @@ fn scan_calls(text: &str, open: &str) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     let mut idx = 0usize;
     while let Some(hit) = text[idx..].find(open) {
-        let start = idx + hit + open.len();
+        let match_at = idx + hit;
+        let start = match_at + open.len();
         idx = start;
+        // Identifier-boundary: `tr(` must not match inside `from_str(`. This mirrors
+        // xgettext's own token-based keyword matching.
+        if match_at > 0 {
+            let prev = bytes[match_at - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                continue;
+            }
+        }
         // Skip an optional Rust `c` string prefix and whitespace.
         let mut i = start;
         while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'c') {
@@ -154,7 +168,6 @@ fn scan_calls(text: &str, open: &str) -> Vec<(String, usize)> {
             continue;
         }
         i += 1;
-        let lit_start = i;
         let mut lit = String::new();
         while i < bytes.len() {
             match bytes[i] {
@@ -172,7 +185,6 @@ fn scan_calls(text: &str, open: &str) -> Vec<(String, usize)> {
                 }
             }
         }
-        let _ = lit_start;
         let line = text[..start].matches('\n').count() + 1;
         out.push((unescape(&lit), line));
         idx = i;
@@ -192,8 +204,15 @@ fn utf8_len(b: u8) -> usize {
 /// All `_("…")` msgids in the blueprint templates, with `file:line` provenance.
 fn blp_msgids(root: &Path) -> BTreeMap<String, String> {
     let mut files = Vec::new();
-    walk(&root.join("crates/rustty-apprt/assets/ui"), "blp", &mut files);
-    assert!(!files.is_empty(), "no .blp files found — the walk is broken");
+    walk(
+        &root.join("crates/rustty-apprt/assets/ui"),
+        "blp",
+        &mut files,
+    );
+    assert!(
+        !files.is_empty(),
+        "no .blp files found — the walk is broken"
+    );
     let mut out = BTreeMap::new();
     for f in files {
         let text = std::fs::read_to_string(&f).expect("read blp");
@@ -205,7 +224,12 @@ fn blp_msgids(root: &Path) -> BTreeMap<String, String> {
     out
 }
 
-/// All `gettext_(c"…")` msgids in the GTK Rust sources, with `file:line`.
+/// All translated msgids looked up from the GTK Rust sources, with `file:line`.
+///
+/// Two spellings count, and they are exactly the two `xtask update-translations`
+/// passes to `xgettext` as `--keyword`s: `rustty_os::i18n::gettext_(c"…")` (the
+/// direct port of the reference's `i18n._`) and `crate::gtk::i18n::tr(c"…")` (the
+/// `&str`-returning wrapper the GTK setters need — see `src/gtk/i18n.rs`).
 fn code_msgids(root: &Path) -> BTreeMap<String, String> {
     let mut files = Vec::new();
     walk(&root.join("crates/rustty-apprt/src/gtk"), "rs", &mut files);
@@ -213,9 +237,11 @@ fn code_msgids(root: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for f in files {
         let text = std::fs::read_to_string(&f).expect("read rs");
-        for (msgid, line) in scan_calls(&text, "gettext_(") {
-            let rel = f.strip_prefix(root).unwrap_or(&f).display();
-            out.entry(msgid).or_insert_with(|| format!("{rel}:{line}"));
+        for open in ["gettext_(", "tr("] {
+            for (msgid, line) in scan_calls(&text, open) {
+                let rel = f.strip_prefix(root).unwrap_or(&f).display();
+                out.entry(msgid).or_insert_with(|| format!("{rel}:{line}"));
+            }
         }
     }
     out
@@ -225,9 +251,17 @@ fn code_msgids(root: &Path) -> BTreeMap<String, String> {
 fn blp_msgids_all_exist_in_pot() {
     let root = repo_root();
     let pot = parse_pot(&std::fs::read(root.join("po/io.airely.rustty.pot")).unwrap());
-    assert!(pot.len() >= 75, "expected >=75 catalog msgids, found {}", pot.len());
+    assert!(
+        pot.len() >= 75,
+        "expected >=75 catalog msgids, found {}",
+        pot.len()
+    );
     let blp = blp_msgids(&root);
-    assert!(blp.len() >= 51, "expected >=51 blueprint msgids, found {}", blp.len());
+    assert!(
+        blp.len() >= 51,
+        "expected >=51 blueprint msgids, found {}",
+        blp.len()
+    );
     let missing: Vec<_> = blp
         .iter()
         .filter(|(m, _)| !pot.contains_key(*m))
@@ -267,9 +301,8 @@ fn code_msgids_all_wrapped_and_in_pot() {
     let expected: BTreeSet<&String> = pot
         .iter()
         .filter(|(_, refs)| {
-            refs.lines().any(|r| {
-                (r.contains(".zig:") || r.contains(".rs:")) && !r.contains("nautilus")
-            })
+            refs.lines()
+                .any(|r| (r.contains(".zig:") || r.contains(".rs:")) && !r.contains("nautilus"))
         })
         .map(|(m, _)| m)
         .collect();

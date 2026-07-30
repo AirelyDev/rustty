@@ -55,6 +55,7 @@ use rustty_config::value_types::{
 };
 use rustty_input::binding;
 
+use crate::gtk::i18n::tr;
 use crate::gtk::{ext, gtk_version, winproto, WeakRef};
 
 use super::application::Application;
@@ -549,9 +550,10 @@ mod imp {
 
         /// PORTS: `window.zig:760-764` `addToast`. Queues a 3s text toast.
         ///
-        /// PORT NOTE: the reference wraps the title in `i18n._(...)` (gettext); the
-        /// runtime `_()` binding + the `msgfmt`-compiled catalog land with the
-        /// translation-domain wiring, so this ports the untranslated literal.
+        /// PORT NOTE (i18n): the reference wraps the title in `i18n._(...)` at each
+        /// CALL SITE (`window.zig:1102,1663,1665`), not here — `addToast` itself
+        /// takes an already-translated `[*:0]const u8`. rustty matches that: the
+        /// callers pass [`crate::gtk::i18n::tr`]`(c"…")`.
         pub(super) fn add_toast(&self, title: &str) {
             let toast = adw::Toast::new(title);
             toast.set_timeout(3);
@@ -1011,11 +1013,12 @@ mod imp {
                 if !config.get().app_notifications.clipboard_copy {
                     return;
                 }
-                // (`:1662-1665`; untranslated literals, see `add_toast`.)
+                // PORTS `:1663-1665`'s `i18n._(...)` lookups (the reference wraps
+                // at the CALLER, not inside `addToast`).
                 if text.is_empty() {
-                    "Cleared clipboard"
+                    tr(c"Cleared clipboard")
                 } else {
-                    "Copied to clipboard"
+                    tr(c"Copied to clipboard")
                 }
             };
             self.add_toast(title);
@@ -1737,7 +1740,8 @@ impl Window {
             if let Some(config) = cfg.as_ref() {
                 if config.get().app_notifications.config_reload {
                     drop(cfg);
-                    imp.add_toast("Reloaded the configuration");
+                    // PORTS `window.zig:1102` `addToast(i18n._("Reloaded the configuration"))`.
+                    imp.add_toast(tr(c"Reloaded the configuration"));
                 }
             }
         }
@@ -1876,7 +1880,25 @@ fn action_about(_action: &gio::SimpleAction, _param: Option<&glib::Variant>, thi
     // issues page) are DROPPED: `rustty_identity` carries no homepage/issue-url
     // constant, and emitting ghostty.org would leak the upstream identity into a
     // user-visible shipped dialog (R2 forbids this).
-    let developer_name = format!("{} Developers", rustty_identity::APP_NAME_TITLECASE);
+    // PORTS: `window.zig:1805` `i18n._("Ghostty Developers")`. R2 + gettext
+    // interaction: a msgid is a lookup KEY, so this must be the literal the 31
+    // catalogs carry (`po/io.airely.rustty.pot` `msgid "Rustty Developers"`) — the
+    // `format!()`-composed string this used to build could never match, so the
+    // credit line was permanently untranslatable. The `debug_assert` pins the
+    // literal to the identity constant so the two cannot silently diverge. It is
+    // scoped to the rustty profile by `PROFILE` (not by a feature cfg apprt does
+    // not declare): under `identity-oracle` `APP_NAME_TITLECASE` is the
+    // reference's `Ghostty` while the shipped catalogs stay rustty's, so no
+    // agreement is expected there.
+    if matches!(rustty_identity::PROFILE, rustty_identity::Profile::Rustty) {
+        debug_assert_eq!(
+            format!("{} Developers", rustty_identity::APP_NAME_TITLECASE),
+            "Rustty Developers",
+            "the `Rustty Developers` gettext msgid must stay in sync with \
+             rustty_identity::APP_NAME_TITLECASE; update po/*.po together with it"
+        );
+    }
+    let developer_name = tr(c"Rustty Developers");
     let dialog = adw::AboutDialog::builder()
         .application_name(rustty_identity::APP_NAME_TITLECASE)
         .application_icon(rustty_identity::BUNDLE_ID)
