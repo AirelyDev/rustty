@@ -54,6 +54,27 @@ check() {
   fi
 }
 
+# --self-test: prove the FAIL arm is REACHABLE, so a green run means something.
+# A gate that cannot fail is worthless (this program has found eight vacuous ones).
+# The negative control is real, not synthetic: `rustty-os` genuinely DOES link
+# rustty-xev on macOS, so pointing the same `check` at that target must trip the
+# very grep the wasm arms rely on. If this arm ever prints "ok", the detection has
+# stopped working and every GREEN this gate ever printed is void.
+if [ "${1:-}" = "--self-test" ]; then
+  echo "== self-test: the FAIL arm must be reachable =="
+  fail=0
+  check rustty-os aarch64-apple-darwin
+  if [ "$fail" -eq 0 ]; then
+    echo "SELF-TEST FAILED: rustty-os DOES link rustty-xev on macOS, but the check" >&2
+    echo "                  reported ok — the detection is vacuous." >&2
+    exit 1
+  fi
+  echo "self-test: FAIL arm REACHABLE (detection fired on a real xev edge)"
+  fail=0
+  echo
+  echo "== self-test: the PASS arm must still hold =="
+fi
+
 check rustty-wasm       wasm32-unknown-unknown
 check rustty-web-canvas wasm32-unknown-unknown
 check rustty-vt-c       wasm32-unknown-unknown
