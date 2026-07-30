@@ -1461,3 +1461,73 @@ VM rule forbids a heavy build concurrently with a headed compositor session, and
 Xwayland was live. The crate-scoped build/test above covers the seam, and the
 whole-workspace build is verified on macOS (Task 8). This is a scope note, not a
 deferral of any WS11 check.
+
+---
+
+## Task 8 RECORDED EVIDENCE — R5, the macOS artifact is behaviour-identical
+
+**Binary hashing was deliberately NOT used.** A prior lane obtained three different
+hashes from rebuilds of byte-identical source; hashes measure build nondeterminism, not
+behaviour. R5 is discharged here by (a) proving no production line changed, (b) a
+feature-graph A/B with its own negative control, and (c) a behaviour A/B of every test
+outcome in the crate.
+
+### Step 1 — no production code changed
+
+`git diff 297afcf..HEAD --stat`: **1518 insertions, 0 deletions**, touching only
+`.port/tools/**`, `docs/superpowers/plans/2026-07-23-ws11-font-glyph-resize.md`,
+`crates/rustty-font-shaper/src/{stb.rs,face/freetype.rs}`, and
+`crates/rustty-font-shaper/src/testdata/**`.
+
+Machine-checked that every added `crates/` line is test-only:
+
+```
+crates/rustty-font-shaper/src/face/freetype.rs: mod tests at line 1455;
+    1 added hunk; hunks at/above `mod tests`: []; removed lines: 0
+crates/rustty-font-shaper/src/stb.rs:           mod tests at line 32;
+    1 added hunk (starts at the `#[cfg(test)]` attribute itself); removed lines: 0
+```
+
+Zero removed lines in either file, and no hunk touches anything above the
+`#[cfg(test)] mod tests` boundary. No `build.rs` flag changed (the locked Task-3
+decision), no `Cargo.toml` changed, no vendored C changed.
+
+### Step 2 — feature-graph A/B
+
+```
+cargo tree -e features -p rustty-font-shaper   (1193 lines)
+diff <297afcf> <HEAD>  ->  FEATURE GRAPH IDENTICAL
+```
+
+**Negative control for that claim** (proving the comparison can detect anything at
+all): temporarily adding `features = ["nightly"]` to `allocator-api2` in
+`crates/rustty-font-shaper/Cargo.toml` makes the same diff report
+
+```
+7a8,9
+> ├── allocator-api2 feature "nightly"
+> │   └── allocator-api2 v0.2.21
+```
+
+Reverted; `git status --porcelain` clean.
+
+### Step 3 — behaviour A/B on the whole crate
+
+Every `^test … \.\.\. ` result line, sorted, on both revisions:
+
+```
+$ diff tests_main.txt tests_ws11.txt
+39a40,42
+> test face::freetype::tests::stb_resize_kat_bitmap_strike_bgra ... ok
+> test face::freetype::tests::stb_resize_kat_bitmap_strike_grayscale ... ok
+> test face::freetype::tests::stb_resize_kat_rejects_nearest_and_bilinear ... ok
+106a110,111
+> test stb::tests::stbir_resize_uint8_treats_channels_independently ... ok
+> test stb::tests::stbir_resize_uint8_upsamples_a_known_ramp ... ok
+```
+
+**Additions only** — exactly the 5 new tests. No pre-existing line changed from `ok`,
+and none disappeared. 107 -> 112 tests, `test result: ok. 112 passed; 0 failed`.
+The macOS-facing suites (`face::coretext`, `shaper::coretext_tests`) are byte-identical
+in that listing, which is the R5 claim: the CoreText path — macOS's default backend —
+is untouched, and the FreeType/stb path that IS live on macOS gains only tests.
