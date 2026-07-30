@@ -62,13 +62,36 @@ HIGHER_BETTER = {"throughput_MiB_per_s", "throughput", "ops_per_s", "clones_per_
 LOWER_BETTER = {"median_s", "min_s", "mean_s", "ns_per_op", "seconds", "wall_s"}
 
 
+#: optimize mode the candidate metrics are always measured at, and therefore the
+#: only half of BASELINE.json that may be compared against them.
+CANDIDATE_OPTIMIZE = "ReleaseFast"
+
+
 def bench_index(obj):
-    """{id: (metric_key, value, direction)} for a benchmarks[] list."""
+    """{(id, optimize): (metric_key, value, direction)} for a benchmarks[] list.
+
+    The key is a TUPLE, and that is load-bearing (fixed WS10 T2, June-2026 bug).
+    `.port/phase-0/baseline/BASELINE.json` carries 28 rows: each of the 14
+    benchmark ids appears TWICE, once with `"optimize": "ReleaseFast"` and once
+    with `"optimize": "Debug"`. This function previously keyed on `id` alone, so
+    the Debug rows -- which come second in the array -- silently overwrote the
+    ReleaseFast ones, and the gate ended up comparing release-fast candidates
+    against Debug oracle numbers. The effect was a gate that could not fail:
+    `terminal-stream/ascii` was fenced at 2.073 MiB/s instead of 118.8 (a 57x
+    loose band) and `screen-clone.clone/small` at 5.486 s instead of 0.0493 s
+    (111x). Keying on (id, optimize) keeps both halves addressable; `run()` then
+    compares only the CANDIDATE_OPTIMIZE half.
+
+    Rows with no `optimize` field default to CANDIDATE_OPTIMIZE, so candidate
+    metrics files -- which only ever measure the release-fast binary and do not
+    carry the field -- still join against the ReleaseFast baseline rows.
+    """
     out = {}
     for b in obj.get("benchmarks", []) or []:
         bid = b.get("id")
         if bid is None:
             continue
+        key = (bid, b.get("optimize") or CANDIDATE_OPTIMIZE)
         mkey = b.get("metric")
         # pick the value: prefer the named metric key, else median_s
         val = None
@@ -82,7 +105,7 @@ def bench_index(obj):
             direction = "lower"
         if val is None:
             continue
-        out[bid] = (mkey, float(val), direction)
+        out[key] = (mkey, float(val), direction)
     return out
 
 
@@ -131,9 +154,12 @@ def run(args):
             print(f"NOTE: metrics file '{args.metrics}' not found -> progress mode")
         else:
             print("NOTE: no --metrics candidate supplied -> progress mode")
-        print(f"baseline benchmarks: {len(base_bench)}; baseline size labels: {len(base_size)}")
-        for bid, (mkey, val, direction) in list(base_bench.items())[:8]:
-            print(f"  baseline bench {bid}: {mkey}={val} ({direction}-is-better)")
+        eligible = [(k, v) for k, v in base_bench.items() if k[1] == CANDIDATE_OPTIMIZE]
+        print(f"baseline benchmarks: {len(base_bench)} rows, "
+              f"{len(eligible)} comparable ({CANDIDATE_OPTIMIZE}); "
+              f"baseline size labels: {len(base_size)}")
+        for (bid, opt), (mkey, val, direction) in eligible[:8]:
+            print(f"  baseline bench {bid} [{opt}]: {mkey}={val} ({direction}-is-better)")
         for label, b in list(base_size.items())[:8]:
             print(f"  baseline size  {label}: {int(b)} bytes")
         G.emit(G.GREEN, "progress mode: no candidate metrics; nothing can regress")
@@ -153,12 +179,19 @@ def run(args):
     missing = []
     compared = 0
 
-    # benchmarks
-    for bid, (mkey, bval, direction) in base_bench.items():
-        if bid not in cand_bench:
+    # benchmarks. Only the CANDIDATE_OPTIMIZE half of BASELINE.json is eligible:
+    # the candidate is always a release-fast build, so comparing it against the
+    # Debug oracle rows is meaningless (and, before WS10 T2, was silently what
+    # this gate did). The Debug rows are therefore neither compared nor counted
+    # as missing-from-candidate under --strict.
+    for key, (mkey, bval, direction) in base_bench.items():
+        bid, optimize = key
+        if optimize != CANDIDATE_OPTIMIZE:
+            continue
+        if key not in cand_bench:
             missing.append(("bench", bid))
             continue
-        _ckey, cval, _cd = cand_bench[bid]
+        _ckey, cval, _cd = cand_bench[key]
         compared += 1
         t = tol["throughput"] if direction == "higher" else tol["time"]
         if direction == "higher":
@@ -292,6 +325,26 @@ def self_test():
     ok &= (r.returncode == 0)
 
     shutil.rmtree(tmp, ignore_errors=True)
+
+    # (f) REAL-BASELINE ARM (WS10 T2). BASELINE.json carries each of the 14 ids
+    # TWICE -- once "ReleaseFast", once "Debug". Before the (id, optimize) fix,
+    # bench_index() keyed on `id` alone and the Debug rows (which come second in
+    # the array) silently overwrote the ReleaseFast ones, so the gate compared
+    # release-fast candidates against Debug oracle numbers. This arm pins the
+    # ReleaseFast row and would have caught that bug.
+    try:
+        real = G.load_baseline()
+        ridx = bench_index(real)
+        ts = ridx[("terminal-stream/ascii", "ReleaseFast")]
+        sc = ridx[("screen-clone.clone/small", "ReleaseFast")]
+        ok_f = (abs(ts[1] - 118.8) / 118.8 < 0.01) and (abs(sc[1] - 0.0493) / 0.0493 < 0.01)
+        detail = f"terminal-stream={ts[1]:.4g} screen-clone.clone={sc[1]:.4g}"
+    except Exception as e:  # noqa: BLE001
+        ok_f = False
+        detail = f"{type(e).__name__}: {e}"
+    print(f"[f] ReleaseFast row preferred -> {ok_f} (expect True) [{detail}]")
+    ok &= ok_f
+
     print("SELF-TEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
