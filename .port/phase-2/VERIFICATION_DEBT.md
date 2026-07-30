@@ -175,6 +175,64 @@ cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_set_urgent 
 > second `gtk4::init()`.
 **Expected:** `ok` in ~1 s (bounded at ~10 s — a broken seam fails, never hangs).
 
+## V6. Wayland `default_mode` post-bind TRANSPORT — no compositor on this host re-advertises it [WS19 T9, 2026-07-29]
+
+**What IS verified, and by what.** WS19 T9 made `winproto::wayland::Window` re-read
+`Globals` at every `decoration_mode`/`client_side_decoration_enabled`/`sync_blur` call
+instead of snapshotting at init (the reference's live `globals: *Globals` dereference,
+`wayland.zig:222`/`:252`/`:303`; audit row O7). The RE-READ is proven end-to-end on a real
+compositor by `.port/tools/gates/ws19_wayland_deco_live_gate.sh` +
+`crates/rustty-apprt/tests/gtk_wayland_deco_live.rs`: nested KWin 6.7.3 on its own socket,
+a real realized GTK window and a real `winproto` `Window`; the INITIAL mode comes off the
+wire (KWin advertises `org_kde_kwin_server_decoration_manager` `default_mode = Server`, and
+the port reports server-side decorations as a result — an assertion that FAILS on mutter,
+which has no such manager, so it cannot pass vacuously); the pre-fix snapshot code FAILS
+the post-change assertion; and a latch check (mode back to `Server` → `csd` back to
+`false`) rules out a stuck value.
+
+**What is NOT verified: the transport.** The mode CHANGE in that KAT is injected by writing
+the exact field the `default_mode` dispatch handler writes
+(`App::test_inject_default_deco_mode`, taking the raw protocol uint and running it through
+the same `Mode::try_from(mode).ok()`), because **no compositor available on this host can
+re-advertise `default_mode` after bind.** MEASURED, not assumed:
+
+* **KWin 6.7.3** sends it exactly once per bound resource. The KAT still performs the real
+  provocation — rewrite `kwinrc` to name a missing decoration plugin, then
+  `org.kde.KWin.reconfigure` over D-Bus — and reports the outcome. Under
+  `WAYLAND_DEBUG=1` the client trace shows exactly two
+  `org_kde_kwin_server_decoration_manager…default_mode(2)` events (one on GDK's default
+  queue, one on rustty's private queue), BOTH at bind time, and none after the reconfigure.
+* **sway 1.11 / wlroots** calls `wlr_server_decoration_manager_set_default_mode` once at
+  startup; there is no runtime lever.
+* **mutter 50** advertises no KDE decoration manager at all, so the value is permanently
+  `None` there.
+
+So the residual is narrow and precisely: *a compositor-originated post-bind `default_mode`
+event travelling over the wire, through `WlQueueSource`, into `Globals`.* The two halves on
+either side of it ARE covered — `WlQueueSource`'s post-init dispatch is proven independently
+by `gtk_wayland_set_urgent.rs` (a real `xdg_activation_token_v1.done` cranked through the
+same GSource), and the `Globals`→`Window` re-read is proven by the KAT above. This item
+exists so nobody later reads the KAT as wire-level proof.
+
+**A finding worth keeping:** the WS19 plan (and the WS17 plan's V3 assumptions) treated a
+live KWin decoration-mode change as available. It is not, for the reason measured above.
+
+**Recipe (any of these discharges it):**
+1. A compositor that calls `set_default_mode` after startup — e.g. a wlroots build patched
+   to re-call `wlr_server_decoration_manager_set_default_mode` on a signal, or a future KWin
+   that re-broadcasts on `reconfigure`. Then delete the injection from
+   `gtk_wayland_deco_live.rs` and assert on the provocation directly:
+   ```
+   .port/tools/gates/ws19_wayland_deco_live_gate.sh     # already performs and reports it
+   ```
+   The gate prints `compositor provocation: … csd=<v>`; when `csd=true` appears there, the
+   wire half is covered and this row can be deleted.
+2. A wire-level injector (a `wl_display` proxy that relays the real compositor and emits an
+   extra `default_mode` on the manager object id it sees pass through). Confirm with
+   `WAYLAND_DEBUG=1` that a THIRD `default_mode(N)` reaches the client after bind.
+
+---
+
 ## V5. X11 winproto residuals: no native X11 session, no KWin, and NO synthetic keyboard input on this VM [WS16, 2026-07-29]
 
 > **OWNER [WS19 audit, 2026-07-29]: WS17.** V5 was filed by WS16 on 2026-07-29, six

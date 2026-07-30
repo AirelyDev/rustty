@@ -5179,8 +5179,11 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
     caught the token `done` demarshalled-but-undispatched, plus a latent trampoline cast bug
     (callback data is `*mut Rc<RefCell<Pump>>`, was deref'd as `*const RefCell<Pump>` — every
     `try_borrow_mut` failed). Both fixed by the queue-pending prepare/check rewrite. Still-open
-    coupled sub-item: `Window` snapshots the decoration mode at init, so a LIVE compositor
-    decoration-mode change (now cranked) is not re-read — a separate tracked deferral.
+    coupled sub-item — **RESOLVED, WS19 T9, 2026-07-29 (audit row O7)**: `Window` no longer
+    snapshots the decoration mode. It shares the app's `Rc<RefCell<Pump>>` and re-reads
+    `Globals` at each `decoration_mode`/`client_side_decoration_enabled`/`sync_blur` call,
+    which is the reference's live `globals: *Globals` dereference
+    (`wayland.zig:222`/`:252`/`:303`).
 - **`gtk/class/inspector_*` + `imgui_widget` — the dcimgui terminal inspector (L6)
   — RESOLVED [2026-07-19].** The GTK/OpenGL3 inspector landed (commits `657f223`,
   `f780650`): the `.inspector` performAction arm and `Surface::control_inspector`
@@ -5225,12 +5228,19 @@ Two known residuals (grounding-review):
   window and asserts mutter's real token `done` dispatched through the GSource (via the test-only
   `App::activation_done_count` counter) — passes in <1s. CSD + blur were never affected (their
   inputs are captured at the init two-phase roundtrip; their requests are outgoing). Remaining
-  coupled follow-up: `Window` still snapshots the decoration mode at init rather than re-reading
-  `Globals` live (a compositor decoration-mode change now cranks but is not re-read).
-- **LOW (pathological): duplicate global re-advertisement.** If a compositor re-advertises a singleton
-  interface with a new `name`, `Globals::bind_global` overwrites the typed proxy but leaves the stale
-  `name→tag` map entry, so a later `global_remove(old_name)` would unbind the live proxy. Compositors
-  don't re-advertise these singletons in practice. (globals.rs bind_global/remove_global.)
+  coupled follow-up — **RESOLVED, WS19 T9, 2026-07-29 (audit row O7).** `Window` re-reads
+  `Globals` live (the reference's `globals: *Globals` dereference at
+  `wayland.zig:222`/`:252`/`:303`) instead of snapshotting at init; the same change made the
+  KDE-decoration-manager presence and the blur capability live too, since the reference reads
+  all three at the same points. Gated by
+  `.port/tools/gates/ws19_wayland_deco_live_gate.sh` (nested KWin 6.7.3, GREEN, with the
+  pre-fix snapshot FAIL arm demonstrated). Residual — the compositor-originated *transport*
+  of a post-bind `default_mode` change — is recorded in `VERIFICATION_DEBT.md` (V6) with the
+  measurement that established it.
+- ~~**LOW (pathological): duplicate global re-advertisement.**~~ **RECLASSIFIED — WS19 T9,
+  2026-07-29 (audit row O8): moved to `# Justified R1 Divergences` with a 4-criterion basis
+  (input no compositor produces; the oracle has the same shape; the failure mode degrades to
+  the graceful-`None` arm; the fix costs state the reference does not have). Not open work.**
 
 ### `share/{APP}` resource root — shell-integration + themes SHIPPED ✅ RESOLVED [2026-07-23, WS1]
 The R5 placeholder (`share/{APP}/DEFERRALS.md`, written by
@@ -5615,6 +5625,33 @@ Divergences from the oracle that are intentional and will NOT be "completed"
 later. Each records what diverges, why fidelity was overruled, and how the
 divergence is bounded. Anything here must be a conscious decision with a
 rationale — never an accident.
+
+## wayland `Globals::bind_global` — duplicate re-advertisement of a SINGLETON global leaves a stale `name→tag` entry
+
+**[RECLASSIFIED — WS19 T9, 2026-07-29, audit row O8.]** Previously filed as an open
+LOW deferral with no owner (`D:4905`). It is a permanent Justified R1 Divergence.
+
+**What diverges.** If a compositor re-advertises a singleton interface under a NEW
+`name`, `Globals::bind_global` overwrites the typed proxy but leaves the old
+`name→tag` map entry in place, so a later `global_remove(old_name)` would unbind the
+live proxy (`winproto/wayland/globals.rs` `bind_global`/`remove_global`).
+
+**4-criterion basis:**
+1. **Bounded input that no implementation produces.** It requires a compositor to
+   re-advertise a *singleton* interface under a second `name` while the first is still
+   advertised. Nothing does this; the singletons involved
+   (`wl_compositor`, `xdg_activation_v1`, the KDE managers, `ext_background_effect`) are
+   advertised exactly once per registry.
+2. **The oracle has the same shape.** `Globals.zig`'s bind path likewise overwrites the
+   typed proxy and keeps no bidirectional `tag↔name` bookkeeping, so "fixing" it here
+   would be a divergence FROM the reference, which is the opposite of R1.
+3. **The failure mode is safe.** A `global_remove(old_name)` would clear a live proxy,
+   degrading to the graceful-`None` arm the code already handles for absent globals
+   (blur/CSD/slide/urgency each early-return when their global is `None`). No UB, no
+   panic, no hang.
+4. **Cost exceeds benefit.** Tracking `tag→name` bidirectionally to defend against an
+   input no implementation produces adds state the reference does not have, on the
+   registry path, for no observable gain.
 
 ## rustty-termio ReadThread — PRESERVED REFERENCE QUIRK: trailing pty output dropped on Linux POLLHUP (L1 LT9)
 
@@ -6021,7 +6058,7 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 | O4 | `D:4960` inspector `pagelist.rs` CELL-detail path still restores compressed pages; "D6 must port that end state" | **OPEN — and WS7 D6 MERGED (`b8c40f9`) without closing it.** `crates/rustty-inspector/src/widgets/pagelist.rs` still calls `Node::page(cell.node)` at **6** sites (`:1701,:1703,:1759,:1889,:2163,:2379`). The guard at `:2414` asserts `!loop_src.contains("Node::page(")` over the **page-tree loop source only** — exactly the weaker form the deferral predicted — so the file-wide property is still unproven. | **fix in WS19 T7** (port the oracle `pages.pin` + `InspectedCell` restructure; tighten the guard to whole-file) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T7.** Ported the oracle `pin` + `InspectedCell` restructure; whole-file guard in a SIBLING file; FAIL arm mutation-proven. |
 | O5 | `D:4973` `PageList::Limits`/`Limits::enforce` has no rustty counterpart, so the oracle's 11th `mark_activity` site has nothing to port onto | **OPEN, correctly described.** Depends on a struct beyond the pin. | **route to Phase 3 as a re-vet row**, not a Phase-2 deferral: WS19 T2 restates it as pin-conditional with the exact assertion Phase 3 must make (`Limits::enforce` must `mark_activity` on entry) | **S** | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** Phase 3 re-vet assertion **P3-RV1**. |
 | O6 | `D:4046` GTK portal `OpenURI` — call site INHABITED, body unported; marked **OPEN**, no owner | **OPEN, real.** No `portal` module under `crates/rustty-apprt/src/gtk/`; `startup` fetches the `gio::DBusConnection` for GlobalShortcuts only. WS15 explicitly split this out and did not take it. | **fix in WS19 T8** (reuses the WS15 request-path pattern + its live gate harness) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T8, 2026-07-29.** Ported (`gtk/portal.rs` + `gtk/portal/open_uri.rs`), call site live in `application.rs`, and verified on the VM by `.port/tools/gates/ws19_portal_openuri_gate.sh` (stub-portal ordering with a demonstrated FAIL arm, live round-trip against the real `xdg-desktop-portal`, `dbus-monitor` wire shape; both negative controls exercised). The plan's "diff against installed ghostty 1.3.1" step was impossible — that build has no OpenURI portal path (`strings … | grep -c` → 0); see the resolved entry. |
-| O7 | `D:4858`/`:4904` wayland `Window` snapshots the decoration mode at init; a live decoration-mode change is now *cranked* but never *re-read* | **OPEN, real, no owner** — recorded twice, both as a "coupled follow-up" with no WS. | **fix in WS19 T9** | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T9** (wayland decoration-mode re-read). Needs a real compositor. |
+| O7 | `D:4858`/`:4904` wayland `Window` snapshots the decoration mode at init; a live decoration-mode change is now *cranked* but never *re-read* | **OPEN, real, no owner** — recorded twice, both as a "coupled follow-up" with no WS. | **fix in WS19 T9** | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T9, 2026-07-29.** `Window` shares the app's `Rc<RefCell<Pump>>` and re-reads `Globals` at each `decoration_mode`/`client_side_decoration_enabled`/`sync_blur` call (the reference's `globals: *Globals` dereference at `wayland.zig:222`/`:252`/`:303`); the three snapshot fields are now caches refreshed by every live read. Gated by `.port/tools/gates/ws19_wayland_deco_live_gate.sh` — nested KWin 6.7.3 on its own socket, GREEN, with the pre-fix snapshot FAIL arm demonstrated (`csd` stays `false`) and a latch check (mode back to Server → `csd` back to `false`). Residual, recorded as `VERIFICATION_DEBT.md` V6: no compositor on this host re-advertises `default_mode` post-bind — MEASURED (`WAYLAND_DEBUG=1`: KWin 6.7.3 emits exactly two `default_mode(2)`, both at bind, none after `org.kde.KWin.reconfigure`; sway sets it once at startup; mutter has no KDE decoration manager), so the wire *transport* of a post-bind change is unexercised while the re-read itself is proven. |
 | O8 | `D:4905` wayland duplicate-global re-advertisement leaves a stale `name→tag` entry | **OPEN, LOW, no owner.** | **permanent divergence** — pathological input no compositor produces; 4-criterion basis written in WS19 T9 | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T9 (ledger half).** Duplicate-global nit is a **Justified R1 Divergence** with a 4-criterion basis. |
 | O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T10** (kqueue `thread_perform` `&mut Loop`). Requires the `mirihar-xev-mpsc` SB/TB proof first — SB conclusions must not be hand-reasoned. |
 | O10 | `D:3273` macOS `xev.File`/`TCP`/`UDP` watcher instantiations still deferred (Linux ported them, Tasks 3–5); plus the macOS `kqueue: file IO on thread pool` skip-stub | **OPEN, real, no owner.** The two targets deliberately diverge, gate-pinned by `crates/rustty-xev/tests/surface_parity.rs`. | **permanent divergence** — already deliberate and gate-pinned; WS19 T11 moves it into the divergence section with its 4-criterion basis rather than leaving it in a "DEFERRED" list | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
