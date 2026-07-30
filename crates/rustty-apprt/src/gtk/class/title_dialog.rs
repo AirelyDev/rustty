@@ -17,6 +17,7 @@ use libadwaita::prelude::*;
 use libadwaita::subclass::prelude::*;
 
 use crate::gtk::ext;
+use crate::gtk::i18n::tr;
 
 /// The target of a title dialog.
 ///
@@ -33,15 +34,14 @@ pub enum Target {
 }
 
 impl Target {
-    /// PORTS: `title_dialog.zig:223-228` `title`. These strings carry no product
-    /// name, so no R2 rebrand applies. (See `close_confirmation_dialog.rs`
-    /// `Target::title` for the i18n PORT NOTE — the reference wraps each in
-    /// `i18n._(...)`; rustty emits the untranslated literal.)
+    /// PORTS: `title_dialog.zig:223-228` `title`, including its `i18n._(...)`
+    /// wrapping (via [`crate::gtk::i18n::tr`]). These strings carry no product
+    /// name, so no R2 rebrand applies.
     #[must_use]
     pub fn title(self) -> &'static str {
         match self {
-            Target::Surface => "Change Terminal Title",
-            Target::Tab => "Change Tab Title",
+            Target::Surface => tr(c"Change Terminal Title"),
+            Target::Tab => tr(c"Change Tab Title"),
         }
     }
 }

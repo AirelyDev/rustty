@@ -98,6 +98,7 @@ pub mod ext;
 pub mod gresource;
 pub mod gsettings;
 pub mod gtk_version;
+pub mod i18n;
 pub mod key;
 pub mod media;
 pub mod portal;
