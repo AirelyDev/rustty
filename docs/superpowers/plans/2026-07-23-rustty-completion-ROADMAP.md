@@ -193,9 +193,17 @@ loud RED rather than an infinite CI wait.
 - [x] WS17 verification debt — authored (`ef7621a`); **NOT executed**. Open. Scope is
   V2/V3/V4/V1b **plus V5** (V5 was orphaned; WS19 T14 adds it).
 - [x] WS18 release lane — authored in-ROADMAP + EXECUTED + **MERGED `eeec83f`**. DONE.
-- [x] WS19 Phase 2 closeout — authored
-  (`docs/superpowers/plans/2026-07-29-ws19-phase2-closeout.md`); executing. Closes
-  Phase 2 and lands the standing closure gate **G-P2**.
+- [ ] WS19 Phase 2 closeout — authored
+  (`docs/superpowers/plans/2026-07-29-ws19-phase2-closeout.md`); **IN FLIGHT, not
+  executed to completion — open.** Lands the standing closure gate **G-P2** and closes
+  Phase 2. **Executed: T1 T2 T3 T4 T7 T11 T13 T14 T15 T16 T18 T19** (+ the new audit row
+  N11, and the O17 correction from the WS11 lane). **REMAINING: T5** (`style::Color`
+  padding-free), **T6** (the `-C debug-assertions=off` vt Miri lane; must follow T5),
+  **T8** (GTK portal `OpenURI`, VM), **T9** (wayland decoration-mode re-read, VM),
+  **T10** (kqueue `thread_perform` `&mut Loop`), **T12** (`+version` OSC-8 hyperlink),
+  **T17** (termio `threadEnter` drain ordering + `posix_waitpid` `ECHILD`), and **T20**
+  (the both-platform finale). Gate **G-P2** enumerates exactly these as RED and will not
+  go green until they land — see its output, which is the authoritative worklist.
 
 ## Wave status
 - **Wave 0 COMPLETE** (WS1/WS2/WS3) — both platforms green.
@@ -220,7 +228,7 @@ loud RED rather than an infinite CI wait.
 | WS16 X11 winproto | authored | **merged `07b64db`** | DONE |
 | WS17 verification debt | authored (`ef7621a`) | **no** | open; scope V2/V3/V4/V1b **+ V5** |
 | WS18 release lane | authored in-ROADMAP | **merged `eeec83f`** | DONE |
-| **WS19 Phase 2 closeout** | this wave | in flight | closes Phase 2; lands **G-P2** |
+| **WS19 Phase 2 closeout** | this wave | **partially — T1–T4, T7, T11, T13–T16, T18, T19 landed; T5, T6, T8, T9, T10, T12, T17, T20 REMAIN** | open; lands **G-P2**, which is RED and names the remainder |
 
 **The open set is exactly WS10, WS11, WS12, WS13, WS14, WS17 — plus Phase 3
 (`.port/phase-3/`, upstream resync).** Gate **G-P2**

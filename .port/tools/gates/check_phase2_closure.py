@@ -11,6 +11,12 @@ disposition. Every open item in the Phase-2 ledgers must end as exactly one of:
   * **verification debt** with a runnable recipe (`VERIFICATION_DEBT.md`);
   * OPEN, but with a named **OWNER** that is an OPEN workstream (or `Phase 3`).
 
+It ALSO asserts a second, stronger property: that **WS19's own closure tasks are all
+executed**. An audit-index row marked `NOT DONE` is a failure even though it is properly
+owned, because otherwise GREEN would mean only "no orphans" and would be read — wrongly
+— as "Phase 2 is closed". With both properties, GREEN means exactly one thing: Phase 2
+is closed.
+
 This gate FAILS on the last case when the owner is missing, or names a workstream that
 is CLOSED. Filing work into a closed workstream is how 21 of 38 genuinely-open items
 became ORPHANED (see the `# PHASE 2 CLOSURE AUDIT (WS19)` section of DEFERRALS.md);
@@ -334,6 +340,96 @@ def check_integration_parity(path, rel, open_ws, closed_ws, verbose):
     return violations, examined
 
 
+AUDIT_ROW = re.compile(r"^\|\s*\**(O\d+[a-z]?|N\d+)\**\s*\|")
+
+
+def check_audit_index(path, rel, open_ws, closed_ws, verbose):
+    """Check the closure audit's OWN index table (`# PHASE 2 CLOSURE AUDIT (WS19)`).
+
+    WHY THIS READER EXISTS. The generic DEFERRALS reader keys off a marker vocabulary
+    ("**OPEN**", "Target:", "Un-defer trigger:"). Several genuinely-open rows are phrased
+    differently — "coupled follow-up: `Window` still snapshots the decoration mode at
+    init", "Follow-up (open, low)" nested INSIDE a RESOLVED entry — and were therefore
+    INVISIBLE to it. That invisibility is not a curiosity: it is the exact structural
+    defect the audit itself named for row O9 ("filed as 'Follow-up (open, low)' inside a
+    RESOLVED entry — invisible to any grep for open items"). A gate that reported 2
+    violations while 6 items were open would be a more sophisticated version of the same
+    lie this workstream exists to end.
+
+    So the audit's §B/§D index is checked DIRECTLY, and it is the authoritative list: it
+    enumerates every item the audit found (O1-O21, N1-N11) with a disposition. A row is
+    satisfied when its disposition is a REAL one — struck, reclassified into the
+    divergences, moved to verification debt, routed to an OPEN workstream, or recorded as
+    out-of-scope-by-platform. A row still reading "fix in WS19 T<n>" once WS19 is marked
+    merged is an ORPHAN by exactly the audit's own definition, and says so.
+    """
+    text = open(path, errors="ignore").read()
+    lines = text.splitlines()
+    audit_start = None
+    for i, line in enumerate(lines):
+        if AUDIT_HEADING.match(line):
+            audit_start = i
+            break
+    if audit_start is None:
+        print("  BLOCKED: no `# PHASE 2 CLOSURE AUDIT` section found in DEFERRALS.md.")
+        print("  That section is the authoritative index of every Phase-2 item; without")
+        print("  it this gate cannot bind. Never a silent pass.")
+        sys.exit(3)
+
+    violations = []
+    examined = 0
+    for i in range(audit_start, len(lines)):
+        line = lines[i]
+        m = AUDIT_ROW.match(line)
+        if not m:
+            continue
+        ident = m.group(1)
+        examined += 1
+        # PROPERTY (b): an audit row explicitly marked NOT DONE means WS19 — the
+        # workstream whose whole purpose is closing Phase 2 — has an unexecuted task.
+        # Without this check, GREEN would mean only "no orphans", and a reader would
+        # reasonably but wrongly take it to mean "Phase 2 is closed". Checked BEFORE the
+        # disposition match, so annotating a row cannot accidentally suppress it.
+        if re.search(r"\bNOT DONE\b", line):
+            task = re.search(r"WS19 T\d+", line)
+            violations.append((
+                rel, i + 1, f"audit row {ident}", "WS19",
+                "WS19's OWN task is UNEXECUTED"
+                + (f" ({task.group(0)})" if task else "")
+                + " — Phase 2 cannot be declared closed while this row stands",
+                (i + 1, line[:140]),
+            ))
+            continue
+        # A row is DONE when it records an actual disposition.
+        done = re.search(
+            r"~~|\bRESOLVED\b|\bRECLASSIFIED\b|\bSTALE\b|\bMOOT\b|\bSHIPPED\b"
+            r"|\bDELETED\b|\bSUPERSEDED\b|\bpermanent divergence\b"
+            r"|\bJustified R1 Divergence\b|\bverification debt\b"
+            r"|\bout-of-scope-by-platform\b|\bOUT-OF-SCOPE\b|✅"
+            r"|\broute to WS(?:1[0-9]|[1-9])\b|\bRECORDED\b|\bfixed in-line\b"
+            r"|\bre-vet\b|\bpin-sequenced\b|\bWAS WRONG\b",
+            line,
+            re.I,
+        )
+        if done:
+            if verbose:
+                print(f"  OK   {rel}:{i + 1} | audit row {ident} | disposed")
+            continue
+        owners = {g for mm in OWNER_RE.finditer(line) for g in mm.groups() if g}
+        live = owners & open_ws
+        dead = owners & closed_ws
+        if live:
+            if verbose:
+                print(f"  OK   {rel}:{i + 1} | audit row {ident} | {sorted(live)}")
+            continue
+        why = (f"still assigned to a CLOSED workstream ({','.join(sorted(dead))}) with no "
+               f"recorded disposition — ORPHANED by the audit's own definition"
+               if dead else "no owner and no recorded disposition")
+        violations.append((rel, i + 1, f"audit row {ident}", ",".join(sorted(dead)) or "NONE",
+                           f"closure-audit index: {why}", (i + 1, line[:140])))
+    return violations, examined
+
+
 def check_file(path, rel, open_ws, closed_ws, verbose):
     """Returns (violations, n_items_examined)."""
     text = open(path, errors="ignore").read()
@@ -470,6 +566,10 @@ def main():
             v, examined = check_integration_parity(path, rel, open_ws, closed_ws, verbose)
         else:
             v, examined = check_file(path, rel, open_ws, closed_ws, verbose)
+            if rel.endswith("DEFERRALS.md"):
+                av, aex = check_audit_index(path, rel, open_ws, closed_ws, verbose)
+                v += av
+                examined += aex
         # ANTI-VACUITY: a non-trivial file in which we found nothing means the parser
         # stopped matching, not that the file is clean.
         if examined == 0 and len(text.strip()) > 400:

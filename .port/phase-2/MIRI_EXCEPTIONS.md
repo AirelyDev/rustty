@@ -1092,6 +1092,17 @@ on nearly every PageList mutation, and adds no SB/TB or leak coverage.
 | `split` with the PRE-FIX reference-derived `Node::page` | Stacked Borrows | **UB reproduced as predicted** (see below) | ~3 min |
 | `roundtrip` + `leak` | Stacked Borrows | **OPEN FINDING** — see below | ~45 min |
 
+> **OWNER [WS19 T19, 2026-07-29]: WS19 T5** (audit row O1). This OPEN FINDING is the
+> `style::Color` uninitialized-payload defect: `crates/rustty-vt/src/style.rs:143` is a
+> plain Rust `enum Color { None, Palette(u8), Rgb(RGB) }` with no `#[repr]`, so a typed
+> write of a `Style` leaves the inactive payload uninit and `CompressedPage::init`
+> compresses those bytes. It was filed to **WS8**, which has MERGED — the row was
+> ORPHANED. **NOT yet executed:** the fix is a byte-complete `#[repr(C)]` value with
+> accessors (closer to the reference's `union(Tag)` than a Rust enum is), across ~160
+> call sites, with the `mapinit_styled` harness scenario as the RED and the production
+> Miri test `pagelist_compress_page_round_trips_a_cold_history_page` as the acceptance
+> evidence. Gate **G-P2** reports it RED until then.
+
 ### The I2 negative control (this is the proof the fix is load-bearing)
 
 Restoring B6's `match &mut *addr_of_mut!((*node).data) { Resident(p) => p as *mut Page }`
