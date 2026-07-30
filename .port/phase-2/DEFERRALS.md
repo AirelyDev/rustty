@@ -5289,7 +5289,10 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
    `target/wasm32-unknown-unknown/release/rustty_web_canvas.wasm` (**1.06 MB, 199
    exports, 14 imports, `WebAssembly.Module.imports` modules = `["env"]` only — ZERO
    wasi imports**; the "936 KB / 184 exports" first recorded here was stale-low and
-   is corrected to the 2026-07-30 measurement so the row stays checkable), loadable
+   is corrected to the 2026-07-30 measurement so the row stays checkable. **Now 1.12
+   MB / 205 exports / 14 imports** after the WS19 T7 `DeferredFace` web_canvas port
+   added the six `rustty_wc_deferred_*` harness exports — see the
+   `rustty-font-shaper` section below), loadable
    directly in a browser with no wasi shim. Achieved by
    making the wasm build PURE RUST: `rustty-simd` scalar-Rust fallbacks under
    cfg(wasm) for every simdutf/highway kernel (base64, codepoint_width, index_of,
@@ -5347,6 +5350,34 @@ fork:
   `Backend::WebCanvas` wasm backend (Canvas FFI replaces `zig-js`; faceFromIndex →
   modern `Collection::get_face`). Browser-verified in real Chrome. See the WASM/web
   section RESIDUAL #1/#2 above for the full record.
+- ~~**`deferred_face.rs:735/738/745` — the 3 WebCanvas `DeferredFace` arms**
+  (`unimplemented!("WebCanvas DeferredFace is DEFERRED (wasm backend)")` on
+  `has_codepoint`/`name`/`load`)~~ **RESOLVED (2026-07-30, WS19 T7).** The premise
+  had gone STALE the moment WS14 resurrected the `web_canvas` face: the oracle
+  (`src/font/DeferredFace.zig`) has real `.web_canvas` bodies for `familyName`,
+  `name`, `hasCodepoint` and `loadWebCanvas`, and every primitive they need
+  (`Face.initNamed`, `Face.glyphIndex`) was already ported in
+  `face/web_canvas.rs`. All four are now real ports in a new
+  `deferred_face::web_canvas_payload` module, alongside the reference
+  `DeferredFace.WebCanvas` payload struct (`font_str: Vec<u8>` — byte-slice
+  fidelity, never a lossy `String` — plus `presentation`); the wasm `_deferred: ()`
+  placeholder field is replaced by the real `wc: Option<WebCanvasData>`, mirroring
+  the macOS `ct` / Linux `fc` shape. **No `unimplemented!` remains in this file.**
+  **Falsifiable gate** (this port is wasm-only, so a host `#[test]` cannot reach
+  it): six LOCAL `rustty_wc_deferred_*` harness exports were added to the
+  `rustty-web-canvas` cdylib root — the same "local helper export" class as
+  `rustty_wc_atlas_*`, NOT a port of anything (the reference `DeferredFace.zig`
+  carries no `Wasm` C-ABI) — and `.port/tools/web-canvas-instantiate.mjs` gained a
+  `(c4)` block that ASSERTS values, not merely "did not trap":
+  `name`/`family_name` must equal the payload's font string exactly, and
+  `has_codepoint` must be `true` for a null presentation, `true` for a matching
+  one, and `false` for a mismatched one (the reference's no-face-init fast path).
+  Recipe: `sh .port/tools/build-web-canvas-wasm.sh --release && node
+  .port/tools/web-canvas-instantiate.mjs`. **Mutation-proven RED twice:** neutering
+  the presentation fast-path (`if false && …`) →
+  `FAIL: deferred has_codepoint('A', emoji) should be false`; truncating the `name`
+  copy (`&wc.font_str[..1]`) → `FAIL: deferred name = "b"`. Both reverted, green
+  re-confirmed.
 
 The cli C2 entry's "Non-macOS Fontconfig discovery is still DEFERRED in the
 shaper" note points here.

@@ -20,13 +20,15 @@
 // mutually-exclusive, comptime-conditional backend payloads — `fc` (Fontconfig),
 // `ct` (CoreText), `win` (Windows FreeType scan), `wc` (WebCanvas) — of which
 // exactly one is non-void per `options.backend`. rustty's parity targets are the
-// two defaults (macOS `coretext`, Linux `fontconfig_freetype`); this port
-// implements the CoreText payload (macOS), the active one for the gates. The
-// Fontconfig/Windows/WebCanvas payloads (and the `familyName`/`name`/`load`/
-// `hasCodepoint` arms that read them) are ported as verbatim reference comments +
-// DEFERRED notes and land with those backends. `macos.text.*`/`macos.graphics.*`/
-// `macos.foundation.*` map to the objc2 framework crates (as in the coretext
-// face). `fontconfig` (Linux discovery) is DEFERRED per the batch scope.
+// two defaults (macOS `coretext`, Linux `fontconfig_freetype`) plus the browser
+// `web_canvas` backend (`wasm32`, the `rustty-web-canvas` deliverable); all three
+// payloads are ported here, each behind the `cfg` that models its
+// `options.backend`: `coretext_payload` (macOS), `fontconfig_payload` (Linux),
+// `web_canvas_payload` (wasm32). Only the Windows payload (`freetype_windows`)
+// stays a verbatim reference comment — Windows is a target this port does not
+// build (`.port/phase-2/DEFERRALS.md`, "Justified R1 Divergences").
+// `macos.text.*`/`macos.graphics.*`/`macos.foundation.*` map to the objc2
+// framework crates (as in the coretext face).
 
 // const log = std.log.scoped(.deferred_face);
 
@@ -54,15 +56,23 @@ pub struct DeferredFace {
     #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
     pub fc: Option<FontconfigData>,
 
-    /// WebCanvas placeholder (the WebCanvas payload is DEFERRED on wasm).
+    /// Canvas (wasm `web_canvas` backend).
+    // wc: if (backend == .web_canvas) ?WebCanvas else void = ...,
+    //
+    // PORT NOTE: this is the wasm32 (`web_canvas`-active) payload, mirroring the
+    // macOS `ct` / Linux `fc` shape. `WebCanvasData` is the port of the reference
+    // `DeferredFace.WebCanvas` struct (`DeferredFace.zig:106-124`).
     #[cfg(target_arch = "wasm32")]
-    pub _deferred: (),
+    pub wc: Option<WebCanvasData>,
 }
 
 // ---------------------------------------------------------------------------
-// PORT NOTE (DEFERRED backend payloads): the Fontconfig / Windows / WebCanvas structs
-// are recorded verbatim as reference comments; their ports land with those
-// backends.
+// PORT NOTE (backend payloads): the Fontconfig / Windows / WebCanvas structs are
+// recorded verbatim as reference comments here. Fontconfig is ported in
+// `fontconfig_payload` (Linux), WebCanvas in `web_canvas_payload` (wasm32);
+// Windows is a target this port does not build (see `.port/phase-2/DEFERRALS.md`,
+// "Justified R1 Divergences" — the same scope boundary as the `cfg(windows)`
+// seams in `rustty-vaxis`/`rustty-termio`).
 //
 // /// Fontconfig specific data. This is only present if building with fontconfig.
 // pub const Fontconfig = struct {
@@ -723,26 +733,200 @@ mod fontconfig_payload {
     }
 }
 
-// WebCanvas (wasm `web_canvas`) DeferredFace stub methods (payload DEFERRED);
-// present so higher tiers type-check on wasm.
+// ---------------------------------------------------------------------------
+// The WebCanvas payload (`options.backend == .web_canvas`, wasm32). This is the
+// live payload for the browser-freestanding deliverable (`rustty-web-canvas`),
+// where `face::Face` IS `face::web_canvas::Face`.
+// ---------------------------------------------------------------------------
+
 #[cfg(target_arch = "wasm32")]
-impl DeferredFace {
-    pub fn undefined() -> DeferredFace {
-        DeferredFace { _deferred: () }
+pub use web_canvas_payload::WebCanvasData;
+
+#[cfg(target_arch = "wasm32")]
+mod web_canvas_payload {
+    use super::DeferredFace;
+    use crate::face::{DesiredSize, Face, FaceError, Options, DEFAULT_DPI};
+    use crate::library::Library;
+    use crate::Presentation;
+
+    /// WebCanvas specific data. This is only present when building with canvas.
+    // pub const WebCanvas = struct {
+    //     /// The allocator to use for fonts
+    //     alloc: Allocator,
+    //     /// The string to use for the "font" attribute for the canvas
+    //     font_str: [:0]const u8,
+    //     /// The presentation for this font.
+    //     presentation: Presentation,
+    // };
+    //
+    // PORT NOTE: the reference's `alloc` field is the allocator that owns
+    // `font_str`; rustty's `Vec<u8>` owns its bytes (the global allocator is used
+    // throughout this crate, exactly as `face::web_canvas::Face` documents), so no
+    // allocator handle is threaded on the payload. `[:0]const u8` → `Vec<u8>`
+    // (byte-slice fidelity; the CSS "font" string is bytes, never a lossy
+    // `String`).
+    pub struct WebCanvasData {
+        /// The string to use for the "font" attribute for the canvas.
+        // font_str: [:0]const u8,
+        pub font_str: Vec<u8>,
+
+        /// The presentation for this font.
+        // presentation: Presentation,
+        pub presentation: Presentation,
     }
-    pub fn deinit(&mut self) {}
-    pub fn has_codepoint(&self, _cp: u32, _p: Option<crate::Presentation>) -> bool {
-        unimplemented!("WebCanvas DeferredFace is DEFERRED (wasm backend)")
+
+    impl WebCanvasData {
+        // pub fn deinit(self: *WebCanvas) void { self.alloc.free(self.font_str); self.* = undefined; }
+        pub fn deinit(&mut self) {
+            // self.alloc.free(self.font_str); — RAII: the `Vec<u8>` owns its bytes.
+            self.font_str.clear();
+            // self.* = undefined;
+        }
     }
-    pub fn name<'a>(&self, _buf: &'a mut [u8]) -> Result<&'a [u8], crate::face::FaceError> {
-        unimplemented!("WebCanvas DeferredFace is DEFERRED (wasm backend)")
+
+    /// Copy `bytes` into `buf`, mirroring the reference's "the memory is always
+    /// owned by the face" contract for the returned slice. Same helper shape as
+    /// the fontconfig payload's `copy_into`.
+    fn copy_into<'a>(bytes: &[u8], buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+        if bytes.len() > buf.len() {
+            return Err(FaceError::OutOfMemory);
+        }
+        buf[..bytes.len()].copy_from_slice(bytes);
+        Ok(&buf[..bytes.len()])
     }
-    pub fn load(
-        &mut self,
-        _lib: crate::library::Library,
-        _opts: crate::face::Options,
-    ) -> Result<crate::face::Face, crate::face::FaceError> {
-        unimplemented!("WebCanvas DeferredFace is DEFERRED (wasm backend)")
+
+    impl DeferredFace {
+        // pub fn deinit(self: *DeferredFace) void { ... .web_canvas => if (self.wc) |*wc| wc.deinit(), ... }
+        pub fn deinit(&mut self) {
+            // .web_canvas => if (self.wc) |*wc| wc.deinit(),
+            if let Some(wc) = self.wc.as_mut() {
+                wc.deinit();
+            }
+            // self.* = undefined; — RAII (the `Option<WebCanvasData>` drops).
+        }
+
+        /// A `DeferredFace` with no payload. Used only where the reference passes
+        /// `undefined` (the `add deferred without loading options` test), where the
+        /// payload is guaranteed never to be accessed.
+        pub fn undefined() -> DeferredFace {
+            DeferredFace { wc: None }
+        }
+
+        /// Returns the family name of the font.
+        // pub fn familyName(self: DeferredFace, buf: []u8) ![]const u8 {
+        //   ...
+        //   .web_canvas => if (self.wc) |wc| return wc.font_str,
+        //   }
+        //   return "";
+        // }
+        pub fn family_name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+            // .web_canvas => if (self.wc) |wc| return wc.font_str,
+            if let Some(wc) = self.wc.as_ref() {
+                return copy_into(&wc.font_str, buf);
+            }
+            // return "";
+            Ok(&[])
+        }
+
+        /// Returns the name of this face. The memory is always owned by the
+        /// face so it doesn't have to be freed.
+        // pub fn name(self: DeferredFace, buf: []u8) ![]const u8 {
+        //   ...
+        //   .web_canvas => if (self.wc) |wc| return wc.font_str,
+        //   }
+        //   return "";
+        // }
+        pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+            // .web_canvas => if (self.wc) |wc| return wc.font_str,
+            if let Some(wc) = self.wc.as_ref() {
+                return copy_into(&wc.font_str, buf);
+            }
+            // return "";
+            Ok(&[])
+        }
+
+        /// Load the deferred font face. This does nothing if the face is loaded.
+        // pub fn load(self: *DeferredFace, lib: Library, opts: font.face.Options) !Face {
+        //     return switch (options.backend) { ... .web_canvas => try self.loadWebCanvas(opts), ... };
+        // }
+        //
+        // fn loadWebCanvas(self: *DeferredFace, opts: font.face.Options) !Face {
+        //     const wc = self.wc.?;
+        //     return try .initNamed(wc.alloc, wc.font_str, opts, wc.presentation);
+        // }
+        //
+        // PORT NOTE: `lib` is unused on this backend (Canvas has no FreeType
+        // library handle) — the reference's `loadWebCanvas` likewise takes only
+        // `opts`. `initNamed` takes the DESIRED SIZE, which `Options` carries.
+        pub fn load(&mut self, _lib: Library, opts: Options) -> Result<Face, FaceError> {
+            // const wc = self.wc.?;
+            let wc = self.wc.as_ref().unwrap();
+            // return try .initNamed(wc.alloc, wc.font_str, opts, wc.presentation);
+            Face::init_named(&wc.font_str, opts.size, wc.presentation)
+        }
+
+        /// Returns true if this face can satisfy the given codepoint and
+        /// presentation. If presentation is null, then it just checks if the
+        /// codepoint is present at all.
+        // pub fn hasCodepoint(self: DeferredFace, cp: u32, p: ?Presentation) bool {
+        //   // Canvas always has the codepoint because we have no way of
+        //   // really checking and we let the browser handle it.
+        //   .web_canvas => if (self.wc) |wc| {
+        //       // Fast-path if we have a specific presentation and we
+        //       // don't match, then it is definitely not this face.
+        //       if (p) |desired| if (wc.presentation != desired) return false;
+        //
+        //       // Slow-path: we initialize the font, render it, and check
+        //       // if it works and the presentation matches.
+        //       var face = Face.initNamed(wc.alloc, wc.font_str, .{ .points = 12 }, wc.presentation) catch |err| {
+        //           log.warn("failed to init face for codepoint check face={s} err={}", .{ wc.font_str, err });
+        //           return false;
+        //       };
+        //       defer face.deinit();
+        //       return face.glyphIndex(cp) != null;
+        //   },
+        pub fn has_codepoint(&self, cp: u32, p: Option<Presentation>) -> bool {
+            if let Some(wc) = self.wc.as_ref() {
+                // Fast-path if we have a specific presentation and we
+                // don't match, then it is definitely not this face.
+                if let Some(desired) = p {
+                    if wc.presentation != desired {
+                        return false;
+                    }
+                }
+
+                // Slow-path: we initialize the font, render it, and check
+                // if it works and the presentation matches.
+                //
+                // PORT NOTE: `.{ .points = 12 }` relies on the reference
+                // `DesiredSize` field defaults for `xdpi`/`ydpi` (`default_dpi`);
+                // Rust has no field defaults on a literal, so they are written out.
+                let mut face = match Face::init_named(
+                    &wc.font_str,
+                    DesiredSize {
+                        points: 12.0,
+                        xdpi: DEFAULT_DPI,
+                        ydpi: DEFAULT_DPI,
+                    },
+                    wc.presentation,
+                ) {
+                    Ok(face) => face,
+                    // PORT NOTE (log-as-comment): this crate wires no logger.
+                    // log.warn("failed to init face for codepoint check face={s} err={}", …);
+                    Err(_err) => return false,
+                };
+                // defer face.deinit();
+                // return face.glyphIndex(cp) != null;
+                let found = face.glyph_index(cp).is_some();
+                face.deinit();
+                return found;
+            }
+
+            // This is unreachable because discovery mechanisms terminate, and
+            // if we're not using a discovery mechanism, the face MUST be loaded.
+            // unreachable;
+            unreachable!()
+        }
     }
 }
 
