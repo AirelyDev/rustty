@@ -2,15 +2,13 @@
 //! handler from input to terminal state update. This is useful to
 //! test general throughput of VT parsing and handling.
 //!
-//! Note that the handler used for this benchmark isn't the full
-//! terminal handler, since that requires a significant amount of
-//! state. This is a simplified version that only handles specific
-//! terminal operations like printing characters. We should expand
-//! this to include more operations to improve the accuracy of the
-//! benchmark.
+//! This uses the full readonly terminal stream handler
+//! (terminal.TerminalStream) so every escape sequence updates real
+//! terminal state (styles, cursor movement, erases, modes, etc.).
+//! This closely mirrors the work done by the real IO thread.
 //!
-//! It is a fairly broad benchmark that can be used to determine
-//! if we need to optimize something more specific (e.g. the parser).
+//! For more isolated measurements see the terminal-parser and
+//! osc-parser benchmarks.
 // const TerminalStream = @This();
 
 // const std = @import("std");
@@ -20,7 +18,7 @@
 // const Benchmark = @import("Benchmark.zig");
 // const options = @import("options.zig");
 // const Terminal = terminalpkg.Terminal;
-// const Stream = terminalpkg.Stream(*Handler);
+// const Stream = terminalpkg.TerminalStream;
 use crate::benchmark::{Benchmark, Error, VTable};
 use crate::cli::BenchmarkAction;
 use crate::options::{self, read_slice_short, DataFile};
@@ -28,31 +26,38 @@ use crate::terminal_options;
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
 use rustty_vt::pagelist::OutOfMemory;
-use rustty_vt::stream::Stream;
+use rustty_vt::stream_terminal::{Handler, Stream};
 use rustty_vt::terminal::Terminal;
+
+// PORT NOTE (258de36d1, WS10 T10): the reference's `Stream.initAlloc(alloc, ...)`
+// threads the terminal's gpa into the OSC parser. `Terminal::vt_stream` is the
+// rustty equivalent, but it returns `Stream<'_>` borrowed from `&mut self`,
+// which cannot be stored beside the `Terminal` in one struct. So `create`
+// reproduces `vt_stream`'s body against the boxed terminal's stable address,
+// backing the OSC parser with a process-static `GlobalZigAllocator` exactly as
+// `terminal.rs:102` does and for the same reason (a `'static` allocator ref
+// coerces to any stream lifetime).
+static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocator =
+    rustty_lib::allocator::GlobalZigAllocator;
 
 const LOG_SCOPE: &str = "terminal-stream-bench";
 
 // opts: Options,
 // terminal: Terminal,
-// handler: Handler,
 // stream: Stream,
 // /// The file, opened in the setup function.
 // data_f: ?std.fs.File = null,
 //
-// PORT NOTE (§7.7): the reference is a self-referential heap struct — `handler:
-// .{ .t = &ptr.terminal }` (the handler borrows the terminal) and `stream:
-// .init(&ptr.handler)` (the stream borrows the handler). Zig's `Stream(*Handler)`
-// parameterizes the stream over a *pointer* to the handler. In Rust `Stream<H>`
-// owns its handler `H` by value; the behavior-identical model owns the `Handler`
-// inside the `Stream` (collapsing the `*Handler` indirection) and models
-// `Handler.t` as `*mut Terminal` (a raw ptr, faithful to Zig's `*Terminal`). The
+// PORT NOTE (§7.7): the reference is a self-referential heap struct — the stream
+// holds a handler that borrows `&ptr.terminal`. In Rust `Stream<H>` owns its
+// handler `H` by value, and `stream_terminal::Handler` already models its
+// terminal as a raw `*mut Terminal` (its own PORT NOTE explains why), so the
 // self-reference is fixed up after boxing, where the terminal's address is
-// stable.
+// stable. 258de36d1 removed the separate `handler` field entirely; so does this.
 pub struct TerminalStream {
     opts: Options,
     terminal: Terminal,
-    stream: Stream<'static, Handler>,
+    stream: Stream<'static>,
     /// The file, opened in the setup function.
     data_f: Option<DataFile>,
 }
@@ -118,9 +123,9 @@ impl TerminalStream {
     //     ptr.* = .{
     //         .opts = opts,
     //         .terminal = try .init(alloc, .{ .rows = ..., .cols = ... }),
-    //         .handler = .{ .t = &ptr.terminal },
-    //         .stream = .init(&ptr.handler),
+    //         .stream = undefined,
     //     };
+    //     ptr.stream = .initAlloc(alloc, .init(&ptr.terminal));
     //     return ptr;
     // }
     pub fn create(alloc: Allocator, opts: Options) -> Result<Box<TerminalStream>, OutOfMemory> {
@@ -131,24 +136,34 @@ impl TerminalStream {
 
         // Box first (so the terminal's address is stable), then patch the
         // self-reference: the handler's `*mut Terminal` points into `b.terminal`.
+        // This is the port's spelling of the reference's `.stream = undefined;`
+        // followed by `ptr.stream = .initAlloc(alloc, .init(&ptr.terminal));`.
         let mut b = Box::new(TerminalStream {
             opts,
             terminal,
-            stream: Stream::init(Handler {
-                t: core::ptr::null_mut(),
-            }),
+            stream: Stream::init_alloc(
+                rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR),
+                Handler::init(core::ptr::null_mut()),
+            ),
             data_f: None,
         });
         let tptr: *mut Terminal = &mut b.terminal;
-        b.stream = Stream::init(Handler { t: tptr });
+        b.stream = Stream::init_alloc(
+            rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR),
+            Handler::init(tptr),
+        );
         Ok(b)
     }
 
     // pub fn destroy(self: *TerminalStream, alloc: Allocator) void {
+    //     self.stream.deinit();
     //     self.terminal.deinit(alloc);
     //     alloc.destroy(self);
     // }
     pub fn destroy(mut self: Box<TerminalStream>, alloc: Allocator) {
+        // 258de36d1 adds this: the full handler owns an APC handler and an OSC
+        // parser with allocated state, which the old print-only handler did not.
+        self.stream.deinit();
         self.terminal.deinit(alloc);
         drop(self);
     }
@@ -214,13 +229,24 @@ impl TerminalStream {
             Some(f) => f,
             None => return Ok(()),
         };
-        // var read_buf: [4096]u8 align(std.atomic.cache_line) = undefined;
+        // var read_buf: [64 * 1024]u8 align(std.atomic.cache_line) = undefined;
         // var f_reader = f.reader(&read_buf);
         // const r = &f_reader.interface;
         let r = f;
 
-        // var buf: [4096]u8 = undefined;
-        let mut buf = [0u8; 4096];
+        // This buffer size matches the read buffer size used by the
+        // real IO thread (see termio Exec.zig buffer_capacity) so that
+        // the benchmark exercises the stream with realistic chunk sizes.
+        // var buf: [64 * 1024]u8 = undefined;
+        //
+        // PORT NOTE (4c5b1d5d5): the reference bumps BOTH buffers — the
+        // `std.Io.Reader` backing buffer and the dispatch buffer. rustty's
+        // `read_slice_short` reads straight from the `DataFile` with no
+        // intermediate reader buffer (see `options::read_slice_short`), so
+        // there is only one buffer here and it is the one that matters: it
+        // determines how often the stream crosses a chunk boundary, which is
+        // the measurement-relevant half of the reference's change.
+        let mut buf = [0u8; 64 * 1024];
         // while (true) {
         loop {
             // const n = r.readSliceShort(&buf) catch { ... return error.BenchmarkFailed; };
@@ -242,34 +268,78 @@ impl TerminalStream {
     }
 }
 
-/// Implements the handler interface for the terminal.Stream.
-/// We should expand this to include more operations to make
-/// our benchmark more realistic.
-// const Handler = struct {
-//     t: *Terminal,
-//     pub fn vt(self, comptime action, value) void {
-//         switch (action) {
-//             .print => self.t.print(value.cp) catch |err| { log.warn(...) },
-//             else => {},
-//         }
-//     }
-// };
-//
-// PORT NOTE (§7.7): the reference's `vt(comptime action, value)` handler that
-// only acts on `.print` maps to the `Handler` trait, overriding *only* `print`;
-// every other trait method keeps its default no-op body (exactly the reference
-// `else => {}`).
-struct Handler {
-    t: *mut Terminal,
-}
+// 258de36d1 DELETED the local print-only `Handler` here. It is gone rather than
+// kept-and-unused: the whole point of the commit is that the simplified handler
+// understated escape-heavy streams, because Zig dispatches actions at comptime
+// and so eliminated every unhandled arm — measuring dispatch code that does not
+// exist in the real app. The full `stream_terminal::Handler` replaces it.
 
-impl rustty_vt::stream::Handler for Handler {
-    // .print => self.t.print(value.cp) catch |err| { log.warn(...) },
-    fn print(&mut self, cp: u32) {
-        if let Err(err) = unsafe { (*self.t).print(cp) } {
-            eprintln!("[{LOG_SCOPE}] error processing benchmark print err={err:?}");
-        }
+// rustty-only test (258de36d1 + 4c5b1d5d5, WS10 T10). NOT a mapped Zig `test{}`
+// — the reference ships both commits with only the pre-existing smoke test
+// below, which passes with EITHER handler.
+//
+// WHY IT EXISTS. The WS10 plan asserts that after the handler swap "the medians
+// MUST move — otherwise the handler swap did not take effect, which is the
+// vacuous-verification trap here". That inference is FALSE for this repo's
+// corpus, and the corpus is the whole benchmark:
+//
+//   .port/phase-0/baseline/corpora/ascii.bin — 67 108 864 bytes, ESC count 0,
+//   non-printable byte count 0.
+//
+// Every byte of `ascii.bin` is a printable ASCII codepoint, so BOTH handlers do
+// exactly the same work on it: `print` flows into the same `Terminal::print`
+// call either way, which is precisely what the upstream commit message says
+// ("print throughput is identical under both handlers"). A neutral median is
+// therefore the CORRECT outcome here and proves nothing either way — the trap
+// the plan warns about is real, but the timing check is not the escape from it.
+//
+// So the swap is proven behaviourally instead: drive a stream carrying an
+// escape sequence THROUGH THE BENCHMARK'S OWN step function and assert the
+// terminal state it updates. The deleted print-only handler ignored every
+// non-print action, so it could not have moved the cursor.
+#[test]
+fn terminal_stream_uses_the_full_terminal_handler() {
+    use std::io::Write as _;
+
+    let alloc = Allocator;
+
+    // "AB", then CUP to row 2 / col 3 (1-based), then "X".
+    //   full handler:    X lands at (x=2, y=1); cursor advances to (x=3, y=1)
+    //   old print-only:  the CSI is ignored -> "ABX" on row 0, cursor (x=3, y=0)
+    // The ROW is the discriminator; the column coincides.
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "rustty-ws10-t10-{}-{:?}.bin",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"AB\x1b[2;3HX").unwrap();
     }
+
+    let opts = Options {
+        data: Some({
+            use std::os::unix::ffi::OsStrExt;
+            path.as_os_str().as_bytes().to_vec()
+        }),
+        ..Options::default()
+    };
+
+    let mut impl_ = TerminalStream::create(alloc, opts).unwrap();
+    let bench = impl_.benchmark();
+    let _ = bench.run(crate::benchmark::RunMode::Once).unwrap();
+
+    let cursor = unsafe { &(*impl_.terminal.screens.active).cursor };
+    assert_eq!(
+        (3u16, 1u16),
+        (cursor.x, cursor.y),
+        "the CSI 2;3H in the stream must have moved the cursor to row 1 — with \
+         the deleted print-only handler it would be at (3, 0)"
+    );
+
+    impl_.destroy(alloc);
+    let _ = std::fs::remove_file(&path);
 }
 
 // test TerminalStream {

@@ -2,7 +2,14 @@
 //!
 //! PORTS: ghostty src/terminal/stream_terminal.zig
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: done. (Corrected WS10 T10, 2026-07-30: this line read "stub"
+//! from the file's first landing and was never updated, even though the PORT
+//! NOTEs immediately below record every dispatch arm landing. It is cited as a
+//! blocker by `.port/phase-3/assessments/B-compression.md` §3.4 — "the
+//! `TerminalStream` bench swap needs `terminal.TerminalStream` from area A" —
+//! which is stale for the same reason. `pub type Stream<'a> = stream::Stream<'a,
+//! Handler<'a>>` below has existed with filled arms throughout, and WS10 T10's
+//! `terminal-stream` benchmark now depends on it.)
 //!
 //! vt-12b-7a fills the STATE-mutating dispatch arms (the `vtFallible` arms that
 //! call already-ported Terminal methods), the Effects scaffolding, and the

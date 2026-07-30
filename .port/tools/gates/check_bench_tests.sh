@@ -31,9 +31,9 @@ SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUSTTY_ROOT="$(cd "$SELF_DIR/../../.." && pwd)"
 
 # Floor, measured at landing (WS10 T4, 2026-07-30):
-#   cargo test -p rustty-bench --lib -> 14 passed; 0 failed; 0 ignored
+#   cargo test -p rustty-bench --lib -> 15 passed; 0 failed; 0 ignored (WS10 T10)
 # Raise this deliberately when a task adds tests it wants protected.
-MIN_TESTS=14
+MIN_TESTS=15
 
 # ---- self-test -------------------------------------------------------------
 # Proves the count arm can actually go RED, on fabricated libtest output rather

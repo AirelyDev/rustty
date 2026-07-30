@@ -969,3 +969,75 @@ with `.port/tools/perf/headroom_probe.py <metrics.json>`.
 not the binary-size axis `BASELINE.json` also carries, and `--strict` RED's on
 those 9 absent size labels. Filed as debt (**V16**) rather than faked green —
 the axis is genuinely unmeasured, and gates are not weakened to pass.
+
+---
+
+## WS10 T10 — the `terminal-stream` bench corpus swap, and why it did NOT move the number
+
+**Ported:** `258de36d1` (full readonly terminal handler) + `4c5b1d5d5` (64 KiB
+chunks) into `crates/rustty-bench/src/terminal_stream.rs`.
+
+### The plan's expectation, and the measured refutation
+
+The WS10 plan (T10 Step 5) states that after the handler swap "the medians moved
+(they must — otherwise the handler swap did not take effect, which is the
+vacuous-verification trap here)", and T10 Step 6 further directs that
+`terminal-stream/ascii` be moved out of Fence 1's STRICT arm into a documented
+`INCOMPARABLE` set because "after this task rustty measures more work than the
+oracle binary does on this config".
+
+**Both conclusions are wrong for this repo's corpus, and the corpus is the
+benchmark.** Measured:
+
+```
+$ python3 -c "d=open('.port/phase-0/baseline/corpora/ascii.bin','rb').read(); \
+              print(len(d), d.count(b'\x1b'), sum(1 for b in d if b<32 or b>126))"
+67108864 0 0
+```
+
+`ascii.bin` is 64 MiB of **pure printable ASCII: zero ESC bytes, zero control
+bytes.** Every byte is a `print` action, and `print` flows into the same
+`Terminal::print` call under both the deleted print-only handler and the full
+`stream_terminal::Handler` — which is exactly what the upstream commit message
+says ("print throughput is identical under both handlers"). The escape-heavy
+work the commit exists to start measuring is **not present in this corpus at
+all**.
+
+So:
+
+1. **A neutral median is the CORRECT outcome here**, not evidence that the swap
+   failed to take effect.
+2. **`terminal-stream/ascii` remains COMPARABLE to the pinned oracle binary.**
+   The pinned oracle's `TerminalStream.zig` is the pre-swap print-only form, and
+   on a zero-escape corpus the two handlers are observationally identical. There
+   is no extra work for rustty to be doing. It is NOT moved to an `INCOMPARABLE`
+   set, and no `ACCEPTED_TRADEOFFS` entry is warranted — there is no trade.
+
+Measured on this (loaded, load 4.57 — **provisional**) box, `+terminal-stream
+--data=ascii.bin`, release-fast, 3 runs each, entry binary vs post-swap binary:
+
+| binary | run 1 | run 2 | run 3 |
+|---|--:|--:|--:|
+| pre-swap (print-only handler, 4 KiB) | 0.54 s | 0.33 s | 0.35 s |
+| post-swap (full handler, 64 KiB) | 0.57 s | 0.35 s | 0.34 s |
+
+Indistinguishable, as predicted above. The first run of each is cold-cache.
+
+### What this means for the rest of WS10
+
+Every Layer-3 claim of the form "terminal-stream improved by X%" measured
+against `ascii.bin` is measuring the **print path only** — not CSI/OSC/ESC
+dispatch, not terminal state updates. The bench code now matches upstream; the
+corpus does not. Regenerating an escape-heavy corpus (upstream measures against
+a 2.6 GB recording of real terminal sessions) would change what
+`terminal-stream/ascii` means and would break comparability with every
+historical number in this file, so it is NOT done here. It is recorded as the
+limiting factor on what this config can ever show.
+
+### The swap IS proven to have taken effect — behaviourally, not by timing
+
+`terminal_stream_uses_the_full_terminal_handler` drives `AB\x1b[2;3HX` through
+the benchmark's own `step` function and asserts the cursor reached **(3, 1)**.
+Mutation proof: with `HEAD`'s print-only handler restored the same test reports
+**(3, 0)** — the CSI ignored, "ABX" on row 0. That is the non-vacuous check the
+plan was reaching for; the timing check could not have supplied it.
