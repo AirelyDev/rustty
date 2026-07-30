@@ -118,4 +118,11 @@ pub trait RendererConfig {
     // renderer-local mirror (thread.rs). Feeds `thread::DerivedConfig::init` — the
     // draw/animation loop reads it to decide whether custom shaders animate.
     fn custom_shader_animation(&self) -> crate::thread::CustomShaderAnimation;
+
+    // scrollback-compression: a plain `bool`, so the accessor returns the config
+    // field directly. Feeds `thread::DerivedConfig::init` (WS7 D3, oracle
+    // 0fb89f4ff) — the renderer thread's idle `Compression` scheduler reads it on
+    // every wake and on every timer step, so toggling it at runtime takes effect
+    // without restarting the surface.
+    fn scrollback_compression(&self) -> bool;
 }
