@@ -365,7 +365,9 @@ impl App {
 
         // `log.debug("X11: found extra XkbStateNotify event w/lookup_mods: {b}")`
         // (`x11.zig:151`).
-        eprintln!("debug(gtk-x11): found extra XkbStateNotify event w/lookup_mods: {lookup_mods:b}");
+        eprintln!(
+            "debug(gtk-x11): found extra XkbStateNotify event w/lookup_mods: {lookup_mods:b}"
+        );
 
         // `x11.zig:149,152-158` — the XKB mask -> `input.Mods` mapping.
         let mut mods = rustty_vt::input::key_mods::Mods::default();
@@ -618,7 +620,12 @@ impl Window {
         // (`x11.zig:309-316`). One element of five `c_long` words => nelements = 5.
         let data = std::ptr::addr_of!(hints).cast::<c_uchar>();
         if unsafe {
-            self.change_property(self.atoms.motif_wm_hints, self.atoms.motif_wm_hints, data, 5)
+            self.change_property(
+                self.atoms.motif_wm_hints,
+                self.atoms.motif_wm_hints,
+                data,
+                5,
+            )
         }
         .is_ok()
         {
@@ -740,9 +747,8 @@ impl Window {
 
     /// PORTS: `x11.zig:413-420` `Window.deleteProperty`.
     fn delete_property(&self, name: xlib::Atom) -> Result<(), Error> {
-        let status = unsafe {
-            (self.xlib.XDeleteProperty)(self.display, self.x11_surface.xid(), name)
-        };
+        let status =
+            unsafe { (self.xlib.XDeleteProperty)(self.display, self.x11_surface.xid(), name) };
         if status == 0 {
             Err(Error::RequestFailed)
         } else {

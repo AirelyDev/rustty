@@ -135,15 +135,14 @@ impl TitleDialog {
     pub fn present(&self, parent: &gtk4::Widget) {
         // If we have a window we can attach to, we prefer that.
         // PORTS: `title_dialog.zig:98-109`.
-        let chosen: gtk4::Widget = if let Some(window) =
-            ext::ancestor::<libadwaita::ApplicationWindow>(parent)
-        {
-            window.upcast()
-        } else if let Some(window) = ext::ancestor::<libadwaita::Window>(parent) {
-            window.upcast()
-        } else {
-            parent.clone()
-        };
+        let chosen: gtk4::Widget =
+            if let Some(window) = ext::ancestor::<libadwaita::ApplicationWindow>(parent) {
+                window.upcast()
+            } else if let Some(window) = ext::ancestor::<libadwaita::Window>(parent) {
+                window.upcast()
+            } else {
+                parent.clone()
+            };
 
         // Set our initial value. PORTS: `title_dialog.zig:111-115`.
         if let Some(v) = self.initial_value() {

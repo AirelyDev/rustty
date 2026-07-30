@@ -892,9 +892,7 @@ impl SlidingWindow {
         // temporary buffer and leaves the node compressed.
         let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) };
         let page = preserved.page();
-        let last_row_wrapped = unsafe {
-            (*(*page).get_row((*page).size.rows as usize - 1)).wrap()
-        };
+        let last_row_wrapped = unsafe { (*(*page).get_row((*page).size.rows as usize - 1)).wrap() };
         let result = self.append_page(node, page, last_row_wrapped);
         preserved.deinit();
         result
@@ -915,9 +913,7 @@ impl SlidingWindow {
     ) -> Result<Option<AppendResult>, OutOfMemory> {
         let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) };
         let page = preserved.page();
-        let last_row_wrapped = unsafe {
-            (*(*page).get_row((*page).size.rows as usize - 1)).wrap()
-        };
+        let last_row_wrapped = unsafe { (*(*page).get_row((*page).size.rows as usize - 1)).wrap() };
         if !last_row_wrapped {
             preserved.deinit();
             return Ok(None);

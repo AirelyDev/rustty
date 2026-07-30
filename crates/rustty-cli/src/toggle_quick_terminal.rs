@@ -114,8 +114,11 @@ pub fn run() -> Result<u8, Error> {
     let ipc_result =
         rustty_apprt::gtk::App::perform_ipc(ipc::Target::Detect, ipc::Action::ToggleQuickTerminal);
     #[cfg(not(all(target_os = "linux", feature = "gtk")))]
-    let ipc_result =
-        none::App::perform_ipc(Global, ipc::Target::Detect, ipc::Action::ToggleQuickTerminal);
+    let ipc_result = none::App::perform_ipc(
+        Global,
+        ipc::Target::Detect,
+        ipc::Action::ToggleQuickTerminal,
+    );
     match ipc_result {
         // if (apprt.App.performIpc(...)) return 0;
         Ok(delivered) => {

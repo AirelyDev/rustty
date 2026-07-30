@@ -96,7 +96,11 @@ fn clipboard_confirmation_fires_callbacks() {
         Some(false),
         "response \"ok\" emits confirm(remember=false by default)"
     );
-    assert_eq!(deny_remember.get(), None, "response \"ok\" does not emit deny");
+    assert_eq!(
+        deny_remember.get(),
+        None,
+        "response \"ok\" does not emit deny"
+    );
 
     dialog.emit_by_name::<()>("response", &[&"cancel"]);
     assert_eq!(

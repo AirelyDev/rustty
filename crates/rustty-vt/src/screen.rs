@@ -1532,8 +1532,7 @@ impl Screen {
                 let pin_y = unsafe { (*pin).y } as usize;
                 let size_rows = unsafe { (*page).size.rows } as usize;
                 // Rotating this suffix changes which logical row its coordinates identify.
-                self.pages
-                    .invalidate_node_layout(unsafe { (*pin).node });
+                self.pages.invalidate_node_layout(unsafe { (*pin).node });
                 fastmem::rotateOnceR(unsafe {
                     core::slice::from_raw_parts_mut(rows.add(pin_y), size_rows - pin_y)
                 });
@@ -2325,8 +2324,7 @@ impl Screen {
                     let p_cols = unsafe { crate::pagelist::Node::cols(p_row.node) };
                     let p_cell = unsafe { *p_cells_base.add(p_cols as usize - 1) };
                     if p_cell.wide() == pagepkg::Wide::SpacerHead {
-                        let p_page: *mut Page =
-                            unsafe { crate::pagelist::Node::page(p_row.node) };
+                        let p_page: *mut Page = unsafe { crate::pagelist::Node::page(p_row.node) };
                         let slice = core::ptr::slice_from_raw_parts_mut(
                             unsafe { p_cells_base.add(p_cols as usize - 1) },
                             1,
@@ -2516,9 +2514,8 @@ impl Screen {
                     // For `.last`, only clear the current line where the cursor is.
                     // For `.true`, clear all prompt lines starting from the beginning.
                     osc::semantic_prompt::Redraw::Last => {
-                        let page: *mut Page = unsafe {
-                            crate::pagelist::Node::page((*self.cursor.page_pin).node)
-                        };
+                        let page: *mut Page =
+                            unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
                         let row = self.cursor.page_row;
                         let cells = unsafe { (*page).get_cells(row) };
                         self.clear_cells(page, row, cells);
@@ -2546,8 +2543,7 @@ impl Screen {
                         // shell is going to expect this space to be available.
                         let mut it = start.row_iterator(pagelist::iter::Direction::RightDown, None);
                         while let Some(pin) = it.next() {
-                            let page: *mut Page =
-                                unsafe { crate::pagelist::Node::page(pin.node) };
+                            let page: *mut Page = unsafe { crate::pagelist::Node::page(pin.node) };
                             let row = pin.row_and_cell().row;
                             let cells = unsafe { (*page).get_cells(row) };
                             self.clear_cells(page, row, cells);
@@ -3034,8 +3030,11 @@ impl Screen {
         use crate::pagelist::grow::IncreaseCapacity;
 
         let result = unsafe {
-            (*crate::pagelist::Node::page((*self.cursor.page_pin).node))
-                .append_grapheme(self.cursor.page_row, cell, cp)
+            (*crate::pagelist::Node::page((*self.cursor.page_pin).node)).append_grapheme(
+                self.cursor.page_row,
+                cell,
+                cp,
+            )
         };
         match result {
             Ok(()) => {}
@@ -3148,8 +3147,8 @@ impl Screen {
                     {
                         if implicit_inc {
                             // .implicit => self.cursor.hyperlink_implicit_id -%= 1
-                        self.cursor.hyperlink_implicit_id =
-                            self.cursor.hyperlink_implicit_id.wrapping_sub(1);
+                            self.cursor.hyperlink_implicit_id =
+                                self.cursor.hyperlink_implicit_id.wrapping_sub(1);
                         }
                         return Err(e);
                     }
@@ -3844,7 +3843,9 @@ impl Screen {
 
                 // If we are going to the next row and it isn't wrapped, we
                 // return the previous.
-                if p.x == unsafe { crate::pagelist::Node::cols(p.node) } - 1 && !unsafe { (*rac.row).wrap() } {
+                if p.x == unsafe { crate::pagelist::Node::cols(p.node) } - 1
+                    && !unsafe { (*rac.row).wrap() }
+                {
                     break 'end p;
                 }
 
@@ -3864,7 +3865,9 @@ impl Screen {
 
                 // If we are going to the next row and it isn't wrapped, we
                 // return the previous.
-                if p.x == unsafe { crate::pagelist::Node::cols(p.node) } - 1 && !unsafe { (*rac.row).wrap() } {
+                if p.x == unsafe { crate::pagelist::Node::cols(p.node) } - 1
+                    && !unsafe { (*rac.row).wrap() }
+                {
                     break 'start prev;
                 }
 
@@ -4025,7 +4028,8 @@ impl Screen {
                 cursor_pin.row_iterator(pagelist::iter::Direction::RightDown, Some(click_pin));
             'row_it: while let Some(row_pin) = row_it.next() {
                 let rac = row_pin.row_and_cell();
-                let cells: &[pagepkg::Cell] = unsafe { &*(*crate::pagelist::Node::page(row_pin.node)).get_cells(rac.row) };
+                let cells: &[pagepkg::Cell] =
+                    unsafe { &*(*crate::pagelist::Node::page(row_pin.node)).get_cells(rac.row) };
 
                 // Determine if this row is our cursor.
                 let is_cursor_row =
@@ -4118,7 +4122,8 @@ impl Screen {
             cursor_pin.row_iterator(pagelist::iter::Direction::LeftUp, Some(click_pin));
         'row_it: while let Some(row_pin) = row_it.next() {
             let rac = row_pin.row_and_cell();
-            let cells: &[pagepkg::Cell] = unsafe { &*(*crate::pagelist::Node::page(row_pin.node)).get_cells(rac.row) };
+            let cells: &[pagepkg::Cell] =
+                unsafe { &*(*crate::pagelist::Node::page(row_pin.node)).get_cells(rac.row) };
 
             // Determine the length of the cells we look at in this row.
             let end_len: usize = 'end_len: {
@@ -4361,9 +4366,8 @@ impl Screen {
 
                     // If we have a ref-counted style, increase.
                     if self.cursor.style_id != style::DEFAULT_ID {
-                        let page = unsafe {
-                            crate::pagelist::Node::page((*self.cursor.page_pin).node)
-                        };
+                        let page =
+                            unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
                         unsafe {
                             let base = (*page).memory_ptr();
                             (*page).styles.use_id(base, self.cursor.style_id);
@@ -4431,9 +4435,8 @@ impl Screen {
 
                     // If we have a ref-counted style, increase twice.
                     if self.cursor.style_id != style::DEFAULT_ID {
-                        let page = unsafe {
-                            crate::pagelist::Node::page((*self.cursor.page_pin).node)
-                        };
+                        let page =
+                            unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
                         unsafe {
                             let base = (*page).memory_ptr();
                             (*page).styles.use_id(base, self.cursor.style_id);
@@ -4774,7 +4777,9 @@ mod tests {
         // Create a hyperlink for the cursor.
         s.start_hyperlink(b"https://example.com/", None).unwrap();
         assert_eq!(1usize, unsafe {
-            (*crate::pagelist::Node::page((*s.cursor.page_pin).node)).hyperlink_set.count()
+            (*crate::pagelist::Node::page((*s.cursor.page_pin).node))
+                .hyperlink_set
+                .count()
         });
         assert!(s.cursor.hyperlink_id != 0);
 
@@ -4822,7 +4827,9 @@ mod tests {
         // Create a hyperlink for the cursor.
         s.start_hyperlink(b"https://example.com/", None).unwrap();
         assert_eq!(1usize, unsafe {
-            (*crate::pagelist::Node::page((*s.cursor.page_pin).node)).hyperlink_set.count()
+            (*crate::pagelist::Node::page((*s.cursor.page_pin).node))
+                .hyperlink_set
+                .count()
         });
         assert!(s.cursor.hyperlink_id != 0);
 
@@ -12305,7 +12312,9 @@ mod tests {
         s.start_hyperlink(uri, Some(id)).unwrap();
 
         let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
-        assert_eq!(b"http://example.com".as_slice(), unsafe { &(&(*link).uri)[..] });
+        assert_eq!(b"http://example.com".as_slice(), unsafe {
+            &(&(*link).uri)[..]
+        });
         match unsafe { &(*link).id } {
             crate::hyperlink::HyperlinkId::Explicit(v) => {
                 assert_eq!(b"current".as_slice(), &v[..])

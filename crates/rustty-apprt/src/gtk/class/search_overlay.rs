@@ -294,7 +294,12 @@ impl SearchOverlay {
     /// overlay's `halign-target`/`valign-target` to whichever corner the overlay's
     /// center crossed, so it can be dragged between corners of the parent.
     #[template_callback]
-    fn on_drag_end(_gesture: &gtk4::GestureDrag, offset_x: f64, offset_y: f64, this: &SearchOverlay) {
+    fn on_drag_end(
+        _gesture: &gtk4::GestureDrag,
+        offset_x: f64,
+        offset_y: f64,
+        this: &SearchOverlay,
+    ) {
         let widget = this.upcast_ref::<gtk4::Widget>();
         let Some(parent) = widget.parent() else {
             return;

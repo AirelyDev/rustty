@@ -67,8 +67,8 @@ use rustty_apprt_c::{
     rustty_app_free, rustty_app_new, rustty_app_tick, rustty_app_update_config, rustty_init,
     rustty_set_window_background_blur, rustty_surface_config_new, rustty_surface_free,
     rustty_surface_free_text, rustty_surface_new, rustty_surface_quicklook_font,
-    rustty_surface_quicklook_word, rustty_surface_set_content_scale,
-    rustty_surface_set_display_id, rustty_surface_set_size,
+    rustty_surface_quicklook_word, rustty_surface_set_content_scale, rustty_surface_set_display_id,
+    rustty_surface_set_size,
 };
 use rustty_config::value_types::BackgroundBlur;
 

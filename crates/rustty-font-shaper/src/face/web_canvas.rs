@@ -170,7 +170,6 @@ impl Canvas {
 pub struct Face {
     // PORT NOTE: the reference holds `alloc: Allocator`; rustty uses the global
     // allocator everywhere, so no allocator handle is threaded on the struct.
-
     /// See `grapheme_to_glyph` for details.
     // const grapheme_start: u32 = 0x10FFFF + 1;
     // const grapheme_end: u32 = std.math.maxInt(u32);
@@ -619,18 +618,14 @@ impl Face {
         // For the broken bounding box case we render ideographic baselines so that
         // we just render the glyph fully in the box with no offsets.
         if broken_bbox {
-            unsafe {
-                ffi::rustty_wc_context_set_text_baseline(ctx, b"ideographic".as_ptr(), 11)
-            };
+            unsafe { ffi::rustty_wc_context_set_text_baseline(ctx, b"ideographic".as_ptr(), 11) };
         }
 
         // Draw background.
         // try ctx.set("fillStyle", js.string("transparent"));
         unsafe { ffi::rustty_wc_context_set_fill_style(ctx, b"transparent".as_ptr(), 11) };
         // try ctx.call(void, "fillRect", .{ 0, 0, width, height });
-        unsafe {
-            ffi::rustty_wc_context_fill_rect(ctx, 0.0, 0.0, width as f64, height as f64)
-        };
+        unsafe { ffi::rustty_wc_context_fill_rect(ctx, 0.0, 0.0, width as f64, height as f64) };
 
         // Draw glyph.
         // try ctx.set("fillStyle", js.string("black"));

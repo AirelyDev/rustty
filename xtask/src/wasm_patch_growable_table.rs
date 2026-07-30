@@ -229,7 +229,7 @@ mod tests {
             if id == 4 {
                 let _ = read_leb128(result, &mut pos); // table count
                 pos += 1; // elem_type
-                // flags should now be 0x00 (no max).
+                          // flags should now be 0x00 (no max).
                 assert_eq!(0x00u8, result[pos]);
                 return;
             }
@@ -259,10 +259,7 @@ mod tests {
 
     #[test]
     fn too_short_input_returns_invalid_wasm() {
-        assert_eq!(
-            Err(PatchError::InvalidWasm),
-            patch_table_growable(b"short"),
-        );
+        assert_eq!(Err(PatchError::InvalidWasm), patch_table_growable(b"short"),);
     }
 
     #[test]

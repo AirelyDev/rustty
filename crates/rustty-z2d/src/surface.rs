@@ -464,6 +464,12 @@ impl<T: PackedAlpha> PackedImageSurface<T> {
         }
         let h_usize = height.max(0) as usize;
         let w_usize = width.max(0) as usize;
+        // WS19 (audit row N11): `clippy::manual_div_ceil` wants `.div_ceil(8)`. Kept as
+        // the reference's `(n + 7) / 8` ceil-div idiom verbatim (R1) — the two forms are
+        // numerically identical for these non-negative `usize` operands, so the rewrite
+        // buys nothing and costs fidelity on a byte-layout computation that must stay
+        // trivially comparable to the reference.
+        #[allow(clippy::manual_div_ceil)]
         let len = (h_usize * w_usize * T::NUM_BITS + 7) / 8;
         let mut buf = vec![0u8; len];
         if let Some(px) = initial_px {
@@ -512,6 +518,9 @@ impl<T: PackedAlpha> PackedImageSurface<T> {
     pub fn resize_buffer(&mut self) {
         let height = self.height.max(0) as usize;
         let width = self.width.max(0) as usize;
+        // WS19 (audit row N11): see the `manual_div_ceil` note in `init_pixel` above —
+        // the reference's ceil-div idiom is kept verbatim (R1).
+        #[allow(clippy::manual_div_ceil)]
         let new_len = (height * width * T::NUM_BITS + 7) / 8;
         if self.buf.len() == new_len {
             return;
@@ -637,11 +646,8 @@ impl<T: PackedAlpha> PackedImageSurface<T> {
         }
 
         for idx in start..start + len {
-            let out = crate::compositor::run_pixel_t(
-                self._get(idx).as_pixel(),
-                src.as_pixel(),
-                operator,
-            );
+            let out =
+                crate::compositor::run_pixel_t(self._get(idx).as_pixel(), src.as_pixel(), operator);
             self._set(idx, T::from_pixel(out));
         }
     }

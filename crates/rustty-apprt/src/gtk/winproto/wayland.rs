@@ -61,20 +61,20 @@ use gdk4::prelude::*;
 use gdk4_wayland::prelude::WaylandSurfaceExtManual;
 use gtk4::prelude::*;
 
-use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{Connection, QueueHandle};
 use wayland_backend::client::ObjectId;
+use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::Proxy;
+use wayland_client::{Connection, QueueHandle};
 
+use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::XdgActivationTokenV1;
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 use wayland_protocols_plasma::server_decoration::client::org_kde_kwin_server_decoration::OrgKdeKwinServerDecoration;
 use wayland_protocols_plasma::server_decoration::client::org_kde_kwin_server_decoration_manager::Mode;
-use wayland_protocols_plasma::slide::client::org_kde_kwin_slide::OrgKdeKwinSlide;
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide::Location as SlideLocation;
+use wayland_protocols_plasma::slide::client::org_kde_kwin_slide::OrgKdeKwinSlide;
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide_manager::OrgKdeKwinSlideManager;
-use wayland_client::protocol::wl_compositor::WlCompositor;
 
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
@@ -181,9 +181,7 @@ impl App {
 
         // `gdk_wayland_display.getWlDisplay() orelse return error.NoWaylandDisplay`
         // (`wayland.zig:45-47`). The raw accessor needs no `wayland_crate` feature.
-        let ptr = wl_display
-            .wl_display_raw()
-            .ok_or(Error::NoWaylandDisplay)?;
+        let ptr = wl_display.wl_display_raw().ok_or(Error::NoWaylandDisplay)?;
 
         // Wrap GDK's foreign display: guest-mode backend (does NOT own the display)
         // -> connection -> fresh registry. `Backend::from_foreign_display` is
@@ -312,10 +310,7 @@ impl App {
         let monitor = gtk_window
             .downcast_ref::<ApprtWindow>()
             .and_then(|apprt_window| {
-                resolve_quick_terminal_monitor(
-                    self.primary_output_name().as_deref(),
-                    apprt_window,
-                )
+                resolve_quick_terminal_monitor(self.primary_output_name().as_deref(), apprt_window)
             });
         // The reference unrefs the returned monitor here; the `gdk::Monitor` owned by
         // `monitor` is dropped (unref'd) at the end of this scope.
@@ -686,7 +681,10 @@ impl Window {
 
     /// PORTS: `wayland.zig:301-308` `Window.getDecorationMode`.
     fn decoration_mode(&self) -> Mode {
-        let decoration = self.apprt_window.upgrade().map(|w| w.get_window_decoration());
+        let decoration = self
+            .apprt_window
+            .upgrade()
+            .map(|w| w.get_window_decoration());
         match decoration {
             // `.auto => default_deco_mode orelse .Client` (`wayland.zig:303`).
             Some(WindowDecoration::Auto) | None => self.default_deco_mode.unwrap_or(Mode::Client),
@@ -865,9 +863,9 @@ fn quick_terminal_primary_output_name(apprt_window: &ApprtWindow) -> Option<Stri
 fn background_blur_enabled(v: BackgroundBlur) -> bool {
     match v {
         BackgroundBlur::False => false,
-        BackgroundBlur::True | BackgroundBlur::MacosGlassRegular | BackgroundBlur::MacosGlassClear => {
-            true
-        }
+        BackgroundBlur::True
+        | BackgroundBlur::MacosGlassRegular
+        | BackgroundBlur::MacosGlassClear => true,
         BackgroundBlur::Radius(r) => r > 0,
     }
 }

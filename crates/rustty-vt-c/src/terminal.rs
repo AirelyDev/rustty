@@ -529,13 +529,25 @@ impl Effects {
         // OOM arm has no rustty analog — a `Vec` aborts on OOM (DG5 abort
         // policy), so the past-4 path is an infallible `Vec`.
         let to_c = |content: &clipboard::Content<'_>| ClipboardContent {
-            mime: LibString { ptr: content.mime.as_ptr(), len: content.mime.len() },
-            data: LibString { ptr: content.data.as_ptr(), len: content.data.len() },
+            mime: LibString {
+                ptr: content.mime.as_ptr(),
+                len: content.mime.len(),
+            },
+            data: LibString {
+                ptr: content.data.as_ptr(),
+                len: content.data.len(),
+            },
         };
 
         let mut stack_contents: [ClipboardContent; 4] = [ClipboardContent {
-            mime: LibString { ptr: std::ptr::null(), len: 0 },
-            data: LibString { ptr: std::ptr::null(), len: 0 },
+            mime: LibString {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
+            data: LibString {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
         }; 4];
         let heap_contents: Vec<ClipboardContent>;
         let contents: &[ClipboardContent] = if write.contents.len() <= stack_contents.len() {
@@ -551,7 +563,11 @@ impl Effects {
         let request = ClipboardWrite {
             size: std::mem::size_of::<ClipboardWrite>(),
             location: write.location,
-            contents: if contents.is_empty() { std::ptr::null() } else { contents.as_ptr() },
+            contents: if contents.is_empty() {
+                std::ptr::null()
+            } else {
+                contents.as_ptr()
+            },
             contents_len: contents.len(),
         };
         func(wrapper, userdata, &request)
@@ -2616,7 +2632,11 @@ mod tests {
 
             let mut viewport_active: bool = false;
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
             });
             assert!(viewport_active);
 
@@ -2624,11 +2644,18 @@ mod tests {
             unsafe {
                 scroll_viewport(
                     t,
-                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 0 } },
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Row,
+                        value: ScrollViewportCValue { row: 0 },
+                    },
                 )
             };
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
             });
             assert!(!viewport_active);
             assert_eq!(b"1\n2", plain_string(t).as_slice());
@@ -2638,14 +2665,25 @@ mod tests {
             unsafe {
                 scroll_viewport(
                     t,
-                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 1 } },
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Row,
+                        value: ScrollViewportCValue { row: 1 },
+                    },
                 )
             };
             assert_eq!(b"2\n3", plain_string(t).as_slice());
 
-            let mut scrollbar_data: TerminalScrollbar = TerminalScrollbar { total: 0, offset: 0, len: 0 };
+            let mut scrollbar_data: TerminalScrollbar = TerminalScrollbar {
+                total: 0,
+                offset: 0,
+                len: 0,
+            };
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::Scrollbar, &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void)
+                get(
+                    t,
+                    TerminalData::Scrollbar,
+                    &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void,
+                )
             });
             assert_eq!(4, scrollbar_data.total);
             assert_eq!(1, scrollbar_data.offset);
@@ -2655,16 +2693,27 @@ mod tests {
             unsafe {
                 scroll_viewport(
                     t,
-                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 9999 } },
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Row,
+                        value: ScrollViewportCValue { row: 9999 },
+                    },
                 )
             };
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
             });
             assert!(viewport_active);
             assert_eq!(b"3\n4", plain_string(t).as_slice());
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::Scrollbar, &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void)
+                get(
+                    t,
+                    TerminalData::Scrollbar,
+                    &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void,
+                )
             });
             assert_eq!(2, scrollbar_data.offset);
 
@@ -2683,7 +2732,11 @@ mod tests {
             unsafe { vt_write(t, b"\x1b[?1049h".as_ptr(), 8) };
             let mut screen: TerminalScreen = TerminalScreen::Primary;
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::ActiveScreen, &mut screen as *mut TerminalScreen as *mut c_void)
+                get(
+                    t,
+                    TerminalData::ActiveScreen,
+                    &mut screen as *mut TerminalScreen as *mut c_void,
+                )
             });
             assert_eq!(TerminalScreen::Alternate, screen);
 
@@ -2692,21 +2745,35 @@ mod tests {
             unsafe {
                 scroll_viewport(
                     t,
-                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 0 } },
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Row,
+                        value: ScrollViewportCValue { row: 0 },
+                    },
                 )
             };
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
             });
             assert!(viewport_active);
             unsafe {
                 scroll_viewport(
                     t,
-                    ScrollViewportC { tag: ScrollViewportTag::Row, value: ScrollViewportCValue { row: 9999 } },
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Row,
+                        value: ScrollViewportCValue { row: 9999 },
+                    },
                 )
             };
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::ViewportActive, &mut viewport_active as *mut bool as *mut c_void)
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
             });
             assert!(viewport_active);
 
@@ -4674,7 +4741,11 @@ mod tests {
 
             let mut sentinel: u8 = 88;
             assert_eq!(Result::Success, unsafe {
-                set(t, Option_::Userdata, &mut sentinel as *mut u8 as *const c_void)
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
             });
             assert_eq!(Result::Success, unsafe {
                 set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
@@ -4685,13 +4756,19 @@ mod tests {
             vtw(t, b"bG8Ad29ybGQ=\x1B\\");
             assert_eq!(1, unsafe { COUNT });
             assert_eq!(t, unsafe { LAST_TERMINAL });
-            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe { LAST_USERDATA });
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
             assert_eq!(std::mem::size_of::<ClipboardWrite>(), unsafe { LAST_SIZE });
             assert_eq!(clipboard::Location::Standard, unsafe { LAST_LOCATION });
             assert!(!unsafe { LAST_CONTENTS_NULL });
             assert_eq!(1, unsafe { LAST_CONTENTS_LEN });
-            assert_eq!(b"text/plain".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_MIMES))[0].as_slice() });
-            assert_eq!(b"hello\x00world".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice() });
+            assert_eq!(b"text/plain".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_MIMES))[0].as_slice()
+            });
+            assert_eq!(b"hello\x00world".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice()
+            });
 
             // OSC 52 destinations are normalized rather than exposed as wire bytes.
             for (selector, expected) in [
@@ -4700,7 +4777,8 @@ mod tests {
                 (b'q', clipboard::Location::Standard),
             ] {
                 let seq = [
-                    0x1B, b']', b'5', b'2', b';', selector, b';', b'e', b'A', b'=', b'=', 0x1B, b'\\',
+                    0x1B, b']', b'5', b'2', b';', selector, b';', b'e', b'A', b'=', b'=', 0x1B,
+                    b'\\',
                 ];
                 vtw(t, &seq);
                 assert_eq!(expected, unsafe { LAST_LOCATION });
@@ -4723,18 +4801,37 @@ mod tests {
             vtw(t, b"\x1B]1337;Copy=:aVRlcm0=\x1B\\");
             assert_eq!(6, unsafe { COUNT });
             assert_eq!(clipboard::Location::Standard, unsafe { LAST_LOCATION });
-            assert_eq!(b"text/plain".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_MIMES))[0].as_slice() });
-            assert_eq!(b"iTerm".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice() });
+            assert_eq!(b"text/plain".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_MIMES))[0].as_slice()
+            });
+            assert_eq!(b"iTerm".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice()
+            });
 
             // Every representation is converted, and callback results propagate
             // through the C trampoline for protocols that can acknowledge writes.
             // (Direct invoke of the installed trampoline, mirroring the oracle.)
             let internal_contents = [
-                clipboard::Content { mime: b"text/plain", data: b"plain" },
-                clipboard::Content { mime: b"application/octet-stream", data: b"a\x00b" },
-                clipboard::Content { mime: b"text/html", data: b"<b>plain</b>" },
-                clipboard::Content { mime: b"text/rtf", data: b"{\\rtf1 plain}" },
-                clipboard::Content { mime: b"image/png", data: b"\x89PNG" },
+                clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"plain",
+                },
+                clipboard::Content {
+                    mime: b"application/octet-stream",
+                    data: b"a\x00b",
+                },
+                clipboard::Content {
+                    mime: b"text/html",
+                    data: b"<b>plain</b>",
+                },
+                clipboard::Content {
+                    mime: b"text/rtf",
+                    data: b"{\\rtf1 plain}",
+                },
+                clipboard::Content {
+                    mime: b"image/png",
+                    data: b"\x89PNG",
+                },
             ];
             unsafe { NEXT_RESULT = clipboard::WriteResult::Busy };
             let write_result = Effects::clipboard_write_trampoline(
@@ -4747,10 +4844,18 @@ mod tests {
             assert_eq!(clipboard::WriteResult::Busy, write_result);
             assert_eq!(7, unsafe { COUNT });
             assert_eq!(5, unsafe { LAST_CONTENTS_LEN });
-            assert_eq!(b"application/octet-stream".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_MIMES))[1].as_slice() });
-            assert_eq!(b"a\x00b".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_DATA))[1].as_slice() });
-            assert_eq!(b"image/png".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_MIMES))[4].as_slice() });
-            assert_eq!(b"\x89PNG".as_slice(), unsafe { (&*std::ptr::addr_of!(LAST_DATA))[4].as_slice() });
+            assert_eq!(b"application/octet-stream".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_MIMES))[1].as_slice()
+            });
+            assert_eq!(b"a\x00b".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_DATA))[1].as_slice()
+            });
+            assert_eq!(b"image/png".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_MIMES))[4].as_slice()
+            });
+            assert_eq!(b"\x89PNG".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_DATA))[4].as_slice()
+            });
 
             unsafe {
                 LAST_MIMES = Vec::new();

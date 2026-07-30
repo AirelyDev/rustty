@@ -315,7 +315,9 @@ mod tests {
     ///   * tears the context down (`ImGui_DestroyContext`).
     #[test]
     fn kat_dcimgui_1_92_5_context_lifecycle() {
-        let _guard = IMGUI_CONTEXT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = IMGUI_CONTEXT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             // Create a context (NULL => Dear ImGui builds a default shared font
             // atlas). Becomes the current context.
@@ -428,7 +430,9 @@ mod tests {
     /// binding shape not already exercised elsewhere).
     #[test]
     fn kat_dock_builder_set_node_size_smoke() {
-        let _guard = IMGUI_CONTEXT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = IMGUI_CONTEXT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let ctx = ImGui_CreateContext(ptr::null_mut());
             assert!(!ctx.is_null(), "ImGui_CreateContext(NULL) returned null");
@@ -461,7 +465,9 @@ mod tests {
     /// violates.
     #[test]
     fn kat_dock_builder_add_node_ex_get_node_round_trip() {
-        let _guard = IMGUI_CONTEXT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = IMGUI_CONTEXT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         assert_eq!(IM_GUI_DOCK_NODE_FLAGS_PRIVATE_DOCK_SPACE, 1 << 10);
         unsafe {
             let ctx = ImGui_CreateContext(ptr::null_mut());

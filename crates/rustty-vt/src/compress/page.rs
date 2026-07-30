@@ -175,9 +175,8 @@ impl CompressedPage {
         let result = self.page.shallow_copy();
         // SAFETY: caller contract — the retained mapping is live, unaliased and
         // exactly `memory_len` bytes.
-        let out = unsafe {
-            core::slice::from_raw_parts_mut(result.memory_ptr as *mut u8, result.memory_len())
-        };
+        let out =
+            unsafe { core::slice::from_raw_parts_mut(result.memory_ptr, result.memory_len()) };
         lz4::decompress(&self.encoded, out)?;
         Ok(result)
     }
@@ -321,6 +320,13 @@ mod tests {
         assert_eq!(cloned.size, resident.size);
         assert!(cloned.dirty);
         cloned.verify_integrity().unwrap();
+        // WS19 (audit row N11): `clippy::drop_non_drop` is technically right — `Page`
+        // is not `Drop`, so this call is a no-op. It is kept because the ORDERING is
+        // the assertion: the value must go out of use BEFORE the mapping underneath it
+        // is deallocated on the next line, and an explicit `drop` is the only way to
+        // state that at the exact point it matters. Allowed at the statement, with the
+        // reason, rather than deleted (which would silently lose the ordering intent).
+        #[allow(clippy::drop_non_drop)]
         drop(cloned);
         unsafe { std::alloc::dealloc(clone_memory, layout) };
 
@@ -354,7 +360,21 @@ mod tests {
             b"https://rustty.org/docs"
         );
 
+        // WS19 (audit row N11): `clippy::drop_non_drop` is technically right — `Page`
+        // is not `Drop`, so this call is a no-op. It is kept because the ORDERING is
+        // the assertion: the value must go out of use BEFORE the mapping underneath it
+        // is deallocated on the next line, and an explicit `drop` is the only way to
+        // state that at the exact point it matters. Allowed at the statement, with the
+        // reason, rather than deleted (which would silently lose the ordering intent).
+        #[allow(clippy::drop_non_drop)]
         drop(restored);
+        // WS19 (audit row N11): `clippy::drop_non_drop` is technically right — `Page`
+        // is not `Drop`, so this call is a no-op. It is kept because the ORDERING is
+        // the assertion: the value must go out of use BEFORE the mapping underneath it
+        // is deallocated on the next line, and an explicit `drop` is the only way to
+        // state that at the exact point it matters. Allowed at the statement, with the
+        // reason, rather than deleted (which would silently lose the ordering intent).
+        #[allow(clippy::drop_non_drop)]
         drop(compressed);
         resident.deinit();
     }
@@ -469,7 +489,21 @@ mod tests {
         let restored = unsafe { compressed.restore() }.unwrap();
         assert_eq!(bytes(restored.memory_ptr(), memory_len), expected);
 
+        // WS19 (audit row N11): `clippy::drop_non_drop` is technically right — `Page`
+        // is not `Drop`, so this call is a no-op. It is kept because the ORDERING is
+        // the assertion: the value must go out of use BEFORE the mapping underneath it
+        // is deallocated on the next line, and an explicit `drop` is the only way to
+        // state that at the exact point it matters. Allowed at the statement, with the
+        // reason, rather than deleted (which would silently lose the ordering intent).
+        #[allow(clippy::drop_non_drop)]
         drop(restored);
+        // WS19 (audit row N11): `clippy::drop_non_drop` is technically right — `Page`
+        // is not `Drop`, so this call is a no-op. It is kept because the ORDERING is
+        // the assertion: the value must go out of use BEFORE the mapping underneath it
+        // is deallocated on the next line, and an explicit `drop` is the only way to
+        // state that at the exact point it matters. Allowed at the statement, with the
+        // reason, rather than deleted (which would silently lose the ordering intent).
+        #[allow(clippy::drop_non_drop)]
         drop(compressed);
         resident.deinit();
     }

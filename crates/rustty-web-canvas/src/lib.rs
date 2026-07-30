@@ -98,8 +98,15 @@ pub extern "C" fn rustty_wc_atlas_new(size: u32, format: u8) -> *mut Atlas<Globa
 }
 
 /// Free an `Atlas` created by `rustty_wc_atlas_new`.
+///
+/// # Safety
+/// `ptr` must be null, or a pointer returned by `rustty_wc_atlas_new` that has not
+/// already been freed. WS19 (audit row N11): marked `unsafe` to match the
+/// `rustty-vt-c` / `rustty-apprt-c` C-ABI convention (`pub unsafe extern "C" fn`)
+/// rather than silencing `clippy::not_unsafe_ptr_arg_deref` — the pointer contract is
+/// real and belongs in the signature.
 #[no_mangle]
-pub extern "C" fn rustty_wc_atlas_free(ptr: *mut Atlas<Global>) {
+pub unsafe extern "C" fn rustty_wc_atlas_free(ptr: *mut Atlas<Global>) {
     if !ptr.is_null() {
         let atlas = unsafe { Box::from_raw(ptr) };
         atlas.deinit(Global);
@@ -108,8 +115,15 @@ pub extern "C" fn rustty_wc_atlas_free(ptr: *mut Atlas<Global>) {
 
 /// Return a pointer to the atlas texture bytes and write the byte length into
 /// `out_len`, so the host can read the rendered glyph pixels out of wasm memory.
+///
+/// # Safety
+/// `ptr` must be null or a live atlas from `rustty_wc_atlas_new`; `out_len` must be
+/// null or point at writable `usize` storage.
 #[no_mangle]
-pub extern "C" fn rustty_wc_atlas_data(ptr: *mut Atlas<Global>, out_len: *mut usize) -> *const u8 {
+pub unsafe extern "C" fn rustty_wc_atlas_data(
+    ptr: *mut Atlas<Global>,
+    out_len: *mut usize,
+) -> *const u8 {
     if ptr.is_null() {
         if !out_len.is_null() {
             unsafe { *out_len = 0 };
@@ -125,8 +139,11 @@ pub extern "C" fn rustty_wc_atlas_data(ptr: *mut Atlas<Global>, out_len: *mut us
 }
 
 /// The atlas dimension (it is square: `size`×`size`).
+///
+/// # Safety
+/// `ptr` must be null or a live atlas from `rustty_wc_atlas_new`.
 #[no_mangle]
-pub extern "C" fn rustty_wc_atlas_size(ptr: *mut Atlas<Global>) -> u32 {
+pub unsafe extern "C" fn rustty_wc_atlas_size(ptr: *mut Atlas<Global>) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -148,8 +165,12 @@ pub extern "C" fn rustty_wc_alloc(len: usize) -> *mut u8 {
 }
 
 /// Free a buffer returned by `rustty_wc_alloc` (`len` must match the allocation).
+///
+/// # Safety
+/// `ptr` must be null or a pointer returned by `rustty_wc_alloc` that has not already
+/// been freed, and `len` must equal the length passed to that call.
 #[no_mangle]
-pub extern "C" fn rustty_wc_free(ptr: *mut u8, len: usize) {
+pub unsafe extern "C" fn rustty_wc_free(ptr: *mut u8, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }

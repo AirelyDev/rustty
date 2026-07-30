@@ -463,7 +463,7 @@ mod tests {
     use crate::gwidth::Method;
     use crate::vxfw::{MaxSize, VxfwArena};
 
-    fn ctx_with<'a>(arena: &'a VxfwArena, max: MaxSize) -> DrawContext {
+    fn ctx_with(arena: &VxfwArena, max: MaxSize) -> DrawContext {
         DrawContext {
             arena,
             min: Size {

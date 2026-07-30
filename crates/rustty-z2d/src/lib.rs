@@ -33,8 +33,8 @@
 //!   downsample/compositeStride.
 //! * [`painter::fill`] — the FILL operation for the non-AA (`.none`) scanline
 //!   rasterizer ([`internal::raster::direct`]), the default anti-aliased
-//!   (`.default`/`.multisample_4x`) rasterizer ([`internal::raster::multisample`]
-//!   + [`internal::raster::sparse_coverage`]), AND the mask-and-downsample
+//!   (`.default`/`.multisample_4x`) rasterizer ([`internal::raster::multisample`] +
+//!   [`internal::raster::sparse_coverage`]), AND the mask-and-downsample
 //!   (`.supersample_4x`) rasterizer ([`internal::raster::supersample`]), via
 //!   [`internal::tess::fill_plotter`] + [`internal::tess::polygon`].
 //! * [`painter::stroke`] — the STROKE operation, including DASHED stroking

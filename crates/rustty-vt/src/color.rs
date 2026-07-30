@@ -162,8 +162,14 @@ fn parse_int_u8_base0(s: &[u8]) -> Result<u8, ParsePaletteEntryError> {
 }
 
 fn trim_space_tab(s: &[u8]) -> &[u8] {
-    let start = s.iter().position(|&b| b != b' ' && b != b'\t').unwrap_or(s.len());
-    let end = s.iter().rposition(|&b| b != b' ' && b != b'\t').map_or(start, |i| i + 1);
+    let start = s
+        .iter()
+        .position(|&b| b != b' ' && b != b'\t')
+        .unwrap_or(s.len());
+    let end = s
+        .iter()
+        .rposition(|&b| b != b' ' && b != b'\t')
+        .map_or(start, |i| i + 1);
     &s[start..end]
 }
 
@@ -1279,19 +1285,86 @@ mod tests {
     fn parse_palette_entry_cases() {
         let e = parse_palette_entry(b"0=#AABBCC").unwrap();
         assert_eq!(e.index, 0);
-        assert_eq!(e.color, RGB { r: 170, g: 187, b: 204 });
+        assert_eq!(
+            e.color,
+            RGB {
+                r: 170,
+                g: 187,
+                b: 204
+            }
+        );
         let e = parse_palette_entry(b"0b1=#014589").unwrap();
-        assert_eq!((e.index, e.color), (1, RGB { r: 1, g: 69, b: 137 }));
+        assert_eq!(
+            (e.index, e.color),
+            (
+                1,
+                RGB {
+                    r: 1,
+                    g: 69,
+                    b: 137
+                }
+            )
+        );
         let e = parse_palette_entry(b"0o7=#234567").unwrap();
-        assert_eq!((e.index, e.color), (7, RGB { r: 35, g: 69, b: 103 }));
+        assert_eq!(
+            (e.index, e.color),
+            (
+                7,
+                RGB {
+                    r: 35,
+                    g: 69,
+                    b: 103
+                }
+            )
+        );
         let e = parse_palette_entry(b"0xF=#ABCDEF").unwrap();
-        assert_eq!((e.index, e.color), (15, RGB { r: 171, g: 205, b: 239 }));
+        assert_eq!(
+            (e.index, e.color),
+            (
+                15,
+                RGB {
+                    r: 171,
+                    g: 205,
+                    b: 239
+                }
+            )
+        );
         let e = parse_palette_entry(b"0 =  #AABBCC").unwrap();
-        assert_eq!((e.index, e.color), (0, RGB { r: 170, g: 187, b: 204 }));
+        assert_eq!(
+            (e.index, e.color),
+            (
+                0,
+                RGB {
+                    r: 170,
+                    g: 187,
+                    b: 204
+                }
+            )
+        );
         let e = parse_palette_entry(b" 1= #DDEEFF    ").unwrap();
-        assert_eq!((e.index, e.color), (1, RGB { r: 221, g: 238, b: 255 }));
+        assert_eq!(
+            (e.index, e.color),
+            (
+                1,
+                RGB {
+                    r: 221,
+                    g: 238,
+                    b: 255
+                }
+            )
+        );
         let e = parse_palette_entry(b"  2  =  #123456 ").unwrap();
-        assert_eq!((e.index, e.color), (2, RGB { r: 18, g: 52, b: 86 }));
+        assert_eq!(
+            (e.index, e.color),
+            (
+                2,
+                RGB {
+                    r: 18,
+                    g: 52,
+                    b: 86
+                }
+            )
+        );
         let e = parse_palette_entry(b"1=black").unwrap();
         assert_eq!((e.index, e.color), (1, RGB { r: 0, g: 0, b: 0 }));
 
@@ -1316,7 +1389,14 @@ mod tests {
     // new "RGB.parse" assertions (oracle 2970e9a2a)
     #[test]
     fn rgb_parse_bare_hex_and_trim() {
-        assert_eq!(RGB { r: 10, g: 11, b: 12 }, RGB::parse("0A0B0C").unwrap());
+        assert_eq!(
+            RGB {
+                r: 10,
+                g: 11,
+                b: 12
+            },
+            RGB::parse("0A0B0C").unwrap()
+        );
         assert_eq!(
             RGB {
                 r: 255,
@@ -1333,7 +1413,14 @@ mod tests {
             },
             RGB::parse("FFF").unwrap()
         );
-        assert_eq!(RGB { r: 51, g: 68, b: 85 }, RGB::parse("#345").unwrap());
+        assert_eq!(
+            RGB {
+                r: 51,
+                g: 68,
+                b: 85
+            },
+            RGB::parse("#345").unwrap()
+        );
         assert_eq!(
             RGB {
                 r: 170,

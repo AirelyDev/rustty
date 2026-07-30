@@ -664,8 +664,9 @@ impl Loop {
                     // `&mut self.thread_pool_completions`, which would pop the
                     // queue's stub-pointer lineage). Mirrors kqueue.rs; mirihar
                     // `boxq`.
-                    let c =
-                        unsafe { TaskCompletionQueue::pop((*self_ptr).thread_pool_completions_ptr) };
+                    let c = unsafe {
+                        TaskCompletionQueue::pop((*self_ptr).thread_pool_completions_ptr)
+                    };
                     if c.is_null() {
                         break;
                     }
@@ -3298,8 +3299,13 @@ impl TCP {
     /// # Safety
     /// `c`/`loop_` valid+stable (held raw by the loop).
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub unsafe fn accept<UD, CB>(self, loop_: *mut Loop, c: *mut Completion, userdata: *mut UD, cb: CB)
-    where
+    pub unsafe fn accept<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
         UD: 'static,
         CB: Fn(
                 *mut UD,
@@ -3822,7 +3828,14 @@ impl TCP {
     {
         let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
         let (writer, buf, result) = TCP::write_result(c_inner, r);
-        cb(userdata_value::<UD>(ud), l_inner, c_inner, writer, buf, result)
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            writer,
+            buf,
+            result,
+        )
     }
 
     /// Extracts the result from a completion for a write callback (`.send` arm).
@@ -5114,7 +5127,14 @@ impl File {
     {
         let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
         let (writer, buf, result) = File::write_result(c_inner, r);
-        cb(userdata_value::<UD>(ud), l_inner, c_inner, writer, buf, result)
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            writer,
+            buf,
+            result,
+        )
     }
 
     /// Extracts the result from a completion for a write callback (`.write` arm).
@@ -5337,7 +5357,14 @@ impl File {
     {
         let cb: CB = unsafe { NonNull::<CB>::dangling().as_ptr().read() };
         let (writer, buf, result) = File::pwrite_result(c_inner, r);
-        cb(userdata_value::<UD>(ud), l_inner, c_inner, writer, buf, result)
+        cb(
+            userdata_value::<UD>(ud),
+            l_inner,
+            c_inner,
+            writer,
+            buf,
+            result,
+        )
     }
 
     /// Extracts the result from a completion for a pwrite callback (`.pwrite` arm).
@@ -6699,7 +6726,8 @@ mod tests {
                 let comp = ptr::addr_of_mut!(self.completion);
                 let self_ptr = self as *mut Receiver;
                 unsafe {
-                    self.conn.read(loop_, comp, read_buf, self_ptr, Self::read_cb);
+                    self.conn
+                        .read(loop_, comp, read_buf, self_ptr, Self::read_cb);
                 }
             }
 
@@ -7306,8 +7334,11 @@ mod tests {
         use std::os::unix::io::IntoRawFd;
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("rustty_xev_file_epoll_{}_{}", std::process::id(), n));
+        let path = std::env::temp_dir().join(format!(
+            "rustty_xev_file_epoll_{}_{}",
+            std::process::id(),
+            n
+        ));
         let f = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -7499,8 +7530,7 @@ mod tests {
         let file = File::init(wfd);
 
         let mut write_queue: WriteQueue = WriteQueue::default();
-        let mut write_req: [WriteRequest; 2] =
-            [WriteRequest::default(), WriteRequest::default()];
+        let mut write_req: [WriteRequest; 2] = [WriteRequest::default(), WriteRequest::default()];
         let write_cb = |_ud: *mut (),
                         _l: *mut Loop,
                         _c: *mut Completion,

@@ -97,6 +97,16 @@ struct InitialPolygon {
     current_slope: Slope,
 }
 
+// WS19 (audit row N11): `clippy::large_enum_variant` fires here because `On`'s
+// `InitialPolygon` (two `Contour`s + a `Slope`) dwarfs `Off(Point)`. Boxing `On` is the
+// lint's suggested fix and is REFUSED: this enum mirrors the reference's tagged union
+// field-for-field, the value is a short-lived plotter-local held on the stack for the
+// duration of one dash traversal (never stored in a collection, so the size difference
+// costs nothing per-element), and introducing a heap indirection here would diverge
+// from the reference's allocation behaviour on a hot tessellation path — an R1 loss
+// bought for no measurable gain. Allowed at the type, with the reason, rather than
+// crate-wide.
+#[allow(clippy::large_enum_variant)]
 enum InitialPolygonState {
     None,
     Off(Point),
@@ -225,7 +235,9 @@ impl Plotter<'_> {
             remaining_len -= step_len;
             let mut x_offset = slope.dx * (total_len - remaining_len);
             let mut y_offset = slope.dy * (total_len - remaining_len);
-            self.opts.ctm.user_to_device_distance(&mut x_offset, &mut y_offset);
+            self.opts
+                .ctm
+                .user_to_device_distance(&mut x_offset, &mut y_offset);
             let current_dash_point = Point {
                 x: first_dash_point.x + x_offset,
                 y: first_dash_point.y + y_offset,

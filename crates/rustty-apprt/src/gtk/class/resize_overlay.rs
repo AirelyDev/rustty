@@ -36,7 +36,10 @@ fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
         // passing it to `g_source_remove` is always valid (returns FALSE if gone).
         let removed = unsafe { glib::ffi::g_source_remove(source.as_raw()) };
         if removed == glib::ffi::GFALSE {
-            eprintln!("warn(gtk): unable to remove {what} source={}", source.as_raw());
+            eprintln!(
+                "warn(gtk): unable to remove {what} source={}",
+                source.as_raw()
+            );
         }
     }
 }

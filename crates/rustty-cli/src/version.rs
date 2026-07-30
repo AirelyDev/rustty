@@ -37,12 +37,8 @@ pub struct Options {}
 /// rustty-renderer edge.
 fn renderer_type_name() -> &'static str {
     match build_config::renderer() {
-        build_config::renderer::Backend::Metal => {
-            "renderer.generic.Renderer(renderer.Metal)"
-        }
-        build_config::renderer::Backend::Opengl => {
-            "renderer.generic.Renderer(renderer.OpenGL)"
-        }
+        build_config::renderer::Backend::Metal => "renderer.generic.Renderer(renderer.Metal)",
+        build_config::renderer::Backend::Opengl => "renderer.generic.Renderer(renderer.OpenGL)",
         build_config::renderer::Backend::Webgl => "renderer.WebGL",
     }
 }
@@ -135,7 +131,11 @@ pub fn run() -> Result<u8, Error> {
     // try stdout.print("  - Zig version   : {s}\n", .{builtin.zig_version_string});
     //   PORT NOTE: the Rust port's toolchain is rustc — the analogous version,
     //   captured at compile time (build_config::RUSTC_VERSION).
-    writeln!(stdout, "  - Rust version  : {}", build_config::RUSTC_VERSION)?;
+    writeln!(
+        stdout,
+        "  - Rust version  : {}",
+        build_config::RUSTC_VERSION
+    )?;
     // try stdout.print("  - build mode    : {}\n", .{builtin.mode});
     writeln!(
         stdout,

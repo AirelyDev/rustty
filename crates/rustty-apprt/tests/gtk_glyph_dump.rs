@@ -122,8 +122,8 @@ fn write_ppm(path: &str, rgba: &[u8], w: usize, h: usize) {
             RUSTTY_DUMP_PPM=/path/out.ppm cargo test -p rustty-apprt --features gtk \
             --test gtk_glyph_dump -- --ignored --exact glyph_dump"]
 fn glyph_dump() {
-    let ppm_path =
-        std::env::var("RUSTTY_DUMP_PPM").unwrap_or_else(|_| "/tmp/rustty-glyph-dump.ppm".to_string());
+    let ppm_path = std::env::var("RUSTTY_DUMP_PPM")
+        .unwrap_or_else(|_| "/tmp/rustty-glyph-dump.ppm".to_string());
 
     rustty_apprt::init().expect("initialize rustty global state");
 
@@ -187,7 +187,9 @@ fn glyph_dump() {
             break;
         }
     }
-    let core = surface.core().expect("core surface built on first GLArea resize");
+    let core = surface
+        .core()
+        .expect("core surface built on first GLArea resize");
 
     // ---- Write visible text into the live shell FIRST, so the captured frame shows
     //      real rendered glyphs (not a bare prompt). ----
@@ -262,5 +264,9 @@ fn glyph_dump() {
         });
     }
     let run_result = app.run();
-    assert!(run_result.is_ok(), "App::run returns Ok: {:?}", run_result.err());
+    assert!(
+        run_result.is_ok(),
+        "App::run returns Ok: {:?}",
+        run_result.err()
+    );
 }

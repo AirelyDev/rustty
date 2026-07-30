@@ -1570,7 +1570,11 @@ impl Surface {
         // Content scale -> DPI (`:2104-2113`). `default_dpi` = 72 on macOS else 96
         // (`rustty-font-shaper/face/mod.rs` `default_dpi`).
         let content_scale = self.get_content_scale();
-        let default_dpi: f32 = if cfg!(target_os = "macos") { 72.0 } else { 96.0 };
+        let default_dpi: f32 = if cfg!(target_os = "macos") {
+            72.0
+        } else {
+            96.0
+        };
         let font_size = DesiredSize {
             points: config.font_size,
             xdpi: (content_scale.x * default_dpi) as u16,
@@ -1901,9 +1905,7 @@ impl Surface {
             if cfg.notify_on_command_finish == NotifyOnCommandFinish::Never {
                 return true;
             }
-            if cfg.notify_on_command_finish == NotifyOnCommandFinish::Unfocused
-                && self.focused()
-            {
+            if cfg.notify_on_command_finish == NotifyOnCommandFinish::Unfocused && self.focused() {
                 return true;
             }
         }
@@ -2066,53 +2068,44 @@ impl Surface {
 
         // Read (`surface.zig:3890-3894`). The completion mirrors `clipboardReadText`
         // (`surface.zig:4042-4105`).
-        clipboard.read_text_async(
-            gio::Cancellable::NONE,
-            move |result| {
-                let text = match result {
-                    Ok(Some(text)) => text,
-                    // No text on the clipboard — nothing to deliver.
-                    Ok(None) => return,
-                    Err(err) => {
-                        eprintln!("warn(gtk): failed to read clipboard err={err}");
-                        return;
-                    }
-                };
-
-                // Reach the core the same way the other handlers do (a single
-                // atomic load returning `*mut CoreSurface`).
-                let Some(core) = this.core() else {
+        clipboard.read_text_async(gio::Cancellable::NONE, move |result| {
+            let text = match result {
+                Ok(Some(text)) => text,
+                // No text on the clipboard — nothing to deliver.
+                Ok(None) => return,
+                Err(err) => {
+                    eprintln!("warn(gtk): failed to read clipboard err={err}");
                     return;
-                };
-
-                // `data: [:0]const u8` -> raw bytes (`&[u8]`, never a lossy String
-                // — R3). `completeClipboardRequest` takes `&mut self`; mirror the
-                // `&mut *core` deref used by the sizeCallback/occlusion handlers.
-                match unsafe { &mut *core }.completeClipboardRequest(
-                    state,
-                    text.as_bytes(),
-                    false,
-                ) {
-                    Ok(()) => {
-                        // `Surface.signals.@"clipboard-read".impl.emit(...)`
-                        // (`surface.zig:4099-4104`).
-                        this.emit_by_name::<()>("clipboard-read", &[]);
-                    }
-
-                    // error.UnsafePaste, error.UnauthorizedPaste => confirmation
-                    // (`surface.zig:4079-4088`). DEFERRED to Phase B.
-                    Err(
-                        CoreSurfaceError::UnsafePaste | CoreSurfaceError::UnauthorizedPaste,
-                    ) => {
-                        this.show_clipboard_confirmation(state, &text);
-                    }
-
-                    Err(err) => {
-                        eprintln!("warn(gtk): failed to complete clipboard request err={err}");
-                    }
                 }
-            },
-        );
+            };
+
+            // Reach the core the same way the other handlers do (a single
+            // atomic load returning `*mut CoreSurface`).
+            let Some(core) = this.core() else {
+                return;
+            };
+
+            // `data: [:0]const u8` -> raw bytes (`&[u8]`, never a lossy String
+            // — R3). `completeClipboardRequest` takes `&mut self`; mirror the
+            // `&mut *core` deref used by the sizeCallback/occlusion handlers.
+            match unsafe { &mut *core }.completeClipboardRequest(state, text.as_bytes(), false) {
+                Ok(()) => {
+                    // `Surface.signals.@"clipboard-read".impl.emit(...)`
+                    // (`surface.zig:4099-4104`).
+                    this.emit_by_name::<()>("clipboard-read", &[]);
+                }
+
+                // error.UnsafePaste, error.UnauthorizedPaste => confirmation
+                // (`surface.zig:4079-4088`). DEFERRED to Phase B.
+                Err(CoreSurfaceError::UnsafePaste | CoreSurfaceError::UnauthorizedPaste) => {
+                    this.show_clipboard_confirmation(state, &text);
+                }
+
+                Err(err) => {
+                    eprintln!("warn(gtk): failed to complete clipboard request err={err}");
+                }
+            }
+        });
 
         // Return true (request started) (`surface.zig:3896`).
         Ok(true)
@@ -2128,10 +2121,7 @@ impl Surface {
     ) {
         // Grab our plaintext content for use in confirmation dialogs and signals.
         // We always expect one to exist (`surface.zig:3768-3774`).
-        let Some(text_content) = contents
-            .iter()
-            .find(|c| c.mime == b"text/plain")
-        else {
+        let Some(text_content) = contents.iter().find(|c| c.mime == b"text/plain") else {
             return;
         };
         let text = String::from_utf8_lossy(text_content.data).into_owned();
@@ -2175,10 +2165,7 @@ impl Surface {
             // `apprt.Clipboard` has no GObject type in this tier, so the param
             // rides as the enum's `i32` (matching the signal declaration at
             // `surface.rs:568`).
-            self.emit_by_name::<()>(
-                "clipboard-write",
-                &[&(clipboard_type as i32), &text],
-            );
+            self.emit_by_name::<()>("clipboard-write", &[&(clipboard_type as i32), &text]);
 
             return;
         }
@@ -2978,7 +2965,10 @@ fn action_notify_on_next_command_finish(
 ) {
     use gio::prelude::*;
     // `state.getBoolean()` (default false if unset / not a bool), then `setState(!value)`.
-    let value = action.state().and_then(|s| s.get::<bool>()).unwrap_or(false);
+    let value = action
+        .state()
+        .and_then(|s| s.get::<bool>())
+        .unwrap_or(false);
     action.set_state(&(!value).to_variant());
 }
 
@@ -2996,40 +2986,40 @@ fn mouse_shape_cursor_name(repr: i32) -> &'static str {
     // Declaration order of `mouse::Shape` (`mouse.rs:71-104`), each mapped to the
     // reference's cursor name (`surface.zig:2390-2426`).
     const NAMES: [&str; 34] = [
-        "default",      // Default
-        "context-menu", // ContextMenu
-        "help",         // Help
-        "pointer",      // Pointer
-        "progress",     // Progress
-        "wait",         // Wait
-        "cell",         // Cell
-        "crosshair",    // Crosshair
-        "text",         // Text
+        "default",       // Default
+        "context-menu",  // ContextMenu
+        "help",          // Help
+        "pointer",       // Pointer
+        "progress",      // Progress
+        "wait",          // Wait
+        "cell",          // Cell
+        "crosshair",     // Crosshair
+        "text",          // Text
         "vertical-text", // VerticalText
-        "alias",        // Alias
-        "copy",         // Copy
-        "move",         // Move
-        "no-drop",      // NoDrop
-        "not-allowed",  // NotAllowed
-        "grab",         // Grab
-        "grabbing",     // Grabbing
-        "all-scroll",   // AllScroll
-        "col-resize",   // ColResize
-        "row-resize",   // RowResize
-        "n-resize",     // NResize
-        "e-resize",     // EResize
-        "s-resize",     // SResize
-        "w-resize",     // WResize
-        "ne-resize",    // NeResize
-        "nw-resize",    // NwResize
-        "se-resize",    // SeResize
-        "sw-resize",    // SwResize
-        "ew-resize",    // EwResize
-        "ns-resize",    // NsResize
-        "nesw-resize",  // NeswResize
-        "nwse-resize",  // NwseResize
-        "zoom-in",      // ZoomIn
-        "zoom-out",     // ZoomOut
+        "alias",         // Alias
+        "copy",          // Copy
+        "move",          // Move
+        "no-drop",       // NoDrop
+        "not-allowed",   // NotAllowed
+        "grab",          // Grab
+        "grabbing",      // Grabbing
+        "all-scroll",    // AllScroll
+        "col-resize",    // ColResize
+        "row-resize",    // RowResize
+        "n-resize",      // NResize
+        "e-resize",      // EResize
+        "s-resize",      // SResize
+        "w-resize",      // WResize
+        "ne-resize",     // NeResize
+        "nw-resize",     // NwResize
+        "se-resize",     // SeResize
+        "sw-resize",     // SwResize
+        "ew-resize",     // EwResize
+        "ns-resize",     // NsResize
+        "nesw-resize",   // NeswResize
+        "nwse-resize",   // NwseResize
+        "zoom-in",       // ZoomIn
+        "zoom-out",      // ZoomOut
     ];
     usize::try_from(repr)
         .ok()
@@ -3476,11 +3466,7 @@ impl Surface {
         // SAFETY: `core` is the widget's boxed, initialized core surface;
         // `completeClipboardRequest` takes `&mut self` (mirror the deref used by
         // the async `clipboard_request` completion above).
-        match unsafe { &mut *core }.completeClipboardRequest(
-            ClipboardRequest::Paste,
-            text,
-            false,
-        ) {
+        match unsafe { &mut *core }.completeClipboardRequest(ClipboardRequest::Paste, text, false) {
             Ok(()) => {}
 
             // error.UnsafePaste, error.UnauthorizedPaste => confirmation
@@ -4128,7 +4114,9 @@ impl Surface {
         };
         // `.{ .navigate_search = .next }` (`:3569`).
         if let Err(err) = unsafe { &mut *core }.performBindingAction(
-            rustty_input::binding::Action::NavigateSearch(rustty_input::binding::NavigateSearch::Next),
+            rustty_input::binding::Action::NavigateSearch(
+                rustty_input::binding::NavigateSearch::Next,
+            ),
         ) {
             eprintln!("warn(gtk): unable to perform navigate_search action err={err:?}");
         }

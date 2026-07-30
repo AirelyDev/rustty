@@ -74,8 +74,8 @@ impl<'a> App<'a> {
                 ..KittyFlags::default()
             },
         });
-        let tty =
-            Tty::init(vec![0u8; 1024]).map_err(|_| std::io::Error::other("vaxis Tty::init failed"))?;
+        let tty = Tty::init(vec![0u8; 1024])
+            .map_err(|_| std::io::Error::other("vaxis Tty::init failed"))?;
         Ok(App { tty, vx })
     }
 

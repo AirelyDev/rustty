@@ -101,8 +101,7 @@ pub fn gen_shell_integration(share_dir: &Path) -> Result<(), String> {
         let parent = path
             .parent()
             .ok_or_else(|| format!("no parent for {}", path.display()))?;
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
         std::fs::write(&path, bytes).map_err(|e| format!("write {}: {e}", path.display()))?;
     }
 
@@ -117,8 +116,8 @@ mod tests {
     /// real (non-empty) content and no `*.md` files leak into the bundle.
     #[test]
     fn emits_real_vendored_tree_excluding_md() {
-        let base = std::env::temp_dir()
-            .join(format!("rustty-xtask-shellint-test-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("rustty-xtask-shellint-test-{}", std::process::id()));
         let share = base.join("share");
         std::fs::create_dir_all(&share).unwrap();
 
@@ -131,18 +130,15 @@ mod tests {
         // Every expected file exists and is non-empty.
         for (rel, _) in FILES {
             let p = root.join(rel);
-            let meta = std::fs::metadata(&p)
-                .unwrap_or_else(|_| panic!("missing {}", p.display()));
+            let meta = std::fs::metadata(&p).unwrap_or_else(|_| panic!("missing {}", p.display()));
             assert!(meta.len() > 0, "empty {}", p.display());
         }
         // The canonical zsh integration file matches its vendored bytes exactly.
         let zsh = std::fs::read(root.join("zsh/rustty-integration")).unwrap();
         assert_eq!(
             zsh.as_slice(),
-            include_bytes!(
-                "../../crates/rustty-extra/shell-integration/zsh/rustty-integration"
-            )
-            .as_slice()
+            include_bytes!("../../crates/rustty-extra/shell-integration/zsh/rustty-integration")
+                .as_slice()
         );
         // No `*.md` file was emitted (README.md / VENDORING.md are excluded).
         for entry in walk(&root) {
@@ -208,17 +204,14 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ghostty/src/shell-integration"),
             Path::new("/Users/gael/projects/ghostty/src/shell-integration").to_path_buf(),
         ];
-        let oracle_root = candidates
-            .iter()
-            .find(|p| p.is_dir())
-            .unwrap_or_else(|| {
-                panic!(
-                    "ghostty oracle not found in any of {:?} — this KAT only runs on the dev machine",
-                    candidates
-                )
-            });
-        let vendored_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../crates/rustty-extra/shell-integration");
+        let oracle_root = candidates.iter().find(|p| p.is_dir()).unwrap_or_else(|| {
+            panic!(
+                "ghostty oracle not found in any of {:?} — this KAT only runs on the dev machine",
+                candidates
+            )
+        });
+        let vendored_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/rustty-extra/shell-integration");
 
         let mut failures: Vec<String> = Vec::new();
         let mut mapped_set: Vec<std::path::PathBuf> = Vec::new();
@@ -226,12 +219,12 @@ mod tests {
         // Forward direction: every oracle file (non-.md, incl. dotfiles like
         // zsh/.zshenv) must exist vendored under the rebranded name with the
         // expected content.
-        for oracle_path in walk(&oracle_root) {
+        for oracle_path in walk(oracle_root) {
             if oracle_path.extension().and_then(|e| e.to_str()) == Some("md") {
                 continue; // README.md — excluded on both sides
             }
             let rel = oracle_path
-                .strip_prefix(&oracle_root)
+                .strip_prefix(oracle_root)
                 .unwrap()
                 .to_str()
                 .expect("oracle path is UTF-8");
@@ -240,7 +233,9 @@ mod tests {
             mapped_set.push(vendored_path.clone());
 
             let Ok(vendored) = std::fs::read_to_string(&vendored_path) else {
-                failures.push(format!("MISSING vendored file: {mapped_rel} (from oracle {rel})"));
+                failures.push(format!(
+                    "MISSING vendored file: {mapped_rel} (from oracle {rel})"
+                ));
                 continue;
             };
             let oracle = std::fs::read_to_string(&oracle_path)
@@ -264,7 +259,10 @@ mod tests {
             if !mapped_set.contains(&vendored_path) {
                 failures.push(format!(
                     "EXTRA vendored file with no oracle counterpart: {}",
-                    vendored_path.strip_prefix(&vendored_root).unwrap().display()
+                    vendored_path
+                        .strip_prefix(&vendored_root)
+                        .unwrap()
+                        .display()
                 ));
             }
         }

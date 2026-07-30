@@ -2862,6 +2862,12 @@ mod tests {
         assert!(copy.dirty);
         // Dropping `copy` must not free the mapping; `page.deinit()` below would
         // then double-free and the test allocator/leak gate would catch it.
+        //
+        // WS19 (audit row N11): `clippy::drop_non_drop` is right that `Page` is not
+        // `Drop` and this is a no-op — but the no-op IS the point being asserted (that
+        // the mapping is NOT freed here), and the comment above only makes sense next to
+        // an explicit `drop`. Allowed at the statement with the reason.
+        #[allow(clippy::drop_non_drop)]
         drop(copy);
         page.deinit();
     }

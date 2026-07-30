@@ -1460,9 +1460,7 @@ impl Loop {
         // lineage. Reading the Copy raw handle + pushing through it touches only
         // the queue's own (Box) allocation via its stable tag. (LIFETIMES-AUDIT M1;
         // mirihar `xthread_boxq`: CLEAN under SB + TB.)
-        unsafe {
-            TaskCompletionQueue::push((*(*c).task_loop).thread_pool_completions_ptr, c)
-        };
+        unsafe { TaskCompletionQueue::push((*(*c).task_loop).thread_pool_completions_ptr, c) };
 
         // Wake up our main loop (macos)
         unsafe {

@@ -302,12 +302,7 @@ fn advance_search(ip: &mut usize, anchor: usize, attempts: &mut usize) {
 
 /// Extend a match backwards without crossing the current literal anchor or the
 /// beginning of the candidate. The returned positions preserve their offset.
-fn match_begin(
-    input: &[u8],
-    position_: usize,
-    candidate_: usize,
-    anchor: usize,
-) -> (usize, usize) {
+fn match_begin(input: &[u8], position_: usize, candidate_: usize, anchor: usize) -> (usize, usize) {
     let mut position = position_;
     let mut candidate = candidate_;
 
@@ -814,7 +809,11 @@ mod tests {
         assert_eq!(&offset_three, b"abcabcabc");
 
         let mut offset_four = [0u8; 8];
-        decompress(&[0x40, b'a', b'b', b'c', b'd', 0x04, 0x00], &mut offset_four).unwrap();
+        decompress(
+            &[0x40, b'a', b'b', b'c', b'd', 0x04, 0x00],
+            &mut offset_four,
+        )
+        .unwrap();
         assert_eq!(&offset_four, b"abcdabcd");
     }
 
@@ -838,8 +837,8 @@ mod tests {
         let mut word_offset = [0u8; 22];
         decompress(
             &[
-                0x85, b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', 0x08, 0x00, 0x50, b'1',
-                b'2', b'3', b'4', b'5',
+                0x85, b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', 0x08, 0x00, 0x50, b'1', b'2',
+                b'3', b'4', b'5',
             ],
             &mut word_offset,
         )
@@ -939,8 +938,8 @@ mod tests {
     #[test]
     fn lz4_round_trips_boundary_sized_inputs() {
         const LENGTHS: [usize; 22] = [
-            0, 1, 3, 4, 5, 12, 15, 16, 19, 20, 254, 255, 256, 269, 270, 271, 510, 511, 512,
-            65_535, 65_536, 65_537,
+            0, 1, 3, 4, 5, 12, 15, 16, 19, 20, 254, 255, 256, 269, 270, 271, 510, 511, 512, 65_535,
+            65_536, 65_537,
         ];
         for len in LENGTHS {
             let buf: Vec<u8> = (0..len).map(|i| (i.wrapping_mul(31)) as u8).collect();

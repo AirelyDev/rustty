@@ -33,8 +33,8 @@
 //!   (see MIRI_EXCEPTIONS.md).
 //!
 //! LANDED SINCE (each was formerly a deferred seam — now real, live-tested):
-//! `DerivedConfig::init<C>`, `changeConfig`/`setScreenSize`/`setFontGrid` (resize
-//! + config-swap), `Renderer::{init,deinit}` (offscreen device ctor + the
+//! `DerivedConfig::init<C>`, `changeConfig`/`setScreenSize`/`setFontGrid` (resize +
+//! config-swap), `Renderer::{init,deinit}` (offscreen device ctor + the
 //! W-ATTACH host-view layer attach, `attach_host_view`), `prepBackgroundImage`/
 //! custom-shader load (`init_shaders`), and the kitty-pixel path. The real
 //! windowed layer-present path is RESOLVED (W-ATTACH, commit 96b0116) — there is

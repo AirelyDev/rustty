@@ -51,10 +51,7 @@ use std::path::Path;
 
 /// The vendored corpus directory, relative to this crate's manifest
 /// (`xtask/`): `../crates/rustty-extra/themes/`.
-const VENDORED_THEMES: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../crates/rustty-extra/themes"
-);
+const VENDORED_THEMES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/rustty-extra/themes");
 
 /// Generate the theme resource subtree under `share_dir`:
 ///
@@ -70,8 +67,7 @@ pub fn gen_themes(share_dir: &Path) -> Result<(), String> {
     let dest = share_dir.join(crate::APP).join("themes");
     fs::create_dir_all(&dest).map_err(|e| format!("mkdir {}: {e}", dest.display()))?;
 
-    let entries =
-        fs::read_dir(src).map_err(|e| format!("read_dir {}: {e}", src.display()))?;
+    let entries = fs::read_dir(src).map_err(|e| format!("read_dir {}: {e}", src.display()))?;
     let mut copied = 0usize;
     for entry in entries {
         let entry = entry.map_err(|e| format!("dir entry in {}: {e}", src.display()))?;
@@ -84,7 +80,10 @@ pub fn gen_themes(share_dir: &Path) -> Result<(), String> {
             continue;
         }
         // Mirror ghostty's `.md` exclusion (drops the vendor README.md).
-        if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("md")) {
+        if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        {
             continue;
         }
         let name = entry.file_name();
@@ -121,7 +120,10 @@ mod tests {
             .expect("read emitted themes")
             .filter(|e| e.as_ref().unwrap().path().is_file())
             .count();
-        assert_eq!(count, 534, "emitted theme count must match ghostty's shipped set");
+        assert_eq!(
+            count, 534,
+            "emitted theme count must match ghostty's shipped set"
+        );
 
         // No `.md` leaked through (README.md is excluded, like ghostty does).
         for e in fs::read_dir(&themes).unwrap() {
@@ -136,7 +138,10 @@ mod tests {
 
         // Spot-check a known theme's content is real (not a placeholder).
         let sample = fs::read_to_string(themes.join("0x96f")).expect("0x96f theme present");
-        assert!(sample.contains("palette = 0="), "theme body should be real conf data");
+        assert!(
+            sample.contains("palette = 0="),
+            "theme body should be real conf data"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -149,8 +154,14 @@ mod tests {
     fn vendored_corpus_carries_upstream_license() {
         let lic = Path::new(VENDORED_THEMES).join("LICENSE.md");
         let text = fs::read_to_string(&lic).expect("themes LICENSE.md present");
-        assert!(text.contains("MIT License"), "must carry the upstream MIT text");
-        assert!(text.contains("Mark Badolato"), "must credit the upstream author");
+        assert!(
+            text.contains("MIT License"),
+            "must carry the upstream MIT text"
+        );
+        assert!(
+            text.contains("Mark Badolato"),
+            "must credit the upstream author"
+        );
         assert!(
             text.contains("iTerm2-Color-Schemes"),
             "must name the upstream project"

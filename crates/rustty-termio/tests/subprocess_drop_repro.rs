@@ -1,5 +1,5 @@
-//! [DOUBLE-FREE FIX] Regression proof: constructing + STARTING (posix fork/exec)
-//! + tearing down a `Subprocess` frees its argv/env C-string storage exactly
+//! [DOUBLE-FREE FIX] Regression proof: constructing + STARTING (posix fork/exec) +
+//! tearing down a `Subprocess` frees its argv/env C-string storage exactly
 //! once — no glibc `free(): invalid size` double-free abort.
 //!
 //! Background: `Subprocess.args` is a `Vec<CString>`. The port's teardown idiom

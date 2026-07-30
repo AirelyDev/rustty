@@ -116,10 +116,7 @@ mod wasm {
         /// terminal row. Note that text runs are only valid one at a time for a
         /// Shaper struct since they share state.
         // pub fn runIterator(self: *Shaper, opts: font.shape.RunOptions) font.shape.RunIterator {
-        pub fn run_iterator<'a>(
-            &mut self,
-            opts: shape::RunOptions<'a>,
-        ) -> RunIterator<'a, Hook> {
+        pub fn run_iterator<'a>(&mut self, opts: shape::RunOptions<'a>) -> RunIterator<'a, Hook> {
             RunIterator {
                 hooks: Hook {
                     shaper: self as *mut Shaper,
@@ -236,9 +233,7 @@ mod wasm {
                     //   const index = try face.graphemeGlyphIndex(cluster);
                     // `faceFromIndex`/`run.group` were deleted upstream; the modern
                     // path reaches the same face via the run's shared grid.
-                    let face = unsafe {
-                        (*run.grid).resolver.collection.get_face(run.font_index)?
-                    };
+                    let face = unsafe { (*run.grid).resolver.collection.get_face(run.font_index)? };
                     let index = unsafe { (*face).grapheme_glyph_index(&cluster)? };
 
                     let cluster_x = self.run_buf[start].1;

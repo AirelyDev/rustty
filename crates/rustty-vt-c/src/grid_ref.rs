@@ -264,7 +264,8 @@ pub unsafe fn grid_ref_hyperlink_uri(
     }
 
     // const link_id = p.node.data.lookupHyperlink(cell) orelse { out_len.* = 0; return .success; };
-    let link_id = match unsafe { (*rustty_vt::pagelist::Node::page(p.node)).lookup_hyperlink(cell) } {
+    let link_id = match unsafe { (*rustty_vt::pagelist::Node::page(p.node)).lookup_hyperlink(cell) }
+    {
         Some(id) => id,
         None => {
             unsafe { *out_len = 0 };
@@ -334,7 +335,9 @@ pub unsafe fn grid_ref_style(ref_: *const CGridRef, out: *mut Style) -> Result {
             // memory base outlives the read; `out` is a valid writable `Style`.
             let style = unsafe {
                 let base = (*rustty_vt::pagelist::Node::page(p.node)).memory_ptr();
-                *(*rustty_vt::pagelist::Node::page(p.node)).styles.get(base, (*cell).style_id())
+                *(*rustty_vt::pagelist::Node::page(p.node))
+                    .styles
+                    .get(base, (*cell).style_id())
             };
             unsafe { *out = Style::from_style(style) };
         }

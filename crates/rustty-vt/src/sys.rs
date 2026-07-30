@@ -62,12 +62,14 @@ pub type DecodePngFn = fn(&[u8]) -> Result<Image, DecodeError>;
 pub static decode_png: RwLock<Option<DecodePngFn>> = RwLock::new(DECODE_PNG_DEFAULT);
 
 #[cfg(feature = "wuffs")]
-const DECODE_PNG_DEFAULT: Option<DecodePngFn> =
-    if matches!(crate::options::ARTIFACT, crate::build_options::Artifact::Lib) {
-        None
-    } else {
-        Some(decode_png_wuffs as DecodePngFn)
-    };
+const DECODE_PNG_DEFAULT: Option<DecodePngFn> = if matches!(
+    crate::options::ARTIFACT,
+    crate::build_options::Artifact::Lib
+) {
+    None
+} else {
+    Some(decode_png_wuffs as DecodePngFn)
+};
 /// Without the wuffs binding no default decoder exists (embedders install one
 /// at runtime via the swappable slot — the vt-c `set(.decode_png, ..)` path).
 #[cfg(not(feature = "wuffs"))]

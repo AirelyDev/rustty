@@ -73,28 +73,26 @@ pub fn plot(
                 current_contour.plot(n.point, None);
                 points.add(n.point);
             }
-            PathNode::LineTo(n) => {
-                match points.last() {
-                    Some(last_point) => {
-                        if !last_point.equal(n.point) {
-                            if let Some(d) = &mut dasher {
-                                dashed_line_to(
-                                    last_point,
-                                    n.point,
-                                    d,
-                                    &mut points,
-                                    &mut current_contour,
-                                    &mut result,
-                                );
-                            } else {
-                                current_contour.plot(n.point, None);
-                                points.add(n.point);
-                            }
+            PathNode::LineTo(n) => match points.last() {
+                Some(last_point) => {
+                    if !last_point.equal(n.point) {
+                        if let Some(d) = &mut dasher {
+                            dashed_line_to(
+                                last_point,
+                                n.point,
+                                d,
+                                &mut points,
+                                &mut current_contour,
+                                &mut result,
+                            );
+                        } else {
+                            current_contour.plot(n.point, None);
+                            points.add(n.point);
                         }
                     }
-                    None => return Err(InternalError::InvalidState),
                 }
-            }
+                None => return Err(InternalError::InvalidState),
+            },
             PathNode::CurveTo(n) => {
                 if points.len == 0 {
                     return Err(InternalError::InvalidState);

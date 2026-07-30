@@ -988,7 +988,9 @@ impl PageList {
                 unsafe {
                     (*super::Node::page(new_node)).size.rows += 1;
                 }
-                match unsafe { (*super::Node::page(new_node)).clone_row_from(page, dst_row, src_row) } {
+                match unsafe {
+                    (*super::Node::page(new_node)).clone_row_from(page, dst_row, src_row)
+                } {
                     Ok(_) => {
                         copied += 1;
                     }
@@ -1230,8 +1232,10 @@ impl ReflowCursor {
         {
             for p in list.tracked_pins.keys() {
                 let p: *mut Pin = *p;
-                if !core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, src_page as *const _)
-                    || unsafe { (*p).y } != src_y
+                if !core::ptr::eq(
+                    unsafe { super::Node::page((*p).node) } as *const _,
+                    src_page as *const _,
+                ) || unsafe { (*p).y } != src_y
                 {
                     continue;
                 }
@@ -1259,7 +1263,10 @@ impl ReflowCursor {
         // If the cursor is after blanks on the right, those cells are still
         // before the next write and must reflow with it.
         if let Some(p) = cursor_pin {
-            if core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, src_page as *const _) && unsafe { (*p).y } == src_y
+            if core::ptr::eq(
+                unsafe { super::Node::page((*p).node) } as *const _,
+                src_page as *const _,
+            ) && unsafe { (*p).y } == src_y
             {
                 cols_len = core::cmp::max(cols_len, unsafe { (*p).x } + 1);
             }
@@ -1321,8 +1328,10 @@ impl ReflowCursor {
             {
                 for p in list.tracked_pins.keys() {
                     let p: *mut Pin = *p;
-                    if !core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, src_page as *const _)
-                        || unsafe { (*p).y } != src_y
+                    if !core::ptr::eq(
+                        unsafe { super::Node::page((*p).node) } as *const _,
+                        src_page as *const _,
+                    ) || unsafe { (*p).y } != src_y
                         || unsafe { (*p).x } != x as size::CellCountInt
                     {
                         continue;
@@ -1348,8 +1357,10 @@ impl ReflowCursor {
                         // since we won't process that cell in the loop.
                         for p in list.tracked_pins.keys() {
                             let p: *mut Pin = *p;
-                            if !core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, src_page as *const _)
-                                || unsafe { (*p).y } != src_y
+                            if !core::ptr::eq(
+                                unsafe { super::Node::page((*p).node) } as *const _,
+                                src_page as *const _,
+                            ) || unsafe { (*p).y } != src_y
                                 || unsafe { (*p).x } != x as size::CellCountInt + 1
                             {
                                 continue;
@@ -1898,8 +1909,10 @@ impl ReflowCursor {
         {
             for p in list.tracked_pins.keys() {
                 let p: *mut Pin = *p;
-                if !core::ptr::eq(unsafe { super::Node::page((*p).node) } as *const _, old_page as *const _)
-                    || unsafe { (*p).y } != unsafe { (*old_page).size.rows } - 1
+                if !core::ptr::eq(
+                    unsafe { super::Node::page((*p).node) } as *const _,
+                    old_page as *const _,
+                ) || unsafe { (*p).y } != unsafe { (*old_page).size.rows } - 1
                 {
                     continue;
                 }

@@ -139,10 +139,7 @@ mod imp {
 
         /// PORTS: `key_state_overlay.zig:173-176` `getHasTables`.
         fn get_has_tables(&self) -> bool {
-            self.tables
-                .borrow()
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
+            self.tables.borrow().as_ref().is_some_and(|v| !v.is_empty())
         }
 
         /// PORTS: `key_state_overlay.zig:178-181` `getHasSequence`.

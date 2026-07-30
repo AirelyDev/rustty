@@ -168,7 +168,10 @@ impl Default for Config {
         // (16 MiB default) and `max_threads = 0`. A derived `Default` of 0 for
         // `stack_size` would make `init`'s `@max(1, stack_size)` produce a 1-byte
         // stack, so the reference's default is reproduced as the literal here.
-        Config { stack_size: 16 * 1024 * 1024, max_threads: 0 }
+        Config {
+            stack_size: 16 * 1024 * 1024,
+            max_threads: 0,
+        }
     }
 }
 
@@ -271,10 +274,12 @@ impl ThreadPool {
 
             // Release barrier synchronizes with Acquire in wait()
             // to ensure pushes to run queues happen before observing a posted notification.
-            match self
-                .sync
-                .compare_exchange_weak(sync.to_u32(), new_sync.to_u32(), Release, Relaxed)
-            {
+            match self.sync.compare_exchange_weak(
+                sync.to_u32(),
+                new_sync.to_u32(),
+                Release,
+                Relaxed,
+            ) {
                 Ok(_) => {
                     // We signaled to notify an idle thread
                     if can_wake && sync.idle > 0 {
@@ -423,7 +428,11 @@ impl ThreadPool {
 
     fn unregister(&self, maybe_thread: Option<*mut Thread>) {
         // Un-spawn one thread, either due to a failed OS thread spawning or the thread is exitting.
-        let one_spawned: u32 = Sync { spawned: 1, ..Sync::default() }.to_u32();
+        let one_spawned: u32 = Sync {
+            spawned: 1,
+            ..Sync::default()
+        }
+        .to_u32();
         let sync = Sync::from_u32(self.sync.fetch_sub(one_spawned, Release));
         debug_assert!(sync.spawned > 0);
 
@@ -519,7 +528,8 @@ impl Batch {
             *self = batch;
         } else {
             unsafe {
-                (*self.tail.unwrap()).node.next = batch.head.map(|h| core::ptr::addr_of_mut!((*h).node));
+                (*self.tail.unwrap()).node.next =
+                    batch.head.map(|h| core::ptr::addr_of_mut!((*h).node));
             }
             self.tail = batch.tail;
             self.len += batch.len;
@@ -535,7 +545,6 @@ struct Thread {
     run_queue: NodeQueue,
     run_buffer: NodeBuffer,
 }
-
 
 thread_local! {
     // threadlocal var current: ?*Thread = null;
@@ -872,8 +881,12 @@ fn futex_wake(atomic: &AtomicU32, n: u32) {
 
 #[cfg(target_os = "macos")]
 extern "C" {
-    fn __ulock_wait(operation: u32, addr: *mut core::ffi::c_void, value: u64, timeout_us: u32)
-        -> i32;
+    fn __ulock_wait(
+        operation: u32,
+        addr: *mut core::ffi::c_void,
+        value: u64,
+        timeout_us: u32,
+    ) -> i32;
     fn __ulock_wake(operation: u32, addr: *mut core::ffi::c_void, wake_value: u64) -> i32;
 }
 
@@ -945,7 +958,6 @@ pub struct Node {
     /// `next: ?*Node = null`
     pub next: Option<*mut Node>,
 }
-
 
 /// A linked list of Nodes (Zig `Node.List`).
 #[derive(Clone, Copy)]
@@ -1096,7 +1108,7 @@ struct NodeBuffer {
 
 type Index = u32;
 const CAPACITY: usize = 256; // Appears to be a pretty good trade-off in space vs contended throughput
-// comptime { assert(std.math.maxInt(Index) >= capacity); assert(std.math.isPowerOfTwo(capacity)); }
+                             // comptime { assert(std.math.maxInt(Index) >= capacity); assert(std.math.isPowerOfTwo(capacity)); }
 const _: () = assert!(Index::MAX as usize >= CAPACITY);
 const _: () = assert!(CAPACITY.is_power_of_two());
 
@@ -1162,10 +1174,12 @@ impl NodeBuffer {
             // Migrating half amortizes the cost of stealing while requiring future pops to still use the buffer.
             // Acquire barrier to ensure the linked list creation after the steal only happens after we succesfully steal.
             let mut migrate = size / 2;
-            match self
-                .head
-                .compare_exchange_weak(head, head.wrapping_add(migrate), Acquire, Relaxed)
-            {
+            match self.head.compare_exchange_weak(
+                head,
+                head.wrapping_add(migrate),
+                Acquire,
+                Relaxed,
+            ) {
                 Ok(_) => {
                     // Link the migrated Nodes together
                     let first = self.array[(head as usize) % CAPACITY].load(Relaxed);
@@ -1320,7 +1334,8 @@ impl NodeBuffer {
                 Ok(_) => {
                     // Pop one from the nodes we stole as we'll be returning it
                     let pushed = steal_size - 1;
-                    let node = self.array[(tail.wrapping_add(pushed) as usize) % CAPACITY].load(Relaxed);
+                    let node =
+                        self.array[(tail.wrapping_add(pushed) as usize) % CAPACITY].load(Relaxed);
 
                     // Update the array tail with the nodes we pushed to it.
                     // Release barrier to synchronize with Acquire barrier in steal()'s to see the written array Nodes.
@@ -1416,7 +1431,12 @@ mod tests {
         while *ran < n {
             let (g, timeout) = ctx.cv.wait_timeout(ran, Duration::from_secs(30)).unwrap();
             ran = g;
-            assert!(!timeout.timed_out(), "only {}/{} tasks ran within the timeout", *ran, n);
+            assert!(
+                !timeout.timed_out(),
+                "only {}/{} tasks ran within the timeout",
+                *ran,
+                n
+            );
         }
         drop(ran);
 
@@ -1500,7 +1520,8 @@ mod tests {
     fn life_task(t: *mut Task) {
         // Recover the enclosing LifeJob and its ctx (the pool never moves the
         // boxed job; deinit joins all workers before ctx is dropped).
-        let job = unsafe { (t as *mut u8).sub(core::mem::offset_of!(LifeJob, task)) as *mut LifeJob };
+        let job =
+            unsafe { (t as *mut u8).sub(core::mem::offset_of!(LifeJob, task)) as *mut LifeJob };
         let ctx = unsafe { &*(*job).ctx };
 
         let cur = ctx.active.fetch_add(1, Ordering::SeqCst) + 1;

@@ -216,8 +216,7 @@ pub enum PinOverflow {
 impl Pin {
     pub fn row_and_cell(&self) -> pagepkg::RowAndCell {
         let rac = unsafe {
-            (*super::Node::page(self.node))
-                .get_row_and_cell(self.x as usize, self.y as usize)
+            (*super::Node::page(self.node)).get_row_and_cell(self.x as usize, self.y as usize)
         };
         pagepkg::RowAndCell {
             row: rac.row,
