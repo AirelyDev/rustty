@@ -55,8 +55,15 @@ only shows up where the rounding flips. Measured against these exact fixtures:
 | gray 8×17 | 5/136 (3.7 %), max delta 255 | **0/136 — INDISTINGUISHABLE** |
 
 The BGRA fixtures are the strong discriminators (a genuine 8-bit source, and a large
-downsample through `num_channels = 4`); see the delta budget below. Do not "simplify"
-the KAT set down to the grayscale pair.
+downsample through `num_channels = 4`). Measured against those exact fixtures:
+
+| fixture | vs nearest neighbour | vs bilinear |
+|---|---|---|
+| BGRA 16×15 | 596/960 (62.1 %), max delta 213 | 577/960 (60.1 %), max delta 114 |
+| BGRA 8×7 | 185/224 (82.6 %), max delta 217 | 187/224 (83.5 %), max delta 121 |
+
+Do not "simplify" the KAT set down to the grayscale pair — that would throw away all
+of the bilinear discrimination.
 
 ## Delta budget (the F-ui-tiers rule: a golden proves nothing unless you know how far it would move if the code were wrong)
 

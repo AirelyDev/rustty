@@ -2032,4 +2032,98 @@ mod tests {
         lib.deinit();
         Ok(())
     }
+
+    /// KAT: the 4-channel (BGRA) side of the resize seam, on a large DOWNSAMPLE.
+    ///
+    /// `color_emoji` above renders the same face but at scale 1.0 (136x128 -> 136x128)
+    /// because it derives grid metrics from the emoji face itself, whose cell is as
+    /// large as its strike. Real rendering takes grid metrics from the PRIMARY text
+    /// face, which is what makes the constraint bite; that is reproduced here, giving
+    /// a 136x128 -> 16x15 / 8x7 downsample through `num_channels = 4`.
+    ///
+    /// This is the STRONG discriminator of the two KATs: unlike the grayscale strike
+    /// (mono, so stb's in/out are 0/1 and a wrong resampler's fractional output rounds
+    /// back — see `src/testdata/README.stb-resize.md` TRAP 2), this source is genuine
+    /// 8-bit BGRA, and a large downsample selects stb's downsampling kernel.
+    #[test]
+    fn stb_resize_kat_bitmap_strike_bgra() -> Result<(), Error> {
+        use rustty_font::glyph::{Align, Constraint};
+
+        const KAT_16X15: &[u8] = include_bytes!("../testdata/stb_resize_emoji_bgra_16x15.bin");
+        const KAT_8X7: &[u8] = include_bytes!("../testdata/stb_resize_emoji_bgra_8x7.bin");
+
+        let alloc = Global;
+        let mut lib = Library::init()?;
+        let mut atlas = Atlas::init(alloc, 1024, Format::Bgra)?;
+
+        // Grid metrics come from the PRIMARY (outline) face, as at runtime. Taking them
+        // from the emoji face instead makes the constraint a NO-OP (all nine
+        // constraint_width x ConstraintSize combinations return 136x128) — that is the
+        // trap `color_emoji` fell into.
+        let mut primary = Face::init(lib, embedded::INCONSOLATA, opts(size(12.0, 96, 96)))?;
+        let metrics = Metrics::calc(primary.get_metrics());
+        primary.deinit();
+
+        let mut emoji = Face::init(lib, embedded::EMOJI, opts(size(12.0, 96, 96)))?;
+        let idx = emoji
+            .glyph_index(0x1F600)
+            .expect("U+1F600 must be in NotoColorEmoji");
+
+        let cases: [(u8, u32, u32, &[u8]); 2] = [(2, 16, 15, KAT_16X15), (1, 8, 7, KAT_8X7)];
+
+        for (cw, ew, eh, expected) in cases {
+            let g = emoji.render_glyph(
+                alloc,
+                &mut atlas,
+                idx,
+                RenderOptions {
+                    grid_metrics: metrics,
+                    constraint_width: cw,
+                    constraint: Constraint {
+                        size: ConstraintSize::Cover,
+                        align_horizontal: Align::Center,
+                        align_vertical: Align::Center,
+                        ..Constraint::none
+                    },
+                    ..Default::default()
+                },
+            )?;
+
+            assert_eq!(
+                (ew, eh),
+                (g.width, g.height),
+                "constraint_width={cw}: target size"
+            );
+            assert_ne!(
+                (136u32, 128u32),
+                (g.width, g.height),
+                "constraint_width={cw}: must be a real downsample, not the identity path"
+            );
+            assert_eq!(
+                expected.len(),
+                (g.width * g.height * 4) as usize,
+                "fixture length (BGRA)"
+            );
+
+            let mut actual = Vec::with_capacity(expected.len());
+            for y in 0..g.height as usize {
+                for x in 0..g.width as usize {
+                    let i = ((g.atlas_y as usize + y) * atlas.size() as usize
+                        + (g.atlas_x as usize + x))
+                        * 4;
+                    actual.extend_from_slice(&atlas.data()[i..i + 4]);
+                }
+            }
+            assert_eq!(
+                expected,
+                &actual[..],
+                "constraint_width={cw}: resized BGRA bytes differ from the stb consensus fixture"
+            );
+        }
+
+        emoji.deinit();
+        atlas.deinit(alloc);
+        lib.deinit();
+        Ok(())
+    }
 }
