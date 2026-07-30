@@ -697,10 +697,12 @@ Miri-excluded (real syscalls; MIRI_EXCEPTIONS.md). **What STILL stays deferred**
 real mach send onto an Async whose loop nobody pumps yet — non-blocking, fails-safe);
 the DCS↔tmux `.tmux` enter/exit arm in `stream_handler::dcsCommand` (vt-side
 `TmuxCommand = ()` stub — the **vt tmux control-mode DCS wiring** sub-batch); and the
-Windows/Flatpak stubs (`Subprocess::start` windows spawn, `ReadThread::
-threadMainWindows`, `killCommandFlatpak`, `Backend::childExitedAbnormally` — the
-last uninstantiated in the reference via Zig lazy compilation), all `#[cfg]`/
-const-false and unrelated to the macOS live-shell milestone. The remaining
+Windows stubs (`Subprocess::start` windows spawn, `ReadThread::
+threadMainWindows`, `Backend::childExitedAbnormally` — the last uninstantiated in
+the reference via Zig lazy compilation), all `#[cfg]`/const-false and unrelated to
+the macOS live-shell milestone. **[WS20] `killCommandFlatpak` STRUCK from this
+list — it is now the real `command.signal(SIGHUP, true)` body behind the
+`rustty-termio` `flatpak` feature; see the Flatpak row below.** The remaining
 `[UPDATED …]` notes below are retained for provenance.
 
 - **D6 xev seam (`rustty-termio/src/xev_seam.rs`).** Every termio file imports
@@ -900,12 +902,41 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   `deinit`/`externalExit`/`stop`/`resize`/`killCommand`/`killPid`/`getpgid`/
   `childPreExec`, the `getProcessInfo` split, `Config`, `ThreadData` (+
   `deinit`), and `ArgsFormatter`.
-- **Flatpak comptime-false branches (exec.rs).** `build_config.flatpak` is
-  const `false` (rustty-build-config), so `FlatpakHostCommand` resolves to the
-  reference's zero-size fallback; the flatpak-gated arms (`stop`'s `.flatpak`,
-  `start`'s host-command spawn, `killCommandFlatpak`) are compiled out exactly
-  as Zig's lazy compilation leaves them unanalyzed — bodies verbatim; they
-  re-bind to rustty-os's FlatpakHostCommand with the Linux/flatpak tier.
+- ~~**Flatpak comptime-false branches (exec.rs).** `build_config.flatpak` is~~
+  ~~const `false` ... they re-bind to rustty-os's FlatpakHostCommand with the~~
+  ~~Linux/flatpak tier.~~ **STRUCK — LANDED (WS20).** `build_config.flatpak` is the
+  REAL `-Dflatpak` ghostty build option, so treating it as a `const false` dead
+  branch was wrong. It is now the `rustty-termio` **`flatpak` cargo feature**
+  (`flatpak = ["rustty-os/flatpak"]`, OFF by default exactly as `-Dflatpak`
+  defaults to false), and with it ON:
+  - `FlatpakHostCommand` / `.Completion` / `.WaitError` bind the REAL
+    `rustty_os::flatpak` types instead of the zero-size fallback (the `if
+    (!build_config.flatpak) struct{...} else internal_os.FlatpakHostCommand`
+    selection, both arms live);
+  - `killCommandFlatpak` is the reference body `command.signal(SIGHUP, true)` —
+    it was `unimplemented!()`;
+  - the other three flatpak arms are filled: `Subprocess.start`'s cwd
+    test-spawn, `Subprocess.start`'s HostCommand spawn (+ its
+    `errdefer killCommandFlatpak`), `Subprocess.stop`'s `.flatpak` kill+wait, and
+    `threadEnter`'s `else if (comptime build_config.flatpak)` arm wiring
+    `cmd.waitXev(...)` to the new live `flatpakExit` callback.
+  - **`rustty-os`'s own `flatpak` feature had never compiled** and was NOT
+    "fully ported with zero stubs": it bound `rustty_global::xev` (the `()`
+    anchor) instead of `rustty-xev`; `spawn` never spawned the thread
+    (`let _ = threadMain;`); `wait` never waited (a `break` + `unreachable!()`);
+    `onExit` dropped the reference's `if (state.completion)` xev-completion wake;
+    and the `@fieldParentPtr("c_xev", ...)` recovery called a nonexistent
+    `xev::completion_parent`. All five are fixed, plus `state` moved inside the
+    `Mutex` that already documented it as guarded (Zig's mutex-by-convention over
+    a plain field is a data race in Rust). `rustty-os` gains an OPTIONAL
+    `rustty-xev` dep behind the feature — acyclic (rustty-xev deps are
+    `{rustty-global, libc}` only). Verified: `cargo check`/`clippy -D warnings`
+    GREEN for `-p rustty-os --features flatpak` and `-p rustty-termio --features
+    flatpak --all-targets`.
+  - **Remaining (NOT a scope exclusion):** the feature cannot be EXECUTED on this
+    host — it links GIO/GLib and needs a live flatpak session bus. That is
+    verification debt with a runnable recipe (VERIFICATION_DEBT.md), owned by
+    WS20.
 - **`Backend.childExitedAbnormally` (backend.rs) — Zig lazy compilation.** The
   reference delegates to `exec.childExitedAbnormally(...)`, a method
   `termio.Exec` does NOT declare at this reference version; the Backend method
@@ -3555,6 +3586,9 @@ DEFERRED (documented; not needed to boot a shell on macOS — the permanent fina
   and `vt → xev` (search), both acyclic (rustty-xev deps neither os nor vt).
   `rustty_global::xev` stays the `()` package anchor exactly as `global.zig`'s
   `pub const xev` is.
+  **[WS20] the `os → xev` half is now REAL:** `rustty-os` declares an optional
+  `rustty-xev` dep enabled by its `flatpak` feature, and `os/flatpak.rs` binds
+  `use rustty_xev as xev;`. `check_acyclic.sh` GREEN.
 - **`net.rs`** (the `std.net.Address` subset for connect/sendto/recvfrom) is a std
   port, not a libxev source file, so it is intentionally UNMAPPED in
   `check_test_counts.py` (no `.zig` reference oracle).
@@ -6399,27 +6433,49 @@ does for macOS/kqueue (§0). Test parity is now GATED, not asserted:
 **What actually remains** (REAL PORT WORK with an owner — read the rows below, and
 note that none of it is recorded as out of scope):
 
-- **[OPEN — owner `Phase 3`] the libxev WATCHER layer instantiated against
-  `iocp`/`wasi_poll`.** `watcher/{async,timer,process,stream}.zig` are generic over
-  the backend upstream. rustty has instantiated them against `kqueue` (macOS:
-  `async.rs`/`timer.rs`/`process.rs`/`stream.rs`) and against the Linux pair
-  (`dynamic.rs`). The `iocp`/`wasi_poll` instantiations are not written yet;
-  `lib.rs`'s `watcher_seam` holds those six handle types with panicking bodies
-  whose message says exactly that and points here. **Recipe:** mirror `timer.rs`
-  against `iocp::Loop`/`wasi_poll::Loop` (both expose the same
-  `timer`/`timer_reset`/`add`/`Completion::state` surface the kqueue one uses),
-  then `async.rs` over `Operation::AsyncWait` + `Loop::async_notify` (already
-  ported in both backends), then `stream.rs`/`process.rs`. Gate: extend
-  `check_test_counts.py` with the per-target rows once each lands.
-- **[OPEN — owner `Phase 3`] `ThreadPool`'s Windows futex arm.** `thread_pool.rs`
-  (kprotty's Zap pool) is `#[cfg(any(macos, linux))]` because its futex primitive
-  has only those two arms; the reference's `std.Thread.Futex` also has a Windows
-  one (`WaitOnAddress`/`WakeByAddressSingle`). Neither `iocp` nor `wasi_poll`
-  consumes the pool (`Loop.init` discards `options` in both), so this blocks
-  nothing today; until it lands, `windows.rs`/`wasi.rs`'s `Options.thread_pool`
-  carries the caller-owned handle as an opaque pointer rather than the concrete
-  type. **Recipe:** add the `WaitOnAddress` arm to `futex_wait`/`futex_wake` and
-  widen the `#[cfg]`; `cargo check -p rustty-xev --target x86_64-pc-windows-msvc`.
+- ~~**[OPEN — owner `Phase 3`] the libxev WATCHER layer instantiated against~~
+  ~~`iocp`/`wasi_poll`.**~~ **STRUCK — LANDED (WS20).** `iocp_watcher.rs` and
+  `wasi_watcher.rs` are the `watcher/{async,timer,process,stream}.zig`
+  monomorphizations for those two backends, and `lib.rs`'s `watcher_seam`
+  placeholder module (8 `unimplemented!()` sites) is DELETED — `lib.rs` now
+  re-exports the real types. What landed per backend:
+  - **iocp**: `AsyncIOCP` (async.zig:530 — guard/wakeup/waiter, `wait`+`notify`),
+    `TimerLoop` (`run`/`reset`/`cancel`), `ProcessIocp` (process.zig:228 — the
+    job-object watcher: `DuplicateHandle` + `CreateJobObject` +
+    `AssignProcessToJobObject`, and the `.associated`/`.message` result decode
+    with the `STILL_ACTIVE` re-arm), `Shared` (`WriteQueue`/`WriteRequest`/
+    `PollError = error{}`/`PollEvent`) and `GenericStream`
+    (`read`/`write`/`writeInit`/`queueWrite` incl. the partial-write remainder
+    engine/`close`).
+  - **wasi_poll**: `AsyncLoopState` (async.zig:446 — the non-`threaded` arm; the
+    `threaded` arm is the reference's own `return struct {}` and is mapped onto
+    `#[cfg(target_feature = "atomics")]`), `TimerLoop`, `Shared`, `GenericStream`.
+  - Two REFERENCE-DRIVEN shape facts, not omissions: `Stream` has NO `poll`
+    method on either backend (`Pollable` is `return struct {}` for
+    `.iocp`/`.wasi_poll`, stream.zig:221) and WASI has NO `Process` watcher
+    (`Process(xev)`'s `.wasi_poll` arm is `struct {}`, process.zig:23 "//
+    Unsupported"). Both are quoted verbatim at their sites.
+  - Enabling seams: `iocp::Completion::new_op` + `wasi_poll::Completion::new_op`
+    (the `pub(crate)` full-reset helper the kqueue port already had), the
+    `windows.rs` `kernel32` additions `GetCurrentProcess`/`DuplicateHandle`/
+    `GetExitCodeProcess`, and `mod common` un-gated from macOS-only.
+  - Verified: `cargo check -p rustty-xev --target x86_64-pc-windows-msvc
+    --all-targets` and `--target wasm32-wasip1 --all-targets` both GREEN, and
+    `cargo clippy` `-D warnings` GREEN on both targets. The reference `test {}`
+    blocks are ported as documented skip-stubs (14 iocp + 12 wasi) — they need a
+    live Win32/WASI host, which is the V8 VERIFICATION DEBT row, not a scope
+    exclusion.
+- ~~**[OPEN — owner `Phase 3`] `ThreadPool`'s Windows futex arm.**~~
+  **STRUCK — LANDED (WS20).** `thread_pool.rs` now carries BOTH remaining
+  `std/Thread/Futex.zig` `*Impl` arms: `WindowsImpl` (ntdll
+  `RtlWaitOnAddress`/`RtlWakeAddressSingle`/`RtlWakeAddressAll` — the reference
+  uses NtDll rather than API-MS-Win-Core-Synch, comment preserved; hand-rolled
+  `extern "system"`, no new dep) and `SingleThreadedImpl` (WASI + freestanding
+  wasm, which are `builtin.single_threaded` — the FIRST arm of the reference's
+  dispatch chain). `mod thread_pool` is un-gated to every target, matching
+  `main.zig`'s unconditional `pub const ThreadPool`, and `pub use
+  thread_pool::ThreadPool` is added for the non-macOS/Linux targets. Verified by
+  both cross-compiles above.
 
 **Verification status — the honest version.** This host builds macOS and Linux
 only. What was actually run:

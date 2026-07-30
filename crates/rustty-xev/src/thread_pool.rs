@@ -942,10 +942,10 @@ fn futex_wake(atomic: &AtomicU32, n: u32) {
 /// `windows.NTSTATUS` — only `.SUCCESS` (0) and `.TIMEOUT` (0x102) are reachable
 /// here; the reference's `else => unreachable`.
 #[cfg(windows)]
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 type NTSTATUS = i32;
 #[cfg(windows)]
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 type LARGE_INTEGER = i64;
 
 #[cfg(windows)]

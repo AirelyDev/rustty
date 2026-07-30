@@ -131,10 +131,17 @@ mod linux;
 // Dynamic layer comptime-elides and the crate surface IS the backend's `Api()`.
 #[cfg(target_os = "windows")]
 mod iocp;
+// WS20: the WATCHER layer (`watcher/{async,timer,process,stream}.zig`)
+// instantiated against each of those two backends — the counterpart of macOS's
+// `async_watcher`/`timer`/`process`/`stream` modules.
+#[cfg(target_os = "windows")]
+mod iocp_watcher;
 #[cfg(target_os = "wasi")]
 mod wasi;
 #[cfg(target_os = "wasi")]
 mod wasi_poll;
+#[cfg(target_os = "wasi")]
+mod wasi_watcher;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -173,7 +180,8 @@ mod darwin;
 #[cfg(target_os = "macos")]
 #[path = "async.rs"]
 mod async_watcher;
-#[cfg(target_os = "macos")]
+// WS20: un-gated — `watcher/common.zig`'s `userdataValue` is backend-independent
+// and is now consumed by the iocp/wasi_poll watcher instantiations too.
 #[allow(dead_code)]
 mod common;
 #[cfg(target_os = "macos")]
@@ -556,88 +564,33 @@ pub use windows::{CallbackAction, CompletionState, Options, RunMode};
 pub use thread_pool::ThreadPool;
 
 // ---------------------------------------------------------------------------
-// REMAINING PORT WORK (explicitly NOT a scope exclusion). The `iocp` and
-// `wasi_poll` LOOPS are ported in full (iocp.rs / wasi_poll.rs). The HIGH-LEVEL
-// WATCHER layer (`watcher/async.zig`, `watcher/timer.zig`, `watcher/process.zig`,
-// `watcher/stream.zig`) is generic over the backend in the reference and has so
-// far been instantiated only against `kqueue` (macOS: `async.rs`/`timer.rs`/
-// `process.rs`/`stream.rs`) and the Linux backends (`dynamic.rs`). Instantiating
-// it against `iocp`/`wasi_poll` is the next chunk of this same lane — tracked in
-// `.port/phase-2/DEFERRALS.md` (WS20) with a concrete recipe, NOT recorded as out
-// of scope by platform.
+// The WATCHER layer for the two single-candidate non-POSIX backends (WS20 —
+// LANDED; this block used to be the `watcher_seam` placeholder).
 //
-// Until it lands these handle types keep placeholder bodies so the crate's public
-// surface stays nameable on those targets. The panic messages say exactly what
-// they are: unported work with a ledger row.
+// `watcher/{async,timer,process,stream}.zig` are generic over `xev` in the
+// reference. They are instantiated against `kqueue` in `async.rs`/`timer.rs`/
+// `process.rs`/`stream.rs` (macOS), against the Linux backends in `dynamic.rs`,
+// and — as of WS20 — against `iocp` in `iocp_watcher.rs` and `wasi_poll` in
+// `wasi_watcher.rs`. Nothing here is a placeholder any more.
+//
+// NOTE the two reference-driven SHAPE differences on these backends, which are
+// the reference's own `switch (xev.backend)` arms and NOT omissions:
+//   - `Stream` has NO `poll` method: `Pollable` is `return struct {}` for
+//     `.iocp`/`.wasi_poll` ("Do not add the methods for poll if the backend
+//     doesn't support it.", stream.zig:221), and `PollError` is `error{}`.
+//   - WASI has NO `Process` watcher: `Process(xev)`'s `.wasi_poll` arm is
+//     `struct {}` (process.zig:23, commented "// Unsupported").
 // ---------------------------------------------------------------------------
-#[cfg(any(target_os = "windows", target_os = "wasi"))]
-pub use watcher_seam::*;
-
-#[cfg(any(target_os = "windows", target_os = "wasi"))]
-mod watcher_seam {
-    use super::Error;
-
-    const MSG: &str = "rustty-xev: the libxev WATCHER layer (watcher/{async,timer,process,\
-                       stream}.zig) is not yet instantiated against this backend. The iocp/\
-                       wasi_poll LOOPS are ported (iocp.rs / wasi_poll.rs); this is REMAINING \
-                       PORT WORK tracked in .port/phase-2/DEFERRALS.md (WS20), NOT a platform \
-                       scope exclusion.";
-
-    /// PORT NOTE: `xev.Async` — watcher layer, see the module note.
-    #[derive(Clone, Copy)]
-    pub struct Async {}
-    /// PORT NOTE: `xev.Timer` — watcher layer, see the module note.
-    pub struct Timer {}
-    /// PORT NOTE: `xev.Process` — watcher layer, see the module note.
-    #[derive(Clone, Copy)]
-    pub struct Process {}
-    /// PORT NOTE: `xev.Stream` — watcher layer, see the module note.
-    #[derive(Clone, Copy)]
-    pub struct Stream {}
-    /// PORT NOTE: `xev.WriteRequest` — Exec's `SegmentedPool<xev::WriteRequest>`
-    /// requires `Default`.
-    #[derive(Default)]
-    pub struct WriteRequest {}
-    /// PORT NOTE: `xev.WriteQueue` — Exec's `write_queue` field default-constructs it.
-    #[derive(Default)]
-    pub struct WriteQueue {}
-
-    impl Stream {
-        pub fn deinit(&self) {
-            unimplemented!("{}", MSG)
-        }
-    }
-
-    impl Async {
-        pub fn init() -> Result<Async, Error> {
-            unimplemented!("{}", MSG)
-        }
-        pub fn deinit(&mut self) {
-            unimplemented!("{}", MSG)
-        }
-        pub fn notify(&self) -> Result<(), super::NotifyError> {
-            unimplemented!("{}", MSG)
-        }
-    }
-
-    impl Timer {
-        pub fn init() -> Result<Timer, Error> {
-            unimplemented!("{}", MSG)
-        }
-        pub fn deinit(&self) {
-            unimplemented!("{}", MSG)
-        }
-    }
-
-    impl Process {
-        pub fn init(_pid: i32) -> Result<Process, Error> {
-            unimplemented!("{}", MSG)
-        }
-        pub fn deinit(&mut self) {
-            unimplemented!("{}", MSG)
-        }
-    }
-}
+#[cfg(target_os = "windows")]
+pub use iocp_watcher::{
+    Async, AsyncWaitError, PollError, PollEvent, Process, ProcessWaitError,
+    RunError as TimerRunError, Stream, Timer, TimerCancelError, WriteQueue, WriteRequest,
+};
+#[cfg(target_os = "wasi")]
+pub use wasi_watcher::{
+    Async, AsyncWaitError, PollError, PollEvent, Process, RunError as TimerRunError, Stream, Timer,
+    TimerCancelError, WriteQueue, WriteRequest,
+};
 
 // ---------------------------------------------------------------------------
 // The NO-BACKEND seam: a target the REFERENCE ITSELF has no backend for.
