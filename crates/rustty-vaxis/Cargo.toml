@@ -8,10 +8,11 @@
 # absent from that crate_map. Its value-type semantics must nonetheless be
 # byte-faithful (the Key matchers rely on `std.meta.eql` over packed structs).
 #
-# PORT STATUS: the chunk sequence 1a-4b is FINISHED and, as of WS12, the IMAGE TIER IS
-# LIVE. The only remaining seams are the `#[cfg(windows)]` family (`WindowsTty`, the
-# windows `tty_run` arm, `TestTty::next_event`) — see src/lib.rs and DEFERRALS.md
-# "rustty-vaxis Chunk 3b".
+# PORT STATUS: the chunk sequence 1a-4b is FINISHED, the IMAGE TIER IS LIVE (WS12), and
+# as of WS20 (2026-07-30) the `#[cfg(windows)]` family is PORTED too (`WindowsTty`, the
+# windows `tty_run` + `handle_event_generic` arms, `TestTty::next_event`). NO seams
+# remain. The Windows arms cannot be BUILT on this host — see
+# .port/phase-2/VERIFICATION_DEBT.md (owner WS20) for the blocker and the recipe.
 #
 # HISTORY (this block previously asserted two things that are now false; corrected in
 # WS12 T8 rather than left to rot):

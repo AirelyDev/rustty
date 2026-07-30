@@ -69,9 +69,19 @@ Ordered by dependency, then by size. "Cost" is S ≤ ~150 LOC, M ≤ ~800, L > ~
 
 | # | Item | Evidence | Cost |
 |---|---|---|---|
-| **P1.1** | **`rustty-vaxis` `WindowsTty`** — 6 stubbed methods + the `Loop` windows arm | `crates/rustty-vaxis/src/tty.rs:417-448` (struct shell present, every body `unimplemented!("WindowsTty: R5 #[cfg(windows)] seam")`), `loop_.rs:341`. Reference: `~/.cache/zig/p/vaxis-*/src/tty.zig:189-691` = **503 lines** (console-mode, `ReadConsoleInputW`, `INPUT_RECORD` key/mouse/resize/focus decode) plus `Loop.zig:116-180`. This is P0.1's twin and it is **not** in the lane that is fixing xev/termio. | **M/L** |
-| **P1.2** | **Windows font backend `freetype_windows`** | (a) `DeferredFace.Windows` payload left as a verbatim comment — `crates/rustty-font-shaper/src/deferred_face.rs:95-130`; (b) the `Windows` **discoverer** commented out wholesale — `discovery.rs:1911-2073` (~160 LOC), reference `src/font/discovery.zig:900+`; (c) `discovery.rs:2459/2471` test bodies deferred with it. `Backend::FreetypeWindows` already exists in `backend.rs:25`, so only the payloads are missing. | **M** |
+| **P1.1** ✅ **DONE — WS20 (2026-07-30)** | **`rustty-vaxis` `WindowsTty`** — 6 stubbed methods + the `Loop` windows arm | `crates/rustty-vaxis/src/tty.rs:417-448` (struct shell present, every body `unimplemented!("WindowsTty: R5 #[cfg(windows)] seam")`), `loop_.rs:341`. Reference: `~/.cache/zig/p/vaxis-*/src/tty.zig:189-691` = **503 lines** (console-mode, `ReadConsoleInputW`, `INPUT_RECORD` key/mouse/resize/focus decode) plus `Loop.zig:116-180`. This is P0.1's twin and it is **not** in the lane that is fixing xev/termio. | **M/L** |
+| **P1.2** ✅ **DONE — WS20 (2026-07-30)** | **Windows font backend `freetype_windows`** | (a) `DeferredFace.Windows` payload left as a verbatim comment — `crates/rustty-font-shaper/src/deferred_face.rs:95-130`; (b) the `Windows` **discoverer** commented out wholesale — `discovery.rs:1911-2073` (~160 LOC), reference `src/font/discovery.zig:900+`; (c) `discovery.rs:2459/2471` test bodies deferred with it. `Backend::FreetypeWindows` already exists in `backend.rs:25`, so only the payloads are missing. | **M** |
 | **P1.3** | **Flatpak spawn tier in `rustty-termio`** | `exec.rs:109` declares a **local empty placeholder** `pub struct FlatpakHostCommand {}` instead of using the **fully ported** `rustty_os::FlatpakHostCommand` (`crates/rustty-os/src/flatpak.rs:202-700`, zero `unimplemented!`); `exec.rs:3296` `killCommandFlatpak` is `unimplemented!` although `flatpak.rs:402 pub fn signal(&mut self, sig: u8, pg: bool)` exists; `flatpakExit` + the `waitXev` flatpak arm stay comments (`exec.rs:288-297`, `:906-910`). The excuse is "`build_config.flatpak` is const false" — but `-Dflatpak` is a **real ghostty build option** (`oracle:src/build/Config.zig:170`), which is exactly the "comptime false" version of "out of scope by platform". | **S/M** |
+
+> **P1.1 / P1.2 CLOSED by WS20 (2026-07-30).** Both are ported in full — the
+> `WindowsTty` console backend + the two windows `Loop` arms, and the
+> `freetype_windows` `Windows` discoverer + the `DeferredFace.win` payload with its
+> `deinit`/`familyName`/`name`/`load`/`hasCodepoint` arms. The reference's own
+> `test "windows"` ships as a documented skip-stub. Neither can be BUILT for a
+> Windows target on this host (no MSVC/mingw C toolchain — see
+> `.port/phase-2/VERIFICATION_DEBT.md` rows V10/V11, owner WS20); both are
+> type-checked and clippy-clean via `.port/phase-2/wincheck.sh`. Nothing was
+> reclassified as out of scope.
 
 ### Tier 2 — GTK subsystem files with **zero** rustty counterpart
 

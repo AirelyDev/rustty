@@ -39,7 +39,10 @@ pub struct ParseResult<'a> {
 /// PORT NOTE: Zig's `parse` error set = `error.InvalidUTF8` (parseGround) ∪
 /// `Color.rgbFromSpec` errors ∪ base64 `Decoder` errors ∪ `Allocator.Error` (dropped —
 /// `Vec` is infallible). No test exercises `Err` (all 34 assert `Ok`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+// PORT NOTE (WS20): `Copy` added — every variant is already `Copy`, and
+// `TtyError::Parse(ParseError)` (the Windows `nextEvent` error path) needs
+// `TtyError` to stay `Copy` as it is on POSIX.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseError {
     InvalidUtf8,                 // parseGround
     Color(cell::ColorSpecError), // rgbFromSpec (OSC 4/10/11/12)

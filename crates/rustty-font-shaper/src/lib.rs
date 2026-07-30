@@ -55,9 +55,12 @@ pub mod ft;
 pub mod hb;
 // Fontconfig binding wrapper (port of `pkg/fontconfig/*.zig`), the Linux/BSD
 // font-discovery seam. Gated OFF on macOS (CoreText discovers fonts; fontconfig
-// is never linked) and on wasm (no C deps), matching the `fontconfig-sys`
-// dependency's `cfg` table.
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+// is never linked), on Windows (`Backend::default` picks `freetype_windows`
+// precisely to "avoid fontconfig on Windows because its libxml2 dependency
+// isn't available" — WS20; the `fontconfig-sys` dependency is gated off the same
+// way, so leaving this module on would have failed to link) and on wasm (no C
+// deps), matching the `fontconfig-sys` dependency's `cfg` table.
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
 pub mod fc;
 pub mod library;
 #[cfg(not(target_arch = "wasm32"))]

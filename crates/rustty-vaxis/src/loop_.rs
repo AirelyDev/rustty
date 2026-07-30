@@ -52,6 +52,7 @@ use crate::queue::Queue;
 use crate::tty::{Tty, TtyError};
 use crate::vaxis::Vaxis;
 use crate::Winsize;
+#[cfg(not(windows))]
 use core::ffi::c_void;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -255,6 +256,13 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
     /// The SIGWINCH winsize callback. Fires with the type-erased `*mut Loop<T>` context;
     /// casts back and projects narrow fields only (§4.2 rule 2). `extern "C"` so it can
     /// adapt the signal-handler ABI.
+    ///
+    /// PORT NOTE (windows): upstream's `Loop.init` has `.windows => {}` — no signal
+    /// handler is ever registered, and `winsizeCallback` (which reads `self.tty.fd`,
+    /// a field `WindowsTty` does not have) is never semantically analyzed. Rust
+    /// analyzes every item, so the callback is `cfg`-gated off exactly where upstream
+    /// elides it.
+    #[cfg(not(windows))]
     pub extern "C" fn winsize_callback(ptr: *mut c_void) {
         let self_ptr = ptr as *mut Loop<'a, T>;
         unsafe {
@@ -334,11 +342,24 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
                 }
             }
         }
+        // The windows read path. Upstream (`Loop.zig:116-122`) is a much simpler pump:
+        // the console driver hands us decoded `INPUT_RECORD`s, so there is no read
+        // buffer, no partial-sequence carry, and no initial `getWinsize` post — the
+        // first `WINDOW_BUFFER_SIZE_EVENT` supplies the size.
         #[cfg(windows)]
-        {
-            // The windows read path (`tty.nextEvent`) is part of the WindowsTty R5 seam.
-            let _ = sp;
-            unimplemented!("windows tty_run — R5 #[cfg(windows)] seam (DEFERRALS.md)");
+        unsafe {
+            let mut parser = Parser::default();
+            let parser_ptr: *mut Parser = std::ptr::addr_of_mut!(parser);
+            while !(*sp).should_quit.load(Ordering::Relaxed) {
+                // Raw-receiver next_event (H1): the thread BLOCKS inside
+                // `ReadConsoleInputW` while `stop()` projects `tty_writer` raw, so no
+                // whole-`&mut Tty` may be formed here (see tty.rs).
+                let event = match Tty::next_event((*sp).tty, parser_ptr) {
+                    Ok(e) => e,
+                    Err(_) => return,
+                };
+                handle_event_generic(sp, (*sp).vaxis, event);
+            }
         }
     }
 }
@@ -373,17 +394,19 @@ impl<'a, T> Drop for Loop<'a, T> {
 /// `unimplemented!()` leaves. `self_ptr`/`vx` are raw so the routing does narrow
 /// projections only (§4.2). The queued `T` OWNS its text via [`Key::into_owned`].
 ///
-/// PORT NOTE (the two `builtin.os.tag` arms): Zig has a `.windows` switch-arm (a strict
-/// subset of the `else` arm, with a `winsize` that skips the in-band-resize latch/
-/// `resetSignalHandler`, and no mouse_leave/paste/color handling) and an `else` arm. The
-/// `else` arm is the LIVE one ported here; the windows arm folds into the WindowsTty R5
-/// seam (its distinctive comments — explicit/scaled width, `HACK: yuck` — are identical
-/// to the ones preserved below), so no dead `#[cfg(windows)]` duplicate is carried.
+/// PORT NOTE (the two `builtin.os.tag` arms): Zig has a `.windows` switch-arm and an
+/// `else` arm. Both are ported, each behind the `cfg` that models its `builtin.os.tag`:
+/// this is the `else` (POSIX) arm; [the windows twin](handle_event_generic) follows.
+/// The two are NOT interchangeable — the windows arm's `winsize` skips the
+/// in-band-resize latch and `resetSignalHandler`, and it has no `mouse_leave`/`paste`/
+/// color/`cap_*` (other than `cap_da1`) handling, all of which fall into its `else =>
+/// {}`.
 ///
 /// # Safety
 /// `self_ptr`/`vx` must be valid, and the caller must hold no conflicting whole-`&mut`.
 ///
 // Use return on the self.post_event's so it can either return error union or void
+#[cfg(not(windows))]
 pub unsafe fn handle_event_generic<'a, T: LoopEvent>(
     self_ptr: *mut Loop<'a, T>,
     vx: *mut Vaxis<'a>,
@@ -512,12 +535,98 @@ pub unsafe fn handle_event_generic<'a, T: LoopEvent>(
             Event::Winsize(winsize) => {
                 (*vx).state.in_band_resize = true;
                 // Reset the signal handler if we are receiving in_band_resize
-                #[cfg(not(windows))]
                 Tty::reset_signal_handler();
                 if let Some(ev) = T::winsize(winsize) {
                     (*self_ptr).queue.push(ev);
                 }
             }
+        }
+    }
+}
+
+/// The `.windows` arm of Zig's `handleEventGeneric` (`Loop.zig:167-234`).
+///
+/// It is deliberately NOT the POSIX arm: `winsize` posts the size without latching
+/// `vx.state.in_band_resize` (there is no SIGWINCH to reset), and everything other than
+/// `winsize`/`key_press`/`key_release`/`cap_da1`/`mouse`/`focus_in`/`focus_out` falls
+/// into upstream's `else => {}` — including `mouse_leave`, `paste*`, the color reports,
+/// and every `cap_*` but `cap_da1`. Those CAN arrive here (the console escape-sequence
+/// path runs the same `Parser`), and upstream drops them; R1 keeps that.
+///
+/// # Safety
+/// `self_ptr`/`vx` must be valid, and the caller must hold no conflicting whole-`&mut`.
+///
+// Use return on the self.post_event's so it can either return error union or void
+#[cfg(windows)]
+pub unsafe fn handle_event_generic<'a, T: LoopEvent>(
+    self_ptr: *mut Loop<'a, T>,
+    vx: *mut Vaxis<'a>,
+    event: Event<'_>,
+) {
+    unsafe {
+        match event {
+            Event::Winsize(ws) => {
+                if let Some(ev) = T::winsize(ws) {
+                    (*self_ptr).queue.push(ev);
+                }
+            }
+            Event::KeyPress(key) => {
+                // Check for a cursor position response for our explicit width query.
+                // This will always be an F3 key with shift = true, and we must be
+                // looking for queries
+                if key.codepoint == crate::key::f3
+                    && key.mods.shift
+                    && !(*vx).queries_done.load(Ordering::Relaxed)
+                {
+                    // explicit width capability detected
+                    (*vx).caps.explicit_width = true;
+                    (*vx).caps.unicode = Method::Unicode;
+                    (*vx).screen.width_method = Method::Unicode;
+                    return;
+                }
+                // Check for a cursor position response for our scaled text query. This
+                // will always be an F3 key with alt = true, and we must be looking for
+                // queries
+                if key.codepoint == crate::key::f3
+                    && key.mods.alt
+                    && !(*vx).queries_done.load(Ordering::Relaxed)
+                {
+                    // scaled text capability detected
+                    (*vx).caps.scaled_text = true;
+                    return;
+                }
+                // HACK: yuck. there has to be a better way (Rust's better way: OWN the bytes)
+                if let Some(ev) = T::key_press(key.into_owned()) {
+                    (*self_ptr).queue.push(ev);
+                }
+            }
+            Event::KeyRelease(key) => {
+                // HACK: yuck. there has to be a better way
+                if let Some(ev) = T::key_release(key.into_owned()) {
+                    (*self_ptr).queue.push(ev);
+                }
+            }
+            Event::CapDa1 => {
+                (*vx).wake_query_futex(); // std.Thread.Futex.wake(&vx.query_futex, 10)
+                (*vx).queries_done.store(true, Ordering::Relaxed);
+            }
+            Event::Mouse(mouse) => {
+                if let Some(ev) = T::mouse((*vx).translate_mouse(mouse)) {
+                    (*self_ptr).queue.push(ev);
+                }
+            }
+            Event::FocusIn => {
+                if let Some(ev) = T::focus_in() {
+                    (*self_ptr).queue.push(ev);
+                }
+            }
+            Event::FocusOut => {
+                if let Some(ev) = T::focus_out() {
+                    (*self_ptr).queue.push(ev);
+                }
+            }
+            // Unsupported currently
+            _ => {}
         }
     }
 }

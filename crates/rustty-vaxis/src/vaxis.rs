@@ -813,6 +813,10 @@ impl<'a> Vaxis<'a> {
         Ok(())
     }
 
+    // Upstream's `.windows` arm of `enableDetectedFeatures` never reaches this
+    // (no feature detection on Windows), so it is dead there — as it is upstream,
+    // where Zig simply does not analyze it.
+    #[cfg_attr(windows, allow(dead_code))]
     fn enable_kitty_keyboard<W: Write>(
         &mut self,
         tty: &mut W,
@@ -1782,6 +1786,7 @@ fn cursor_shape_int(shape: CursorShape) -> u8 {
 
 /// `@bitCast(KittyFlags) -> u5` (§8.3) — LSB-first pack: `disambiguate0 report_events1
 /// report_alternate_keys2 report_all_as_ctl_seqs3 report_text4`.
+#[cfg_attr(windows, allow(dead_code))]
 fn kitty_flags_bits(flags: KittyFlags) -> u8 {
     (flags.disambiguate as u8)
         | ((flags.report_events as u8) << 1)

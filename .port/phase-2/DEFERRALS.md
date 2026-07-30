@@ -4900,14 +4900,26 @@ From **vaxis Chunk 3b** (`crates/rustty-vaxis/src/{tty,loop_,vaxis}.rs`) — the
 named later chunk. Nothing is dropped (R1); the reference control-flow/comments are
 preserved and the field/method surface is fixed so the later chunk FILLS them.
 
-1. **`tty.rs` — `WindowsTty` (`#[cfg(windows)] mod windows_tty`).** The console-mode +
-   `ReadConsoleInputW` + `INPUT_RECORD` key/mouse/resize/focus decode (~450 LOC) lands
-   when a Windows target is in scope. Ported as the struct SHAPE (`stdin`/`stdout`/
-   `initial_*`/`buf`/`last_mouse_button_press`) + `unimplemented!()` method bodies; the
-   non-windows (macOS/Linux) build never names it (which also sidesteps its latent Zig
-   `self.fd` bug — its `read` references a field it lacks). **Target: a Windows-target
-   OUT-OF-SCOPE-BY-PLATFORM per `ROADMAP:214` — see the WS19 T19 note below.
-   chunk.**
+1. ~~**`tty.rs` — `WindowsTty` (`#[cfg(windows)] mod windows_tty`).**~~ **PORTED — WS20
+   (2026-07-30).** The full `tty.zig:189-691` body is LIVE: `GetStdHandle`/
+   `GetConsoleOutputCP`/`GetConsoleMode`/`SetConsoleMode` init + `deinit` restore, the
+   `CONSOLE_MODE_INPUT`/`CONSOLE_MODE_OUTPUT` bit layouts, the buffered `WriteFile`
+   writer, and the whole `ReadConsoleInputW` + `INPUT_RECORD` key/mouse/resize/focus
+   decode (`next_event`/`event_from_record`/`translate_mods` + the UTF-16 surrogate
+   pairing). The Win32 ABI is hand-rolled `extern "system"` against `kernel32` (the
+   `rustty-os::windows` / `rustty-xev::windows` convention; NO new crate). The two
+   upstream compile errors on that path are repaired and documented in the module PORT
+   NOTE — `WindowsTty.read` calls `posix.read(self.fd, ...)` against a field the struct
+   does not have (ported as `ReadFile` on the stdin handle), and upstream has NO
+   `WindowsTty.getWinsize` at all (ported as `GetConsoleScreenBufferInfo`, the same call
+   the resize arm already makes). One rustty-only SOUNDNESS divergence, documented at
+   the field: upstream's `EventState` (which owns the `ansi_buf` the returned escape-
+   sequence `Event` BORROWS) is a `nextEvent` local, so that event points into a dead
+   frame — the state is hoisted into the tty and reset on entry to `next_event`, which
+   is behaviourally identical and not a UAF. **VERIFICATION DEBT (owner WS20):** cannot
+   be cross-compiled on this host (`zlib-sys`), see
+   `.port/phase-2/VERIFICATION_DEBT.md`; type-checked + clippy-clean on the host with
+   the windows `cfg` arms forced on.
 
 2. ~~**`vaxis.rs` — the `Vaxis` INHABITED placeholder leaves.**~~ **RESOLVED by
    Chunk 4a** (commit 9500493): the real `Vaxis<'a>` replaced the placeholder;
@@ -4915,19 +4927,20 @@ preserved and the field/method surface is fixed so the later chunk FILLS them.
    `wake_query_futex` (vaxis.rs:1153) are all LIVE. The 4a residuals (the two
    `zigimg` seams) are the **Chunk 4a/4b section below**.
 
-3. **`tty.rs` — `TestTty::next_event`.** A Windows-API-compat stub (`unimplemented!()`) —
-   Zig returns `error.SkipZigTest`; never reached on non-windows targets. Filled with the
-   `WindowsTty` decode (item 1). **Target: a Windows-target chunk.**
+3. **`tty.rs` — `TestTty::next_event`.** A Windows-API-compat stub — upstream's body is
+   literally `return error.SkipZigTest;`, so the `unimplemented!()` IS the port of that
+   body, not a seam. WS20 brought its signature to parity with the (now live)
+   `WindowsTty::next_event` (raw receiver, `Event`-returning) so the `Tty` alias exposes
+   ONE surface. `TestTty` itself is now `cfg(all(test, not(windows)))`: upstream's
+   `TestTty` calls `posix.pipe`, so it would not compile on a Windows target either, and
+   a Windows test build aliases the real `WindowsTty`.
 
-   > **OUT-OF-SCOPE-BY-PLATFORM, not a deferral [WS19 T19, 2026-07-29].** Both `tty.rs`
-   > Windows items were flagged by gate G-P2 as open claims with no owner, because
-   > "a Windows-target chunk" is not a workstream and never will be one:
-   > `ROADMAP:214` puts Windows out of the port's scope entirely, alongside every
-   > `#[cfg(windows)]` seam (`D:3155`, `D:4155`, `D:4169`), the `iocp`/`wasi_poll` xev
-   > backends and the iOS device runtime. Out-of-scope-by-platform items are explicitly
-   > NOT deferrals — there is no owner to name because there is no plan for the target.
-   > Recorded here so a closure sweep classifies them correctly instead of hunting for
-   > an owner that should not exist.
+   > **CORRECTION [WS20, 2026-07-30].** The "OUT-OF-SCOPE-BY-PLATFORM per `ROADMAP:214`"
+   > note that stood here (WS19 T19) is STRUCK. "Out of scope by platform" is not a
+   > valid disposition: everything ghostty/libvaxis supports is in scope, and inability
+   > to build or run it on this host is verification debt with a recipe, not an
+   > exclusion. Both items are now ported; the residual is recorded in
+   > `.port/phase-2/VERIFICATION_DEBT.md` with owner **WS20**.
 
 
 4. ~~**`loop_.rs` — the `test Loop` lifecycle test (`#[ignore]`).**~~ **RESOLVED by
@@ -4936,8 +4949,15 @@ preserved and the field/method surface is fixed so the later chunk FILLS them.
    against `TestTty` (see the comment at loop_.rs:525).
 
 NOTE (T14 reconciliation, 2026-07-10): item 1's Windows seam family also covers
-`loop_.rs:341` (`#[cfg(windows)]` `tty_run` arm) — same `#[cfg(windows)]` class,
-same Windows-target-chunk target.
+`loop_.rs:341` (`#[cfg(windows)]` `tty_run` arm) — same `#[cfg(windows)]` class.
+**PORTED — WS20 (2026-07-30):** the `.windows` arm of `Loop.ttyRun` (`Loop.zig:116-122`)
+is LIVE, and so is the previously-undropped `.windows` arm of `handleEventGeneric`
+(`Loop.zig:167-234`), which is NOT a strict subset of the POSIX arm — its `winsize` skips
+the in-band-resize latch and `resetSignalHandler`, and `mouse_leave`/`paste*`/the color
+reports/every `cap_*` but `cap_da1` fall into its `else => {}`. `Loop.winsizeCallback` is
+`cfg`-gated off on Windows exactly where upstream elides it (upstream's `Loop.init` is
+`.windows => {}`, so Zig never analyzes the callback's reference to the non-existent
+`WindowsTty.fd`).
 
 ## rustty-vaxis Chunks 4a/4b (the real `Vaxis<'a>` + widgets) — the image tier [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT M5]
 
@@ -4998,9 +5018,10 @@ paths); Chunk 4b (commit 17bcf2d) added the `widgets`/TextInput tier.
 > Miri: the FFI-touching arms are `#[cfg_attr(miri, ignore)]` with rows in
 > `.port/phase-2/MIRI_EXCEPTIONS.md`; every geometry KAT stays Miri-live.
 >
-> **NOT struck by WS12, and correctly still open:** the `#[cfg(windows)]` family — see
-> "rustty-vaxis Chunk 3b" items 1/3. This program has no Windows host or target and the
-> non-Windows build never names them.
+> **The `#[cfg(windows)]` family was NOT struck by WS12; it is struck by WS20
+> (2026-07-30)** — see "rustty-vaxis Chunk 3b" items 1/3, both now PORTED. What remains
+> is verification debt (no Windows host, and no MSVC/mingw cross toolchain here), not
+> unported code: `.port/phase-2/VERIFICATION_DEBT.md`, owner WS20.
 
 ### Historical record — the original seam write-up (2026-07-10)
 

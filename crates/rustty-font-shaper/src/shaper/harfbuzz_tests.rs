@@ -24,6 +24,11 @@ use crate::Style;
 
 use rustty_vt::kitty;
 use rustty_vt::modes as modespkg;
+// PORT NOTE (WS20): `Mode` and `contains_subslice` below are used ONLY by the
+// `#[cfg(target_os = "macos")]` discovered-font tests, so they are gated the same
+// way — otherwise every non-macOS build (Linux fontconfig, Windows freetype) warns
+// `unused`, which `-D warnings` rejects.
+#[cfg(target_os = "macos")]
 use rustty_vt::modes::Mode;
 use rustty_vt::page::{Cell, CellRgb, ContentTag};
 use rustty_vt::point::{Coordinate, Point};
@@ -293,6 +298,7 @@ fn resolver_for(c: Collection) -> CodepointResolver {
 }
 
 /// `std.mem.indexOf(u8, haystack, needle) != null`.
+#[cfg(target_os = "macos")]
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() {
         return true;
