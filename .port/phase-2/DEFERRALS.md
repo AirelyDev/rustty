@@ -4866,13 +4866,46 @@ and proven, so when the §6 ThreadPool body lands it need only wire the queue (t
 SB/TB soundness of the completion-queue plumbing is already discharged); the
 harness `.port/phase-2/mirihar-xev-mpsc` remains the reproduction/regression proof.
 
-**Follow-up (open, low, [2026-07-19, `xev-libxev-completion` branch]):** worker-thread
-`&mut Loop`/`wakeup` aliasing — kqueue.rs twin + `task_loop` lineage audit. `epoll.rs`'s
-`thread_perform` no longer autorefs `Loop::wakeup(&mut self)` on a pool worker (it now
-notifies through a by-value `Copy` eventfd, forming no `&mut Loop`); `kqueue.rs` still
-carries the equivalent dead-path `self.wakeup()` idiom. Joint follow-up: apply the same
-copied-fd notify to the kqueue twin and audit the full `task_loop`-pointer lineage under
-SB/TB (mirihar) once the pool paths go live on both backends.
+**Follow-up — ✅ RESOLVED (2026-07-29, WS19 T10; audit row O9).** ~~worker-thread
+`&mut Loop`/`wakeup` aliasing — kqueue.rs twin + `task_loop` lineage audit.~~ Filed
+2026-07-19 as "open, low" INSIDE this RESOLVED entry, which is why it stayed invisible.
+
+The original prescription — "apply epoll's copied-fd notify to the kqueue twin" — was
+**disproven by the harness**, which is exactly why the doctrine forbids hand-reasoning
+SB. Five new `.port/phase-2/mirihar-xev-mpsc` candidates settle it (full 14-row matrix in
+that README; `bash run-all.sh` reproduces):
+
+| candidate | SB | TB |
+|---|---|---|
+| `wakeup_naive` — shipped kqueue `(*(*c).task_loop).wakeup()` | **UB** | **UB** |
+| `wakeup_copied` — shipped epoll "fix": by-value `Copy` handle read through `task_loop` | **UB** | CLEAN |
+| `wakeup_completion_cached` — **APPLIED FIX** | CLEAN | CLEAN |
+| `taskloop_lineage_naive` — shipped `(*c).task_loop = self`, deref'd after a later tick | **UB** | CLEAN |
+| `taskloop_lineage_rooted` | CLEAN | CLEAN |
+
+**Why "form no reference" is not enough.** The loop thread sits inside
+`tick(&mut self)`/`run(&mut self)` for the entire time a pool worker runs, so it holds a
+*function-entry, PROTECTED* `&mut Loop`. A by-value read of a `Copy` field is still a
+**foreign access** on the `Loop` allocation, and protected tags may not be invalidated at
+all — hence `wakeup_copied` is SB-UB. **This also corrects the M1 verdict above:** the
+already-applied `(*(*c).task_loop).thread_pool_completions_ptr` read had the same defect;
+`xthread_boxq` read CLEAN only because that candidate sequenced the two threads with a
+channel handshake, so the loop thread was NOT holding its `&mut Loop`. The new candidates
+deliberately remove that concession.
+
+**Applied fix (both backends).** The worker must not touch the `Loop` allocation at all,
+so `Loop::start`/`thread_schedule` copies the two handles it needs into the **caller-owned
+`Completion`** (never inside `Loop`, hence immune to `Loop`'s per-tick reborrows) before
+`schedule`, and `thread_perform` reads only from `(*c)`:
+`task_completions: *mut TaskCompletionQueue` — **the reference's OWN field, restored**
+after the Task-2 elision, so this half is a fidelity GAIN — and `task_wakeup`
+(`Async`/`Eventfd`, `Copy`) — port-added, ledgered as a `[R1-DIVERGENCE]` below. Because
+`task_loop` is no longer dereferenced on the worker, the lineage audit is discharged too:
+its provenance (`taskloop_lineage_naive`: SB-UB) stops mattering. `COMPLETION_SIZE`
+tripwires re-pinned (kqueue 248→264, epoll 208→224 — the `task_completions` half moves
+the Rust size *toward* Zig's 256). Verified: `cargo test -p rustty-xev` 47+2 green on
+macOS and on the Linux VM (epoll arm), `cargo +nightly miri test -p rustty-xev` no new
+findings.
 
 ### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity — ✅ RESOLVED (2026-07-23, WS3)
 
@@ -5733,6 +5766,55 @@ consumers — has no rustty counterpart.
 
 ---
 
+## xev `Completion.task_wakeup` — the pool worker wakes the loop through a per-completion `Copy` handle, not `c.task_loop.wakeup()` [WS19 T10, 2026-07-29, audit row O9]
+
+**Oracle:** both `backend/kqueue.zig` and `backend/epoll.zig` end `thread_perform` with
+`c.task_loop.wakeup()` — the pool worker reaches back into the `Loop` to notify it.
+
+**Divergence:** `Completion` gains ONE port-added field, `task_wakeup` (`Async` on
+kqueue — a `Copy` `port: u32`; `Eventfd` on epoll — a `Copy` `fd: i32`), written on the
+loop thread in `Loop::start`/`thread_schedule` immediately after `(*c).task_loop = self`,
+and `thread_perform` notifies THAT copy. Nothing else changes: same handle, same
+`mach_msg`/`write(1u64)`, same ordering relative to the queue push. Note the companion
+field `task_completions` is NOT a divergence — it is the reference's own field, restored
+after a Task-2 elision, and it makes `Completion` a closer match to Zig's 256 bytes
+(kqueue 248→264).
+
+**Why fidelity is overruled (soundness > R1):**
+
+1. **The oracle's shape is UB in Rust, proven not argued.** The loop thread is inside
+   `tick(&mut self)` / `run(&mut self)` — a *function-entry, PROTECTED* `&mut Loop` — for
+   the entire time a pool worker runs. `.port/phase-2/mirihar-xev-mpsc` (`bash
+   run-all.sh`): `wakeup_naive`, the literal `(*(*c).task_loop).wakeup()` autoref, is UB
+   under **both** Stacked and Tree Borrows. Zig has no aliasing model, so the reference
+   incurs no such cost; this is a language-level obligation, not a behavior choice.
+2. **The obvious cheaper fix is insufficient — also proven.** `wakeup_copied` (read the
+   `Copy` handle out of the `Loop` by value, forming no reference — the shape `epoll.rs`
+   had already shipped) is **still SB-UB**: a by-value read is a foreign *access* on the
+   `Loop` allocation, and a protected tag may not be invalidated at all. Only
+   `wakeup_completion_cached` — the worker touching ONLY the caller-owned `Completion`
+   allocation — is CLEAN under both models. There is no faithful shape that is sound.
+3. **The divergence is invisible to every observer.** The handle notified is bit-identical
+   to `Loop`'s own, so the kernel-visible effect (`mach_msg` to the same port / `write` to
+   the same eventfd) is byte-identical; no caller, test or syscall trace can tell the two
+   apart. The only observable is `size_of::<Completion>()`, which is *already* a
+   documented Rust-vs-Zig divergence pinned by its own tripwire.
+4. **It is bounded and gate-pinned.** Two fields, two write sites (both on the loop
+   thread, both adjacent to the existing `task_loop` write), one read site per backend.
+   The `COMPLETION_SIZE` `const` assert trips on any drift, `tests/surface_parity.rs`
+   pins `Completion`'s public surface (`Sized`/`Default`/`Send`), and the mirihar matrix
+   is the standing regression proof. As a bonus the change removes ALL worker derefs of
+   `task_loop`, which discharges the separate `task_loop`-lineage hazard
+   (`taskloop_lineage_naive`: SB-UB) rather than merely relocating it.
+
+**Guard:** `.port/phase-2/mirihar-xev-mpsc` (`wakeup_naive` / `wakeup_copied` /
+`wakeup_completion_cached` / `taskloop_lineage_*`, SB + TB) — out-of-suite by necessity:
+the pool path is dead in-tree (`Loop::init` hardcodes `Options::default()`, so
+`thread_pool` is always `None`), so no in-suite test can reach it, and Miri only checks
+executed code.
+
+---
+
 ## `rustty-bench` macOS `os_signpost` Instruments interval [RECLASSIFIED — WS19 T13, 2026-07-29, audit row O19a]
 
 **What diverges.** `Benchmark.zig:44-65` opens an `os_signpost` interval so a benchmark
@@ -5971,7 +6053,7 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 | O6 | `D:4046` GTK portal `OpenURI` — call site INHABITED, body unported; marked **OPEN**, no owner | **OPEN, real.** No `portal` module under `crates/rustty-apprt/src/gtk/`; `startup` fetches the `gio::DBusConnection` for GlobalShortcuts only. WS15 explicitly split this out and did not take it. | **fix in WS19 T8** (reuses the WS15 request-path pattern + its live gate harness) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T8** (GTK portal `OpenURI`). Needs the port plus live D-Bus verification on the VM. |
 | O7 | `D:4858`/`:4904` wayland `Window` snapshots the decoration mode at init; a live decoration-mode change is now *cranked* but never *re-read* | **OPEN, real, no owner** — recorded twice, both as a "coupled follow-up" with no WS. | **fix in WS19 T9** | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T9** (wayland decoration-mode re-read). Needs a real compositor. |
 | O8 | `D:4905` wayland duplicate-global re-advertisement leaves a stale `name→tag` entry | **OPEN, LOW, no owner.** | **permanent divergence** — pathological input no compositor produces; 4-criterion basis written in WS19 T9 | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T9 (ledger half).** Duplicate-global nit is a **Justified R1 Divergence** with a 4-criterion basis. |
-| O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T10** (kqueue `thread_perform` `&mut Loop`). Requires the `mirihar-xev-mpsc` SB/TB proof first — SB conclusions must not be hand-reasoned. |
+| O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T10.** And the prescription it carried was WRONG: the harness proved "mirror epoll's copied-fd notify" INSUFFICIENT (`wakeup_copied`: still SB-UB — a by-value read is a foreign *access* against the loop thread's *protected* `&mut Loop`, and forming no reference is not enough). Cure applied to BOTH backends: the queue handle + the wakeup handle are copied into the caller-owned `Completion` at schedule time (`task_completions`, the reference's OWN field restored, + port-added `task_wakeup`), so `thread_perform` never accesses the `Loop` allocation and never derefs `task_loop` — which also discharges the lineage audit. 14-candidate SB/TB matrix in `.port/phase-2/mirihar-xev-mpsc/README.md`. |
 | O10 | `D:3273` macOS `xev.File`/`TCP`/`UDP` watcher instantiations still deferred (Linux ported them, Tasks 3–5); plus the macOS `kqueue: file IO on thread pool` skip-stub | **OPEN, real, no owner.** The two targets deliberately diverge, gate-pinned by `crates/rustty-xev/tests/surface_parity.rs`. | **permanent divergence** — already deliberate and gate-pinned; WS19 T11 moves it into the divergence section with its 4-criterion basis rather than leaving it in a "DEFERRED" list | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
 | O11 | `D:3274` xev `c_api.zig` (libxev's own C ABI) unported | **OPEN, no owner.** rustty consumers use the Rust API; nothing in ghostty consumes libxev's C ABI. | **permanent divergence** (outside the port's consumption surface; basis in WS19 T11) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
 | O12 | `D:2643` `+version`'s OSC-8 commit-hash hyperlink never emits (no `+BUILD` metadata, no repo-URL identity constant) | **OPEN, real, no owner.** The three STUB lines it is bundled with are GONE (see W8); only the hyperlink branch is still dead. | **fix in WS19 T12** (repo-URL constant in `rustty-identity` + a build-time commit hash) | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T12** (`+version` OSC-8 commit hyperlink). |
@@ -6091,7 +6173,7 @@ opposite direction** — claiming open work that has shipped.
 | **O16** WebGL backend | repo-wide `grep -rni 'webgl'` → only `build_config::renderer::Backend::Webgl` (an enum variant) + prose "WebGL wasm-deferred"; no backend implementation | confirmed **OPEN** → WS14 |
 | **O5** `PageList::Limits` | repo-wide `grep -rn 'struct Limits'` → only `kitty/graphics_image.rs:126` (an unrelated struct); no `PageList::Limits` | confirmed **OPEN** → Phase 3 re-vet P3-RV1 |
 | **O6** GTK portal `OpenURI` | repo-wide `grep -rni 'openuri\|open_uri'` across `crates/` → **0 hits**; the only portal code is `gtk/class/global_shortcuts.rs` (GlobalShortcuts iface) | confirmed **OPEN** → WS19 T8 |
-| **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ends in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | confirmed **OPEN** → WS19 T10 |
+| **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ended in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | **CLOSED** by WS19 T10 (both backends; `thread_perform` no longer derefs `task_loop` at all) |
 | **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returns `None` unconditionally; `:103` is the unreachable emit | confirmed **OPEN** → WS19 T12 |
 | **O21** `shell_integration.rs` lossy path | `crates/rustty-termio/src/shell_integration.rs:1708` and `:1760` both `to_string_lossy()` | confirmed **OPEN** → WS19 T15 |
 | **O1** `style::Color` | `crates/rustty-vt/src/style.rs:143` is a plain `enum Color { None, Palette(u8), Rgb(RGB) }`, no `#[repr]` | confirmed **OPEN** → WS19 T5 |

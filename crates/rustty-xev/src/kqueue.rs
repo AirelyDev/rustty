@@ -335,7 +335,10 @@ struct LoopFlags {
 // thread. SAFETY / single-thread affinity: after the move a `Loop` (and every
 // `Completion` it links) is touched by exactly one thread at a time — the owning
 // event-loop thread — so transferring ownership is sound. The cross-thread wakeup
-// rides `Async{port:u32}` (auto-`Send`), never a shared `&mut Loop`.
+// rides `Async{port:u32}` (auto-`Send`), never a shared `&mut Loop` — and, since
+// WS19 T10, the pool worker reads that handle (and the completion queue's) out of
+// the caller-owned `Completion` (`task_wakeup`/`task_completions`), so it never
+// ACCESSES the `Loop` allocation at all.
 unsafe impl Send for Loop {}
 
 impl Loop {
@@ -1353,6 +1356,16 @@ impl Loop {
                 // communicate back to our main thread.
                 unsafe {
                     (*c).task_loop = self;
+                    // PORT-ADDED [R1-DIVERGENCE, WS19 T10]: copy the two handles
+                    // `thread_perform` needs INTO the completion, so the pool
+                    // worker never touches the `Loop` allocation (which the loop
+                    // thread holds a protected `&mut` to for the whole tick). See
+                    // the `task_completions`/`task_wakeup` field docs and mirihar
+                    // `wakeup_completion_cached`. Both reads here happen on the
+                    // loop thread; `thread_pool_completions_ptr` was established
+                    // at the top of this very tick (`tick_inner` init arm).
+                    (*c).task_completions = self.thread_pool_completions_ptr;
+                    (*c).task_wakeup = self.wakeup_state.mach_port;
                     (*c).task = thread_pool::Task {
                         callback: Loop::thread_perform,
                         ..thread_pool::Task::default()
@@ -1453,18 +1466,27 @@ impl Loop {
         unsafe { (*c).result = Some(Completion::perform(c, None)) };
 
         // Add to our completion queue. Push THROUGH the loop's cached stable raw
-        // handle (`thread_pool_completions_ptr`), never a fresh `&mut ...
-        // thread_pool_completions`: this runs ON A POOL THREAD, so a unique `&mut`
-        // reborrow of the queue (or of the owning `Loop`) formed here would be UB
-        // regardless of the atomics inside, AND would pop the queue's stub-pointer
-        // lineage. Reading the Copy raw handle + pushing through it touches only
-        // the queue's own (Box) allocation via its stable tag. (LIFETIMES-AUDIT M1;
-        // mirihar `xthread_boxq`: CLEAN under SB + TB.)
-        unsafe { TaskCompletionQueue::push((*(*c).task_loop).thread_pool_completions_ptr, c) };
+        // handle, which `Loop::start` copied into THIS completion — never a fresh
+        // `&mut …thread_pool_completions` (a unique reborrow of the queue formed on
+        // a pool thread is UB regardless of the atomics inside, and would pop the
+        // queue's stub-pointer lineage), and never `(*(*c).task_loop)` either: the
+        // loop thread holds a protected `&mut Loop` for the whole tick, so even a
+        // by-value READ out of the `Loop` allocation from here is a foreign access
+        // that invalidates it (mirihar `wakeup_copied`: UB under SB). The handle
+        // reached this way is rooted in the queue's own (Box) allocation, and the
+        // completion is caller-owned. (LIFETIMES-AUDIT M1 + WS19 T10; mirihar
+        // `xthread_boxq` + `wakeup_completion_cached`: CLEAN under SB + TB.)
+        unsafe { TaskCompletionQueue::push((*c).task_completions, c) };
 
-        // Wake up our main loop (macos)
+        // Wake up our main loop (macos).
+        //
+        // The reference calls `self.wakeup()`; autorefing `Loop::wakeup(&mut self)`
+        // here would form a `&mut Loop` on this pool worker while the loop thread
+        // holds one (mirihar `wakeup_naive`: UB under SB AND TB). We notify the
+        // `Copy` mach-port handle that `Loop::start` copied into this completion,
+        // forming no reference to — and performing no access on — `Loop` at all.
         unsafe {
-            let _ = (*(*c).task_loop).wakeup();
+            let _ = (*c).task_wakeup.notify();
         };
     }
 
@@ -1520,6 +1542,35 @@ pub struct Completion {
     /// except internally.
     task: thread_pool::Task,
     task_loop: *mut Loop,
+
+    /// The two loop-side handles `thread_perform` needs, COPIED INTO THIS
+    /// COMPLETION at schedule time (WS19 T10).
+    ///
+    /// `task_completions` RESTORES the reference's own per-completion
+    /// `task_completions: *TaskCompletionQueue` field, which the Task-2 port had
+    /// elided in favour of reaching the queue via `task_loop` (see the elision
+    /// note that used to sit here and its epoll.rs twin) — so this half is a
+    /// FIDELITY RESTORATION, not a divergence. `task_wakeup` is PORT-ADDED
+    /// [R1-DIVERGENCE]: the reference wakes the loop with `c.task_loop.wakeup()`.
+    ///
+    /// Why the port cannot: the loop thread is inside `tick(&mut self)` /
+    /// `run(&mut self)` for the whole time a pool worker runs, so it holds a live
+    /// (function-entry, PROTECTED) `&mut Loop`. ANY worker access to the `Loop`
+    /// allocation is a foreign access that invalidates it — including a by-value
+    /// read of a `Copy` handle that forms no reference at all. Proven on
+    /// `.port/phase-2/mirihar-xev-mpsc`: `wakeup_naive` (the autoref'd
+    /// `(*task_loop).wakeup()` this port shipped) is UB under SB **and** TB;
+    /// `wakeup_copied` (the by-value-handle shape epoll.rs shipped as its fix) is
+    /// still UB under SB; only `wakeup_completion_cached` — the worker touching
+    /// ONLY the caller-owned `Completion` allocation — is CLEAN under both. The
+    /// same argument condemns reading `(*task_loop).thread_pool_completions_ptr`,
+    /// which is exactly what the restored reference field avoids.
+    ///
+    /// A `Completion` is allocated by the CALLER, never inside `Loop`, so it is
+    /// immune to `Loop`'s per-tick reborrows. Both handles are written on the
+    /// loop thread in `Loop::start`'s threadpool arm, before `schedule`.
+    task_completions: *mut TaskCompletionQueue,
+    task_wakeup: Async,
 }
 
 /// PORT NOTE: the `flags: packed struct { state: State, threadpool: bool }` sub-struct.
@@ -1572,6 +1623,12 @@ impl Default for Completion {
             },
             task: thread_pool::Task::default(),
             task_loop: ptr::null_mut(),
+            // PORT-ADDED (WS19 T10): same discipline as `task`/`task_loop` —
+            // Zig `undefined`, only set when scheduled on the pool.
+            task_completions: ptr::null_mut(),
+            task_wakeup: Async {
+                port: darwin::MACH_PORT_NULL,
+            },
         }
     }
 }
@@ -2762,7 +2819,15 @@ impl Timer {
 // bit-packed 1 byte; the ThreadPool `Task.node` is now the real intrusive Zap
 // node (+16B over the former ZST placeholder, once the pool was ported).
 // `Result` (24B) and `Address` (108B) match Zig.
-const COMPLETION_SIZE: usize = 248;
+//
+// RE-MEASURED (WS19 T10): 248 → 264. The pool-worker aliasing fix puts the two
+// loop-side handles `thread_perform` needs in the completion itself, so the worker
+// never accesses the `Loop` allocation: `task_completions: *mut TaskCompletionQueue`
+// (8 — the reference's OWN field, restored after the Task-2 elision, so this half
+// moves the Rust size TOWARD Zig's) + `task_wakeup: Async` (4, port-added, +4 tail
+// padding). See the field docs and the `[R1-DIVERGENCE]` entry in
+// `.port/phase-2/DEFERRALS.md`.
+const COMPLETION_SIZE: usize = 264;
 const _: () = assert!(size_of::<Completion>() == COMPLETION_SIZE);
 
 // ---------------------------------------------------------------------------

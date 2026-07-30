@@ -549,6 +549,215 @@ fn run_xthread_boxq() {
     drop(lp);
 }
 
+// ===========================================================================
+// WAKEUP / `task_loop`-lineage candidates (the 2026-07-19 "Follow-up (open,
+// low)" joint item: worker-thread `&mut Loop`/`wakeup` aliasing — kqueue.rs twin
+// + `task_loop` lineage audit; WS19 T10).
+//
+// Modelled here, faithfully to `crates/rustty-xev/src/kqueue.rs`:
+//   * `Loop.wakeup_state: Wakeup { mach_port: Async /* Copy, port: u32 */,
+//     mach_port_buffer: [u8; 32] }`, `Loop::wakeup(&mut self)` ->
+//     `Wakeup::wakeup(&mut self)` -> `Async::notify(&self)`.
+//   * `Completion.task_loop: *mut Loop`, set by `Loop::start` as `(*c).task_loop
+//     = self` — i.e. derived from THAT tick's `&mut self`.
+//   * `thread_perform(t)` runs ON A POOL WORKER and (a) pushes the completion and
+//     (b) wakes the loop, WHILE the loop thread is inside `tick(&mut self)` /
+//     `run(&mut self)` and therefore holds a live `&mut Loop`.
+//
+// The concurrency is NOT sequenced away here (unlike the queue candidates above,
+// which used a channel handshake): the loop thread deliberately HOLDS its
+// `&mut self` across the worker's `thread_perform`, because that overlap is the
+// exact thing under test. Two spin-wait flags make the interleaving
+// deterministic so the verdict is reproducible instead of schedule-dependent.
+// ===========================================================================
+use core::sync::atomic::AtomicBool;
+
+static W_DONE: AtomicBool = AtomicBool::new(false);
+static L_READY: AtomicBool = AtomicBool::new(false);
+
+/// `async.rs` `Async` — a `#[derive(Clone, Copy)]` handle whose whole state is
+/// `port: mach_port_name_t` (`u32`), with `notify(&self)`.
+#[derive(Clone, Copy)]
+struct AsyncPort {
+    port: u32,
+}
+impl AsyncPort {
+    // stands in for `mach_msg(MACH_SEND_MSG)` — a real syscall, i.e. a WIDE
+    // window during which the loop thread certainly runs.
+    fn notify(&self) -> u32 {
+        self.port ^ 0x5a
+    }
+}
+
+/// `kqueue.rs` `Wakeup` — note `wakeup(&mut self)` (faithful to Zig `*Wakeup`).
+struct Wakeup {
+    mach_port: AsyncPort,
+    mach_port_buffer: [u8; 32],
+}
+impl Wakeup {
+    fn new() -> Self {
+        Wakeup { mach_port: AsyncPort { port: 7 }, mach_port_buffer: [0; 32] }
+    }
+    fn wakeup(&mut self) -> u32 {
+        self.mach_port.notify()
+    }
+}
+
+/// The `Loop` analogue for these candidates.
+struct LWake {
+    other: u32,
+    wakeup_state: Wakeup,
+}
+impl LWake {
+    fn new() -> Self {
+        LWake { other: 0, wakeup_state: Wakeup::new() }
+    }
+    /// `Loop::wakeup(&mut self)` — kqueue.rs:1473.
+    fn wakeup(&mut self) -> u32 {
+        self.wakeup_state.wakeup()
+    }
+}
+
+/// The `Completion` analogue: an EXTERNAL, caller-owned allocation (this is the
+/// key structural fact the `completion_cached` candidate exploits — it is NOT
+/// inside the `Loop` allocation, so `Loop` reborrows never touch it).
+struct Comp {
+    task_loop: *mut LWake,
+    /// candidate-only: the wakeup handle copied in at schedule time.
+    cached_port: AsyncPort,
+}
+
+struct SendComp(*mut Comp);
+unsafe impl Send for SendComp {}
+
+#[derive(Clone, Copy, PartialEq)]
+enum WakeMode {
+    /// `let _ = (*(*c).task_loop).wakeup();` — what kqueue.rs ships: an autoref
+    /// forming `&mut Loop` on the pool worker.
+    Naive,
+    /// epoll.rs's applied shape: read the `Copy` wakeup handle out BY VALUE
+    /// through the raw `task_loop`, notify the copy. Forms no reference to
+    /// `Loop` — but still ACCESSES the `Loop` allocation.
+    Copied,
+    /// Read the handle from the COMPLETION's own allocation (cached there on the
+    /// loop thread at schedule time). The worker touches `Loop` not at all.
+    CompletionCached,
+}
+
+/// `thread_perform` (the pool-worker body).
+fn wake_thread_perform(c: SendComp, mode: WakeMode) {
+    // Wait until the loop thread is demonstrably inside `tick(&mut self)`.
+    while !L_READY.load(Ordering::Acquire) {
+        std::hint::spin_loop();
+    }
+    let out = unsafe {
+        match mode {
+            WakeMode::Naive => (*(*c.0).task_loop).wakeup(),
+            WakeMode::Copied => {
+                let mp: AsyncPort = (*(*c.0).task_loop).wakeup_state.mach_port;
+                mp.notify()
+            }
+            WakeMode::CompletionCached => {
+                let mp: AsyncPort = (*c.0).cached_port;
+                mp.notify()
+            }
+        }
+    };
+    std::hint::black_box(out);
+    W_DONE.store(true, Ordering::Release);
+}
+
+impl LWake {
+    /// `tick(&mut self)` holding its `&mut Loop` across the worker's
+    /// `thread_perform` — the real overlap. `task_loop` is set from a STABLE raw
+    /// root (`root`), so this candidate isolates ONE variable: what the worker
+    /// does with `task_loop`. (The lineage of `task_loop` itself is the separate
+    /// `taskloop_*` pair below.)
+    fn tick_hold(&mut self) -> u32 {
+        self.other = self.other.wrapping_add(1); // loop-thread access via &mut self
+        L_READY.store(true, Ordering::Release);
+        while !W_DONE.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
+        // The SAME `&mut self`, used AFTER the worker's access. If the worker
+        // invalidated it, this is where SB/TB reports.
+        self.other = self.other.wrapping_add(1);
+        self.other
+    }
+}
+
+fn run_wakeup(mode: WakeMode, name: &str) {
+    let mut lp: Box<LWake> = Box::new(LWake::new());
+    // ONE stable raw root for the whole run (the `boxq` precedent shape).
+    let root: *mut LWake = &raw mut *lp;
+    let port = unsafe { (*root).wakeup_state.mach_port };
+    let c: *mut Comp = Box::into_raw(Box::new(Comp { task_loop: root, cached_port: port }));
+
+    let send = SendComp(c);
+    let handle = std::thread::spawn(move || wake_thread_perform(send, mode));
+    // The loop thread's tick, reached THROUGH the stable root (never a fresh
+    // `&mut *lp` autoref, which would itself pop `root`).
+    let n = unsafe { (*root).tick_hold() };
+    handle.join().unwrap();
+    println!("{name}: other={n}");
+    drop(unsafe { Box::from_raw(c) });
+    drop(lp);
+}
+
+// ---------------------------------------------------------------------------
+// `task_loop` LINEAGE pair. `Loop::start(&mut self)` does `(*c).task_loop =
+// self`, minting the worker's `*mut Loop` from THAT tick's `&mut self`. The
+// worker then derefs it LATER — possibly after a subsequent `tick(&mut self)`
+// function-entry retag has popped that lineage (the `plain_selfptr` failure mode,
+// one level up: the whole `Loop`, not just the queue field).
+// ---------------------------------------------------------------------------
+impl LWake {
+    /// `Loop::start(&mut self)` — naive: `(*c).task_loop = self`.
+    fn start_naive(&mut self, c: *mut Comp) {
+        unsafe { ptr::addr_of_mut!((*c).task_loop).write(self) };
+    }
+    /// A plain later tick, whose `&mut self` entry retag pops the lineage above.
+    fn tick_plain(&mut self) {
+        self.other = self.other.wrapping_add(1);
+    }
+}
+
+fn run_taskloop_lineage(rooted: bool, name: &str) {
+    let mut lp: Box<LWake> = Box::new(LWake::new());
+    let c: *mut Comp = Box::into_raw(Box::new(Comp {
+        task_loop: ptr::null_mut(),
+        cached_port: AsyncPort { port: 0 },
+    }));
+    let root: *mut LWake = &raw mut *lp;
+    if rooted {
+        // FIXED shape: `task_loop` is the ONE stable raw root, and the completion
+        // also carries the `Copy` wakeup handle, so the worker never re-derives
+        // anything from a per-tick borrow.
+        unsafe {
+            ptr::addr_of_mut!((*c).task_loop).write(root);
+            ptr::addr_of_mut!((*c).cached_port).write((*root).wakeup_state.mach_port);
+        }
+        // later ticks, reached through the stable root
+        unsafe {
+            (*root).tick_plain();
+            (*root).tick_plain();
+        }
+    } else {
+        // SHIPPED shape: `(*c).task_loop = self` inside `&mut self`, then a later
+        // `&mut self` tick retag.
+        lp.start_naive(c);
+        lp.tick_plain();
+        lp.tick_plain();
+    }
+    // The worker derefs `task_loop` (here: on the same thread — the LINEAGE
+    // question is orthogonal to concurrency, and keeping it single-threaded makes
+    // the verdict unambiguous).
+    let mp: AsyncPort = unsafe { (*(*c).task_loop).wakeup_state.mach_port };
+    println!("{name}: port={}", mp.notify());
+    drop(unsafe { Box::from_raw(c) });
+    drop(lp);
+}
+
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
@@ -561,11 +770,20 @@ fn main() {
         "xthread_naive" => run_xthread_naive(),
         "xthread_shipped" => run_xthread_shipped(),
         "xthread_boxq" => run_xthread_boxq(),
+        "wakeup_naive" => run_wakeup(WakeMode::Naive, "wakeup_naive"),
+        "wakeup_copied" => run_wakeup(WakeMode::Copied, "wakeup_copied"),
+        "wakeup_completion_cached" => {
+            run_wakeup(WakeMode::CompletionCached, "wakeup_completion_cached")
+        }
+        "taskloop_lineage_naive" => run_taskloop_lineage(false, "taskloop_lineage_naive"),
+        "taskloop_lineage_rooted" => run_taskloop_lineage(true, "taskloop_lineage_rooted"),
         other => {
             eprintln!("unknown candidate: {other:?}");
             eprintln!(
                 "candidates: plain_naive plain_selfptr plain_rawtick cell_selfptr \
-                 xthread_naive xthread_shipped"
+                 inline_cached boxq xthread_naive xthread_shipped xthread_boxq \
+                 wakeup_naive wakeup_copied wakeup_completion_cached \
+                 taskloop_lineage_naive taskloop_lineage_rooted"
             );
             std::process::exit(2);
         }

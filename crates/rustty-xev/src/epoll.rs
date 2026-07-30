@@ -238,8 +238,9 @@ struct LoopFlags {
 // the pool itself is `Sync + Send` (its worker threads run concurrently by design),
 // so the only cross-thread channel — a worker running `thread_perform` and pushing
 // onto `thread_pool_completions` — rides the lock-free MPSC queue (through the
-// cached stable raw handle) + the `Eventfd` wakeup (a plain `Copy` fd), never a
-// shared `&mut Loop`.
+// stable raw handle) + the `Eventfd` wakeup (a plain `Copy` fd), BOTH read out of
+// the caller-owned `Completion` (`task_completions`/`task_wakeup`), so the worker
+// never references — nor even ACCESSES — the `Loop` allocation (WS19 T10).
 unsafe impl Send for Loop {}
 
 impl Loop {
@@ -798,11 +799,10 @@ impl Loop {
     /// (epoll.zig:483). Returns `Err(())` for the reference's
     /// `error.ThreadPoolRequired` when no pool is attached; the caller maps that to
     /// the op's `ThreadPoolRequired` result. Mirrors kqueue.rs's threadpool
-    /// `StartAction` idioms: the per-completion `task_completions` field the oracle
-    /// sets is elided — `thread_perform` reaches the loop's cached stable
-    /// `thread_pool_completions_ptr` via `task_loop` instead (the lifetimes-audit
-    /// fix), so the self-referential MPSC queue's stub pointers are never
-    /// invalidated.
+    /// `StartAction` idioms, including the per-completion `task_completions` field
+    /// the oracle sets (restored in WS19 T10) plus the port-added `task_wakeup`, so
+    /// that `thread_perform` never accesses the `Loop` allocation and the
+    /// self-referential MPSC queue's stub pointers are never invalidated.
     ///
     /// # Safety
     /// `c` must be a valid, stable `Completion` pointer owned by this loop.
@@ -816,6 +816,14 @@ impl Loop {
         unsafe {
             // Setup our completion state so that thread_perform can do stuff.
             (*c).task_loop = self;
+            // WS19 T10: copy the two handles `thread_perform` needs INTO the
+            // completion, so the pool worker never touches the `Loop` allocation
+            // (which the loop thread holds a protected `&mut` to for the whole
+            // tick). Both reads happen here, on the loop thread;
+            // `thread_pool_completions_ptr` was established in the `tick_inner`
+            // init arm. Symmetric with kqueue.rs.
+            (*c).task_completions = self.thread_pool_completions_ptr;
+            (*c).task_wakeup = self.eventfd;
             (*c).task = thread_pool::Task {
                 callback: Loop::thread_perform,
                 ..thread_pool::Task::default()
@@ -838,23 +846,26 @@ impl Loop {
     // PORT NOTE: `fn thread_perform(t: *ThreadPool.Task) void` (epoll.zig:501).
     // `@fieldParentPtr("task", t)` recovers the owning Completion via `container_of`
     // (offset-of). The result is stored on `task_result`, then the completion is
-    // pushed onto the loop's MPSC queue THROUGH the cached stable raw handle
-    // (`thread_pool_completions_ptr`), never a fresh `&mut ...
-    // thread_pool_completions`: this runs ON A POOL THREAD, so a unique `&mut`
-    // reborrow of the queue (or of the owning `Loop`) formed here would be UB
-    // regardless of the atomics inside, AND would pop the queue's stub-pointer
-    // lineage (mirrors kqueue.rs; mirihar `xthread_boxq`: CLEAN under SB + TB).
+    // pushed onto the loop's MPSC queue through the stable raw handle the loop
+    // thread copied into THIS COMPLETION (`task_completions`, the reference's own
+    // field), never a fresh `&mut …thread_pool_completions`: this runs ON A POOL
+    // THREAD, so a unique `&mut` reborrow of the queue (or of the owning `Loop`)
+    // formed here would be UB regardless of the atomics inside, AND would pop the
+    // queue's stub-pointer lineage (mirrors kqueue.rs; mirihar `xthread_boxq`:
+    // CLEAN under SB + TB).
     //
-    // The final wakeup applies the SAME invariant: the reference calls
-    // `self.wakeup()`, but autorefing `Loop::wakeup(&mut self)` on this pool
-    // worker would form a `&mut Loop` while the loop thread may concurrently
-    // hold one — two overlapping `&mut`, aliasing-model UB. This port instead
-    // reads the loop's `eventfd` out BY VALUE (it is a `Copy` fd wrapper) and
-    // notifies the copy, forming NO reference to `Loop` at all — precisely the
-    // channel the `unsafe impl Send for Loop` note (~:232) promises ("rides the
-    // `Eventfd` wakeup (a plain `Copy` fd), never a shared `&mut Loop`"). The
-    // kqueue.rs twin has the same dead-path `wakeup()` idiom; both are ledgered
-    // for a joint follow-up audit (.port/phase-2/DEFERRALS.md, 2026-07-19).
+    // The final wakeup applies the SAME invariant, through `task_wakeup`. REVISED
+    // WS19 T10: the previous shape here read `(*(*c).task_loop).eventfd` out by
+    // value, on the reasoning that a `Copy` read forms no reference. The mirihar
+    // `wakeup_copied` candidate DISPROVED that as sufficient — the loop thread
+    // holds a PROTECTED `&mut Loop` for the whole tick, and a by-value read is
+    // still a foreign ACCESS on the `Loop` allocation, hence SB UB. Only touching
+    // the caller-owned `Completion` allocation is clean under both models
+    // (`wakeup_completion_cached`). Both handles are therefore copied in at
+    // schedule time and `task_loop` is no longer dereferenced here at all — which
+    // ALSO discharges the `task_loop` lineage hazard (`(*c).task_loop = self` is
+    // minted from one tick's `&mut self` and popped by the next tick's entry
+    // retag; mirihar `taskloop_lineage_naive`: UB under SB).
     fn thread_perform(t: *mut thread_pool::Task) {
         // const c: *Completion = @fieldParentPtr("task", t);
         let c: *mut Completion = unsafe {
@@ -865,18 +876,11 @@ impl Loop {
         unsafe { (*c).task_result = Completion::perform(c, None) };
 
         // Add to our completion queue
-        unsafe { TaskCompletionQueue::push((*(*c).task_loop).thread_pool_completions_ptr, c) };
+        unsafe { TaskCompletionQueue::push((*c).task_completions, c) };
 
         // Wake up our main loop.
-        //
-        // We read the loop's eventfd out BY VALUE (it is a `Copy` fd wrapper)
-        // and notify the copy, forming NO reference — not even a shared one —
-        // to the owning `Loop`. Calling `Loop::wakeup(&mut self)` here would
-        // autoref a `&mut Loop` on this pool worker thread while the loop
-        // thread may concurrently hold `&mut Loop`; see the PORT NOTE above.
         unsafe {
-            let efd = (*(*c).task_loop).eventfd;
-            let _ = efd.notify();
+            let _ = (*c).task_wakeup.notify();
         }
     }
 
@@ -1344,14 +1348,25 @@ pub struct Completion {
     /// reliable way to get access to the loop and shouldn't be used
     /// except internally.
     //
-    // PORT NOTE (Task 2): the oracle's `task_completions: *TaskCompletionQueue`
-    // per-completion field is elided — `thread_perform` reaches the loop's cached
-    // stable `thread_pool_completions_ptr` via `task_loop` instead (the
-    // lifetimes-audit fix; symmetric with kqueue.rs). `task_result` holds the result
-    // computed on the pool thread until the loop drains it in `tick`.
+    // PORT NOTE (Task 2, REVISED WS19 T10): the oracle's `task_completions:
+    // *TaskCompletionQueue` per-completion field had been elided — `thread_perform`
+    // reached the loop's cached `thread_pool_completions_ptr` via `task_loop`
+    // instead. WS19 T10 RESTORED it (and added `task_wakeup`): the mirihar
+    // `wakeup_copied` candidate proves that ANY worker access to the `Loop`
+    // allocation — including a by-value read of a `Copy` handle — is a foreign
+    // access against the protected `&mut Loop` the loop thread holds for the whole
+    // tick, hence SB UB. `task_result` holds the result computed on the pool thread
+    // until the loop drains it in `tick`. See kqueue.rs's field docs (the two
+    // backends are symmetric) and `.port/phase-2/DEFERRALS.md`.
     task: thread_pool::Task,
     task_loop: *mut Loop,
     task_result: Result,
+    /// The reference's own field, restored (fidelity gain).
+    task_completions: *mut TaskCompletionQueue,
+    /// PORT-ADDED [R1-DIVERGENCE, WS19 T10] — the reference wakes the loop with
+    /// `c.task_loop.wakeup()`; `Eventfd` is a `Copy` fd wrapper, copied in here at
+    /// schedule time so the worker touches only this caller-owned allocation.
+    task_wakeup: Eventfd,
 }
 
 /// PORT NOTE: the `flags: packed struct { state, threadpool, dup, dup_fd }`
@@ -1412,11 +1427,14 @@ impl Default for Completion {
                 dup: false,
                 dup_fd: 0,
             },
-            // `task`/`task_loop`/`task_result` are Zig `undefined` (only set when
-            // scheduled on the pool); zeroed/placeholder here (Rust has no undefined).
+            // `task`/`task_loop`/`task_result`/`task_completions`/`task_wakeup` are
+            // Zig `undefined` (only set when scheduled on the pool); zeroed/
+            // placeholder here (Rust has no undefined).
             task: thread_pool::Task::default(),
             task_loop: ptr::null_mut(),
             task_result: Result::Noop,
+            task_completions: ptr::null_mut(),
+            task_wakeup: Eventfd { fd: -1 },
         }
     }
 }
@@ -5603,7 +5621,13 @@ impl File {
 // per-completion `task: thread_pool::Task` (16), `task_loop: *mut Loop` (8), and
 // `task_result: Result` (32 incl. alignment) fields the blocking-op path needs.
 // 208 is the new measured Rust size on aarch64-unknown-linux-gnu.
-const COMPLETION_SIZE: usize = 208;
+// RE-MEASURED (WS19 T10): 208 → 224. The pool-worker aliasing fix puts the two
+// loop-side handles `thread_perform` needs in the completion itself:
+// `task_completions: *mut TaskCompletionQueue` (8 — the reference's OWN field,
+// restored after the Task-2 elision, so this half moves the Rust size TOWARD
+// Zig's) + `task_wakeup: Eventfd` (4, port-added, +4 tail padding). Symmetric with
+// kqueue.rs (248 → 264).
+const COMPLETION_SIZE: usize = 224;
 const _: () = assert!(size_of::<Completion>() == COMPLETION_SIZE);
 
 // ---------------------------------------------------------------------------
