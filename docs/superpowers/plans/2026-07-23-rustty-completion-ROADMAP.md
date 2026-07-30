@@ -47,6 +47,12 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 - `ghostty_*` alias layer + signed xcframework xtask — DONE (app links & runs).
 - GTK inspector — DONE (2026-07-19 OpenGL3 inspector).
 - VD:V1 (rustty-xev never compiled on macOS) — DISCHARGED 2026-07-23.
+- `stb_image_resize` glyph resize (D:3741 / audit row O17) — **SHIPPED 2026-06-30**
+  at `2e82776` in `crates/rustty-font-shaper`; the row's grep was scoped to the wrong
+  crate (`crates/rustty-font/src`, pre-D1-split). The seam is `cfg(not(target_arch =
+  "wasm32"))`, i.e. LIVE ON macOS, not “non-macOS”. WS11 closed the real residual
+  (vacuous scale-1.0 coverage) on 2026-07-29 and ledgered the `ReleaseFast` ±1 LSB as
+  a permanent divergence. Do NOT change the stb `build.rs` flags.
 - Shell-integration/themes: real content exists in `zig-out/share/rustty/` and
   the current app bundle, but is NOT reproducible — xtask still emits the
   deferral placeholder (`xtask/src/res_terminfo.rs:216-245`). WS1 makes it
@@ -83,7 +89,7 @@ breakages (xev `Loop::init`, `COMPLETION_SIZE`).
 | WS | Plan file | Scope |
 |----|-----------|-------|
 | **WS10 perf series (BL-4)** | `2026-07-23-ws10-perf-series.md` | SIMD scans, bulk CSI/print, pty pipelining. Guarded by the benchmark suite (goal: hold or extend the 14/14 wins). |
-| **WS11 font glyph resize** | `2026-07-23-ws11-font-glyph-resize.md` | ~~`stb_image_resize` parity for the FreeType glyph-resize path (stb-sys cc build for bit-exactness), wired on the non-macOS path, KAT vs oracle rasterization.~~ **CORRECTED [WS19 T14, 2026-07-29 — audit row O17]: the PORT ALREADY SHIPPED at `2e82776` (2026-06-30)** — `crates/rustty-font-shaper/src/stb.rs:18`, `build.rs` `cc::Build` over `vendor/stb_impl.c`, `vendor/stb_image_resize.h` byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806`. Two further corrections: (1) the gating is `cfg(not(target_arch = "wasm32"))`, **not** `not(target_os = "macos")` — the seam is LIVE ON macOS (`nm -g` shows `T _stbir_resize_uint8` in the macOS archive), so "wired on the non-macOS path" is wrong; (2) **do NOT chase bit-exactness by changing `build.rs` flags** — ghostty's own Debug and ReleaseFast builds of the identical C disagree (9/512 bytes, maxdelta 1, ReleaseFast's loop vectorizer), rustty sits on the consensus side across 5 toolchain/optimization combos on 2 OSes, and since the seam is live on macOS a flag change would *create* divergence and violate R5. **WS11's real scope is that the coverage is VACUOUS**: every test reaching the resize runs at scale 1.0 (`8x16→8x16`, `136x128→136x128`) and `render_and_resize` never enters the bitmap arm (Inconsolata is an outline font) — swapping stb for nearest-neighbour leaves all 9 tests green. |
+| **WS11 font glyph resize** | `2026-07-23-ws11-font-glyph-resize.md` | ~~`stb_image_resize` parity for the FreeType glyph-resize path (stb-sys cc build for bit-exactness), wired on the non-macOS path, KAT vs oracle rasterization.~~ **CORRECTED [WS19 T14, 2026-07-29 — audit row O17]: the PORT ALREADY SHIPPED at `2e82776` (2026-06-30)** — `crates/rustty-font-shaper/src/stb.rs:18`, `build.rs` `cc::Build` over `vendor/stb_impl.c`, `vendor/stb_image_resize.h` byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806`. Two further corrections: (1) the gating is `cfg(not(target_arch = "wasm32"))`, **not** `not(target_os = "macos")` — the seam is LIVE ON macOS (`nm -g` shows `T _stbir_resize_uint8` in the macOS archive), so "wired on the non-macOS path" is wrong; (2) **do NOT chase bit-exactness by changing `build.rs` flags** — ghostty's own Debug and ReleaseFast builds of the identical C disagree (9/512 bytes, maxdelta 1, ReleaseFast's loop vectorizer), rustty sits on the consensus side across 5 toolchain/optimization combos on 2 OSes, and since the seam is live on macOS a flag change would *create* divergence and violate R5. **WS11's real scope is that the coverage was VACUOUS**: every test reaching the resize ran at scale 1.0 (`8x16→8x16`, `136x128→136x128`) and `render_and_resize` never enters the bitmap arm (Inconsolata is an outline font) — swapping stb for nearest-neighbour left all 9 tests green. **DONE 2026-07-29.** Closed with 5 new tests — 2 direct-FFI (`src/stb.rs`: interpolation + `num_channels=4` channel independence) and 3 KATs (`face/freetype.rs`: Terminus 8×16→16×17/8×17 grayscale, NotoColorEmoji 136×128→16×15/8×7 BGRA downsample, plus a permanent machine-checked negative control) — and new gate **D10** (`check_stb_resize_parity.sh`) diffing our vendored C against ghostty's OWN build recipe at all four zig optimize modes, with `negative_control.py` proving the ±1 envelope still rejects nearest/bilinear. Nearest-neighbour substitution now FAILS both KATs while all 9 pre-existing tests still pass. Fixtures reproduce byte-for-byte under Fedora gcc 16.1.1 + clang 22.1.8 at all five opt levels; Linux runtime path 12/12 + 2/2 green. The `ReleaseFast` ±1 LSB is ledgered as a permanent divergence with a four-criterion basis. Two things WS11 found that this row did not: the grayscale strike is MONO (`num_grays=2`), so its fixtures are weak discriminators and bilinear is inseparable at 8×17 — the BGRA KAT is therefore not optional; and Fedora gcc `-O0/-O1` form a THIRD ±1 variant vs its own `-O2/-O3/-Os`, a fourth instance of the same codegen axis. **No deferral taken.** |
 | **WS12 vaxis completion** | `2026-07-23-ws12-vaxis-completion.md` | Resolve the uucode width-table fork (presents Option A extend rustty-unicode vs Option B vendor uucode-0.1.0 tables to the human — decision REQUIRED in-plan, not deferred); zigimg image tier (`transmit_image`/`load_image`/`Image::draw`/`cell_size`); verify `boo` end-to-end. |
 | **WS13 i18n & docs** | `2026-07-23-ws13-i18n-docs.md` | Vendor the `.po` corpus + msgfmt step (real `share/locale`); mdgen man-page pipeline (markdown→roff); `rustty_translate` live. |
 | **WS14 wasm/WebGL renderer** | `2026-07-23-ws14-wasm-webgl.md` | Port the WebGL backend + wasm entry (`main_wasm`, `Atlas.Wasm` C-ABI/JS surface); build `wasm32` target green; **validate live in Chrome via the browser automation tools** (load harness page, screenshot the rendered canvas, assert glyph output). |
@@ -175,11 +181,14 @@ loud RED rather than an infinite CI wait.
   §E.4]; per-WS rows:**
 - [ ] WS10 perf (BL-4) — **NOT authored**, not executed. Open. Inherits audit row **O3**
   (`Screen::cursor_scroll_region_up`, beyond-pin `77190bd02`, pin-sequenced).
-- [x] WS11 font glyph resize — **authored 2026-07-29 in the WS11 plan-authoring lane
-  (10 tasks)**; not executed. Open. Inherits audit row **O17**, **as reclassified**: the
-  `stb_image_resize` port itself SHIPPED at `2e82776`; what WS11 owns is that its test
-  coverage is **vacuous** (all reaching tests at scale 1.0; the bitmap arm is never
-  entered). Do NOT change the stb `build.rs` flags — see the WS11 scope cell.
+- [x] WS11 font glyph resize — **authored 2026-07-29, EXECUTED 2026-07-29 (10 tasks,
+  no deferral)**. **CLOSED.** Audit row **O17** as reclassified: the `stb_image_resize`
+  port itself SHIPPED at `2e82776`; WS11 owned its **vacuous** coverage (all reaching
+  tests at scale 1.0; the bitmap arm never entered) and closed it with 5 new tests +
+  gate **D10** vs ghostty's own build recipe at 4 zig optimize modes, each with a
+  demonstrated RED arm. The stb `build.rs` flags were NOT changed — and D10's
+  `--self-test` now proves why (`-ffast-math` makes the gate RED against ghostty's own
+  Debug/ReleaseSafe/ReleaseSmall builds, i.e. a flag change would CREATE divergence).
 - [x] WS12 vaxis completion — authored (`c7c93f7`); **NOT executed**. Open. Consumes
   WS19 T1's `.port/tools/restore_zig_deps.sh`.
 - [x] WS13 i18n & docs — authored (`39355ff`); **NOT executed**. Open. Owns audit rows
@@ -220,7 +229,7 @@ loud RED rather than an infinite CI wait.
 |---|---|---|---|
 | WS1–WS9 | authored | **merged** | DONE |
 | WS10 perf (BL-4) | **NOT authored** | no | open; inherits O3 (pin-sequenced) |
-| WS11 font glyph resize | authored 2026-07-29 (WS11 lane, 10 tasks) | **no** | open; inherits O17 **as reclassified** — the port shipped at `2e82776`, the VACUOUS COVERAGE is the work |
+| WS11 font glyph resize | authored 2026-07-29 (WS11 lane, 10 tasks) | **yes — 2026-07-29** | **CLOSED, no deferral.** O17 as reclassified: the port shipped at `2e82776`; the VACUOUS COVERAGE was the work, closed by 5 tests + gate D10 (both platforms verified; Linux D10 = BLOCKED/3 per contract, no zig on the VM) |
 | WS12 vaxis completion | authored (`c7c93f7`) | **no** | open; consumes WS19 T1's restore script |
 | WS13 i18n & docs | authored (`39355ff`) | **no** | open; owns N8, O13b |
 | WS14 wasm/WebGL | **NOT authored** | no | open; inherits O13a/O14/O15/O16 |

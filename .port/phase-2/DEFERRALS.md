@@ -3933,7 +3933,7 @@ codegen the CLI already defers (C6). **What unblocks it:** LOW priority; port wi
 the doc/codegen tooling milestone if/when man-page + website generation is wanted.
 0-test impact.
 
-## ~~`src/stb/stb_image_resize.h` — glyph resize (`stbir_resize_uint8`); rustty-font does NOT yet cover it~~ **PORTED 2026-06-30 at `2e82776`; RECLASSIFIED to VACUOUS TEST COVERAGE → OWNER: WS11** [corrected WS19 T14, 2026-07-29 — audit row O17]
+## ~~`src/stb/stb_image_resize.h` — glyph resize (`stbir_resize_uint8`); rustty-font does NOT yet cover it~~ **PORTED 2026-06-30 at `2e82776`; RECLASSIFIED to VACUOUS TEST COVERAGE → CLOSED by WS11, 2026-07-29** [row corrected WS19 T14 — audit row O17; coverage closed WS11]
 
 **Ghostty source:** `src/stb/stb_image_resize.h` (single-header stb library),
 invoked as `stb.stbir_resize_uint8(...)` in the FreeType glyph-resize path
@@ -3975,13 +3975,46 @@ the non-macOS path" is wrong — `build.rs` gates on
 the FreeType face are **live on macOS too** (`nm -g` shows `T _stbir_resize_uint8`
 in the macOS archive). Any reasoning that treats this seam as Linux-only is wrong.
 
-**WHAT IS ACTUALLY OPEN → OWNER: WS11** (which now has a 10-task plan and owns this).
-The **test coverage of the resize is VACUOUS**: every existing test that reaches the
-call does so at **scale 1.0** (`8x16→8x16`, `136x128→136x128`), and
-`render_and_resize` never enters the bitmap arm at all (Inconsolata is an outline
-font). Proof: substituting a nearest-neighbour loop for stb leaves **all 9 tests
-green** — so nothing in the suite would notice if the resampler were wrong. WS11 owns
-adding coverage that actually discriminates.
+~~**WHAT IS ACTUALLY OPEN → OWNER: WS11**~~ **— CLOSED by WS11, 2026-07-29.**
+The residual item was that the **test coverage of the resize was VACUOUS**: every
+existing test that reached the call did so at **scale 1.0** (`8x16→8x16`,
+`136x128→136x128`), and `render_and_resize` never enters the bitmap arm at all
+(Inconsolata is an outline font). Proof, re-reproduced at the head of WS11:
+substituting a nearest-neighbour loop for stb left **all 9 tests green** — nothing in
+the suite would have noticed a wrong resampler.
+
+**WS11 closed it with 5 new tests + a new gate, each with a demonstrated RED arm:**
+
+| what | where | discriminates? |
+|---|---|---|
+| `stbir_resize_uint8_upsamples_a_known_ramp` | `src/stb.rs` | structural: rejects a non-interpolating resampler (falsified by swapping `input_w`/`input_h`) |
+| `stbir_resize_uint8_treats_channels_independently` | `src/stb.rs` | the `num_channels = 4` (BGRA) path: a 4-channel resize must equal 4 separate 1-channel resizes of the deinterleaved planes (falsified by a wrong stride) |
+| `stb_resize_kat_bitmap_strike_grayscale` | `face/freetype.rs` | Terminus 8×16 → **16×17** and **8×17** via `Constraint{size:Stretch}`; consensus-validated fixtures |
+| `stb_resize_kat_bitmap_strike_bgra` | `face/freetype.rs` | NotoColorEmoji 136×128 → **16×15** and **8×7** via `Constraint{size:Cover}` + primary-face grid metrics; the STRONG discriminator (real 8-bit source) |
+| `stb_resize_kat_rejects_nearest_and_bilinear` | `face/freetype.rs` | makes the falsification PERMANENT: recomputes nearest + bilinear in-test and asserts the fixtures reject them, and that the tolerated ±1 envelope is disjoint from those rejections |
+| **gate D10** `check_stb_resize_parity.sh` | `.port/tools/gates/` | our vendored C vs **ghostty's own build recipe** at all four Zig optimize modes, plus `negative_control.py`; `--self-test` proves both RED arms |
+
+**The non-vacuity is measured, not asserted.** Under nearest-neighbour substitution
+both KATs FAIL while all 9 pre-existing tests still pass — simultaneously the proof
+that the new coverage discriminates and that the old coverage never did. Delta budget:
+
+```
+gray 16x17  vs nearest   11/272 ( 4.0%) maxdelta=255   vs bilinear   2/272 maxdelta=255
+gray  8x17  vs nearest    5/136 ( 3.7%) maxdelta=255   vs bilinear   0/136  INDISTINGUISHABLE
+BGRA 16x15  vs nearest  597/960 (62.2%) maxdelta=210   vs bilinear 575/960 maxdelta=108
+BGRA  8x7   vs nearest  185/224 (82.6%) maxdelta=217   vs bilinear 187/224 maxdelta=121
+```
+
+**A WS11 finding the plan did not anticipate:** the grayscale strike is **mono**
+(`num_grays = 2`), so stb both reads and writes 0/1 there and `freetype.rs` applies the
+`255/(num_grays-1)` factor afterwards. That makes the grayscale fixtures *weak*
+discriminators (a wrong resampler's fractional output rounds back onto 0/1) and makes
+bilinear entirely inseparable at 8×17. This is why the BGRA KAT is not optional. Fully
+documented in `crates/rustty-font-shaper/src/testdata/README.stb-resize.md` (TRAP 2).
+
+Cross-platform: all four fixtures reproduce **byte-for-byte** under Fedora 44 gcc 16.1.1
+and clang 22.1.8 at all five optimization levels, and the Linux runtime path (where
+FreeType is the *default* backend) runs 12/12 + 2/2 green.
 
 **DO NOT "fix" the stb `build.rs` flags.** Bit-exactness against a single oracle
 build is unattainable: ghostty's own Debug and ReleaseFast builds of the identical C
@@ -3989,6 +4022,100 @@ disagree (9/512 bytes, maxdelta 1 — ReleaseFast's loop vectorizer). rustty sit
 the **consensus** side across 5 toolchain/optimization combinations on 2 OSes.
 Changing flags would *create* divergence, and since the seam is live on macOS it
 would violate R5.
+
+**Confirmed by WS11's `--self-test`, which is the direct evidence for that decision:**
+rebuilding our vendored header with `-ffast-math` makes gate D10 go RED against
+ghostty's `Debug`/`ReleaseSafe`/`ReleaseSmall` recipes (3/512 bytes, maxdelta 1). Adding
+that flag would therefore *create* the divergence it appears to fix. **Locked: no
+`build.rs` flag changes.**
+
+## PERMANENT DIVERGENCE — `stbir_resize_uint8` differs from a `ReleaseFast` ghostty build by ≤1 LSB on ≤2 % of bytes [WS11, 2026-07-29]
+
+**Scope:** the FreeType bitmap-strike glyph resampler
+(`crates/rustty-font-shaper/src/face/freetype.rs`, the `crate::stb::stbir_resize_uint8`
+call). The C is byte-identical to the oracle's
+(md5 `7381a7070120fd5a36d8fb9e3179dd7c` at the pin `4749c4e93` **and** at
+`origin/main`); only the *codegen* differs.
+
+**Measured** (zig **0.16.0**, oracle @ `4749c4e93`, ghostty's own
+`src/build/SharedDeps.zig` recipe — `-I src/stb` + `stb.c`, no extra flags on
+non-MSVC — vs rustty's `cc` build of the same header):
+
+```
+=== case 16x32 (8x16 grayscale ramp upsample)
+  ghostty Debug        vs rustty cc: 0/512 differ, maxdelta=0
+  ghostty ReleaseFast  vs rustty cc: 9/512 differ, maxdelta=1     <-- the divergence
+  ghostty ReleaseSafe  vs rustty cc: 0/512 differ, maxdelta=0
+  ghostty ReleaseSmall vs rustty cc: 0/512 differ, maxdelta=0
+=== case 8x17
+  all four ghostty modes vs rustty cc: 0/136 differ, maxdelta=0
+```
+
+These figures were originally measured under zig 0.15.2 and **re-measured unchanged
+under zig 0.16.0** (both consensus MD5s — `5f18d21d6d9d9c6f035bade776299e7c` for
+16×32, `0e2fb9f06dc7de62c1c28b5706bd918b` for 8×17 — and the 9/512 maxdelta=1 figure
+reproduce exactly).
+
+**Cause identified, not guessed: the loop vectorizer.** Under zig 0.16 (16×32 case,
+vs the consensus / vs the ReleaseFast recipe):
+
+```
+  zig cc -O0 (no ubsan)              0/512 maxdelta=0   |  9/512 maxdelta=1
+  zig cc -O1 -fno-vectorize          0/512 maxdelta=0   |  9/512 maxdelta=1
+  zig cc -O2                         9/512 maxdelta=1   |  0/512 maxdelta=0
+  zig cc -O3                         9/512 maxdelta=1   |  0/512 maxdelta=0
+  zig cc -O2 -fno-vectorize          0/512 maxdelta=0   |  9/512 maxdelta=1
+  zig cc -O2 -fno-vectorize -fno-slp 0/512 maxdelta=0   |  9/512 maxdelta=1
+  zig cc -O2 -fno-slp-vectorize      9/512 maxdelta=1   |  0/512 maxdelta=0
+  zig cc -O2 -ffp-contract=off       9/512 maxdelta=1   |  4/512 maxdelta=1
+```
+
+`-fno-vectorize` restores the consensus **exactly**; `-fno-slp-vectorize` alone and
+`-ffp-contract=off` do not. (Refinement vs the WS11 plan, which credited only `-O3`:
+under 0.16 **both** `zig cc -O2` and `-O3` are byte-identical to the ReleaseFast
+recipe, so *any* zig `-O≥2` build lands on the ReleaseFast side.)
+
+**Four-criterion permanent-divergence basis:**
+
+1. **Not closable within the port's constraints.** The only construction that matches
+   `ReleaseFast` is compiling the C with `zig cc -O≥2`, i.e. making the Zig toolchain a
+   hard build dependency of the Rust port — directly against R3.
+2. **The oracle is not self-consistent.** Ghostty's own `Debug` and `ReleaseFast` builds
+   of the identical header disagree by the same ±1, so "bit-exact with the oracle" has
+   no unique referent. The honest target is "exact with the oracle's non-`ReleaseFast`
+   modes and with every non-Zig toolchain, within ±1 LSB of `ReleaseFast`".
+3. **Not port-specific.** The same ±1 appears on two further axes: aarch64 vs x86_64
+   builds of the same compiler at the same `-O` (9/512 and 3/136, maxdelta 1), and —
+   found by WS11's Linux verification — **Fedora gcc 16 `-O0`/`-O1` vs its own
+   `-O2`/`-O3`/`-Os`** (9/512 and 3/136, maxdelta 1; gcc `-O0/-O1` produce a third
+   variant, md5 `770a168d…`/`4dc5c919…`). It is a property of the resampler's float
+   summation order.
+4. **Below the observable threshold by upstream's own standard.** Upstream accepted
+   sprite-golden regolds at max-delta 48 (`d0e72a3ab`, per
+   `.port/phase-3/assessments/F-ui-tiers.md`); ±1 LSB in an anti-aliased glyph bitmap is
+   48× smaller and imperceptible.
+
+**What is GUARDED, so this cannot silently widen:**
+* **Gate D10** (`check_stb_resize_parity.sh`, registered PROGRESS in `ci.sh`)
+  continuously asserts the envelope: ghostty `Debug`/`ReleaseSafe`/`ReleaseSmall` must
+  be **byte-exact**, `ReleaseFast` within max delta 1 on ≤3 % of bytes. Drift beyond
+  that is RED. `exit 3` BLOCKED (never a silent green) where `zig` or the oracle
+  checkout is absent.
+* **The in-crate KATs** assert **exact** equality on the shipping toolchains — and
+  that exactness is verified at all five optimization levels on macOS Apple clang,
+  Fedora gcc 16 and Fedora clang 22.
+* **`negative_control.py` + `stb_resize_kat_rejects_nearest_and_bilinear`** prove the
+  envelope cannot admit a wrong resampler (a wrong one moves 55–98 % of bytes at max
+  delta 14–255; the envelope allows ≤3 % at max delta 1 — an ~18–20× margin in both
+  dimensions).
+
+**Note on the fraction bound.** D10 uses **3 %**, not 2 %. The largest rate observed
+anywhere is 3/136 = 2.21 % (Fedora gcc `-O0` vs `-O2` on the 8×17 case — a small buffer,
+where one extra differing byte moves the rate a lot); 9/512 = 1.76 % is the next. 3 % is
+the smallest round bound above measurement. A hard 2.00 % would make D10 permanently and
+**falsely** RED on any Linux box whose `cc` is gcc, i.e. CI. The negative control
+validates the same 3 % bound the gate enforces, so the check can never certify a
+stricter envelope than the one actually in force.
 
 ## Sub-project #2 (macos-swift-app): the `ghostty_*`→`rustty_*` C-ABI compatibility ALIAS layer
 
@@ -5979,7 +6106,7 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 | O14 | `D:4209` `Atlas.Wasm` `test "happy path"` (4 named assertions) deferred with the wasm atlas surface | **OPEN, correctly described**; target is an unscheduled milestone. | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
 | O15 | `D:1894` `App.zig` `Wasm` block preserved verbatim, "Target: the rustty wasm app-runtime" | **OPEN, correctly described** (the block is commented out in the *reference* too). | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
 | O16 | `D:571` the **WebGL** renderer backend | **OPEN, correctly described.** | **route to WS14** | **L** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
-| O17 | `D:3741` `stb_image_resize.h` glyph resize has no rustty counterpart | ~~**OPEN, correctly described.**~~ **THIS AUDIT VERDICT WAS WRONG — corrected 2026-07-29 by the WS11 plan-authoring lane.** The port **SHIPPED at `2e82776` (2026-06-30)**: `rustty-font-shaper/src/stb.rs:18` declares `stbir_resize_uint8`, `build.rs` compiles `vendor/stb_impl.c` via `cc::Build`, `vendor/stb_image_resize.h` is byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806` is argument-for-argument identical to `freetype.zig:639-652`. **Root cause of the miss:** the row's evidence grep was scoped to `crates/rustty-font/src`, but the code lives in the sibling crate `rustty-font-shaper` created by the D1 three-tier split — *the grep scope WAS the bug*, so re-running it could not detect the error (see §G). | **RECLASSIFIED, not closed:** the port is done; what is open is that its test coverage is **VACUOUS** (all reaching tests run at scale 1.0; `render_and_resize` never enters the bitmap arm; swapping stb for nearest-neighbour leaves all 9 tests green). **Route to WS11**, which owns it with a 10-task plan. | **S** (row) / **M** (coverage, in WS11) | **WS19 EXECUTION STATUS:** **DONE (row CORRECTED) — WS19 T14.** The audit verdict was WRONG: the port SHIPPED at `2e82776`. Reclassified to vacuous test coverage → **WS11**. |
+| O17 | `D:3741` `stb_image_resize.h` glyph resize has no rustty counterpart | ~~**OPEN, correctly described.**~~ **THIS AUDIT VERDICT WAS WRONG — corrected 2026-07-29 by the WS11 plan-authoring lane.** The port **SHIPPED at `2e82776` (2026-06-30)**: `rustty-font-shaper/src/stb.rs:18` declares `stbir_resize_uint8`, `build.rs` compiles `vendor/stb_impl.c` via `cc::Build`, `vendor/stb_image_resize.h` is byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806` is argument-for-argument identical to `freetype.zig:639-652`. **Root cause of the miss:** the row's evidence grep was scoped to `crates/rustty-font/src`, but the code lives in the sibling crate `rustty-font-shaper` created by the D1 three-tier split — *the grep scope WAS the bug*, so re-running it could not detect the error (see §G). | **RECLASSIFIED, not closed:** the port is done; what is open is that its test coverage is **VACUOUS** (all reaching tests run at scale 1.0; `render_and_resize` never enters the bitmap arm; swapping stb for nearest-neighbour leaves all 9 tests green). **Route to WS11**, which owns it with a 10-task plan. | **S** (row) / **M** (coverage, in WS11) | **WS19 EXECUTION STATUS:** **DONE (row CORRECTED) — WS19 T14.** The audit verdict was WRONG: the port SHIPPED at `2e82776`. Reclassified to vacuous test coverage → **WS11**. **WS11 EXECUTION STATUS: DONE — coverage CLOSED 2026-07-29.** 5 new tests (2 direct-FFI in `src/stb.rs`, 3 KATs in `face/freetype.rs` incl. a permanent machine-checked negative control) + new gate **D10** vs ghostty's own build recipe at 4 zig optimize modes, each with a demonstrated RED arm; nearest-neighbour substitution now FAILS both KATs while all 9 pre-existing tests still pass. The `ReleaseFast` ±1 LSB is ledgered as a permanent divergence with a four-criterion basis. **Nothing deferred.** |
 | O18 | `D:3668` `rustty-synthetic` `cli.rs` 4 binary-entry seams (`main`, `main_action_impl_{ascii,osc,utf8}`) | **OPEN**; un-defer trigger is "the `rustty +synthetic` binary entry", which no WS owns. | **fix in WS19 T13** — wire the entries through the existing `rustty-cli` detection, **or** record as permanent if the acyclic split forbids it. Decide in-plan; do not defer. | **M** | **WS19 EXECUTION STATUS:** **DONE (row was STALE) — WS19 T13.** The 4 seams do not exist; only the local `detectArgs` remains, as a **Justified R1 Divergence** (R4). |
 | O19 | `D:3697` `rustty-bench` residuals: macOS `os_signpost` interval; `main_bench.zig` binary entry; locally-replicated `detectArgs` | **OPEN, no owner.** | `os_signpost` → **permanent divergence** (Instruments-only instrumentation, zero behavior); the binary entry + local `detectArgs` → **fix in WS19 T13** with O18 (same class) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T13/T14.** All four residuals disposed: `os_signpost` + local `detectArgs` are divergences; the bin entry SHIPPED; the alias clause is MOOT. |
 | O20 | `INTEGRATION_PARITY §2.8` terminfo SOURCE + termcap never emitted (diverges only in Debug builds); fix-list item 8 is marked "(Optional)" | **OPEN, no owner — and "optional" is not a disposition.** | **permanent divergence** — the shipping app is Release, where rustty MATCHES the oracle exactly; WS19 T14 writes the basis and deletes the fix-list row | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T14.** Permanent **Justified R1 Divergence**; `INTEGRATION_PARITY` fix-list item 8 DELETED. |
