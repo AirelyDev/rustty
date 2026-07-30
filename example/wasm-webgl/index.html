@@ -100,15 +100,35 @@ open http://127.0.0.1:8731/example/wasm-webgl/index.html</pre>
         result = { error: String(e) };
       }
       window.__ws14_result = result;
+      // The page's verdict must be the SAME conjunction the headless gate uses
+      // (ws14_webgl_browser_gate.mjs's `problems` list) — a page that says PASS on
+      // a weaker rule than the gate would be exactly the drift this design exists
+      // to prevent.
       const verdict =
-        result.pass_good && result.neg_offset_fails && result.neg_black_fails && result.glError === 0
+        result.pass_good &&
+        result.neg_offset_fails &&
+        result.neg_black_fails &&
+        result.undrawn_cell_is_zero &&
+        result.p1_glyphs_nonzero &&
+        result.p2_regions_disjoint &&
+        result.p3_no_ink_outside_regions &&
+        result.p4_glyphs_distinct &&
+        result.p5_debug_canvas_agrees === true &&
+        result.glError === 0 &&
+        result.wasiImports === 0 &&
+        result.badImportModules.length === 0 &&
+        result.debugCanvas !== 0
           ? "PASS"
           : "FAIL";
       document.getElementById("result").textContent =
         verdict + "\n" + JSON.stringify(result, null, 2);
-      // Show the canvas atlas_debug_canvas built, if the handle is live.
-      for (const c of document.querySelectorAll("canvas")) {
-        if (c.id !== "gl" && !c.parentElement) document.getElementById("atlas").append(c);
+      // The canvas `atlas_debug_canvas` built is already in `#atlas`: the shared
+      // glue's `createCanvas` appends it there at creation time (see gate.js).
+      // Appending it here instead does not work — until it is in the document,
+      // `document.querySelectorAll("canvas")` cannot see it.
+      if (!document.querySelector("#atlas canvas")) {
+        document.getElementById("atlas").textContent =
+          "atlas_debug_canvas produced no canvas (handle " + result.debugCanvas + ")";
       }
     </script>
   </body>

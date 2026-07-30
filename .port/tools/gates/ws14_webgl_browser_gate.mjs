@@ -240,6 +240,11 @@ async function main() {
     `(atlas ink ${v.totalInk} vs sum(expect) ${v.expectSum})`,
   );
   console.log("  P4 glyph counts distinct  ", v.p4_glyphs_distinct);
+  console.log(
+    "  P5 debug canvas agrees    ",
+    v.p5_debug_canvas_agrees,
+    `(atlas_debug_canvas alpha ink ${v.debugCanvasInk} vs atlas ink ${v.totalInk})`,
+  );
 
   const problems = [];
   // The P* arms are what make the gate sensitive to the PORTED atlas code rather
@@ -252,6 +257,15 @@ async function main() {
         "atlas_set wrote outside the region it was given (wrong offset or stride)",
     );
   if (!v.p4_glyphs_distinct) problems.push("P4: the two distinct glyphs produced identical counts");
+  // P5 is `null` only if the page had no `#atlas` host to attach the debug canvas
+  // to — which cannot happen through this driver (it always loads index.html), so
+  // a null here is itself a defect rather than a skip.
+  if (v.p5_debug_canvas_agrees !== true)
+    problems.push(
+      `P5: atlas_debug_canvas readback ink ${v.debugCanvasInk} != atlas ink ${v.totalInk} — ` +
+        "the reference's own readback path disagrees with the WebGL one " +
+        "(wrong destination byte, stride, or a dropped putImageData)",
+    );
   if (!v.pass_good) problems.push("positive arm did NOT match the CPU expectation");
   if (!v.neg_offset_fails) problems.push("NC1 (wrong atlas offset) did NOT fail — vacuous gate");
   if (!v.neg_black_fails) problems.push("NC2 (black shader) did NOT fail — vacuous gate");

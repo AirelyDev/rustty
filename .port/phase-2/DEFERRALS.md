@@ -592,12 +592,31 @@ of the five tiers have since LANDED and the stale list was never resolved here):
   and a live-app toggle shakedown (Ctrl+Shift+I opens/closes the inspector window).
   See `docs/superpowers/plans/2026-07-19-gtk-inspector-opengl.md`.
 
-**STILL DEFERRED (the honest residual):**
-- the **WebGL** backend (wasm) — out of the monomorphic Metal scope; a
+**RESIDUAL — NONE. The last bullet is resolved:**
+- ~~the **WebGL** backend (wasm) — out of the monomorphic Metal scope; a
   whole-backend follow-up port, no in-crate `unimplemented!()`. (Metal = macOS and
-  OpenGL3 = GTK/Linux are both done.)
+  OpenGL3 = GTK/Linux are both done.)~~ **RESOLVED — WS14, 2026-07-30. The premise
+  was wrong: there is no WebGL backend upstream.** The reference
+  `src/renderer/WebGL.zig` is a **2-line placeholder** (a doc comment plus
+  `pub const WebGL = @This();`) — no fields, no methods, no shaders, no draw path,
+  no tests — and it is byte-identical on the oracle's `origin/main`, so this is not
+  a pin artifact. Every previous re-derivation of this row measured the PORT
+  (`grep -rni 'webgl'` over `crates/`) and never the ORACLE, which is how "no
+  backend implementation in the port" was read as "a backend is owed" for months:
+  the port had exactly as much WebGL as upstream does. It is now ported verbatim at
+  `crates/rustty-renderer/src/webgl.rs` (a unit struct + the file's doc comment,
+  with a `size_of == 0` reference test), and `renderer.zig`'s comptime switch has
+  all three arms — `#[cfg(target_arch = "wasm32")] pub use webgl::WebGL as Renderer`.
+  Inventing a WebGL draw path here would be an **R1 violation** (no reference to be
+  faithful to). Actual browser drawing lives where the reference's own wasm model
+  puts it — in the consumer: `example/wasm-webgl/` uploads the `Atlas.Wasm` texture
+  as an `R8` WebGL2 texture and draws one quad per glyph, gated by
+  `.port/tools/gates/ws14_webgl_browser_gate.sh` (per-cell ink counts vs a CPU
+  expectation computed from the module's own atlas bytes; two negative controls
+  that MUST fail every run; opt-in CI lane `ci.sh --webgl`).
+  See `docs/superpowers/plans/2026-07-23-ws14-wasm-webgl.md`.
 
-  > **OWNER [WS19 T14, 2026-07-29 — audit row O16]: WS14 (wasm/WebGL).** This row previously named "out of the monomorphic Metal scope" with no owner, which is not a workstream, so it was ORPHANED. Gate **G-P2** (`.port/tools/gates/check_phase2_closure.py`) now FAILS on any open row without an owner in an OPEN workstream, so this attribution is enforced rather than aspirational. Re-derived repo-wide 2026-07-29 (not with the row's own scope — see §G): `grep -rni 'webgl'` finds only the `build_config::renderer::Backend::Webgl` enum variant and prose; there is no backend implementation, so the row is genuinely OPEN.
+  > **OWNER [WS19 T14, 2026-07-29 — audit row O16]: WS14 (wasm/WebGL).** ~~This row previously named "out of the monomorphic Metal scope" with no owner, which is not a workstream, so it was ORPHANED.~~ Gate **G-P2** (`.port/tools/gates/check_phase2_closure.py`) now FAILS on any open row without an owner in an OPEN workstream, so this attribution is enforced rather than aspirational. **CLOSED by WS14 (2026-07-30)** — the "L" size estimate the WS19 audit carried for O16 was itself a product of the oracle never being read; the real task was ~15 lines.
 
 
 ## rustty-crash (integration-tier stage 1) — `ThreadStateSurface` seam; concrete `ThreadState` impl deferred
@@ -1944,10 +1963,28 @@ GPU renderer / D6 libxev port):**
    > note at the top of this file.
 
 
-5. **App.zig Wasm block (C4, in-file).** `App.zig:579 pub const Wasm` is
+5. ~~**App.zig Wasm block (C4, in-file).** `App.zig:579 pub const Wasm` is
    wasm-target-gated and commented out IN the reference; preserved verbatim at
-   the bottom of app.rs. **Target: the rustty wasm app-runtime** — **OWNER [WS19 T14, 2026-07-29]: WS14 (wasm/WebGL)**; "the rustty wasm app-runtime" is a milestone name, not a workstream, so these rows were ORPHANED. Gate **G-P2** now FAILS on any open row whose owner is not an OPEN workstream (off-by-default
+   the bottom of app.rs. **Target: the rustty wasm app-runtime**~~ — **OWNER [WS19 T14, 2026-07-29]: WS14 (wasm/WebGL)**; "the rustty wasm app-runtime" is a milestone name, not a workstream, so these rows were ORPHANED. Gate **G-P2** now FAILS on any open row whose owner is not an OPEN workstream (off-by-default
    `wasm` feature family).
+
+   > **RESOLVED — WS14, 2026-07-30 (audit row O15).** Ported LIVE, and it is
+   > *complete precisely by being empty*. `App.zig:577-604` is
+   > `pub const Wasm = if (!builtin.target.isWasm()) struct {} else struct { … }`,
+   > and on the wasm arm the struct's ONLY live members are two private aliases
+   > (`wasm`, `alloc`) — all three exports (`app_new`, `app_new_`, `app_free`) are
+   > **commented out IN THE REFERENCE**. The port is
+   > `crates/rustty-core/src/app.rs`'s `#[cfg(target_arch = "wasm32")] pub mod wasm`,
+   > carrying the two aliases and the commented-out bodies verbatim, so a future
+   > un-comment upstream is a diff rather than archaeology.
+   >
+   > **Consequence, and it is the load-bearing one:** because retaining this block
+   > emits **zero symbols**, `crates/rustty-wasm` needs **no `rustty-core`
+   > dependency edge** to be a faithful `main_wasm.zig`. The edge the port used to
+   > carry was not merely heavy but UNFAITHFUL — it over-retained an entire
+   > application tier and dragged `rustty-inspector → dcimgui-sys → freetype-sys →
+   > zlib-sys` into a freestanding wasm link. Dropping it (WS14 T7) is the *more*
+   > faithful choice, not a concession.
 
 **Gate deltas (C-F): NONE** — no code changed; core stays **15** tests (R1-owed
 1 = surface_mouse `keyToMouseShape`; +13 app.rs `mod test_runtime` seam tests +
@@ -3235,8 +3272,23 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   > three files with one non-owner target; they have three different dispositions.
   > * **`main_gen.zig` — STALE, it is PORTED** at `crates/rustty-synthetic/src/main_gen.rs`
   >   (and registered as the `rustty-synthetic` bin, `Cargo.toml:26-28`). Strike it.
-  > * **`main_wasm.zig` → OWNER: WS14** (wasm/WebGL). Re-derived repo-wide:
-  >   `grep -rn 'main_wasm' crates/ --include='*.rs'` → 0 hits, so genuinely OPEN.
+  > * **`main_wasm.zig` → OWNER: WS14** (wasm/WebGL). ~~Re-derived repo-wide:
+  >   `grep -rn 'main_wasm' crates/ --include='*.rs'` → 0 hits, so genuinely OPEN.~~
+  >   **RESOLVED — WS14, 2026-07-30 (audit row O13a).** That re-derivation was a
+  >   FALSE NEGATIVE: it grepped for the *reference filename*, which a Rust port
+  >   naturally never spells. `main_wasm.zig` was already ported at
+  >   `crates/rustty-wasm/src/lib.rs` when the row was written — the genuine residual
+  >   was never the source but the **artifact**: the crate was an `rlib`, could not
+  >   build for `wasm32`, and retained only 3 of the reference's 5 modules. WS14
+  >   closes exactly that: `crates/rustty-wasm` is now a `cdylib` producing a real
+  >   freestanding `target/wasm32-unknown-unknown/release/rustty_wasm.wasm`
+  >   (built by `.port/tools/build-main-wasm.sh`, shape-asserted by
+  >   `crates/rustty-wasm/tests/artifact_shape.rs`), with the retention set
+  >   corrected — `font/Atlas.Wasm` added, and the `rustty-core` edge DROPPED as
+  >   unfaithful (see item 5 of the C4 list above: the reference's `App.Wasm` emits
+  >   zero symbols, so an edge to it retains nothing and costs a
+  >   `rustty-inspector → dcimgui-sys → freetype-sys → zlib-sys` chain in a
+  >   freestanding link). **Zero wasi imports; every import in `env`.**
   > * ~~**`main_build_data.zig` + the `+gen-*` file-emit wiring → OWNER: WS13** (i18n &
   >   docs), which already owns the generated-artifact tooling. Also 0 hits, genuinely OPEN.~~
   >   **PORTED (WS13, 2026-07-30)** at `xtask/src/main_build_data.rs`, exposed as
@@ -4673,6 +4725,18 @@ for the app-id/`.desktop` environment setup that any portal call needs.
 The gap-analysis app-core inventory marked `src/main_gen.zig`, `src/main_wasm.zig`,
 and `src/main_build_data.zig` as done. **They are NOT ported — they are DEFERRED.**
 
+> **CORRECTION OF THE CORRECTION [WS14, 2026-07-30 — audit row O13a].** The
+> blanket "NOT ported — DEFERRED" above was itself an over-claim, in the opposite
+> direction, for two of the three files. It was **already stale for `main_gen.zig`**
+> when written (see the WS19 split below), and it was **stale for `main_wasm.zig`**
+> as of WS14's plan: that file was ported as an rlib at
+> `crates/rustty-wasm/src/lib.rs` (128 L) at plan time and is now a real freestanding
+> `cdylib` artifact (`rustty_wasm.wasm`, zero wasi imports) with the retention set
+> corrected. **The correction still stands, unaltered, for `main_build_data.zig`**
+> (→ WS13). Method note for future re-derivations: grepping `crates/` for a
+> *reference filename* proves nothing about whether a file is ported — a faithful
+> Rust port never spells `main_wasm.zig`. Grep for the ported *symbols*.
+
 > **SPLIT AND OWNED [WS19 T19, 2026-07-29 — audit rows O13a/O13b].** Flagged by gate
 > G-P2 as an open claim with no owner; this is the second copy of the three-file bundle.
 > Same disposition as the C6 copy: **`main_gen.zig` is PORTED** (
@@ -4947,14 +5011,45 @@ No other live seams exist in the crate outside the `#[cfg(windows)]` family +
 
 ## rustty-font Atlas wasm surface — per-test deferral ledger (VALIDATION_REPORT §3e)
 
-The reference `font/Atlas.zig` `pub const Wasm` block (the C-ABI/JS atlas surface
+**RESOLVED — WS14, 2026-07-30 (audit row O14). All 4 assertions are LIVE.**
+
+~~The reference `font/Atlas.zig` `pub const Wasm` block (the C-ABI/JS atlas surface
 for the wasm build) is feature-gated OFF in `crates/rustty-font/src/atlas.rs`
 (off-by-default `wasm` cargo feature; the whole block is preserved verbatim as a
 comment at atlas.rs — R1, no reference line dropped). Its ONE test defers with it
-and is tracked here PER-TEST so `check_test_counts`/G2 auditors can resolve it:
+and is tracked here PER-TEST so `check_test_counts`/G2 auditors can resolve it:~~
 
-- **`Atlas.Wasm` `test "happy path"`** (Atlas.zig:564; commented verbatim at
-  atlas.rs "test \"happy path\"") — **4 assertions deferred with the surface**:
+**The archaeology matters, because this is the single most confusing item in the
+ledger.** "Port the test with all 4 asserts live" was not merely deferred work — as
+written it was **impossible**, and would have stayed impossible however long it sat
+here. Assert 1 is `try testing.expect(wasm.isHostOwned(reg));`, and
+`wasm.toHostOwned` / `isHostOwned` / `toModuleOwned` were **DELETED upstream by
+`9dc2e5978` (#9301, 2025-10-21)**. `Atlas.Wasm` still calls `wasm.toHostOwned` at
+the pin, so the reference block **dangles and does not compile upstream either**.
+
+Closing it therefore required **resurrecting the deleted host-ownership tracker**
+(`crates/rustty-os/src/wasm.rs` + `wasm/host_owned.rs`, feature `wasm-host-owned`,
+ported from `git show 9dc2e5978^:src/os/wasm.zig` with `9dc2e5978` cited in-source,
+carrying its own **2** reference tests). That is the same accepted precedent as the
+`web_canvas` face/shaper resurrection — port the deleted-upstream code the pinned
+reference still depends on, rather than silently dropping the assertion.
+
+Disposition:
+- the `Wasm` block is ported LIVE under `#[cfg(feature = "wasm")]` in
+  `crates/rustty-font/src/atlas.rs` (7 C-ABI exports, unprefixed by design — the JS
+  host binds them by bare name — plus `atlas_debug_canvas`);
+- `test "happy path"` runs natively with **all 4 asserts live** under
+  `cargo test -p rustty-font --features wasm`;
+- `check_test_counts.py`'s `font_atlas` `apc_deferred` goes **1 → 0** (13/13);
+- `atlas_debug_canvas` is additionally asserted in the browser: gate arm **P5**
+  requires its canvas readback to agree with the WebGL path
+  (`.port/tools/gates/ws14_webgl_browser_gate.sh`), proven falsifiable against
+  product code.
+
+The original per-test row, for the record:
+
+- ~~**`Atlas.Wasm` `test "happy path"`** (Atlas.zig:564; commented verbatim at
+  atlas.rs "test \"happy path\"") — **4 assertions deferred with the surface**~~ — **ALL 4 NOW LIVE**:
   1. `try testing.expect(wasm.isHostOwned(reg));`
   2. `try testing.expect(reg.width > 0);`
   3. `try testing.expect(!atlas.modified);`
@@ -4965,7 +5060,7 @@ and is tracked here PER-TEST so `check_test_counts`/G2 auditors can resolve it:
   un-defers the config/vt wasm exports); porting the Wasm block MUST port this
   test with all 4 asserts live.
 
-  > **OWNER [WS19 T14, 2026-07-29 — audit row O14]: WS14 (wasm/WebGL).** The row targeted "the wasm-artifact milestone", which is not a workstream — it was ORPHANED. Re-derived repo-wide: `crates/rustty-font/src/atlas.rs:740` carries the block as `PORT NOTE (wasm — feature-gated OFF)` with the reference preserved as comments, so the row is genuinely OPEN and lands with the wasm atlas surface.
+  > **OWNER [WS19 T14, 2026-07-29 — audit row O14]: WS14 (wasm/WebGL).** ~~The row targeted "the wasm-artifact milestone", which is not a workstream — it was ORPHANED. Re-derived repo-wide: `crates/rustty-font/src/atlas.rs:740` carries the block as `PORT NOTE (wasm — feature-gated OFF)` with the reference preserved as comments, so the row is genuinely OPEN and lands with the wasm atlas surface.~~ **CLOSED by WS14, 2026-07-30** — see the RESOLVED note at the head of this subsection; the "S" size estimate was wrong because the audit did not know assert 1's dependency had been deleted upstream.
 >
 > Gate **G-P2** (`.port/tools/gates/check_phase2_closure.py`) FAILS on any open row without an owner in an OPEN workstream, so this attribution is enforced, not aspirational.
 
@@ -5104,7 +5199,31 @@ overlay) never construct — latent, not parity-blocking (GAP_ANALYSIS §6).
 future GTK/OpenGL renderer tier), or GAP_ANALYSIS §7 open decision 4 choosing
 fill-for-completeness.
 
-## WASM/web target — ✅ DONE (VT C-ABI wasm), 2026-07-15 (superseded the 2 "limits" below)
+## WASM/web target — VT C-ABI wasm + `web_canvas` DONE (2026-07-15); WebGL / `main_wasm` / `Atlas.Wasm` closed by WS14 (2026-07-30)
+
+> **SCOPE NOTE [WS14, 2026-07-30]. Read this before concluding "wasm is finished"
+> from the heading.** The heading used to read "WASM/web target — ✅ DONE", which a
+> grep could — and did — take as covering the whole wasm/web surface. It did not.
+>
+> **What the 2026-07-15 pass actually covered:** the wasip1 `rustty_vt_c.wasm`
+> (the libghostty-vt C-ABI, node-WASI runtime-verified), the freestanding
+> `rustty_web_canvas.wasm`, and the `web_canvas` face + shaper, all browser-verified.
+>
+> **What it did NOT cover:** *any* GPU or WebGL path — **every pixel in that harness
+> is drawn by the 2D Canvas** — plus the four ledger items O13a (`main_wasm.zig`
+> artifact), O14 (`Atlas.Wasm` + its 4-assert test), O15 (`App.zig`'s `Wasm` block)
+> and O16 (`renderer/WebGL.zig`). Those are closed by **WS14**
+> (`docs/superpowers/plans/2026-07-23-ws14-wasm-webgl.md`), which adds a THIRD wasm
+> artifact — `rustty_wasm.wasm` (`main_wasm.zig`'s port; 18 exports, 4 imports, all
+> `env`, zero wasi, 586 KB) — and the first GPU-path proof in the tree: WebGL2
+> rendering of the `Atlas.Wasm` texture in a real Chrome, gated by
+> `.port/tools/gates/ws14_webgl_browser_gate.sh` / `ci.sh --webgl`.
+>
+> Note also that `rustty_vt_c.wasm`'s wasip1 lane needs
+> `rustup target add wasm32-wasip1` on a fresh machine (only
+> `wasm32-unknown-unknown` is installed by default here), so a missing artifact
+> there is a toolchain gap, not a regression.
+
 
 **A real, running `.wasm` is produced and merged (main @ ea92fb4).** CRITICAL
 REFRAMING from the first pass: the modern ghostty wasm artifact is
@@ -5158,13 +5277,20 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
    real glyphs via the browser Canvas (distinct metrics R 21×25 / u 18×19 / s
    18×20 / t 18×24 / y 20×26 / ! 14×25), populates the atlas, the Shaper produces
    cells, and the VT terminal roundtrip runs — all with 0 console errors.
-   (`main_wasm.zig` stays un-ported: it is the dead monolithic playground entry;
-   the modern equivalent is the per-C-ABI wasm module, which is what we build.)
+   ~~(`main_wasm.zig` stays un-ported: it is the dead monolithic playground entry;
+   the modern equivalent is the per-C-ABI wasm module, which is what we build.)~~
+   **STALE [WS14, 2026-07-30]:** `main_wasm.zig` IS ported
+   (`crates/rustty-wasm/src/lib.rs`) and now ships as a real freestanding
+   `rustty_wasm.wasm` cdylib. "Dead upstream" is a reason to record the divergence,
+   not a licence to skip the port — the same judgement that resurrected
+   `web_canvas` in this very item.
 2. ~~**Target is wasi, not browser-freestanding `wasm32-unknown-unknown`**~~
    **RESOLVED (2026-07-15).** Built a TRUE freestanding
-   `target/wasm32-unknown-unknown/release/rustty_web_canvas.wasm` (**936 KB, 184
-   exports, `WebAssembly.Module.imports` modules = `["env"]` only — ZERO wasi
-   imports**), loadable directly in a browser with no wasi shim. Achieved by
+   `target/wasm32-unknown-unknown/release/rustty_web_canvas.wasm` (**1.06 MB, 199
+   exports, 14 imports, `WebAssembly.Module.imports` modules = `["env"]` only — ZERO
+   wasi imports**; the "936 KB / 184 exports" first recorded here was stale-low and
+   is corrected to the 2026-07-30 measurement so the row stays checkable), loadable
+   directly in a browser with no wasi shim. Achieved by
    making the wasm build PURE RUST: `rustty-simd` scalar-Rust fallbacks under
    cfg(wasm) for every simdutf/highway kernel (base64, codepoint_width, index_of,
    utf8-vt — extending the existing `cfg!(miri)` scalar precedent; C++ `-sys`
@@ -5184,8 +5310,20 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
    `rustty-vt-c/src/lib.rs`/`sgr.rs`) — which also un-defers the stale sgr
    `wasm_alloc_attribute` PORT NOTE (its "rustty does not yet build a WASM target"
    justification was obsolete). Module now exports 169 symbols.
-4. The earlier `rustty-wasm` crate (config/core/font, the `main_wasm.zig` analog)
-   is the legacy path — retained (builds natively) but NOT the wasm deliverable.
+4. ~~The earlier `rustty-wasm` crate (config/core/font, the `main_wasm.zig` analog)
+   is the legacy path — retained (builds natively) but NOT the wasm deliverable.~~
+   **SUPERSEDED — WS14, 2026-07-30.** `crates/rustty-wasm` is no longer an
+   rlib-only "legacy path": it is a `cdylib` that builds for
+   `wasm32-unknown-unknown` and IS a wasm deliverable alongside the two above —
+   `rustty_wasm.wasm`, the faithful `main_wasm.zig` artifact (`atlas_*` from
+   `font/Atlas.Wasm`, `config_*` from `config.Wasm`, plus `malloc`/`free`;
+   4 imports, all `env`, zero wasi). Its retention set is now the reference's,
+   corrected: `font` ADDED, `core` DROPPED — the reference's `App.Wasm` emits zero
+   symbols, so the `rustty-core` edge retained nothing while dragging
+   `rustty-inspector → dcimgui-sys → freetype-sys → zlib-sys` into a freestanding
+   link. Built by `.port/tools/build-main-wasm.sh`; shape-asserted by
+   `crates/rustty-wasm/tests/artifact_shape.rs`; rendered and pixel-gated by
+   `example/wasm-webgl/`.
 
 ## rustty-font-shaper — Linux fontconfig backend + web_canvas [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
 
@@ -6701,10 +6839,10 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 | O10 | `D:3273` macOS `xev.File`/`TCP`/`UDP` watcher instantiations still deferred (Linux ported them, Tasks 3–5); plus the macOS `kqueue: file IO on thread pool` skip-stub | **OPEN, real, no owner.** The two targets deliberately diverge, gate-pinned by `crates/rustty-xev/tests/surface_parity.rs`. | **permanent divergence** — already deliberate and gate-pinned; WS19 T11 moves it into the divergence section with its 4-criterion basis rather than leaving it in a "DEFERRED" list | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
 | O11 | `D:3274` xev `c_api.zig` (libxev's own C ABI) unported | **OPEN, no owner.** rustty consumers use the Rust API; nothing in ghostty consumes libxev's C ABI. | **permanent divergence** (outside the port's consumption surface; basis in WS19 T11) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
 | O12 | `D:2643` `+version`'s OSC-8 commit-hash hyperlink never emits (no `+BUILD` metadata, no repo-URL identity constant) | **OPEN, real, no owner.** The three STUB lines it is bundled with are GONE (see W8); only the hyperlink branch is still dead. | **fix in WS19 T12** (repo-URL constant in `rustty-identity` + a build-time commit hash) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T12. IMPLEMENTED, not diverged** — there was no honest 4-criterion basis for permanence (the repo URL already exists as workspace `Cargo.toml` `repository`, and the hyperlink is user-observable R1 behavior). `rustty_identity::COMMIT_URL_PREFIX` (both profile arms) + a `rustty-cli/build.rs` `RUSTTY_COMMIT_HASH` capture (env-overridable, degrades to `None` off a git checkout — R3-clean, reproducibility-clean) + a live `commit_url()`. Also fixed a latent BUG in the dead branch: it wrote the bare hash as the URI, with no URL prefix. Gated by 4 `rustty-cli` unit tests over a new `write_version(sink, tty)` seam (the tty-only branch is unreachable from `cli_smoke`, whose stdout is a pipe); 3 mutation experiments. |
-| O13 | `D:3065`/`:4067` `main_wasm.zig` + `main_build_data.zig` unported, "Target: the gen/wasm-artifact tooling milestone" | **OPEN.** `grep -rn 'main_wasm\|main_build_data' crates/ --include='*.rs'` → **zero hits**. (`main_gen.zig` **IS** ported at `crates/rustty-synthetic/src/main_gen.rs`, so that third of the row is stale.) | `main_wasm` → **route to WS14**; `main_build_data` + the `+gen-*` file-emit wiring (`D:3725`) → **route to WS13** | **M** each | **WS19 EXECUTION STATUS:** **DONE (split + routed) — WS19 T14/T19.** `main_gen` PORTED; `main_wasm` → WS14; `main_build_data` + `+gen-*` → WS13 (in WS13's plan). |
-| O14 | `D:4209` `Atlas.Wasm` `test "happy path"` (4 named assertions) deferred with the wasm atlas surface | **OPEN, correctly described**; target is an unscheduled milestone. | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
-| O15 | `D:1894` `App.zig` `Wasm` block preserved verbatim, "Target: the rustty wasm app-runtime" | **OPEN, correctly described** (the block is commented out in the *reference* too). | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
-| O16 | `D:571` the **WebGL** renderer backend | **OPEN, correctly described.** | **route to WS14** | **L** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
+| O13 | `D:3065`/`:4067` `main_wasm.zig` + `main_build_data.zig` unported, "Target: the gen/wasm-artifact tooling milestone" | **OPEN.** `grep -rn 'main_wasm\|main_build_data' crates/ --include='*.rs'` → **zero hits**. (`main_gen.zig` **IS** ported at `crates/rustty-synthetic/src/main_gen.rs`, so that third of the row is stale.) | `main_wasm` → **route to WS14**; `main_build_data` + the `+gen-*` file-emit wiring (`D:3725`) → **route to WS13** | **M** each | **WS19 EXECUTION STATUS:** **DONE (split + routed) — WS19 T14/T19.** `main_gen` PORTED; `main_wasm` → WS14; `main_build_data` + `+gen-*` → WS13 (in WS13's plan). **WS14 EXECUTION STATUS (O13a), 2026-07-30: CLOSED.** The "zero hits" derivation was a false negative — it grepped the reference FILENAME, which a Rust port never spells. `main_wasm.zig` was already ported (`crates/rustty-wasm/src/lib.rs`); WS14 shipped the missing ARTIFACT (freestanding `rustty_wasm.wasm` cdylib) + the corrected retention set. O13b (`main_build_data`) remains with WS13. |
+| O14 | `D:4209` `Atlas.Wasm` `test "happy path"` (4 named assertions) deferred with the wasm atlas surface | **OPEN, correctly described**; target is an unscheduled milestone. | **route to WS14** | ~~**S**~~ | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. **WS14 EXECUTION STATUS, 2026-07-30: CLOSED — all 4 asserts live** (`cargo test -p rustty-font --features wasm`), `check_test_counts.py` `font_atlas` apc_deferred 1 → 0. The **S** estimate was wrong: assert 1's `wasm.isHostOwned` was DELETED upstream by `9dc2e5978`, so the block dangles upstream and closing the row required resurrecting the tracker (`crates/rustty-os/src/wasm/host_owned.rs` + 2 reference tests). |
+| O15 | `D:1894` `App.zig` `Wasm` block preserved verbatim, "Target: the rustty wasm app-runtime" | **OPEN, correctly described** (the block is commented out in the *reference* too). | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. **WS14 EXECUTION STATUS, 2026-07-30: CLOSED** — ported live at `crates/rustty-core/src/app.rs` (`#[cfg(target_arch = "wasm32")] pub mod wasm`), complete BY BEING EMPTY, which is what let WS14 drop `rustty-wasm`'s unfaithful `rustty-core` edge. |
+| O16 | `D:571` the **WebGL** renderer backend | ~~**OPEN, correctly described.**~~ **MIS-DESCRIBED** — see below. | **route to WS14** | ~~**L**~~ → **XS** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. **WS14 EXECUTION STATUS, 2026-07-30: CLOSED.** There is no WebGL backend upstream to port: `src/renderer/WebGL.zig` is **2 lines**, identical at the pin and on `origin/main`. The **L** estimate came from re-deriving the row against the PORT and never the ORACLE. Ported verbatim (~15 lines incl. PORT NOTES) at `crates/rustty-renderer/src/webgl.rs`; browser drawing is proven in the consumer under a falsifiable pixel gate. |
 | O17 | `D:3741` `stb_image_resize.h` glyph resize has no rustty counterpart | ~~**OPEN, correctly described.**~~ **THIS AUDIT VERDICT WAS WRONG — corrected 2026-07-29 by the WS11 plan-authoring lane.** The port **SHIPPED at `2e82776` (2026-06-30)**: `rustty-font-shaper/src/stb.rs:18` declares `stbir_resize_uint8`, `build.rs` compiles `vendor/stb_impl.c` via `cc::Build`, `vendor/stb_image_resize.h` is byte-identical to the oracle (md5 `7381a7070120fd5a36d8fb9e3179dd7c`), call site `face/freetype.rs:806` is argument-for-argument identical to `freetype.zig:639-652`. **Root cause of the miss:** the row's evidence grep was scoped to `crates/rustty-font/src`, but the code lives in the sibling crate `rustty-font-shaper` created by the D1 three-tier split — *the grep scope WAS the bug*, so re-running it could not detect the error (see §G). | **RECLASSIFIED, not closed:** the port is done; what is open is that its test coverage is **VACUOUS** (all reaching tests run at scale 1.0; `render_and_resize` never enters the bitmap arm; swapping stb for nearest-neighbour leaves all 9 tests green). **Route to WS11**, which owns it with a 10-task plan. | **S** (row) / **M** (coverage, in WS11) | **WS19 EXECUTION STATUS:** **DONE (row CORRECTED) — WS19 T14.** The audit verdict was WRONG: the port SHIPPED at `2e82776`. Reclassified to vacuous test coverage → **WS11**. **WS11 EXECUTION STATUS: DONE — coverage CLOSED 2026-07-29.** 5 new tests (2 direct-FFI in `src/stb.rs`, 3 KATs in `face/freetype.rs` incl. a permanent machine-checked negative control) + new gate **D10** vs ghostty's own build recipe at 4 zig optimize modes, each with a demonstrated RED arm; nearest-neighbour substitution now FAILS both KATs while all 9 pre-existing tests still pass. The `ReleaseFast` ±1 LSB is ledgered as a permanent divergence with a four-criterion basis. **Nothing deferred.** |
 | O18 | `D:3668` `rustty-synthetic` `cli.rs` 4 binary-entry seams (`main`, `main_action_impl_{ascii,osc,utf8}`) | **OPEN**; un-defer trigger is "the `rustty +synthetic` binary entry", which no WS owns. | **fix in WS19 T13** — wire the entries through the existing `rustty-cli` detection, **or** record as permanent if the acyclic split forbids it. Decide in-plan; do not defer. | **M** | **WS19 EXECUTION STATUS:** **DONE (row was STALE) — WS19 T13.** The 4 seams do not exist; only the local `detectArgs` remains, as a **Justified R1 Divergence** (R4). |
 | O19 | `D:3697` `rustty-bench` residuals: macOS `os_signpost` interval; `main_bench.zig` binary entry; locally-replicated `detectArgs` | **OPEN, no owner.** | `os_signpost` → **permanent divergence** (Instruments-only instrumentation, zero behavior); the binary entry + local `detectArgs` → **fix in WS19 T13** with O18 (same class) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T13/T14.** All four residuals disposed: `os_signpost` + local `detectArgs` are divergences; the bin entry SHIPPED; the alias clause is MOOT. |
@@ -6812,9 +6950,9 @@ opposite direction** — claiming open work that has shipped.
 | **O17** stb glyph resize | `grep -rn 'stbir_resize_uint8' crates/` → `rustty-font-shaper/src/stb.rs:18`, `build.rs`, `face/freetype.rs:806` | **WAS WRONG** — ported at `2e82776`; reclassified to vacuous coverage → **WS11** |
 | **O18** synthetic `cli.rs` "4 live `unimplemented!()` binary-entry seams" | `grep -rn 'unimplemented\|todo!' crates/rustty-synthetic/` → **0 hits**. `cli.rs:97` `main()`, `:245/:274/:297` `main_action_impl_{ascii,osc,utf8}` are all LIVE; `Cargo.toml:26-28` registers the `rustty-synthetic` bin at `src/main_gen.rs`, whose `fn main` calls `cli::main()` | **WAS WRONG (stale)** — all 4 seams filled; only the LOCAL `detectArgs` replica remains, and that is a permanent acyclic-split divergence (see the divergence section) |
 | **O19** bench `main_bench.zig` binary entry | `crates/rustty-bench/Cargo.toml:21-23` registers the `rustty-bench` bin at `src/main_bench.rs`; `main_bench.rs:24` `fn main() -> ExitCode` calls `rustty_bench::cli::main()` | **WAS WRONG (stale)** — shipped. `os_signpost` (`benchmark.rs:81-101`, no-op + verbatim body) and the local `detectArgs` are the real residuals, both permanent divergences |
-| **O14** `Atlas.Wasm` test | `grep -rn 'wasm' crates/rustty-font/src/atlas.rs` → `:740` "PORT NOTE (wasm — feature-gated OFF)", block preserved as comments | confirmed **OPEN** → WS14 |
-| **O15** `App.zig` Wasm block | `grep -rn 'Wasm' crates/rustty-core/src/app.rs` → `:998`–`:1007`, preserved as comments | confirmed **OPEN** → WS14 |
-| **O16** WebGL backend | repo-wide `grep -rni 'webgl'` → only `build_config::renderer::Backend::Webgl` (an enum variant) + prose "WebGL wasm-deferred"; no backend implementation | confirmed **OPEN** → WS14 |
+| **O14** `Atlas.Wasm` test | `grep -rn 'wasm' crates/rustty-font/src/atlas.rs` → `:740` "PORT NOTE (wasm — feature-gated OFF)", block preserved as comments | ~~confirmed **OPEN** → WS14~~ **CLOSED by WS14 2026-07-30** (block live under `feature = "wasm"`; 4/4 asserts) |
+| **O15** `App.zig` Wasm block | `grep -rn 'Wasm' crates/rustty-core/src/app.rs` → `:998`–`:1007`, preserved as comments | ~~confirmed **OPEN** → WS14~~ **CLOSED by WS14 2026-07-30** (ported live; empty by construction, per the reference) |
+| **O16** WebGL backend | repo-wide `grep -rni 'webgl'` → only `build_config::renderer::Backend::Webgl` (an enum variant) + prose "WebGL wasm-deferred"; no backend implementation | ~~confirmed **OPEN** → WS14~~ **CLOSED by WS14 2026-07-30.** METHOD DEFECT worth remembering: this probe searched the PORT only. The ORACLE has no backend either (`src/renderer/WebGL.zig` = 2 lines), so "no backend implementation" was PARITY, not a gap. Re-derive open rows against the oracle, not just the port. |
 | **O5** `PageList::Limits` | repo-wide `grep -rn 'struct Limits'` → only `kitty/graphics_image.rs:126` (an unrelated struct); no `PageList::Limits` | confirmed **OPEN** → Phase 3 re-vet P3-RV1 |
 | **O6** GTK portal `OpenURI` | repo-wide `grep -rni 'openuri\|open_uri'` across `crates/` → **0 hits** at audit time; the only portal code was `gtk/class/global_shortcuts.rs` (GlobalShortcuts iface) | was **OPEN** → **CLOSED by WS19 T8, 2026-07-29** (`gtk/portal.rs` + `gtk/portal/open_uri.rs`, live-gated against a real `xdg-desktop-portal` `Response` code 0) |
 | **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ended in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | **CLOSED** by WS19 T10 (both backends; `thread_perform` no longer derefs `task_loop` at all). NOTE: the Miri harness proved the *prescribed* epoll-style fix (copy the field, form no reference) is ITSELF UB under Stacked Borrows — a by-value read of a `Copy` field is still a foreign ACCESS on the `Loop` allocation. This also retroactively invalidates the previously-"RESOLVED" M1 verdict. |

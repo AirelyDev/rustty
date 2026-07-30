@@ -200,6 +200,78 @@ step and, for D8, the G8 bench lane.
 
 ---
 
+## Opt-in lanes (NOT part of the default run)
+
+### `--webgl` — the WS14 wasm / WebGL2 browser lane
+
+```sh
+bash .port/tools/ci.sh --webgl
+```
+
+which is exactly these two commands, in order:
+
+```sh
+.port/tools/build-main-wasm.sh --release            # ~9 s cold, ~5 s warm
+.port/tools/gates/ws14_webgl_browser_gate.sh        # ~6 s (headless Chrome)
+```
+
+**What it proves.** The freestanding `rustty_wasm.wasm` cdylib
+(`wasm32-unknown-unknown`, zero wasi imports, every import in `env`) is loaded in
+a real headless Chrome, its `Atlas.Wasm` texture is uploaded as an `R8` NEAREST
+WebGL2 texture, `readPixels` counts ink per 32 px cell column, and those counts
+must **equal** an expectation computed at runtime on the CPU **from the same atlas
+bytes the module holds** (read back through `rustty_wasm_atlas_data` — never a
+hardcoded number, never the JS copy of what was written).
+
+**Why it cannot go vacuously green.** Every invocation runs three arms and passes
+only if the positive arm matches **and both negative controls fail**:
+
+| arm | mutation | must |
+| --- | --- | --- |
+| positive | none | MATCH the CPU expectation |
+| NC1 | atlas UVs offset by +3 px | FAIL |
+| NC2 | fragment shader outputs black | FAIL |
+
+plus NC3 (structural): the third, deliberately undrawn cell column must be
+**exactly 0** ink; and five product-sensitivity assertions:
+
+| # | asserts |
+| --- | --- |
+| P1 | each glyph actually left ink in the atlas (a no-op `set` cannot pass with `expect == [0,0]`) |
+| P2 | the two reserved regions are disjoint (`reserve` did not hand out the same rect twice) |
+| P3 | whole-atlas ink equals the sum of the per-region inks — `Atlas::set` wrote **nothing** outside the region it was given (wrong destination offset or row stride) |
+| P4 | the two distinct bitmaps produce distinct counts (a `set` that ignores its region is caught) |
+| P5 | `atlas_debug_canvas` — the **reference's own** readback path — agrees with the WebGL one: its canvas carries exactly `totalInk` alpha-channel ink (the grayscale arm writes A8 into `buf[(i*4)+3]`) |
+
+P1–P5 are what make the gate sensitive to the **ported product code** rather than
+only to its own injected mutations. Three product mutations were each demonstrated
+RED, and GREEN again on revert:
+
+| mutation (product code) | gate |
+| --- | --- |
+| `Atlas::set` `tex_offset` + 1 column | RED — P4 |
+| `Atlas::set` `tex_offset` + 2 rows | RED — P3 |
+| `atlas_debug_canvas_` grayscale writes `buf[(i*4)+2]` instead of `+3` | RED — P5 |
+
+**Why it is opt-in, not default.** It needs a second full target's artifacts plus a
+browser process, and two things a CI box may not have. Missing either is **exit 3
+(BLOCKED)**, never a silent green:
+
+- the `wasm32-unknown-unknown` rustup target → `rustup target add wasm32-unknown-unknown`
+- a Chrome/Chromium binary (the driver probes the usual macOS/Linux paths)
+
+**Headless is not a weaker proxy.** `--headless=new --enable-unsafe-swiftshader`
+was observed to produce **byte-identical** ink counts to a live, GPU-backed Chrome
+on the same host (WS14 T9 design probe and WS14 T10's live run), so wiring the lane
+headlessly in CI asserts the same pixels a human sees at
+`example/wasm-webgl/index.html`.
+
+The driver is Node-only with **zero npm dependencies** (node's built-in `WebSocket`
++ `fetch` speak CDP directly) and serves over loopback only
+(`python3 -m http.server --bind 127.0.0.1`).
+
+---
+
 ## Why this is honest (no fabricated greens)
 
 - Hard-fail gates that pass today (`fmt`, `clippy`, `build`, `test`, G7, G4

@@ -104,15 +104,56 @@
 # check is red, OR a PROGRESS gate went RED because a claimed-done crate
 # regressed (which is no longer "while unported").
 #
+# OPT-IN LANES (never part of the default run):
+#   --webgl  WS14's wasm+browser lane — builds the freestanding
+#            `rustty_wasm.wasm` cdylib and runs the WebGL2 pixel gate in headless
+#            Chrome. Opt-in because it is heavyweight relative to everything above
+#            (a second full target's artifacts + a browser process) and needs two
+#            things CI boxes do not all have: the `wasm32-unknown-unknown` rustup
+#            target and a Chrome/Chromium binary. Missing either is exit 3
+#            (BLOCKED/env-missing) — NEVER a silent green.
+#
 # Usage:
 #   bash .port/tools/ci.sh                   # full run (what CI runs)
 #   CI_SKIP_CARGO=1 bash .port/tools/ci.sh   # gates only (no cargo; local/fast)
+#   bash .port/tools/ci.sh --webgl           # ONLY the opt-in WS14 wasm/WebGL lane
 set -uo pipefail   # NOTE: no `-e` — run every check, aggregate failures.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 GATES="$ROOT/.port/tools/gates"
 PY="${PYTHON:-python3}"
+
+# ---- opt-in lanes ----------------------------------------------------------
+# Parsed and dispatched BEFORE the default run so `--webgl` is a lane you ask for,
+# not an addition to what CI runs by default.
+WEBGL_LANE=0
+for arg in "$@"; do
+  case "$arg" in
+    --webgl) WEBGL_LANE=1 ;;
+    *) echo "ci.sh: unknown argument '$arg' (known opt-in lanes: --webgl)" >&2; exit 2 ;;
+  esac
+done
+
+# WS14 — the wasm/WebGL lane. Two commands, in order; the gate itself owns the
+# pass/fail verdict (positive arm must match AND both negative controls must fail)
+# and its own exit-3 environment check for Chrome.
+run_webgl_lane() {
+  section "opt-in lane: WS14 wasm/WebGL  (--webgl)"
+  if ! rustup target list --installed 2>/dev/null | grep -qx 'wasm32-unknown-unknown'; then
+    echo "BLOCKED: the wasm32-unknown-unknown target is not installed." >&2
+    echo "         Install it with: rustup target add wasm32-unknown-unknown" >&2
+    echo "         Exiting 3 (environment missing) rather than passing vacuously." >&2
+    return 3
+  fi
+  echo "--- .port/tools/build-main-wasm.sh --release"
+  if ! sh "$ROOT/.port/tools/build-main-wasm.sh" --release; then
+    echo ">> FAIL: the freestanding rustty_wasm.wasm cdylib did not build" >&2
+    return 1
+  fi
+  echo "--- .port/tools/gates/ws14_webgl_browser_gate.sh"
+  sh "$GATES/ws14_webgl_browser_gate.sh"
+}
 
 # G1b runner: check_test_counts.py greps the read-only ghostty oracle checkout
 # directly (R3: the oracle is an EXTERNAL reference, never shipped to CI). With
@@ -327,6 +368,18 @@ echo " rustty CI — single entry (.port/tools/ci.sh)"
 echo " root: $ROOT"
 echo " toolchain: $( (rustc --version 2>/dev/null) || echo 'rustc: n/a')"
 echo "=================================================================="
+
+# ---- opt-in lane dispatch (exits; the default run below is not performed) ---
+if [ "$WEBGL_LANE" = "1" ]; then
+  run_webgl_lane; rc=$?
+  hr
+  case "$rc" in
+    0) echo "CI RESULT (--webgl lane): PASS"; ;;
+    3) echo "CI RESULT (--webgl lane): BLOCKED — environment missing, NOT green" >&2 ;;
+    *) echo "CI RESULT (--webgl lane): FAIL (exit $rc)" >&2 ;;
+  esac
+  exit "$rc"
+fi
 
 # ---- 1..4: cargo steps (all HARD-FAIL) ------------------------------------
 run_cargo "cargo fmt --check"        cargo fmt --check

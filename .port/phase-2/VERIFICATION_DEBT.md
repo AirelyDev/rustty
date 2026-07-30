@@ -251,7 +251,17 @@ BEFORE it accepts clients, so a client that connects too early fails with a bare
 
 **Out of scope by decision (not debt):** ~~the WebGL/wasm apprt (owner decision,
 2026-07)~~ **[WS19 T14 correction: the WebGL/wasm surface is now OWNED — routed to WS14,
-audit rows O13a/O14/O15/O16 — so it is scheduled work, not an out-of-scope decision]**;
+audit rows O13a/O14/O15/O16 — so it is scheduled work, not an out-of-scope decision]**
+**[WS14 sharpening, 2026-07-30: what remains out of scope is the browser *apprt
+runtime* — a full `apprt` App/Surface over the browser. `apprt/browser.zig` ITSELF is
+4 loc and is ported at `crates/rustty-apprt/src/browser.rs`. This exclusion does NOT
+cover WS14, which is DONE: it ports the `renderer/WebGL.zig` placeholder, the
+`main_wasm.zig` module as a real freestanding `rustty_wasm.wasm` cdylib, `App.Wasm`
+and `Atlas.Wasm` (all 4 reference asserts live), and gates browser rendering with a
+falsifiable pixel assertion whose two negative controls must FAIL on every run
+(`.port/tools/gates/ws14_webgl_browser_gate.sh`, `ci.sh --webgl`). WS14 adds NO
+verification debt — the artifact builds, the gate runs headlessly on this machine,
+and it is CI-wireable.]**;
 ~~macOS `File`/`TCP`/`UDP` watcher instantiations (tracked in `DEFERRALS.md`
 as the C7 follow-up chunk — an implementation deferral, not verification debt)~~
 **[WS19 T11 correction: reclassified as a permanent Justified R1 Divergence, with a
