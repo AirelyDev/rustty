@@ -585,6 +585,9 @@ of the five tiers have since LANDED and the stale list was never resolved here):
   whole-backend follow-up port, no in-crate `unimplemented!()`. (Metal = macOS and
   OpenGL3 = GTK/Linux are both done.)
 
+  > **OWNER [WS19 T14, 2026-07-29 — audit row O16]: WS14 (wasm/WebGL).** This row previously named "out of the monomorphic Metal scope" with no owner, which is not a workstream, so it was ORPHANED. Gate **G-P2** (`.port/tools/gates/check_phase2_closure.py`) now FAILS on any open row without an owner in an OPEN workstream, so this attribution is enforced rather than aspirational. Re-derived repo-wide 2026-07-29 (not with the row's own scope — see §G): `grep -rni 'webgl'` finds only the `build_config::renderer::Backend::Webgl` enum variant and prose; there is no backend implementation, so the row is genuinely OPEN.
+
+
 ## rustty-crash (integration-tier stage 1) — `ThreadStateSurface` seam; concrete `ThreadState` impl deferred
 
 `src/crash/` is ported in full (dir.zig + main.zig + sentry.zig +
@@ -1922,7 +1925,7 @@ GPU renderer / D6 libxev port):**
 
 5. **App.zig Wasm block (C4, in-file).** `App.zig:579 pub const Wasm` is
    wasm-target-gated and commented out IN the reference; preserved verbatim at
-   the bottom of app.rs. **Target: the rustty wasm app-runtime** (off-by-default
+   the bottom of app.rs. **Target: the rustty wasm app-runtime** — **OWNER [WS19 T14, 2026-07-29]: WS14 (wasm/WebGL)**; "the rustty wasm app-runtime" is a milestone name, not a workstream, so these rows were ORPHANED. Gate **G-P2** now FAILS on any open row whose owner is not an OPEN workstream (off-by-default
    `wasm` feature family).
 
 **Gate deltas (C-F): NONE** — no code changed; core stays **15** tests (R1-owed
@@ -3139,6 +3142,18 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   gen/wasm-artifact tooling milestone (the same milestone that builds the
   `help_strings` codegen — see below).
 
+  > **SPLIT AND OWNED [WS19 T14, 2026-07-29 — audit rows O13a / O13b].** This row bundled
+  > three files with one non-owner target; they have three different dispositions.
+  > * **`main_gen.zig` — STALE, it is PORTED** at `crates/rustty-synthetic/src/main_gen.rs`
+  >   (and registered as the `rustty-synthetic` bin, `Cargo.toml:26-28`). Strike it.
+  > * **`main_wasm.zig` → OWNER: WS14** (wasm/WebGL). Re-derived repo-wide:
+  >   `grep -rn 'main_wasm' crates/ --include='*.rs'` → 0 hits, so genuinely OPEN.
+  > * **`main_build_data.zig` + the `+gen-*` file-emit wiring → OWNER: WS13** (i18n &
+  >   docs), which already owns the generated-artifact tooling. Also 0 hits, genuinely OPEN.
+  >
+  > Gate **G-P2** FAILS on any open row without an owner in an OPEN workstream.
+
+
 - **`logFn` / `std_options` — the log-facade seam is a deferred seam (continued).**
   `main_ghostty.rs` ports `logFn` (the stderr branch is LIVE, gated on the bin's
   `GlobalState.logging.stderr` + the debug-only-in-Debug rule, exactly as the
@@ -3354,11 +3369,21 @@ DEFERRED (documented; not needed to boot a shell on macOS — the permanent fina
   `bes[0].Api()`); N/A, not weakened. The `Dynamic`/`DynamicXev`/`Sys`/`dynamic`/
   `backend`/`available` main.zig decls are noted (reference doc preserved, R3) but not
   re-exported.
-- **Other backends** (`backend/epoll` 12t, `io_uring` 13t, `iocp` 14t, `wasi_poll` 9t),
-  **`watcher/file`** (8t, `xev.File` — zero ghostty uses), **`watcher/tcp`** (5t),
-  **`watcher/udp`** (6t), **`c_api.zig`** (1t, libxev's C ABI — rustty consumers use the
-  Rust API) — whole follow-up ports (§1). Non-macOS handle types stay `lib.rs`
-  placeholders.
+- **Other backends** (`backend/epoll` 12t, `io_uring` 13t — **both since PORTED**;
+  `iocp` 14t, `wasi_poll` 9t — out-of-scope-by-platform per `ROADMAP:214`, not
+  deferrals), ~~**`watcher/file`** (8t, `xev.File` — zero ghostty uses),
+  **`watcher/tcp`** (5t), **`watcher/udp`** (6t), **`c_api.zig`** (1t, libxev's C ABI —
+  rustty consumers use the Rust API) — whole follow-up ports (§1). Non-macOS handle
+  types stay `lib.rs` placeholders.~~
+
+  **RECLASSIFIED [WS19 T11, 2026-07-29 — audit rows O10, O11].** `File`/`TCP`/`UDP` are
+  **PORTED on Linux** (per-backend in `epoll.rs`/`io_uring.rs`, wrapped as the Dynamic
+  enums). What remains is (a) the macOS export surface for those three plus the
+  `kqueue: file IO on thread pool` skip-stub, and (b) `c_api.zig`. Both are now
+  **permanent Justified R1 Divergences** with 4-criterion bases — see
+  "macOS `xev.File`/`TCP`/`UDP` watcher surface …" and "libxev `c_api.zig` …" in the
+  `# Justified R1 Divergences` section. Neither is open work; neither had an owner while
+  it sat in this list.
 - **[ADV-FIX F6] `os/flatpak.rs` + vt-search xev refs** — NOT resolved by making
   `rustty_global::xev` re-export `rustty-xev` (that would cycle
   `global → xev → global`). They resolve LATER via DIRECT edges: `os → xev` (flatpak)
@@ -3758,22 +3783,38 @@ root, plus 3 net-new support modules `rand`/`enums`/`io`), PRNG bit-exact
 Zig `test{}` ported assertion-for-assertion (15 Rust tests), Miri-clean, G3b
 missing=0, `PORT STATUS: done`.
 
-**Residual (4 live `unimplemented!()` — the BINARY-ENTRY seams,
+~~**Residual (4 live `unimplemented!()` — the BINARY-ENTRY seams,
 `crates/rustty-synthetic/src/cli.rs`, previously tracked only in
-`SYNTHETIC_DESIGN.md`; each keeps its verbatim Zig body as comments):**
+`SYNTHETIC_DESIGN.md`; each keeps its verbatim Zig body as comments):**~~
 
-1. **`cli.rs:56` `main()`** — needs `cli.action.detectArgs` (generic `+action`
+1. ~~**`cli.rs:56` `main()`** — needs `cli.action.detectArgs` (generic `+action`
    detection), which lives ABOVE `synthetic` in the acyclic Rust split (a
-   synthetic→cli edge would cycle). No ported `test{}` exercises it.
-2. **`cli.rs:85/88/91` `main_action_impl_{ascii,osc,utf8}`** — the
+   synthetic→cli edge would cycle). No ported `test{}` exercises it.~~
+2. ~~**`cli.rs:85/88/91` `main_action_impl_{ascii,osc,utf8}`** — the
    option-parsing (`cli.args.parse` over argv/string iterators) + stdout wiring
    of `mainActionImpl`. The substantive dispatch (`main_action`) and every
-   generator body are LIVE; only the binary-entry glue defers.
+   generator body are LIVE; only the binary-entry glue defers.~~
 
-**Un-defer trigger:** the `rustty +synthetic`-style binary entry (the same
+~~**Un-defer trigger:** the `rustty +synthetic`-style binary entry (the same
 milestone that wires generator binaries into the differential-fuzz harness, G5).
 Placeholder-leaf doctrine: shapes fixed, bodies panic if called, no test reaches
-them.
+them.~~
+
+**RESOLVED / STALE [WS19 T13, 2026-07-29 — audit row O18].** These four seams **do not
+exist**. Verified repo-wide, not with the row's own scope (see §G for why that matters):
+`grep -rn 'unimplemented!\|todo!' crates/rustty-synthetic/` → **0 hits**. `main()` is
+LIVE at `cli.rs:97` and `main_action_impl_{ascii,osc,utf8}` at `:245`/`:274`/`:297`.
+`crates/rustty-synthetic/Cargo.toml:26-28` registers the `rustty-synthetic` bin at
+`src/main_gen.rs`, whose `fn main` calls `rustty_synthetic::cli::main()` — so the
+"un-defer trigger" (a binary entry) has ALSO already happened. The plan's T13 was
+therefore going to implement something that already shipped.
+
+**What actually remains** is the LOCAL replication of `detectArgs`, which is a
+**permanent Justified R1 Divergence** forced by the acyclic split (R4): the shared helper
+lives in the heavy `rustty-cli`, above this crate. See
+"`rustty-synthetic` / `rustty-bench` locally-replicated `detectArgs`" in the
+`# Justified R1 Divergences` section for the 4-criterion basis. **This is a decision, not
+a deferral** — no owner or trigger is needed beyond "if `detectArgs` changes".
 
 ## Sub-project #3 (unused-subset): `src/benchmark/**` + `main_bench.zig` + `ghostty_benchmark_cli`
 
@@ -3796,6 +3837,23 @@ per R2); (3) `src/main_bench.zig` — the thin binary entry (re-export of the be
 main), a Phase-2 CLI-bin seam; (4) `cli.main`'s `detectArgs` replicated locally (the
 shared helper lives in the heavy `rustty-cli`; `main()` is only reached by the deferred
 `main_bench.zig` bin). 0-test regression.
+
+**ALL FOUR RESIDUALS DISPOSED — WS19 T13/T14, 2026-07-29 (audit rows O19, O19a).** None
+is open work:
+* **(1) `os_signpost`** → **permanent Justified R1 Divergence** (pure Instruments
+  instrumentation, verbatim body preserved, unobserved by any test, and the binding tier
+  it needs is deferred tree-wide). 4-criterion basis in the divergence section.
+* **(2) the `ghostty_benchmark_cli` C-name alias** → **MOOT.** Upstream **deleted** the
+  `ghostty_*` alias layer at `e4cc852` (audit row W7), so there is no legacy name to be
+  compatible with. `rustty_benchmark_cli` is the whole surface. Do not re-add aliases.
+* **(3) `main_bench.zig` binary entry** → **SHIPPED.** `Cargo.toml:21-23` registers the
+  `rustty-bench` bin at `src/main_bench.rs`, whose `fn main() -> ExitCode` calls
+  `rustty_bench::cli::main()`. `grep -rn 'unimplemented!\|todo!' crates/rustty-bench/`
+  → 0 hits. The row was stale; the parenthetical "only reached by the deferred
+  `main_bench.zig` bin" in (4) is stale for the same reason.
+* **(4) local `detectArgs`** → **permanent Justified R1 Divergence**, forced by the
+  acyclic split (R4). 4-criterion basis in the divergence section, shared with
+  `rustty-synthetic`.
 
 ## Sub-project #3 (unused-subset): `src/extra/{bash,fish,zsh,vim,sublime}.zig` — shell-completion / editor-syntax generators
 
@@ -4378,9 +4436,14 @@ and is tracked here PER-TEST so `check_test_counts`/G2 auditors can resolve it:
   4. `try testing.expect(atlas.modified);` (after `atlas_set`)
   It exercises `atlas_new`/`atlas_reserve`/`atlas_set`/`atlas_free` + the
   `os/wasm.zig` host-ownership helpers — none of which exist outside the wasm
-  artifact. **Target: the rustty wasm app-runtime** (the same milestone that
+  artifact. **Target: the rustty wasm app-runtime** — **OWNER [WS19 T14, 2026-07-29]: WS14 (wasm/WebGL)**; "the rustty wasm app-runtime" is a milestone name, not a workstream, so these rows were ORPHANED. Gate **G-P2** now FAILS on any open row whose owner is not an OPEN workstream (the same milestone that
   un-defers the config/vt wasm exports); porting the Wasm block MUST port this
   test with all 4 asserts live.
+
+  > **OWNER [WS19 T14, 2026-07-29 — audit row O14]: WS14 (wasm/WebGL).** The row targeted "the wasm-artifact milestone", which is not a workstream — it was ORPHANED. Re-derived repo-wide: `crates/rustty-font/src/atlas.rs:740` carries the block as `PORT NOTE (wasm — feature-gated OFF)` with the reference preserved as comments, so the row is genuinely OPEN and lands with the wasm atlas surface.
+>
+> Gate **G-P2** (`.port/tools/gates/check_phase2_closure.py`) FAILS on any open row without an owner in an OPEN workstream, so this attribution is enforced, not aspirational.
+
 
 ## W-ATTACH — windowed host-attach unwired in core `renderer_seam::Renderer::init` (M4 triage, 2026-07-10)
 
@@ -5523,6 +5586,149 @@ argument: the DELIBERATE DEVIATION note on `Event::wake`; RED/GREEN evidence + r
 (`thread_pool::tests::multi_worker_quiesce_then_join_50x`, 50 lifecycles under a 60s watchdog):
 `.superpowers/sdd/task-1-report.md` addendum 2.
 
+
+---
+
+## macOS `xev.File`/`TCP`/`UDP` watcher surface + the `kqueue: file IO on thread pool` skip-stub [RECLASSIFIED — WS19 T11, 2026-07-29, audit row O10]
+
+**Was** filed among the xev DEFERRALS, which made a closure sweep read it as open work.
+It is neither open nor a deferral of choice: it is a deliberate, gate-pinned
+cross-target surface difference. Moved here.
+
+**What diverges.** On macOS, `xev.File` / `xev.TCP` / `xev.UDP` are not instantiated
+(the kqueue backend exports no `File`/`TCP`/`UDP` handle types), and the reference's
+`kqueue: file IO on thread pool` test is a **SkipZigTest-style skip-stub `#[test]`**
+(`kqueue_file_io_on_thread_pool`), keeping the mapped count at 12. On Linux they ARE
+fully ported per-backend (`epoll.rs` + `io_uring.rs`) and wrapped as the Dynamic
+`File`/`TCP`/`UDP` enums.
+
+**4-criterion basis.**
+1. **Zero consumers.** ghostty makes no use of `xev.File`/`TCP`/`UDP` on macOS
+   (`watcher/file` is annotated "zero ghostty uses" in the reference-surface notes
+   above), and rustty's only thread-pool consumer is the Linux epoll `File` watcher. No
+   caller — in the reference or the port — can observe the difference.
+2. **Gate-pinned, not hidden.** `crates/rustty-xev/tests/surface_parity.rs` asserts each
+   target's ACTUAL exported surface, so neither side can drift silently: adding or
+   removing an export fails that test.
+3. **The capability EXISTS in the tree.** The Linux side is ported, and the work-stealing
+   `ThreadPool` body is 1630 lines with zero `unimplemented!()` (audit row W5). The macOS
+   gap is an EXPORT decision on an unexercised surface, not missing logic — so there is
+   no unported reference behavior hiding behind it.
+4. **The skip-stub is honest.** `kqueue_file_io_on_thread_pool` is a real `#[test]` that
+   declares what it skips and why, keeping the R1 test count intact rather than quietly
+   dropping a reference test. It defers genuinely-unused functionality, never a live path.
+
+**If a consumer ever appears** (a macOS caller that needs pool-routed file IO), the arms
+to fill are named in the xev surface notes above; the trigger is that consumer, and the
+`surface_parity.rs` expectations are what must change first.
+
+---
+
+## libxev `c_api.zig` — libxev's own C ABI [RECLASSIFIED — WS19 T11, 2026-07-29, audit row O11]
+
+**What diverges.** libxev's `c_api.zig` (1 test) — the C ABI libxev exposes for C
+consumers — has no rustty counterpart.
+
+**4-criterion basis.**
+1. **Outside the port's consumption surface.** Every rustty consumer of `rustty-xev`
+   uses the RUST API. The C ABI is a libxev-to-C boundary, not a ghostty-to-libxev one.
+2. **ghostty does not consume it either.** ghostty links libxev as a Zig package and
+   calls its Zig API, so there is no reference behavior any caller observes through
+   `c_api.zig`. R1 is a fidelity obligation about observable behavior; nothing observes
+   this.
+3. **Porting it would create an UNGATEABLE surface.** A C ABI with no consumer cannot be
+   bound by any existing gate — not the differential harness (no driver), not
+   `surface_parity.rs` (which asserts the RUST surface), not the header gates (which
+   cover `rustty-vt-c`/`rustty-apprt-c`). It would be new unexercised `unsafe` whose
+   correctness no test could assert, which is strictly worse than its absence.
+4. **The trigger is named.** If a C consumer of `rustty-xev` ever appears, the port is
+   `c_api.zig` plus a cbindgen header and a smoke KAT modelled on
+   `rustty-vt-c`'s — at which point it becomes gateable, which is exactly the condition
+   that makes it worth doing.
+
+---
+
+## `rustty-bench` macOS `os_signpost` Instruments interval [RECLASSIFIED — WS19 T13, 2026-07-29, audit row O19a]
+
+**What diverges.** `Benchmark.zig:44-65` opens an `os_signpost` interval so a benchmark
+run shows up as a named region in Instruments. `crates/rustty-bench/src/benchmark.rs:81`
+is a `#[cfg(target_os = "macos")]` **no-op**, with the reference body preserved verbatim
+as comments.
+
+**4-criterion basis.**
+1. **Pure instrumentation.** An Instruments trace interval has zero effect on measured
+   behavior, on benchmark timings as reported by the port's own harness, or on any
+   output. It changes what a profiler DISPLAYS, nothing the program computes.
+2. **R1 no-loss.** The verbatim Zig body is preserved at the site, so nothing is dropped;
+   the reference logic is readable in place and comment-fidelity gates count it.
+3. **Unobserved.** No test in the reference or the port asserts anything about the
+   signpost.
+4. **Filling it here would be an isolated one-off.** It needs the `macos.os.Log` /
+   `macos.os.signpost` binding tier, which the tree defers TREE-WIDE (the log-facade
+   seam). Binding that family for one profiler annotation — while every other consumer
+   of the same tier stays deferred — buys nothing and creates a lone unexercised FFI
+   surface. The trigger is the log-facade tier landing, not this call site.
+
+---
+
+## `rustty-synthetic` / `rustty-bench` locally-replicated `detectArgs` [JUSTIFIED — WS19 T13, 2026-07-29, audit row O18/O19]
+
+**Context, and a correction.** The ledger claimed these two crates had unfilled
+BINARY-ENTRY seams. **They do not** — see the strike on those rows: `cli.rs:97` `main()`,
+`:245`/`:274`/`:297` `main_action_impl_{ascii,osc,utf8}` are all LIVE, both crates
+register real `[[bin]]` targets (`src/main_gen.rs`, `src/main_bench.rs`) whose `fn main`
+calls `cli::main()`, and `grep -rn 'unimplemented!\|todo!'` over both crates returns
+**zero hits**. What remains is one real, permanent structural divergence.
+
+**What diverges.** Each crate replicates the `+action` detection logic locally
+(`detect_args`, mirroring `cli.action.detectArgs(Action, alloc)`) instead of calling the
+shared generic helper.
+
+**4-criterion basis.**
+1. **The shared helper is ABOVE these crates in the acyclic graph (R4).**
+   `cli.action.detectArgs` lives in `rustty-cli`, which is a heavy crate depending on
+   config/vaxis/zf; a `rustty-synthetic → rustty-cli` or `rustty-bench → rustty-cli` edge
+   would invert the graph. `check_acyclic.sh` (G7) is the binding constraint, and it is
+   invariant (R5).
+2. **The replication is FAITHFUL and small.** Each local `detect_args` reproduces the
+   reference's detect logic — find the single `+name` argument, `stringToEnum` — over
+   `std::env::args_os`. The synthetic `Action` declares no `detectSpecialCase`, so the
+   special-case arm of `detectIter` is correctly elided rather than stubbed; that
+   elision is documented at the site.
+3. **Behavior is identical where it is observable.** Both binaries dispatch the same
+   actions from the same argv shapes as the reference; no caller can distinguish a local
+   detector from the shared one.
+4. **The alternative is worse than the divergence.** Hoisting `detectArgs` into a new
+   leaf crate purely to de-duplicate ~30 lines adds a crate to the graph and a new
+   published surface for no behavioral gain; hosting the entries in the `rustty` bin
+   (the plan's suggested alternative) is moot now that both crates have working bins of
+   their own. If `detectArgs` ever needs to change, the trigger is that change, and the
+   two replicas are named here.
+
+---
+
+## terminfo SOURCE + termcap files never emitted (Debug builds only) [RECLASSIFIED — WS19 T14, 2026-07-29, audit row O20]
+
+**Was** `INTEGRATION_PARITY.md §2.8`, with fix-list item 8 marked "(Optional)".
+"Optional" is not a disposition, and the row had no owner. Moved here as permanent.
+
+**What diverges.** `xtask` does not emit the terminfo **source** file or the **termcap**
+file that `GhosttyResources.zig` emits.
+
+**4-criterion basis.**
+1. **In the SHIPPED configuration, rustty matches the oracle EXACTLY.** The reference's
+   `emit_terminfo_source` / `emit_termcap` options default **FALSE for Release**
+   (`Config.zig:410-429`), and the shipping app IS a Release build. There is no
+   divergence at all in what users get — only in a Debug-build convenience.
+2. **Confined to informational files; the functional artifact IS produced.** The
+   COMPILED terminfo database — which is what TERM resolution actually reads — is
+   generated (`xtask/src/res_terminfo.rs:50-90`). The source and termcap files are
+   human-readable/legacy conveniences, not inputs to any runtime path.
+3. **Unobserved.** No test in the reference or the port asserts these two files exist.
+4. **Named trigger, bounded cost.** If a Debug-parity need appears, the work is
+   mirroring the two `GhosttyResources.zig` hunks into `res_terminfo.rs`; the trigger is
+   that need, and the hunks are named. Deleting the "(Optional)" fix-list row removes the
+   pretence that this is scheduled work.
 
 ---
 

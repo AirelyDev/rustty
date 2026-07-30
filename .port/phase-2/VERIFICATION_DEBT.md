@@ -12,53 +12,23 @@ and delete it here.
 
 ---
 
-## V1. macOS build + test of `rustty-xev` — **DISCHARGED [2026-07-23]; row was STALE**
+## ~~V1. macOS build + test of `rustty-xev`~~ — **DISCHARGED 2026-07-23; ROW DELETED [WS19 T14, 2026-07-29]**
 
-**Status: CLOSED.** Flagged by the WS19 Phase 2 closure audit as row **W11** — a
-claimed-open item that had shipped weeks earlier. `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md:41`
-records "VD:V1 (rustty-xev never compiled on macOS) — DISCHARGED 2026-07-23", and every
-workstream since gates on `cargo build --workspace` + `cargo test` on macOS as a merge
-condition (ROADMAP sequencing rule 2), which compiles and runs `rustty-xev` including
-the `__ulock_wait`/`__ulock_wake` shim and the `thread_pool` lifecycle tests. This row
-was never deleted even though this file's own header says to delete verified items.
-**Owner of the deletion: WS19 T14** (it stays here, marked, until WS19 rewrites the
-file — deleting it silently now would lose the audit trail). The historical recipe is
-retained below for anyone re-checking the shim in isolation.
+This row's body has been **deleted**, per this file's own header rule ("When an item is
+verified … delete it here"). It was a claimed-open item that had shipped weeks earlier —
+audit row **W11**: `ROADMAP:41` records "VD:V1 (rustty-xev never compiled on macOS) —
+DISCHARGED 2026-07-23", and every workstream since gates on `cargo build --workspace` +
+`cargo test` on macOS as a merge condition (ROADMAP sequencing rule 2), which compiles
+and runs `rustty-xev` including the `__ulock_wait`/`__ulock_wake` shim and the
+`thread_pool` lifecycle tests.
 
-### Historical (the original V1 text)
+The audit trail lives in the `# PHASE 2 CLOSURE AUDIT (WS19)` section of
+`.port/phase-2/DEFERRALS.md` (row W11), which is why deleting the body here loses
+nothing. This one-paragraph stub is kept ONLY so a reader who arrives from an old
+reference to "V1" is not left wondering whether the row was dropped by accident; it
+carries no open work and no recipe.
 
-**What changed that macOS consumes.** The `xev-libxev-completion` branch (12 commits,
-`eb655ba..9de16be`) edited SHARED code that the macOS build compiles:
-
-- `crates/rustty-xev/src/thread_pool.rs` — the whole ThreadPool port is new and
-  un-gated for both OSes. The macOS futex shim (`__ulock_wait`/`__ulock_wake`,
-  `thread_pool.rs` bottom) **parses but has never been compiled** (cfg-gated, no
-  toolchain here). Note: the Linux futex_wake i32-clamp bug class does NOT apply to
-  the macOS shim (`n > 1` selects `ULF_WAKE_ALL` — a flag, not a count), but this
-  reasoning is unverified by execution. The Task-1 `Event::wake` deliberate deviation
-  (unconditional SHUTDOWN wake + sticky SHUTDOWN; see the DELIBERATE DEVIATION note
-  in-file and the `DEFERRALS.md` entry) is shared code and runs on macOS too.
-- `crates/rustty-xev/src/lib.rs` — export-seam and header-comment changes around the
-  per-target `pub use` blocks.
-- `crates/rustty-xev/tests/surface_parity.rs` — new compile-time export pins
-  (Linux-gated; must stay inert on macOS).
-
-**Recipe (on any Mac with the repo's pinned Rust 1.93.1):**
-```
-cargo build -p rustty-xev
-cargo test  -p rustty-xev            # kqueue suite + ThreadPool smoke/lifecycle tests
-cargo clippy -p rustty-xev --all-targets
-```
-**Expected:** builds clean; full suite green — specifically the `thread_pool` tests
-(`schedule_runs_all_tasks_and_deinit_joins`, `multi_worker_quiesce_then_join_50x`,
-`init_shutdown_deinit_without_tasks_joins_cleanly`) now exercise the `__ulock_*` shim
-for the first time. `multi_worker_quiesce_then_join_50x` has a 60 s watchdog: a hang
-there means the macOS shim's wake semantics diverge — capture per-thread backtraces
-(`sample <pid>` / lldb `thread backtrace all`) before killing; do not paper over with
-`max_threads = 1`.
-
-Also worthwhile while there: `cargo build -p rustty-apprt` (macOS apprt untouched this
-session — expected no-op confirmation).
+---
 
 ## V1b. macOS terminal inspector (cmd+opt+i) — SIGNED OFF [WS6, 2026-07-28]
 
@@ -154,9 +124,14 @@ RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/debug/rustty
 
 ---
 
-**Out of scope by decision (not debt):** the WebGL/wasm apprt (owner decision,
-2026-07); macOS `File`/`TCP`/`UDP` watcher instantiations (tracked in `DEFERRALS.md`
-as the C7 follow-up chunk — an implementation deferral, not verification debt).
+**Out of scope by decision (not debt):** ~~the WebGL/wasm apprt (owner decision,
+2026-07)~~ **[WS19 T14 correction: the WebGL/wasm surface is now OWNED — routed to WS14,
+audit rows O13a/O14/O15/O16 — so it is scheduled work, not an out-of-scope decision]**;
+~~macOS `File`/`TCP`/`UDP` watcher instantiations (tracked in `DEFERRALS.md`
+as the C7 follow-up chunk — an implementation deferral, not verification debt)~~
+**[WS19 T11 correction: reclassified as a permanent Justified R1 Divergence, with a
+4-criterion basis, in `DEFERRALS.md`'s divergence section — it is neither debt nor a
+deferral, and `crates/rustty-xev/tests/surface_parity.rs` pins it]**.
 
 ## V4. `set_urgent` KAT on the primary GNOME/mutter session (avoided: crash correlation)
 
