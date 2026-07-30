@@ -2856,6 +2856,28 @@ impl Terminal {
     ///
     /// Callers should schedule compression when it doesn't impact user
     /// experience, for example during idle times.
+    ///
+    /// PORT NOTE (WS19 T18) — `Pending` does NOT mean "unfinished work remains".
+    /// A fresh `compress(Incremental)` issued right after a pass that returned
+    /// `Complete` returns `Pending` again, because the incremental traversal
+    /// RESTARTS from the beginning rather than remembering that it converged.
+    /// So `Pending` means "call me again", never "there is work outstanding", and
+    /// `result == Complete` is NOT a durable "compression is done" probe — it is
+    /// only true of the pass that just ran. Callers that want an idle-detection
+    /// signal must debounce on activity (see the renderer's compression scheduler,
+    /// `rustty-core/src/renderer_seam.rs`, which schedules another tick on
+    /// `Pending` and stops on `Complete`/`Unsupported` per tick — correct, because
+    /// it re-arms from activity, not from a remembered `Complete`), not on this
+    /// return value.
+    ///
+    /// This is rustty-only clarification of ported behavior, not reference prose:
+    /// the reference doc comment above says only that "the return value tells
+    /// callers whether they should continue calling it in the future", which reads
+    /// naturally as the *opposite* of what happens. Observed, not assumed — the
+    /// behavior is pinned by
+    /// `terminal_compress_incremental_restarts_after_complete` in this file's test
+    /// module, and cross-referenced from the compression narrative in
+    /// `.port/phase-2/MIRI_EXCEPTIONS.md`.
     pub fn compress(&mut self, mode: TerminalCompressionMode) -> TerminalCompressionResult {
         // const pages = &self.screens.get(.primary).?.pages;
         let primary: *mut Screen = self.screens.get(crate::screen_set::Key::Primary).unwrap();
@@ -17383,6 +17405,77 @@ mod tests {
 
         // Compression changes storage representation, not the activity token.
         assert_eq!(t.compression_activity(), activity);
+
+        t.deinit(alloc);
+    }
+
+    /// PINS THE `compress(Incremental)` RESTART (WS19 T18, audit row N10).
+    ///
+    /// A fresh incremental call issued immediately after a pass returned `Complete`
+    /// returns **`Pending`**, not `Complete`: the incremental traversal restarts from
+    /// the beginning instead of remembering that it converged. That makes the obvious
+    /// "is compression done?" probe — call it once and look for `Complete` — invalid,
+    /// and it is the opposite of what the reference doc comment ("whether they should
+    /// continue calling it in the future") suggests to a reader.
+    ///
+    /// This test exists so the `PORT NOTE` on `Terminal::compress` cannot rot: if a
+    /// future change ever makes a converged pass STAY `Complete`, this test fails and
+    /// whoever changes it must update the doc comment in the same commit. Referenced
+    /// BY NAME from that PORT NOTE, so a reader who doubts the claim can run it.
+    ///
+    /// PORT NOTE: no reference counterpart — upstream exercises compression only
+    /// through `PageList`, and documents nothing about the restart.
+    #[test]
+    fn terminal_compress_incremental_restarts_after_complete() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts_sb(80, 24, 10 * 1024 * 1024)).unwrap();
+
+        let mut stream = t.vt_stream();
+        let line = b"repeated and compressible terminal history\r\n";
+        for _ in 0..4_000 {
+            stream.next_slice(line);
+        }
+        stream.deinit();
+        drop(stream);
+
+        // Drive one incremental pass to convergence.
+        let mut result = TerminalCompressionResult::Pending;
+        let mut steps = 0usize;
+        for _ in 0..10_000 {
+            result = t.compress(TerminalCompressionMode::Incremental);
+            steps += 1;
+            match result {
+                TerminalCompressionResult::Pending => continue,
+                TerminalCompressionResult::Complete => break,
+                TerminalCompressionResult::Unsupported => {
+                    panic!("test builds always support strict reclamation")
+                }
+            }
+        }
+        assert_eq!(
+            result,
+            TerminalCompressionResult::Complete,
+            "the incremental pass must converge first, or this test proves nothing \
+             (steps={steps})"
+        );
+        assert!(
+            steps > 1,
+            "the pass converged in ONE call, so `Complete` here carries no information \
+             about a restart — the fixture is not compressible enough to be a valid \
+             discriminator (steps={steps})"
+        );
+
+        // THE PROPERTY: the very next call is Pending again, not Complete.
+        let again = t.compress(TerminalCompressionMode::Incremental);
+        assert_eq!(
+            again,
+            TerminalCompressionResult::Pending,
+            "a fresh compress(Incremental) right after a Complete pass must return \
+             Pending, because the incremental traversal RESTARTS. If this now returns \
+             Complete, the behavior changed — update the PORT NOTE on \
+             `Terminal::compress` and the note in .port/phase-2/MIRI_EXCEPTIONS.md in \
+             the same commit."
+        );
 
         t.deinit(alloc);
     }
