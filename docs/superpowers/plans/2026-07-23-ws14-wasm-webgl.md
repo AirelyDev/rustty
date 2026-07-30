@@ -215,7 +215,7 @@ The gate **runs all three arms every time** and exits non-zero unless: `good` pa
 
 **Interfaces:** Produces a `ws14-wasm-webgl` branch and a recorded baseline that confirms every PREMISE CORRECTION claim on the executing machine.
 
-- [ ] **Step 1: Branch**
+- [x] **Step 1: Branch**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -226,7 +226,7 @@ git push -u origin ws14-wasm-webgl
 
 Expected: HEAD at `4069662` or later; branch pushed.
 
-- [ ] **Step 2: Confirm the native tree is green before touching anything**
+- [x] **Step 2: Confirm the native tree is green before touching anything**
 
 ```bash
 cd /Users/gael/projects/rustty && cargo build --workspace 2>&1 | tail -3
@@ -234,7 +234,7 @@ cd /Users/gael/projects/rustty && cargo build --workspace 2>&1 | tail -3
 
 Expected: `Finished`. WS14 does not start on a red tree.
 
-- [ ] **Step 3: Confirm the oracle's WebGL backend is a 2-line placeholder (§1)**
+- [x] **Step 3: Confirm the oracle's WebGL backend is a 2-line placeholder (§1)**
 
 ```bash
 wc -l /Users/gael/projects/ghostty/src/renderer/WebGL.zig
@@ -244,7 +244,7 @@ git -C /Users/gael/projects/ghostty show origin/main:src/renderer/WebGL.zig
 
 Expected: `2`, the two lines, and the same two lines from `origin/main`. If `origin/main` has grown a real backend, STOP — O16 changes shape and this plan must be re-scoped.
 
-- [ ] **Step 4: Confirm the deleted host-ownership tracker (§5)**
+- [x] **Step 4: Confirm the deleted host-ownership tracker (§5)**
 
 ```bash
 grep -rn 'toHostOwned\|isHostOwned\|toModuleOwned' /Users/gael/projects/ghostty/src
@@ -254,7 +254,7 @@ git -C /Users/gael/projects/ghostty show 9dc2e5978^:src/os/wasm.zig | wc -l
 
 Expected: only call sites + one doc mention (no `pub fn` definitions); `src/os/wasm.zig | 90 ---...`; `115`.
 
-- [ ] **Step 5: Reproduce the wasm32 build + artifact shape (probe 1)**
+- [x] **Step 5: Reproduce the wasm32 build + artifact shape (probe 1)**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -264,7 +264,7 @@ node -e 'const fs=require("fs");const m=new WebAssembly.Module(fs.readFileSync("
 
 Expected: `Finished`; `imports 14 [ 'env' ] exports 199`.
 
-- [ ] **Step 6: Reproduce the three `rustty-wasm` wasm32 errors (§3)**
+- [x] **Step 6: Reproduce the three `rustty-wasm` wasm32 errors (§3)**
 
 ```bash
 cd /Users/gael/projects/rustty && cargo check -p rustty-wasm --target wasm32-unknown-unknown 2>&1 | grep -E '^error' | head
@@ -272,11 +272,11 @@ cd /Users/gael/projects/rustty && cargo check -p rustty-wasm --target wasm32-unk
 
 Expected: the two `rustty-xev/src/backend.rs` `compile_error!`s and the `zlib-sys` build-script failure.
 
-- [ ] **Step 7: Record the baseline**
+- [x] **Step 7: Record the baseline**
 
 Append the outputs of Steps 3-6 to the PR description (or a scratch note). These are the evidence the PREMISE CORRECTION rests on; the ledger edits in Task 11 cite them.
 
-- [ ] **Step 8: Commit nothing** — Task 1 changes no files. Proceed.
+- [x] **Step 8: Commit nothing** — Task 1 changes no files. Proceed.
 
 ---
 
@@ -290,7 +290,7 @@ Append the outputs of Steps 3-6 to the PR description (or a scratch note). These
 - Consumes: `rustty_build_config::renderer::Backend::Webgl` (already exists, `crates/rustty-build-config/src/renderer.rs:15`).
 - Produces: `rustty_renderer::webgl::WebGL`, and `rustty_renderer::Renderer` resolving on `wasm32`.
 
-- [ ] **Step 1: Write the failing check first (TDD)**
+- [x] **Step 1: Write the failing check first (TDD)**
 
 Add to `crates/rustty-renderer/src/lib.rs`'s existing test module (or create `crates/rustty-renderer/tests/webgl_arm.rs` if the lib has no suitable `mod tests`):
 
@@ -308,7 +308,7 @@ fn webgl_arm_exists_and_is_a_unit_placeholder() {
 Run: `cargo test -p rustty-renderer --lib webgl_arm 2>&1 | tail -5`
 Expected: **compile error** — `could not find webgl in the crate root`. That is the red state.
 
-- [ ] **Step 2: Create `crates/rustty-renderer/src/webgl.rs`**
+- [x] **Step 2: Create `crates/rustty-renderer/src/webgl.rs`**
 
 Faithful port. The reference is `//!` doc + `pub const WebGL = @This();` — a file-as-struct with no fields, i.e. a unit type. Content:
 
@@ -338,7 +338,7 @@ Faithful port. The reference is `//!` doc + `pub const WebGL = @This();` — a f
 pub struct WebGL;
 ```
 
-- [ ] **Step 3: Wire it into the crate root**
+- [x] **Step 3: Wire it into the crate root**
 
 In `crates/rustty-renderer/src/lib.rs`, next to the other backend modules, add:
 
@@ -360,7 +360,7 @@ pub use webgl::WebGL as Renderer;
 
 Update the surrounding PORT NOTE so it no longer says "WebGL wasm-deferred" (three sites: `lib.rs:53`, `lib.rs:150`, and `crates/rustty-renderer/src/generic.rs:9`, `crates/rustty-renderer/src/metal.rs:7`, `:32` — grep `WebGL` in the crate and fix every "deferred" claim to "ported (2-line reference placeholder)").
 
-- [ ] **Step 4: Green the test**
+- [x] **Step 4: Green the test**
 
 ```bash
 cd /Users/gael/projects/rustty && cargo test -p rustty-renderer --lib webgl_arm 2>&1 | tail -5
@@ -368,7 +368,7 @@ cd /Users/gael/projects/rustty && cargo test -p rustty-renderer --lib webgl_arm 
 
 Expected: `test result: ok. 1 passed`.
 
-- [ ] **Step 5: Confirm no native behavior change (R5)**
+- [x] **Step 5: Confirm no native behavior change (R5)**
 
 ```bash
 cd /Users/gael/projects/rustty && cargo build --workspace 2>&1 | tail -2 && cargo test -p rustty-renderer 2>&1 | tail -3
@@ -376,7 +376,7 @@ cd /Users/gael/projects/rustty && cargo build --workspace 2>&1 | tail -2 && carg
 
 Expected: `Finished`; the renderer suite's pass count is its previous count **+1**.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -396,7 +396,7 @@ git commit -m "renderer: port renderer/WebGL.zig (2-line reference placeholder) 
 
 **Why:** §5. `Atlas.Wasm` and the ledger's 4 required asserts depend on functions `9dc2e5978` deleted upstream. This is the same *user-requested resurrection* precedent as `web_canvas.zig` (`DEFERRALS.md:4402`).
 
-- [ ] **Step 1: Read the deleted reference**
+- [x] **Step 1: Read the deleted reference**
 
 ```bash
 git -C /Users/gael/projects/ghostty show 9dc2e5978^:src/os/wasm.zig > /tmp/ws14_wasm_zig_pre9dc2e59.zig
@@ -405,7 +405,7 @@ sed -n '26,115p' /tmp/ws14_wasm_zig_pre9dc2e59.zig
 
 Expected: the `allocs` map, `malloc`, `free`, `toHostOwned`, `isHostOwned`, `toModuleOwned`, and the 2 tests (`"basics"`, `"toHostOwned"`).
 
-- [ ] **Step 2: Write the two reference tests FIRST (TDD)**
+- [x] **Step 2: Write the two reference tests FIRST (TDD)**
 
 Append to `crates/rustty-os/src/wasm.rs`, under `#[cfg(all(test, feature = "wasm-host-owned"))] mod host_owned_tests`, faithful ports of both:
 
@@ -436,7 +436,7 @@ fn to_host_owned_roundtrip() {
 
 Run `cargo test -p rustty-os --features wasm-host-owned host_owned 2>&1 | tail -5` → expect **compile failure** (nothing exists yet). Red state.
 
-- [ ] **Step 3: Port the tracker**
+- [x] **Step 3: Port the tracker**
 
 Add to `crates/rustty-os/src/wasm.rs` a `#[cfg(feature = "wasm-host-owned")] pub mod host_owned` (re-exported at the module root for the reference's flat namespace), with a full PORT header recording the archaeology:
 
@@ -463,7 +463,7 @@ Port rules to follow exactly:
 - Add a test-only `allocs_len()` helper (the reference reads `allocs.size` directly from the same file, so this is the same access, not new API).
 - Byte-slice discipline: everything is `*mut u8`/`&[u8]`; no `String` anywhere.
 
-- [ ] **Step 4: Cargo feature**
+- [x] **Step 4: Cargo feature**
 
 In `crates/rustty-os/Cargo.toml`'s `[features]`:
 
@@ -476,7 +476,7 @@ In `crates/rustty-os/Cargo.toml`'s `[features]`:
 wasm-host-owned = []
 ```
 
-- [ ] **Step 5: Green**
+- [x] **Step 5: Green**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -487,7 +487,7 @@ cargo build --workspace 2>&1 | tail -2
 
 Expected: `2 passed` for the feature run; the default `rustty-os` suite unchanged; workspace `Finished`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/rustty-os/src/wasm.rs crates/rustty-os/Cargo.toml
@@ -506,7 +506,7 @@ git commit -m "os/wasm: resurrect the 9dc2e5978-deleted host-ownership tracker +
 - Consumes: `rustty_os::wasm` host-ownership tracker (T3); the Canvas `env` imports (declared locally — **no new crate edge**, R4/D1).
 - Produces: the unprefixed `atlas_new`/`atlas_free`/`atlas_reserve`/`atlas_set`/`atlas_grow`/`atlas_clear`/`atlas_debug_canvas` C-ABI exports under `feature = "wasm"`.
 
-- [ ] **Step 1: Read the reference block**
+- [x] **Step 1: Read the reference block**
 
 ```bash
 sed -n '405,578p' /Users/gael/projects/ghostty/src/font/Atlas.zig
@@ -514,7 +514,7 @@ sed -n '405,578p' /Users/gael/projects/ghostty/src/font/Atlas.zig
 
 Expected: `pub const Wasm = struct { … }` from the `/// The wasm-compatible API…` doc through `test "happy path"` and the closing `};`. The port's verbatim copy is already in `crates/rustty-font/src/atlas.rs:740-925` as comments — port *those* comment lines into live code, keeping each reference line as a `//`-prefixed PORT anchor above its Rust equivalent (the house style everywhere else in this file).
 
-- [ ] **Step 2: Write the reference test first (TDD) — all 4 asserts live**
+- [x] **Step 2: Write the reference test first (TDD) — all 4 asserts live**
 
 In `atlas.rs`, inside the new `#[cfg(feature = "wasm")] pub mod wasm_exports`:
 
@@ -551,7 +551,7 @@ fn happy_path() {
 
 Run `cargo test -p rustty-font --features wasm happy_path 2>&1 | tail -5` → **compile failure**. Red.
 
-- [ ] **Step 3: Port the seven exports**
+- [x] **Step 3: Port the seven exports**
 
 Each is `#[no_mangle] pub extern "C"` (plain `"C"` — DG5), unprefixed per the Global Constraints exception, and each maps 1:1:
 
@@ -565,7 +565,7 @@ Each is `#[no_mangle] pub extern "C"` (plain `"C"` — DG5), unprefixed per the 
 | `atlas_clear(self)` | direct |
 | `atlas_debug_canvas(self) u32` | see Step 4 |
 
-- [ ] **Step 4: `atlas_debug_canvas` — the Canvas/JS half, without a crate edge**
+- [x] **Step 4: `atlas_debug_canvas` — the Canvas/JS half, without a crate edge**
 
 The reference uses `zig-js` to `document.createElement("canvas")`, size it, `getContext("2d")`, build an `ImageData` from wasm memory (BGRA→RGBA swap, or A8→RGBA expansion), `putImageData`, and return a JS ref id. rustty's equivalent JS bridge already exists as the 14-op `#[link(wasm_import_module = "env")]` Canvas FFI used by `rustty-font-shaper`'s `web_canvas` backend, with glue at `.port/tools/web-canvas-glue.mjs`.
 
@@ -586,7 +586,7 @@ PORT NOTE requirements: (a) wasm imports dedupe by `(module, name)`, so declarin
 
 Also port both pixel conversions faithfully (BGRA: swap every R/B; grayscale: A8 → RGBA with the value in the alpha byte) into `Vec<u8>`, never `String`.
 
-- [ ] **Step 5: Extend the shared glue with the one missing op**
+- [x] **Step 5: Extend the shared glue with the one missing op**
 
 `.port/tools/web-canvas-glue.mjs` currently exposes 14 ops (`rustty_wc_canvas_new/free/get_context/set_size`, `rustty_wc_context_clear/set_font/get_font/set_fill_style/set_text_baseline/fill_rect/fill_text/measure_text/get_image_data`, `rustty_wc_debug_append`) and has **no** `put_image_data`. Add:
 
@@ -600,7 +600,7 @@ rustty_wc_context_put_image_data(ch, ptr, len, w, h, x, y) {
 
 (match the file's existing handle-table and `u8()` helper names exactly).
 
-- [ ] **Step 6: Feature wiring + the two gates**
+- [x] **Step 6: Feature wiring + the two gates**
 
 `crates/rustty-font/Cargo.toml`: change `wasm = []` to `wasm = ["rustty-os/wasm-host-owned"]` and rewrite the comment (it currently says the block "is recorded as a verbatim commented reference" — now it is live code).
 
@@ -608,7 +608,7 @@ rustty_wc_context_put_image_data(ch, ptr, len, w, h, x, y) {
 
 `crates/rustty-apprt-c/tests/panic_policy.rs:96`: extend the crate list from `["rustty-apprt-c", "rustty-vt-c", "rustty-renderer"]` to include `"rustty-font"` and `"rustty-wasm"` (the two crates that now carry C-ABI exports), and extend its comment to say why.
 
-- [ ] **Step 7: Green**
+- [x] **Step 7: Green**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -622,7 +622,7 @@ cargo build --workspace 2>&1 | tail -2
 
 Expected: font suite +1 with the feature on; default font suite unchanged; wasm target `Finished`; test-count gate green with `font_atlas` at 13/13; DG5 gate green; workspace green.
 
-- [ ] **Step 8: Prove the DG5 gate can still fail (anti-vacuity)**
+- [x] **Step 8: Prove the DG5 gate can still fail (anti-vacuity)**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -636,7 +636,7 @@ git checkout -- crates/rustty-font/src/atlas.rs
 
 Expected: `1` (the gate FAILS naming `atlas.rs`), then the tree is restored. If it prints `0`, the crate-list edit in Step 6 did not take effect — fix before proceeding.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/rustty-font/src/atlas.rs crates/rustty-font/Cargo.toml \
@@ -653,7 +653,7 @@ git commit -m "font: port Atlas.Wasm live (7 C-ABI exports + debug canvas) with 
 
 **Interfaces:** Produces a *complete* port of the reference's empty `App.Wasm` struct — and therefore a ledger strike, not a deferral.
 
-- [ ] **Step 1: Re-read the reference and the port's verbatim copy**
+- [x] **Step 1: Re-read the reference and the port's verbatim copy**
 
 ```bash
 sed -n '575,605p' /Users/gael/projects/ghostty/src/App.zig
@@ -662,7 +662,7 @@ sed -n '995,1010p' /Users/gael/projects/rustty/crates/rustty-core/src/app.rs
 
 Expected: the reference block is `pub const Wasm = if (!builtin.target.isWasm()) struct {} else struct { const wasm = …; const alloc = …; /* app_new, app_new_, app_free ALL COMMENTED OUT */ };`, and `app.rs` already preserves it verbatim.
 
-- [ ] **Step 2: Port it live**
+- [x] **Step 2: Port it live**
 
 Replace the commented block's *wrapper* (keeping every reference line as a `//` PORT anchor, including the commented-out `app_new`/`app_new_`/`app_free` bodies — they are commented **in the reference**, so commented-in-the-port is the faithful state) with a real, empty, wasm-gated item:
 
@@ -693,7 +693,7 @@ pub mod wasm {
 
 Delete the in-source deferral wording (the "currently a documented-deferral" / "Target: the rustty wasm app-runtime" phrasing) — it is no longer true.
 
-- [ ] **Step 3: Green**
+- [x] **Step 3: Green**
 
 ```bash
 cd /Users/gael/projects/rustty && cargo build --workspace 2>&1 | tail -2 && cargo test -p rustty-core 2>&1 | tail -3
@@ -702,7 +702,7 @@ python3 .port/tools/gates/check_comment_coverage.py --crate rustty-core 2>&1 | t
 
 Expected: `Finished`; core suite unchanged at **15**; comment coverage no worse than before (the reference lines are all still present).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/rustty-core/src/app.rs
@@ -722,7 +722,7 @@ git commit -m "core/app: complete the App.Wasm port (empty struct, reference exp
 
 **Design note (why this rather than cross-compiling the C):** probe 4. Five `-sys` build scripts block the wasm link, and all five arrive through exactly two crate edges. `wasm32-unknown-unknown` has no libc sysroot, so those C/C++ libraries cannot be built for it at all (unlike the `wasm32-wasip1` lane, which has zig's wasi sysroot). Shrinking the link surface is therefore not a shortcut — it is the only correct option, and it is what `rustty-vt-c` already did for zlib/simdutf (`DEFERRALS.md:4415-4440`).
 
-- [ ] **Step 1: xev — the freestanding-wasm backend arm**
+- [x] **Step 1: xev — the freestanding-wasm backend arm**
 
 In `crates/rustty-xev/src/backend.rs`, in **both** `default()` (`:66`) and `candidates()` (`:106`), widen the wasi arm and the matching `not(any(...))` guard:
 
@@ -751,7 +751,7 @@ cargo test -p rustty-xev 2>&1 | tail -3
 
 Expected: wasm32 `Finished`; the native xev suite (42 tests) unchanged.
 
-- [ ] **Step 2: `rustty-config` — default-on `renderer` feature**
+- [x] **Step 2: `rustty-config` — default-on `renderer` feature**
 
 `Cargo.toml`: `rustty-renderer = { workspace = true, optional = true }`, and
 
@@ -777,13 +777,13 @@ cd /Users/gael/projects/rustty && grep -rn 'rustty-config' crates/*/Cargo.toml x
 
 Expected: **no** `default-features = false` on `rustty-config` anywhere (if one exists, add `features = ["renderer"]` to it explicitly and note it).
 
-- [ ] **Step 3: `rustty-input` — default-on `oniguruma` feature**
+- [x] **Step 3: `rustty-input` — default-on `oniguruma` feature**
 
 `Cargo.toml`: `rustty-oniguruma = { workspace = true, optional = true }`, `default = ["oniguruma"]`, `oniguruma = ["dep:rustty-oniguruma"]` — mirroring the precedent `rustty-config/Cargo.toml:32` already sets. Gate the single consumer, `crates/rustty-input/src/link.rs:92 oni_regex` (and the `oni`-typed signature) with `#[cfg(feature = "oniguruma")]`, with a PORT NOTE: the reference `Link.oniRegex` is unconditional; the feature exists solely because the C library cannot target freestanding wasm, and the method is unreachable there (no renderer ⇒ no link highlighting).
 
 Same dependent audit as Step 2 for `rustty-input`.
 
-- [ ] **Step 4: Verify the wasm surface is now clean**
+- [x] **Step 4: Verify the wasm surface is now clean**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -793,7 +793,7 @@ cargo check -p rustty-input --no-default-features --target wasm32-unknown-unknow
 
 Expected: `Finished` for both, **no** `-sys` build-script failures. If a *new* `-sys` crate appears, `cargo tree -i <crate>` it and extend this task rather than moving on.
 
-- [ ] **Step 5: Verify native is unchanged (R5) and the graph is still acyclic (R4)**
+- [x] **Step 5: Verify native is unchanged (R5) and the graph is still acyclic (R4)**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -805,7 +805,7 @@ cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -3
 
 Expected: `Finished`; the workspace test totals **identical** to the Task 1 baseline plus WS14's new tests only; acyclic green; clippy clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/rustty-xev/src/backend.rs crates/rustty-config/Cargo.toml crates/rustty-config/src/lib.rs \
@@ -823,7 +823,7 @@ git commit -m "wasm32: freestanding xev backend arm + default-on renderer/onigur
 - Consumes: T3 (tracker), T4 (`atlas_*` exports), T5 (`App.Wasm` is a no-symbol empty struct ⇒ no core edge), T6 (link surface).
 - Produces: `target/wasm32-unknown-unknown/release/rustty_wasm.wasm` with the `config_*` + `atlas_*` + VT surface, zero wasi imports.
 
-- [ ] **Step 1: Write the artifact test first (TDD)**
+- [x] **Step 1: Write the artifact test first (TDD)**
 
 Create `crates/rustty-wasm/tests/artifact_shape.rs` — a host-side test that **fails loudly with instructions** when the artifact is absent, and otherwise asserts its shape by parsing the `.wasm` (pure Rust, no new deps: parse the module header + the import/export sections manually, or assert via the node driver in T9 if binary parsing is disproportionate — pick one and say so in the file header):
 
@@ -837,7 +837,7 @@ Create `crates/rustty-wasm/tests/artifact_shape.rs` — a host-side test that **
 
 Mark it `#[ignore]` with a message naming `.port/tools/build-main-wasm.sh`, so `cargo test --workspace` does not require a wasm build; T9's gate runs it un-ignored.
 
-- [ ] **Step 2: `Cargo.toml` — cdylib + the corrected retention edges**
+- [x] **Step 2: `Cargo.toml` — cdylib + the corrected retention edges**
 
 ```toml
 [lib]
@@ -872,13 +872,13 @@ rustty-font = { workspace = true, features = ["wasm"] }
 # link). The block itself IS ported, in `rustty-core/src/app.rs` (WS14 T5).
 ```
 
-- [ ] **Step 3: `src/lib.rs` — complete the retention set**
+- [x] **Step 3: `src/lib.rs` — complete the retention set**
 
 Extend the `mod retain` block with a second `#[used]` static pinning the `atlas_*` exports (same mechanism and same rationale as the existing `config_*` tuple), and rewrite the module header's PORT NOTE: it currently says `font/main.zig`'s wasm export block "is BLOCKED — B1" and that `App.zig.Wasm` is "currently a documented-deferral". Both statements are now false. State the new truth: 4 of the 5 reference retentions map to crate edges + `#[used]` statics; the 5th (`App.Wasm`) retains an empty struct and therefore needs no edge.
 
 Also update `PORT STATUS:` from "ported (host-buildable rlib; the wasm32 cdylib link is gated on the B2 cross-workspace wasm32 gating)" to record the artifact and its build script.
 
-- [ ] **Step 4: Build script**
+- [x] **Step 4: Build script**
 
 Create `.port/tools/build-main-wasm.sh`, `chmod +x`, modelled exactly on `.port/tools/build-web-canvas-wasm.sh`:
 
@@ -895,7 +895,7 @@ set -e
 exec cargo build -p rustty-wasm --target wasm32-unknown-unknown "$@"
 ```
 
-- [ ] **Step 5: Build and inspect**
+- [x] **Step 5: Build and inspect**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -906,7 +906,7 @@ node -e 'const fs=require("fs");const m=new WebAssembly.Module(fs.readFileSync("
 
 Expected: `Finished`; a `.wasm` on disk; `wasi 0`; all ten names listed by `has`. If any `config_*`/`atlas_*` is missing, the `#[used]` retention did not hold — fix the retention static (do **not** reach for `-C link-dead-code` or LTO; LTO is banned).
 
-- [ ] **Step 6: Un-ignore-run the artifact test, and confirm native is untouched**
+- [x] **Step 6: Un-ignore-run the artifact test, and confirm native is untouched**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -916,7 +916,7 @@ cargo build --workspace 2>&1 | tail -2
 
 Expected: artifact test passes; workspace `Finished`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/rustty-wasm/Cargo.toml crates/rustty-wasm/src/lib.rs \
@@ -934,11 +934,11 @@ git commit -m "wasm: rustty_wasm.wasm is now a real freestanding cdylib — comp
 - Consumes: `rustty_wasm.wasm`'s `atlas_*` + VT C-ABI + the `rustty_wc_*` Canvas imports.
 - Produces: a page that renders glyphs through **WebGL2**, and `gate.js` — the single assertion body shared with T9's gate so the two can never diverge.
 
-- [ ] **Step 1: `glue.mjs` — the `env` import object for `rustty_wasm.wasm`**
+- [x] **Step 1: `glue.mjs` — the `env` import object for `rustty_wasm.wasm`**
 
 Re-export `makeWebCanvasEnv` from `../../.port/tools/web-canvas-glue.mjs` (which now includes `put_image_data` from T4 Step 5). If `rustty_wasm.wasm` imports a strict subset, still supply the full object — extra properties are ignored by `WebAssembly.instantiate`. Add a one-line header explaining the file exists so the page has a stable relative import and the gate and page load identical glue.
 
-- [ ] **Step 2: `gate.js` — the assertion body (an async IIFE returning JSON)**
+- [x] **Step 2: `gate.js` — the assertion body (an async IIFE returning JSON)**
 
 Structure it as an IIFE evaluating to a `Promise` of a plain JSON object, so it works verbatim from `Runtime.evaluate {returnByValue: true, awaitPromise: true}` **and** from the page's own `<script type="module">`. It must:
 
@@ -952,11 +952,11 @@ Structure it as an IIFE evaluating to a `Promise` of a plain JSON object, so it 
 8. Accept a `mutate` parameter (`null | 'offset' | 'black'`) implementing NC1/NC2 (see the gate section) and return all three arms plus `pass_good`, `neg_offset_fails`, `neg_black_fails`, `glError`, and `gl.getParameter(gl.RENDERER)`.
 9. **Never** call `alert`/`confirm`/`prompt`; log only into a `<pre id="log">`.
 
-- [ ] **Step 3: `index.html` — the human-visible page**
+- [x] **Step 3: `index.html` — the human-visible page**
 
 Modelled on `example/wasm-web-canvas/index.html`: a short prose header explaining that this is the wasm consumer rendering the `Atlas.Wasm` texture through **WebGL2** (and that upstream's `renderer/WebGL.zig` is a placeholder, so this is where browser drawing lives), the serving instruction (`python3 -m http.server` from the repo root — `fetch()` of a `.wasm` needs http, not `file://`), the WebGL canvas appended at native size, a 5× nearest-neighbour upscale for legibility, and the `gate.js` result rendered as text (including the two negative-control arms, so a human sees the controls firing).
 
-- [ ] **Step 4: Verify by hand once, over loopback**
+- [x] **Step 4: Verify by hand once, over loopback**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -966,7 +966,7 @@ sleep 2 && curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8731/exampl
 
 Expected: `200`. (Leave the server for T9/T10; kill it with `pkill -f 'http.server 8731'` when done.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add example/wasm-webgl
@@ -983,7 +983,7 @@ git commit -m "example/wasm-webgl: WebGL2 consumer page rendering the Atlas.Wasm
 - Consumes: `rustty_wasm.wasm` (T7), `example/wasm-webgl/gate.js` (T8).
 - Produces: a gate that exits 0 only when the positive arm passes **and both negative controls fail**; exit 3 when the environment is missing; exit 1 on assertion failure.
 
-- [ ] **Step 1: The driver**
+- [x] **Step 1: The driver**
 
 `.port/tools/gates/ws14_webgl_browser_gate.mjs`, node-only, **zero npm deps** (node 25's built-in `WebSocket`/`fetch`):
 
@@ -997,7 +997,7 @@ git commit -m "example/wasm-webgl: WebGL2 consumer page rendering the Atlas.Wasm
 
 Header comment must state, verbatim, the tolerance rule from the gate design: *exact equality is the gate; any future widening must be accompanied by a re-run proving NC1 and NC2 still FAIL under the widened rule.*
 
-- [ ] **Step 2: The wrapper**
+- [x] **Step 2: The wrapper**
 
 `.port/tools/gates/ws14_webgl_browser_gate.sh`, `chmod +x`:
 
@@ -1013,7 +1013,7 @@ ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 exec node "$ROOT/.port/tools/gates/ws14_webgl_browser_gate.mjs" "$@"
 ```
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1023,7 +1023,7 @@ cd /Users/gael/projects/rustty
 
 Expected: a table like the authoring-time observation — `expect [217,291]`, `good [217,291,0]`, `offset [252,188,0]`, `black [0,0,0]`, `pass_good: true`, `neg_offset_fails: true`, `neg_black_fails: true` — and `exit=0`. (Absolute ink counts depend on the host `monospace` font; the *equality* is what matters, which is why nothing is hardcoded.)
 
-- [ ] **Step 4: Prove the gate's FAIL arm on the real thing (not just the built-in controls)**
+- [x] **Step 4: Prove the gate's FAIL arm on the real thing (not just the built-in controls)**
 
 Mutate **product** code, not the gate, and confirm a red gate:
 
@@ -1046,15 +1046,15 @@ git checkout -- crates/rustty-font/src/atlas.rs && .port/tools/build-main-wasm.s
 
 Expected: `exit=0`. Record both outputs in the PR — this is the evidence the gate reflects **product** correctness, not only its own injected mutations.
 
-- [ ] **Step 5: Corroborate headless == live GPU**
+- [x] **Step 5: Corroborate headless == live GPU**
 
 Note in the gate's header the authoring-time finding that a live, GPU-backed Chrome and `--headless=new --enable-unsafe-swiftshader` produced **byte-identical** ink counts (`[217,291,0]`) on this host, so the headless lane is not a weaker proxy. Task 10 re-establishes this on the executing machine.
 
-- [ ] **Step 6: Wire the opt-in CI lane**
+- [x] **Step 6: Wire the opt-in CI lane**
 
 In `.port/tools/ci.sh`, add a `--webgl` lane (following the file's existing lane conventions) that runs `.port/tools/build-main-wasm.sh --release` then the gate, and **hard-fails (exit 3)** if the `wasm32-unknown-unknown` target or Chrome is missing. It is NOT in the default lane set (heavyweight: a wasm build + a browser). Document the lane in `.port/tools/CI.md`, including the ~9s/~6s local timings and the exact two commands a developer runs.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add .port/tools/gates/ws14_webgl_browser_gate.mjs .port/tools/gates/ws14_webgl_browser_gate.sh \
@@ -1070,7 +1070,7 @@ git commit -m "gates: WS14 WebGL browser gate — headless Chrome pixel assertio
 
 **Interfaces:** Consumes T8/T9. Produces the human-visible record and confirms headless == live on the executing machine.
 
-- [ ] **Step 1: Serve**
+- [x] **Step 1: Serve**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1080,27 +1080,27 @@ sleep 2 && curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8731/exampl
 
 Expected: `200`.
 
-- [ ] **Step 2: Load in the real browser**
+- [x] **Step 2: Load in the real browser**
 
 Use the Chrome automation tools (`mcp__plugin_chrome-devtools-mcp_chrome-devtools__new_page` with `http://127.0.0.1:8731/example/wasm-webgl/index.html`, or the `claude-in-chrome` equivalents after loading them with `ToolSearch`). **Do not** trigger any dialog; the page must not call `alert`/`confirm`/`prompt`.
 
-- [ ] **Step 3: Assert, don't admire**
+- [x] **Step 3: Assert, don't admire**
 
 `evaluate_script` a function that returns the same JSON `gate.js` produces (import `./gate.js` from the page, or read `window.__ws14_result` if the page stores it). Assert in the returned JSON: `pass_good === true`, `neg_offset_fails === true`, `neg_black_fails === true`, `glError === 0`, `wasiImports === 0`.
 
 Expected: identical ink counts to Step 4 of Task 9 (same host font, same NEAREST path).
 
-- [ ] **Step 4: Confirm a clean console**
+- [x] **Step 4: Confirm a clean console**
 
 `list_console_messages` with `types: ["error","warn"]`.
 
 Expected: empty. Any entry is a defect to fix, not to note.
 
-- [ ] **Step 5: Screenshot for the record**
+- [x] **Step 5: Screenshot for the record**
 
 `take_screenshot` of the WebGL canvas element. Attach to the PR, captioned *"corroboration only — the gate is the pixel assertion in Task 9, not this image."*
 
-- [ ] **Step 6: Tear down**
+- [x] **Step 6: Tear down**
 
 ```bash
 pkill -f 'http.server 8731'
@@ -1108,7 +1108,7 @@ pkill -f 'http.server 8731'
 
 Close the tab via `close_page` (never leave an automation tab open).
 
-- [ ] **Step 7: Record the live-vs-headless comparison**
+- [x] **Step 7: Record the live-vs-headless comparison**
 
 Paste both JSON results side by side into the PR. If they differ at all, STOP and diagnose before merging — a divergence means the headless lane is not the gate it claims to be.
 
@@ -1118,7 +1118,7 @@ Paste both JSON results side by side into the PR. If they differ at all, STOP an
 
 **Files:** Modify `.port/phase-2/DEFERRALS.md`, `.port/phase-2/VERIFICATION_DEBT.md`, `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md`.
 
-- [ ] **Step 1: `D:571` — the WebGL backend "STILL DEFERRED" bullet**
+- [x] **Step 1: `D:571` — the WebGL backend "STILL DEFERRED" bullet**
 
 Replace the bullet (`.port/phase-2/DEFERRALS.md:571-573`) with:
 
@@ -1137,19 +1137,19 @@ Replace the bullet (`.port/phase-2/DEFERRALS.md:571-573`) with:
   `.port/tools/gates/ws14_webgl_browser_gate.sh`.
 ```
 
-- [ ] **Step 2: `D:1894` item 5 — the `App.zig` Wasm block**
+- [x] **Step 2: `D:1894` item 5 — the `App.zig` Wasm block**
 
 Rewrite as RESOLVED: the reference block is an empty struct with all three exports commented out **upstream**; ported complete at `crates/rustty-core/src/app.rs`; and note the consequence that `crates/rustty-wasm` needs no `rustty-core` edge.
 
-- [ ] **Step 3: `D:3065` and `D:4067` — the `main_wasm.zig` rows**
+- [x] **Step 3: `D:3065` and `D:4067` — the `main_wasm.zig` rows**
 
 At `:3065` (the C6 bullet) split `main_wasm.zig` out of the three-file group: `main_gen.zig` / `main_build_data.zig` remain as they are; `main_wasm.zig` becomes RESOLVED with the artifact path, the build script, and the retention-set correction. At `:4067` (the app-core over-claim CORRECTION) add a dated correction-of-the-correction: the "NOT ported — DEFERRED" claim was **stale for `main_wasm.zig`**, which was already ported as an rlib at plan time (`crates/rustty-wasm/src/lib.rs`, 128 L) and is now a real cdylib artifact; keep the correction standing for the other two files.
 
-- [ ] **Step 4: `D:4209` — the `Atlas.Wasm` per-test ledger**
+- [x] **Step 4: `D:4209` — the `Atlas.Wasm` per-test ledger**
 
 Rewrite as RESOLVED, with the archaeology, because it is the single most confusing item in the ledger: the block's `wasm.toHostOwned`/`isHostOwned`/`toModuleOwned` were **deleted upstream by `9dc2e5978` (#9301, 2025-10-21)**, so "port the test with all 4 asserts live" required resurrecting the tracker (`crates/rustty-os/src/wasm.rs`, feature `wasm-host-owned`, with its own 2 reference tests). All 4 asserts now run natively under `cargo test -p rustty-font --features wasm`; `check_test_counts.py`'s `font_atlas` `apc_deferred` is `1 → 0` (13/13).
 
-- [ ] **Step 5: `D:4363` — the misleading "WASM/web target ✅ DONE" heading**
+- [x] **Step 5: `D:4363` — the misleading "WASM/web target ✅ DONE" heading**
 
 Change the heading to:
 
@@ -1159,15 +1159,15 @@ Change the heading to:
 
 and insert, immediately under it, a short scope note: what the 2026-07-15 pass covered (`rustty_vt_c.wasm` wasip1 + `rustty_web_canvas.wasm` freestanding + the `web_canvas` face/shaper, all browser-verified) and what it did **not** (any GPU/WebGL path — every pixel in that harness is 2D-Canvas — plus O13a/O14/O15/O16), with a pointer to this plan. Also correct the stale export count (`184 exports` → `199` as measured) so the row stays checkable, and note that the wasip1 lane needs `rustup target add wasm32-wasip1` on a fresh machine.
 
-- [ ] **Step 6: `VERIFICATION_DEBT.md:157`**
+- [x] **Step 6: `VERIFICATION_DEBT.md:157`**
 
 Sharpen the "Out of scope by decision (not debt): the WebGL/wasm apprt" line to say *the browser **apprt runtime** (a full `apprt` App/Surface over the browser; `apprt/browser.zig` itself, 4 loc, is ported at `crates/rustty-apprt/src/browser.rs`)* — and add: *this exclusion does NOT cover WS14, which ports the WebGL placeholder + the wasm module + `Atlas.Wasm` and gates browser rendering with a falsifiable pixel assertion.*
 
-- [ ] **Step 7: Add no new debt — or prove it**
+- [x] **Step 7: Add no new debt — or prove it**
 
 WS14 introduces **no** verification debt: the wasm artifact builds, the browser gate runs headlessly and is CI-wireable, and both negative controls fire. If (and only if) the executing machine cannot run Chrome, add a `VERIFICATION_DEBT.md` row with the exact runnable recipe (`.port/tools/build-main-wasm.sh --release` + `.port/tools/gates/ws14_webgl_browser_gate.sh`) and the machine constraint — never a bare "unverifiable".
 
-- [ ] **Step 8: ROADMAP row**
+- [x] **Step 8: ROADMAP row**
 
 Replace the WS14 row in `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md` with:
 
@@ -1175,7 +1175,7 @@ Replace the WS14 row in `docs/superpowers/plans/2026-07-23-rustty-completion-ROA
 | **WS14 wasm/WebGL renderer** | `2026-07-23-ws14-wasm-webgl.md` | DONE. Premise corrected: upstream `renderer/WebGL.zig` is a 2-line placeholder (no backend exists to port) and `main_wasm.zig` was already ported as an rlib — the real residual was the artifact, the retention set, and verification. Shipped: the WebGL placeholder port + the third `Renderer` selection arm; the resurrected `os/wasm.zig` host-ownership tracker (deleted upstream by `9dc2e5978`) unblocking `Atlas.Wasm` with all 4 reference asserts live; `App.Wasm` completed; a real freestanding `rustty_wasm.wasm` cdylib (config_* + atlas_* + VT, zero wasi imports) enabled by an xev freestanding-wasm arm and default-on `renderer`/`oniguruma` features that drop 5 C `-sys` deps from the wasm link; and `example/wasm-webgl/` — a WebGL2 consumer gated by `.port/tools/gates/ws14_webgl_browser_gate.sh`, which asserts per-cell ink counts against a CPU expectation and runs two negative controls (wrong atlas offset; black shader) that must FAIL on every invocation. |
 ```
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1190,7 +1190,7 @@ git commit -m "parity: close O13a/O14/O15/O16; strike the misleading 'WASM DONE'
 
 **Files:** none beyond the merge (plus any gate-mandated fix).
 
-- [ ] **Step 1: Whole-tree gates**
+- [x] **Step 1: Whole-tree gates**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1208,7 +1208,7 @@ cargo test -p rustty-apprt-c --test panic_policy 2>&1 | tail -3
 
 Expected: all green. `check_stale_comments` matters here specifically: T2/T5/T7 removed "deferred"/"BLOCKED" claims that are no longer true, and this gate is what catches any that were missed. Do **not** run `.port/tools/gates/no_homebrew_gettext_gate.sh`.
 
-- [ ] **Step 2: WS19 cross-reference (do not duplicate)**
+- [x] **Step 2: WS19 cross-reference (do not duplicate)**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1218,7 +1218,7 @@ printf '#include <rustty.h>\nint main(void){return 0;}\n' | clang -fsyntax-only 
 
 Expected: still `unknown type name 'Opaque'` at `:2455`/`:2457`. That is **WS19 T3's** fix (`docs/superpowers/plans/2026-07-29-ws19-phase2-closeout.md:405-459`). WS14 must not touch `crates/rustty-vt-c/cbindgen.toml` or `include/rustty.h`. Record the state in the PR and note that WS14's new exports (`atlas_*`, `config_*`) are **wasm-only, unprefixed by design, and not cbindgen-exported**, so they add nothing to the A5 header surface. If WS19 has landed by then, re-run the compile probe and expect it clean; either way, do not re-fix.
 
-- [ ] **Step 3: The wasm lane, end to end, from clean**
+- [x] **Step 3: The wasm lane, end to end, from clean**
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1230,7 +1230,11 @@ cargo test -p rustty-wasm -- --ignored 2>&1 | tail -4
 
 Expected: both artifacts `Finished`; gate `exit=0`; artifact-shape test passing. Confirm the pre-existing `example/wasm-web-canvas` harness still works (it must not regress from the glue change in T4 Step 5) by loading it once in the browser as in Task 10.
 
-- [ ] **Step 4: Merge**
+- [ ] **Step 4: Merge** — NOT PERFORMED BY THE EXECUTING LANE. WS14 was finished in
+  an isolated worktree under an explicit instruction not to merge to `main` (two other
+  lanes hold `crates/rustty-vt/` and `po/`+`xtask/`+`crates/rustty-extra/` concurrently).
+  All 12 tasks are complete and every gate below is green on the branch; the merge is
+  the integrator's step, not a deferral of WS14 work.
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1239,7 +1243,8 @@ git merge --no-ff ws14-wasm-webgl -m "merge: WS14 wasm/WebGL — WebGL placehold
 git push
 ```
 
-- [ ] **Step 5: Verify the merge result**
+- [ ] **Step 5: Verify the merge result** — deferred to the merge itself (Step 4); the
+  identical sweep was run on the branch, see Step 1/3 above.
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1251,7 +1256,7 @@ cargo test --workspace 2>&1 | tail -4
 
 Expected: `Finished`, tests green, `exit=0`.
 
-- [ ] **Step 6: Delete the branch and confirm a clean tree**
+- [ ] **Step 6: Delete the branch and confirm a clean tree** — follows the merge.
 
 ```bash
 cd /Users/gael/projects/rustty
