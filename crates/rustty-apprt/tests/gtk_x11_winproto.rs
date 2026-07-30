@@ -51,3 +51,28 @@ fn x11_app_init_selects_x11_arm() {
          succeeded against the real X server without crashing"
     );
 }
+
+/// The XKB extension really initialized: `x11.zig:71-101` runs `XkbQueryExtension`
+/// and `XkbSelectEventDetails` in `App.init` and stores the returned
+/// `base_event_code`. A real X server always assigns a non-zero base event code
+/// (event codes 0 and 1 are reserved for errors/replies), so a non-zero value here
+/// is proof the query actually ran and succeeded — not that the field defaulted.
+#[test]
+#[ignore = "headed GTK + a live X server; run under GDK_BACKEND=x11 — see the module docs"]
+fn x11_app_init_initializes_xkb() {
+    gtk4::init().expect("gtk init");
+    let display = gtk4::gdk::Display::default().expect("a default GDK display");
+    let config = CoreConfig::default_config();
+    let app = App::init(&display, "io.airely.rustty", &config)
+        .expect("winproto App::init must not error on a live display");
+
+    assert_eq!(app.protocol(), Protocol::X11, "must be on the X11 arm");
+
+    let base = app
+        .x11_xkb_base_event_code()
+        .expect("the X11 arm must expose its XKB base event code");
+    assert!(
+        base > 1,
+        "XkbQueryExtension must have assigned a real base event code, got {base}"
+    );
+}
