@@ -40,6 +40,11 @@
 //!     reference's `website`/`issue-url` rather than shipping ghostty.org in
 //!     user-visible text).
 
+/// The `pandoc` stand-in: markdown → `man(7)` roff and markdown → standalone
+/// HTML. See its module docs for the tradeoff argument behind not shelling out
+/// to `pandoc` (`GhosttyDocs.zig:60-88`), which exists on neither build host.
+pub mod render;
+
 /// `rustty_1_header.md` — PORTS `@embedFile("ghostty_1_header.md")`.
 const MAN_1_HEADER: &[u8] = include_bytes!("mdgen/rustty_1_header.md");
 /// `rustty_1_footer.md` — PORTS `@embedFile("ghostty_1_footer.md")`.

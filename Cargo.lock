@@ -1252,6 +1252,7 @@ dependencies = [
  "rustty-font-shaper",
  "rustty-identity",
  "rustty-input",
+ "rustty-os",
  "rustty-renderer",
  "rustty-vt",
  "rustty-xev",
@@ -1390,8 +1391,12 @@ dependencies = [
 name = "rustty-extra"
 version = "0.1.0"
 dependencies = [
+ "rustty-build-config",
+ "rustty-cfg-fmt",
  "rustty-cli",
  "rustty-config",
+ "rustty-identity",
+ "rustty-input",
 ]
 
 [[package]]

@@ -1,55 +1,61 @@
 //! xtask `resources` sub-generator: the remaining build-phase share/ folders
-//! `share/{man,locale,bat}` for the macOS Swift-app Copy-Resources phase.
+//! `share/{man,locale,bat}` plus `share/{APP}/{doc,webdata}` for the macOS
+//! Swift-app Copy-Resources phase.
 //!
 //! PORTS (build-orchestration analog, R4 — independent of parity order):
-//!   * `share/man`   — ghostty `src/build/GhosttyDocs.zig` (`installDummy` path).
+//!   * `share/man` + `share/{APP}/doc` — ghostty `src/build/GhosttyDocs.zig`
+//!     (the REAL generated path, not `installDummy`), driven by the ported
+//!     `src/build/mdgen`.
+//!   * `share/{APP}/webdata` — ghostty `src/build/GhosttyWebdata.zig`, driven by
+//!     the ported `src/build/webgen`.
 //!   * `share/locale` — ghostty `src/build/GhosttyI18n.zig`.
 //!   * `share/bat`   — ghostty `src/build/GhosttyResources.zig` (sublime syntax
 //!     install to `share/bat/syntaxes`).
 //!
-//! These three are NOT runtime-critical for a basic terminal window; the macOS
+//! None of these is runtime-critical for a basic terminal window; the macOS
 //! `Rustty.xcodeproj` Copy-Resources build phase references `../zig-out/share/
 //! {man,locale,bat}` and only requires the folders to EXIST so the copy step
-//! succeeds. Each folder is emitted minimal-but-VALID (R5): never faked content.
+//! succeeds. Each folder is emitted REAL and VALID (R5): never faked content.
 //!
 //! DEFERRAL SUMMARY (durable, disjoint record — mirrored in
 //! `.port/phase-2/DEFERRALS.swiftapp-misc.md`):
 //!
-//!  1. **man** (P1.3) — we now emit REAL, rendering `roff` man pages:
-//!     `share/man/man1/{APP}.1` + `share/man/man5/{APP}.5` (`{APP}` =
-//!     [`crate::APP`], Task 14 — `rustty` by default, `ghostty` under
-//!     `identity-oracle`; verified via `man -M zig-out/share/man <app>`). Both
-//!     the FILENAME and the `.TH`/body prose carry the **Rustty product
-//!     identity** — the `rustty` command, the `io.airely.rustty` bundle id, and
-//!     the real config paths (`~/.config/rustty/config.rustty`) — so the
-//!     installed man page is accurate for the shipped product (see the PARTIAL
-//!     note below). ghostty's own pipeline
-//!     (`GhosttyDocs.zig`) runs `mdgen` (`src/build/mdgen/`) to emit *markdown*
-//!     from the `help_strings` corpus, then `pandoc --to man` converts it to
-//!     roff. pandoc is not available in this build environment, so we do NOT run
-//!     that exact toolchain; instead the man body is a faithful `man(7)`-macro
-//!     transcription of ghostty's `mdgen` `ghostty_{1,5}_{header,footer}.md`
-//!     prose (real documentation — R5, not fabricated), rebranded to Rustty.
-//!     Unlike the terminfo entry, there is no man-page byte-parity gate, so the
-//!     body follows the product identity rather than the oracle.
+//!  1. **man + doc + webdata** — the `src/build/mdgen/**` + `src/build/webgen/**`
+//!     deferral is CLOSED (WS13, 2026-07-30). `gen_man` emits real
+//!     `share/man/man1/{APP}.1` + `share/man/man5/{APP}.5`; `gen_doc` emits
+//!     `share/{APP}/doc/{APP}.{1,5}.{md,html}`; `gen_webdata` emits
+//!     `share/{APP}/webdata/{config,actions,commands}.mdx`. All of it is
+//!     GENERATED from the live help corpora via `rustty_extra::mdgen` (the port
+//!     of `src/build/mdgen`) and `rustty_extra::webgen` (the port of
+//!     `src/build/webgen`), so the pages carry the full auto-generated
+//!     `# COMMAND LINE ACTIONS` / `# CONFIGURATION OPTIONS` / `# KEYBIND ACTIONS`
+//!     catalogs — one entry per CLI action, config field and keybind action.
 //!
-//!     PARTIAL — the auto-generated `# CONFIGURATION OPTIONS` /
-//!     `# COMMAND LINE ACTIONS` / `# KEYBIND ACTIONS` catalog (mdgen
-//!     `genConfig`/`genActions`/`genKeybindActions`, one entry per config field /
-//!     CLI action / keybind action from the live help corpus) is DEFERRED. That
-//!     corpus lives in `rustty-config`/`rustty-cli`/`rustty-input`
-//!     (`help_strings::config_help` + `CONFIG_FIELDS`, `action_help`,
-//!     `keybind_help`); reaching it from `res_misc` requires adding those crates
-//!     as xtask deps, which (a) is outside this agent's disjoint file set
-//!     (`res_misc.rs`+`res_terminfo.rs`) and (b) would race the sibling
-//!     resource-generator agents' `xtask/Cargo.toml` edits — the same reason
-//!     `gen_misc` is deliberately `std`-only (see `bat` below). In its place the
-//!     pages point users at `ghostty +show-config --default --docs` and
-//!     `ghostty +<action> --help`, which is exactly how ghostty's own
-//!     `ghostty(5)` DESCRIPTION directs readers to the always-current option list.
-//!     Un-defer trigger: add a man-page generator to `rustty-extra` (already an
-//!     xtask dep, already depends on rustty-config+rustty-cli) porting
-//!     mdgen's three `gen*` walks → roff, and call it here.
+//!     What used to be here — and why it is gone: a hand-written
+//!     `MAN1_BODY`/`MAN5_BODY` roff transcription that carried the prose but
+//!     DEFERRED the three generated catalogs, telling readers to run
+//!     `+show-config --default --docs` instead. Its recorded un-defer trigger
+//!     was "add a man-page generator to `rustty-extra` … porting mdgen's three
+//!     `gen*` walks, and call it here" — which is exactly what WS13 T6/T7/T8
+//!     did. (Two claims in the old text were also stale by the time it was
+//!     read: the pages had not pointed at `ghostty +show-config` since the
+//!     rebrand, and `rustty-extra` had long since become an xtask dependency.)
+//!
+//!     The reference converts mdgen's markdown with `pandoc --to man` /
+//!     `--to html` (`GhosttyDocs.zig:60-88`). pandoc is installed on NEITHER
+//!     build host, so the conversion is done by `rustty_extra::mdgen::render`,
+//!     a Rust markdown→roff/HTML renderer covering the closed subset mdgen
+//!     produces. See that module's header for the full tradeoff argument
+//!     (requiring pandoc was rejected on the same grounds WS9 rejected linking
+//!     Homebrew's libintl: do not add a host dependency a stock machine lacks).
+//!
+//!     Two intentional divergences from the reference, both recorded on
+//!     `gen_man`: rustty always emits REAL pages rather than
+//!     `GhosttyDocs.installDummy`'s `share/man/.placeholder` (the macOS
+//!     Copy-Resources phase ships `share/man` unconditionally), and the `.TH`
+//!     title now follows [`crate::APP`] so `--features identity-oracle`
+//!     produces `.TH "GHOSTTY" "1"` to match the `ghostty.1` filename — before
+//!     WS13 the filename flipped but the title stayed `RUSTTY`.
 //!
 //!  2. **locale** — REAL compiled gettext catalogs (un-deferred: the `po/*.po`
 //!     corpus now exists and is `msgfmt`-clean). Mirroring ghostty
@@ -104,211 +110,6 @@ const DOMAIN: &str = "io.airely.rustty";
 const SUBLIME_SYNTAX: &[u8] =
     include_bytes!("../../crates/rustty-extra/testdata/rustty.sublime-syntax");
 
-/// `man(7)`-macro body of `share/man/man1/{app}.1` (everything after the
-/// `.TH` title line, which [`gen_man`] prepends with the live version). A
-/// faithful roff transcription of ghostty `mdgen`'s `ghostty_1_header.md` +
-/// `ghostty_1_footer.md` prose (the auto-generated option/action catalog is a
-/// documented PARTIAL — see the module DEFERRAL SUMMARY), rebranded to the
-/// Rustty product identity (`rustty`, `io.airely.rustty`, `config.rustty`).
-const MAN1_BODY: &str = r#".SH NAME
-rustty \- Rustty terminal emulator
-.SH SYNOPSIS
-.B rustty
-.RI [ +action ]
-.RI [ options ]
-.SH DESCRIPTION
-Rustty is a cross-platform, GPU-accelerated terminal emulator that aims to push
-the boundaries of what is possible with a terminal emulator by exposing modern,
-opt-in features that enable CLI tool developers to build more feature rich,
-interactive applications.
-.PP
-There are a number of excellent terminal emulator options that exist today.
-The unique goal of Rustty is to have a platform for experimenting with modern,
-optional, non-standards-compliant features to enhance the capabilities of CLI
-applications. We aim to be the best in this category, and competitive in the
-rest.
-.PP
-While aiming for this ambitious goal, Rustty is a fully standards compliant
-terminal emulator that aims to remain compatible with all existing shells and
-software. You can use this as a drop-in replacement for your existing terminal
-emulator.
-.SH "COMMAND LINE ACTIONS"
-The full, always-current list of command line actions and their documentation is
-available at runtime. Run
-.B rustty \-\-help
-for the top-level actions, and
-.BI "rustty +" action " \-\-help"
-for a specific action's options.
-.SH "CONFIGURATION OPTIONS"
-The complete, always-current list of configuration options with documentation
-can be printed at runtime with
-.PP
-.RS
-.B rustty +show\-config \-\-default \-\-docs
-.RE
-.PP
-which outputs every option with its default value and doc comment. See
-.BR rustty (5)
-for the configuration file format and locations.
-.SH FILES
-.TP
-.I $XDG_CONFIG_HOME/rustty/config.rustty
-Location of the default configuration file.
-.TP
-.I $HOME/Library/Application Support/io.airely.rustty/config.rustty
-.B On macOS,
-location of the default configuration file. This location takes precedence over
-the XDG environment locations.
-.TP
-.I $LOCALAPPDATA/rustty/config.rustty
-.B On Windows,
-if
-.I $XDG_CONFIG_HOME
-is not set,
-.I $LOCALAPPDATA
-will be searched for configuration files.
-.SH ENVIRONMENT
-.TP
-.B TERM
-Defaults to
-.BR xterm\-rustty .
-Can be configured with the
-.B term
-configuration option.
-.TP
-.B RUSTTY_RESOURCES_DIR
-Where the Rustty resources can be found.
-.TP
-.B XDG_CONFIG_HOME
-Default location for configuration files.
-.TP
-.B RUSTTY_LOG
-Controls which destinations receive logs. Rustty currently defines two
-destinations:
-.BR stderr " (logging to " stderr ") and " macos
-(logging to macOS's unified log; no effect on non-macOS platforms). Combine
-values with a comma to enable multiple destinations; prefix a destination with
-.B no\-
-to disable it. Setting
-.B RUSTTY_LOG
-to
-.B true
-enables all destinations,
-.B false
-disables all.
-.SH BUGS
-See GitHub issues: <https://github.com/rustty-org/rustty/issues>
-.SH AUTHOR
-Mitchell Hashimoto <m@mitchellh.com>
-.br
-Rustty contributors <https://github.com/rustty-org/rustty/graphs/contributors>
-.SH "SEE ALSO"
-.BR rustty (5)
-"#;
-
-/// `man(7)`-macro body of `share/man/man5/{app}.5`. Faithful roff
-/// transcription of ghostty `mdgen`'s `ghostty_5_header.md` + `ghostty_5_footer.md`
-/// prose, rebranded to Rustty. See [`MAN1_BODY`] for the identity/deferral notes.
-const MAN5_BODY: &str = r#".SH NAME
-rustty \- Rustty terminal emulator configuration file
-.SH DESCRIPTION
-To configure Rustty, you must use a configuration file. GUI-based configuration
-is on the roadmap but not yet supported. The configuration file must be placed at
-.IR $XDG_CONFIG_HOME/rustty/config.rustty ,
-which defaults to
-.I ~/.config/rustty/config.rustty
-if the XDG environment is not set.
-.PP
-.B If you are using macOS,
-the configuration file can also be placed at
-.IR "$HOME/Library/Application Support/io.airely.rustty/config.rustty" .
-This is the default configuration location for macOS. It will be searched before
-any of the XDG environment locations listed above.
-.PP
-The file format is documented below as an example:
-.PP
-.RS
-.EX
-# The syntax is "key = value". The whitespace around the equals doesn't matter.
-background = 282c34
-foreground = ffffff
-
-# Blank lines are ignored!
-
-keybind = ctrl+z=close_surface
-keybind = ctrl+d=new_split:right
-
-# Colors can be changed by setting the 16 colors of \(gapalette\(ga, with each
-# color being defined as regular and bold.
-palette = 0=#1d2021
-palette = 8=#7c6f64
-.EE
-.RE
-.PP
-You can view all available configuration options and their documentation by
-executing the command
-.B rustty +show\-config \-\-default \-\-docs
-\&. Note that this outputs the full default configuration with docs to stdout, so
-you may want to pipe that through a pager, an editor, etc.
-.PP
-Note: You'll see a lot of seemingly blank configurations like
-.BR "font\-family =" .
-This is valid syntax to specify the default behavior (no value).
-.B +show\-config
-outputs it so it's clear that key is defaulting.
-.SS "Configuration Errors"
-If your configuration file has any errors, Rustty does its best to ignore them
-and move on. Configuration errors will be logged and shown in a dedicated window
-on both macOS and Linux (GTK); Rustty does not treat them as fatal and falls
-back to default values for erroneous keys.
-.SS "Configuration Options"
-The full, always-current catalog of configuration keys — one entry per option,
-with its default value and documentation — is printed by
-.B rustty +show\-config \-\-default \-\-docs
-\&. You can also read them in the source
-.I Config
-structure; the available keys are the keys verbatim, and their possible values
-are typically documented in the comments.
-.SH FILES
-.TP
-.I $XDG_CONFIG_HOME/rustty/config.rustty
-Location of the default configuration file.
-.TP
-.I $HOME/Library/Application Support/io.airely.rustty/config.rustty
-.B On macOS,
-location of the default configuration file. This location takes precedence over
-the XDG environment locations.
-.TP
-.I $LOCALAPPDATA/rustty/config.rustty
-.B On Windows,
-if
-.I $XDG_CONFIG_HOME
-is not set,
-.I $LOCALAPPDATA
-will be searched for configuration files.
-.SH ENVIRONMENT
-.TP
-.B XDG_CONFIG_HOME
-Default location for configuration files.
-.TP
-.B $HOME/Library/Application Support/io.airely.rustty
-.B MACOS ONLY
-default location for configuration files. This location takes precedence over
-the XDG environment locations.
-.TP
-.B LOCALAPPDATA
-.B WINDOWS ONLY:
-alternate location to search for configuration files.
-.SH BUGS
-See GitHub issues: <https://github.com/rustty-org/rustty/issues>
-.SH AUTHOR
-Mitchell Hashimoto <m@mitchellh.com>
-.br
-Rustty contributors <https://github.com/rustty-org/rustty/graphs/contributors>
-.SH "SEE ALSO"
-.BR rustty (1)
-"#;
-
 /// Generate the remaining build-phase resource folders under `share_dir`:
 /// `man/`, `locale/`, and `bat/`.
 ///
@@ -318,35 +119,92 @@ Rustty contributors <https://github.com/rustty-org/rustty/graphs/contributors>
 /// naming the offending path.
 pub fn gen_misc(share_dir: &Path) -> Result<(), String> {
     gen_man(share_dir)?;
+    gen_doc(share_dir)?;
+    gen_webdata(share_dir)?;
     gen_locale(share_dir)?;
     gen_bat(share_dir)?;
     Ok(())
 }
 
-/// `share/man` — emit real, rendering `roff` man pages `man1/{APP}.1` and
-/// `man5/{APP}.5` (P1.3; `{APP}` = [`crate::APP`], Task 14). The `.TH` title
-/// line (carrying the live crate version, ghostty's `@@VERSION@@`
-/// substitution) is prepended to the [`MAN1_BODY`]/[`MAN5_BODY`] roff bodies.
-/// Both the output FILENAME (`{APP}`-routed) and the `.TH`/body text carry the
-/// Rustty product identity — the man page is accurate for the shipped product
-/// (see the module DEFERRAL SUMMARY). Verify with `man -M <share>/man <app>` /
-/// `man -M <share>/man 5 <app>`.
+/// `share/man` — the port of `GhosttyDocs.zig:20-88`'s real (non-`installDummy`)
+/// path: `man1/{APP}.1` + `man5/{APP}.5`, where `{APP}` = [`crate::APP`].
+///
+/// The markdown comes from [`rustty_extra::mdgen`] (the port of
+/// `src/build/mdgen`, including the auto-generated `COMMAND LINE ACTIONS` /
+/// `CONFIGURATION OPTIONS` / `KEYBIND ACTIONS` catalogs), and the roff comes
+/// from [`rustty_extra::mdgen::render`], which stands in for the reference's
+/// `pandoc --to man` — pandoc exists on neither build host; see that module's
+/// header for the tradeoff argument.
+///
+/// Two intentional divergences from the reference:
+///   * rustty ALWAYS emits real pages, never `GhosttyDocs.installDummy`'s
+///     `share/man/.placeholder`, because the macOS Copy-Resources phase ships
+///     `share/man` unconditionally.
+///   * the `.TH` title is derived from [`crate::APP`] rather than hardcoded, so
+///     `--features identity-oracle` produces `.TH "GHOSTTY" "1"` alongside the
+///     `ghostty.1` FILENAME. Before WS13 the title said `RUSTTY` in both
+///     profiles while the filename flipped — a real, if cosmetic, profile bug.
+///
+/// Verify with `man -M <share>/man <app>` / `man -M <share>/man 5 <app>`.
 fn gen_man(share_dir: &Path) -> Result<(), String> {
-    let ver = env!("CARGO_PKG_VERSION");
     let app = crate::APP;
+    let title = app.to_uppercase();
 
     let man1_dir = share_dir.join("man").join("man1");
     mkdirp(&man1_dir)?;
-    let page1 =
-        format!(".TH RUSTTY 1 \"\" \"Version {ver}\" \"Rustty terminal emulator\"\n{MAN1_BODY}");
-    write_file(&man1_dir.join(format!("{app}.1")), page1.as_bytes())?;
+    let page1 = rustty_extra::mdgen::render::markdown_to_roff_with_title(
+        &rustty_extra::mdgen::man_1_markdown(),
+        Some(title.as_bytes()),
+    );
+    write_file(&man1_dir.join(format!("{app}.1")), &page1)?;
 
     let man5_dir = share_dir.join("man").join("man5");
     mkdirp(&man5_dir)?;
-    let page5 = format!(
-        ".TH RUSTTY 5 \"\" \"Version {ver}\" \"Rustty terminal emulator configuration file\"\n{MAN5_BODY}"
+    let page5 = rustty_extra::mdgen::render::markdown_to_roff_with_title(
+        &rustty_extra::mdgen::man_5_markdown(),
+        Some(title.as_bytes()),
     );
-    write_file(&man5_dir.join(format!("{app}.5")), page5.as_bytes())
+    write_file(&man5_dir.join(format!("{app}.5")), &page5)
+}
+
+/// `share/{APP}/doc` — the markdown and HTML halves of `GhosttyDocs.zig:60-88`
+/// (`pandoc --to html` plus the `.md` source it installs alongside).
+fn gen_doc(share_dir: &Path) -> Result<(), String> {
+    let app = crate::APP;
+    let doc_dir = share_dir.join(app).join("doc");
+    mkdirp(&doc_dir)?;
+
+    for (section, md) in [
+        (1u8, rustty_extra::mdgen::man_1_markdown()),
+        (5u8, rustty_extra::mdgen::man_5_markdown()),
+    ] {
+        write_file(&doc_dir.join(format!("{app}.{section}.md")), &md)?;
+        write_file(
+            &doc_dir.join(format!("{app}.{section}.html")),
+            &rustty_extra::mdgen::render::markdown_to_html(&md),
+        )?;
+    }
+    Ok(())
+}
+
+/// `share/{APP}/webdata` — the port of `GhosttyWebdata.zig:44-48,74-79,113-116`:
+/// the three `.mdx` documents the reference's `src/build/webgen/main_*.zig`
+/// executables emit, generated here by [`rustty_extra::webgen`].
+fn gen_webdata(share_dir: &Path) -> Result<(), String> {
+    let webdata_dir = share_dir.join(crate::APP).join("webdata");
+    mkdirp(&webdata_dir)?;
+    write_file(
+        &webdata_dir.join("config.mdx"),
+        &rustty_extra::webgen::config_mdx(),
+    )?;
+    write_file(
+        &webdata_dir.join("actions.mdx"),
+        &rustty_extra::webgen::actions_mdx(),
+    )?;
+    write_file(
+        &webdata_dir.join("commands.mdx"),
+        &rustty_extra::webgen::commands_mdx(),
+    )
 }
 
 /// `share/locale` — compile every `po/<locale>.po` gettext catalog into
