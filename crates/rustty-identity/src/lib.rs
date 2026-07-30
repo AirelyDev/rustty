@@ -127,6 +127,13 @@ mod values {
     /// Title-case ("formal") product name, e.g. the third terminfo entry name.
     /// Reference: `"Ghostty"` (`src/terminfo/ghostty.zig`, "Our formal name").
     pub const APP_NAME_TITLECASE: &str = "Rustty";
+
+    /// URL prefix a source-commit hash is appended to, to form the web link for
+    /// that commit. `+version` hyperlinks its version header with it (OSC 8).
+    /// Reference: `https://github.com/ghostty-org/ghostty/commit/`
+    /// (`src/cli/version.zig`). R2: the repo is product identity, so rustty's is
+    /// rustty's own — the workspace `Cargo.toml` `repository` value.
+    pub const COMMIT_URL_PREFIX: &str = "https://github.com/AirelyDev/rustty/commit/";
 }
 
 // ---- ghostty reference values (parity harness only) -----------------------
@@ -186,6 +193,11 @@ mod values {
     /// Title-case ("formal") product name, e.g. the third terminfo entry name.
     /// Reference: `"Ghostty"` (`src/terminfo/ghostty.zig`, "Our formal name").
     pub const APP_NAME_TITLECASE: &str = "Ghostty";
+
+    /// URL prefix a source-commit hash is appended to. Reference:
+    /// `src/cli/version.zig` —
+    /// `"\x1b]8;;https://github.com/ghostty-org/ghostty/commit/{s}\x1b\\"`.
+    pub const COMMIT_URL_PREFIX: &str = "https://github.com/ghostty-org/ghostty/commit/";
 }
 
 // ---- public re-exports (the stable identity API) --------------------------
@@ -220,6 +232,8 @@ pub const LIBVT_XTVERSION_FALLBACK: &str = values::LIBVT_XTVERSION_FALLBACK;
 pub const ENV_PREFIX: &str = values::ENV_PREFIX;
 /// Title-case ("formal") product name.
 pub const APP_NAME_TITLECASE: &str = values::APP_NAME_TITLECASE;
+/// URL prefix a source-commit hash is appended to (the `+version` OSC-8 link).
+pub const COMMIT_URL_PREFIX: &str = values::COMMIT_URL_PREFIX;
 
 /// The full XTVERSION (`CSI > 0 q`) wire response an application-level handler
 /// reports: `ESC P > | {XTVERSION_NAME} {VERSION} ESC \`.
@@ -264,6 +278,10 @@ mod tests {
         assert_eq!(ENV_PREFIX, "RUSTTY");
         assert_eq!(APP_NAME_TITLECASE, "Rustty");
         assert_eq!(BUNDLE_ID, "io.airely.rustty");
+        assert_eq!(
+            COMMIT_URL_PREFIX,
+            "https://github.com/AirelyDev/rustty/commit/"
+        );
         // The vt library carries its OWN version (the reference's deliberate
         // app/lib split, build.zig:7-10); rustty's vt lib version has no
         // pre-release tag.
@@ -297,6 +315,12 @@ mod tests {
         assert_eq!(ENV_PREFIX, "GHOSTTY");
         assert_eq!(APP_NAME_TITLECASE, "Ghostty");
         assert_eq!(BUNDLE_ID, "com.mitchellh.ghostty");
+        // Exactly the URL the reference's `+version` OSC-8 hyperlink prefixes
+        // the commit hash with (`src/cli/version.zig`).
+        assert_eq!(
+            COMMIT_URL_PREFIX,
+            "https://github.com/ghostty-org/ghostty/commit/"
+        );
         // The reference's SEPARATE libghostty version (build.zig:10). This is
         // exactly what the c-vt-build-info golden records ("Version:
         // 0.1.0-dev" / "Version pre  : dev"), and it must NOT equal the app

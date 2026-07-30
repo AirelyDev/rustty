@@ -2727,8 +2727,9 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   STUBBED. ✅ RESOLVED (2026-07-23, WS3-B) for the renderer/libxev/toolchain
   lines — real values via build_config::renderer() type-name map,
   rustty_xev::backend(), and build_config::RUSTC_VERSION; the cli_smoke
-  `version_plus` KAT now ASSERTS their content. Still open: the OSC-8
-  commit-hash hyperlink (no `+BUILD` metadata / repo-URL identity constant).**
+  `version_plus` KAT now ASSERTS their content. The OSC-8 commit-hash hyperlink
+  is ✅ RESOLVED too (2026-07-29, WS19 T12, audit row O12) — see the RESOLUTION
+  note at the end of this entry. NOTHING in this entry is open.**
   `version.rs` emits documented STUB strings for the `- renderer` line
   (`RENDERER_STUB`; rustty-renderer's `Renderer` is a Phase-3 leaf, commented out)
   and the `- libxev` line (`LIBXEV_STUB`; rustty-xev unimplemented, D6). The
@@ -2744,6 +2745,47 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   preserved verbatim as commented reference (R1). **Target:** un-defer the
   renderer/libxev line content when R-d (renderer) / D6 (libxev) land; add a
   rustty repo-URL constant to `rustty-identity` for the hyperlink.
+
+  **RESOLUTION of the OSC-8 hyperlink half — IMPLEMENTED, not diverged (2026-07-29,
+  WS19 T12, audit row O12).** Weighed implement-vs-divergence honestly and
+  implemented: the repo URL already EXISTS as a first-class product-identity value
+  (the workspace `Cargo.toml` `repository = "https://github.com/AirelyDev/rustty"`),
+  and the hyperlink is user-observable R1 behavior, so there was no honest
+  4-criterion basis for making it permanent. Three pieces:
+  1. `rustty_identity::COMMIT_URL_PREFIX` — `https://github.com/AirelyDev/rustty/commit/`,
+     with the oracle spelling (`github.com/ghostty-org/ghostty/commit/`) under
+     `identity-oracle`, both arms asserted by the existing profile tests (R2).
+  2. `crates/rustty-cli/build.rs` gains a third generator baking
+     `RUSTTY_COMMIT_HASH` from `git rev-parse --short HEAD` — the `+BUILD`-metadata
+     channel Rust's `SemanticVersion` view lacks. **R3-clean:** the oracle tree is
+     not consulted; it reads *this* repo's git. **Reproducibility-clean:** the value
+     is a function of the source revision (same commit → same bytes), the
+     `RUSTTY_COMMIT_HASH` env var overrides it so a packager can pin or blank it
+     without git, and a non-checkout build (tarball / vendored crate / docs.rs)
+     degrades to EMPTY → `commit_hash() == None` → no hyperlink, which is exactly
+     the reference's own `build_config.version.build == null` behavior rather than a
+     build failure. `rerun-if-changed` is registered on the resolved HEAD + ref
+     files (via `git rev-parse --git-path`, so it is correct inside a git WORKTREE)
+     and ONLY when those paths exist, so a vanished worktree cannot force perpetual
+     rebuilds through the shared `target/`.
+  3. `version.rs`'s hyperlink branch is live, and `commit_url()` composes
+     prefix+hash. NOTE the old branch was ALSO WRONG, not merely dead: it wrote
+     `\x1b]8;;{hash}` — the bare hash as the URI, with no URL prefix at all.
+
+  **Gate.** `+version`'s hyperlink is tty-only, and `cli_smoke`'s stdout is a pipe,
+  so the binary-level KAT structurally cannot reach it. `run()` was therefore split
+  into `run()` (acquires stdout + `isTty`) and `write_version(sink, tty)` — a seam,
+  not a divergence: the reference already threads `stdout` and `tty` through this
+  code. Four `rustty-cli` unit tests: the commit hash is captured whenever the
+  source IS a git checkout (the assertion that was dead before), the URL is the
+  product repo's, the tty path emits `OSC 8 ;; <commit-url> ST <header> \n\n OSC 8
+  ;; ST`, and the non-tty path emits no OSC-8 at all. Mutation-verified (3
+  experiments, all RED then reverted): `commit_hash() -> None` (the pre-fix state),
+  a wrong URL prefix, and a suppressed hyperlink write.
+
+  Incidentally documented by the tty test: the CLOSING `OSC 8 ;; ST` is emitted on
+  a tty even when no link was opened — the reference guards it on `tty` alone, not
+  on the hash. Preserved verbatim (R1).
 
 - **`help_strings` / `Action::help_text` — the `+action --help` text. ✅ RESOLVED
   (help_strings doc-table generator landed).**
@@ -3216,8 +3258,10 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   'RENDERER_STUB\|LIBXEV_STUB\|TOOLCHAIN_VERSION_STUB' crates/` → **zero hits**.
   WS3-B replaced all three with real values and `crates/rustty/tests/cli_smoke.rs`'s
   `version_plus` KAT now asserts their CONTENT. The `D:2639` copy of this row already
-  recorded that; this C6 copy was never struck. The only `+version` residual left is
-  the OSC-8 commit hyperlink (audit row O12 → **WS19 T12**).
+  recorded that; this C6 copy was never struck. The last `+version` residual — the
+  OSC-8 commit hyperlink (audit row O12) — is ✅ RESOLVED by **WS19 T12** (2026-07-29;
+  implemented, not diverged: see the RESOLUTION note on the `version.zig is PARTIAL`
+  entry). `+version` now has NO residual.
 
 - **`explain_config` (1t DEFERRED) + `help_strings` codegen (continued, ADV-FIX 3).**
   The bin does not un-defer these; `Action::help_text` still returns "" (the
@@ -6056,7 +6100,7 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 | O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T10.** And the prescription it carried was WRONG: the harness proved "mirror epoll's copied-fd notify" INSUFFICIENT (`wakeup_copied`: still SB-UB — a by-value read is a foreign *access* against the loop thread's *protected* `&mut Loop`, and forming no reference is not enough). Cure applied to BOTH backends: the queue handle + the wakeup handle are copied into the caller-owned `Completion` at schedule time (`task_completions`, the reference's OWN field restored, + port-added `task_wakeup`), so `thread_perform` never accesses the `Loop` allocation and never derefs `task_loop` — which also discharges the lineage audit. 14-candidate SB/TB matrix in `.port/phase-2/mirihar-xev-mpsc/README.md`. |
 | O10 | `D:3273` macOS `xev.File`/`TCP`/`UDP` watcher instantiations still deferred (Linux ported them, Tasks 3–5); plus the macOS `kqueue: file IO on thread pool` skip-stub | **OPEN, real, no owner.** The two targets deliberately diverge, gate-pinned by `crates/rustty-xev/tests/surface_parity.rs`. | **permanent divergence** — already deliberate and gate-pinned; WS19 T11 moves it into the divergence section with its 4-criterion basis rather than leaving it in a "DEFERRED" list | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
 | O11 | `D:3274` xev `c_api.zig` (libxev's own C ABI) unported | **OPEN, no owner.** rustty consumers use the Rust API; nothing in ghostty consumes libxev's C ABI. | **permanent divergence** (outside the port's consumption surface; basis in WS19 T11) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
-| O12 | `D:2643` `+version`'s OSC-8 commit-hash hyperlink never emits (no `+BUILD` metadata, no repo-URL identity constant) | **OPEN, real, no owner.** The three STUB lines it is bundled with are GONE (see W8); only the hyperlink branch is still dead. | **fix in WS19 T12** (repo-URL constant in `rustty-identity` + a build-time commit hash) | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T12** (`+version` OSC-8 commit hyperlink). |
+| O12 | `D:2643` `+version`'s OSC-8 commit-hash hyperlink never emits (no `+BUILD` metadata, no repo-URL identity constant) | **OPEN, real, no owner.** The three STUB lines it is bundled with are GONE (see W8); only the hyperlink branch is still dead. | **fix in WS19 T12** (repo-URL constant in `rustty-identity` + a build-time commit hash) | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T12. IMPLEMENTED, not diverged** — there was no honest 4-criterion basis for permanence (the repo URL already exists as workspace `Cargo.toml` `repository`, and the hyperlink is user-observable R1 behavior). `rustty_identity::COMMIT_URL_PREFIX` (both profile arms) + a `rustty-cli/build.rs` `RUSTTY_COMMIT_HASH` capture (env-overridable, degrades to `None` off a git checkout — R3-clean, reproducibility-clean) + a live `commit_url()`. Also fixed a latent BUG in the dead branch: it wrote the bare hash as the URI, with no URL prefix. Gated by 4 `rustty-cli` unit tests over a new `write_version(sink, tty)` seam (the tty-only branch is unreachable from `cli_smoke`, whose stdout is a pipe); 3 mutation experiments. |
 | O13 | `D:3065`/`:4067` `main_wasm.zig` + `main_build_data.zig` unported, "Target: the gen/wasm-artifact tooling milestone" | **OPEN.** `grep -rn 'main_wasm\|main_build_data' crates/ --include='*.rs'` → **zero hits**. (`main_gen.zig` **IS** ported at `crates/rustty-synthetic/src/main_gen.rs`, so that third of the row is stale.) | `main_wasm` → **route to WS14**; `main_build_data` + the `+gen-*` file-emit wiring (`D:3725`) → **route to WS13** | **M** each | **WS19 EXECUTION STATUS:** **DONE (split + routed) — WS19 T14/T19.** `main_gen` PORTED; `main_wasm` → WS14; `main_build_data` + `+gen-*` → WS13 (in WS13's plan). |
 | O14 | `D:4209` `Atlas.Wasm` `test "happy path"` (4 named assertions) deferred with the wasm atlas surface | **OPEN, correctly described**; target is an unscheduled milestone. | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
 | O15 | `D:1894` `App.zig` `Wasm` block preserved verbatim, "Target: the rustty wasm app-runtime" | **OPEN, correctly described** (the block is commented out in the *reference* too). | **route to WS14** | **S** | **WS19 EXECUTION STATUS:** **DONE (routed) — WS19 T14.** → **WS14**. |
@@ -6174,7 +6218,7 @@ opposite direction** — claiming open work that has shipped.
 | **O5** `PageList::Limits` | repo-wide `grep -rn 'struct Limits'` → only `kitty/graphics_image.rs:126` (an unrelated struct); no `PageList::Limits` | confirmed **OPEN** → Phase 3 re-vet P3-RV1 |
 | **O6** GTK portal `OpenURI` | repo-wide `grep -rni 'openuri\|open_uri'` across `crates/` → **0 hits**; the only portal code is `gtk/class/global_shortcuts.rs` (GlobalShortcuts iface) | confirmed **OPEN** → WS19 T8 |
 | **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ended in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | **CLOSED** by WS19 T10 (both backends; `thread_perform` no longer derefs `task_loop` at all) |
-| **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returns `None` unconditionally; `:103` is the unreachable emit | confirmed **OPEN** → WS19 T12 |
+| **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returned `None` unconditionally; `:103` was the unreachable emit (and wrote the bare hash, not a URL) | **CLOSED** by WS19 T12 (implemented) |
 | **O21** `shell_integration.rs` lossy path | `crates/rustty-termio/src/shell_integration.rs:1708` and `:1760` both `to_string_lossy()` | confirmed **OPEN** → WS19 T15 |
 | **O1** `style::Color` | `crates/rustty-vt/src/style.rs:143` is a plain `enum Color { None, Palette(u8), Rgb(RGB) }`, no `#[repr]` | confirmed **OPEN** → WS19 T5 |
 | **O3** `cursor_scroll_region_up` | already repo-wide in the original audit (`grep -rn … crates/` → 0 hits) | confirmed **OPEN** → WS10, pin-sequenced |
