@@ -34,8 +34,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+// `DBusConnection::{call, subscribe_to_signal}` are inherent; the prelude brings in
+// `ToVariant` for the payload builder.
 use gio::prelude::*;
-use glib::prelude::*;
 
 use rustty_apprt_api::action::{OpenUrl, OpenUrlKind};
 

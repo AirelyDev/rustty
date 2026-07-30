@@ -19,11 +19,26 @@
 //!   * if the port subscribed after the reply (the racy documented flow), the signal
 //!     is already gone and `responses` stays 0 — the assertion FAILS.
 //!
-//! DEMONSTRATED FAIL ARM: moving the `subscribe_to_response` call in
-//! `portal/open_uri.rs::start` to after `send_request` makes this test fail with
-//! `no Response was delivered` — that reordering was applied on the VM and the
-//! failure recorded in the WS19 T8 commit message. The test is therefore falsifiable
-//! by construction, not by inspection.
+//! DEMONSTRATED FAIL ARM (measured on the VM, WS19 T8). The counterfactual that
+//! actually reproduces the bug is "subscribe only once the method REPLY names the
+//! path" — the literal documented flow. Applying it (drop the `subscribe_to_response`
+//! in `start`, subscribe inside `request_callback` instead) fails this test with
+//!
+//! ```text
+//! no Response was delivered: ... observed=Observed { responses: 0, call_replies: 1, .. },
+//!   stub saw=Seen { calls: 1, response_path: Some(".../request/1_0/3389bbd4ce3e102a"), .. }
+//! ```
+//!
+//! i.e. the stub proves it emitted on the right path and the client still never saw it.
+//!
+//! A WEAKER counterfactual does NOT reproduce it, and this is worth recording because
+//! it was tried first and passed: merely moving `subscribe_to_response` to the line
+//! AFTER `send_request` still passes. `gio`'s `call` is asynchronous and the portal's
+//! `Response` is a UNICAST signal, so the client-side match table is consulted at
+//! DISPATCH time, and no main-loop iteration happens between the two statements. The
+//! ordering that matters is therefore "before any main-loop iteration", not "before
+//! the send" — which is exactly why the subscription must not wait for the reply
+//! callback, and why the reference's own comment frames it that way.
 //!
 //! The stub ALSO records the payload it received, so the test asserts the on-the-wire
 //! shape (parent window, uri, and the three options `handle_token`/`writable`/`ask`),
@@ -42,12 +57,27 @@
 //! G-GTKINIT one-headed-test-per-binary rule does not apply (and no display is
 //! needed).
 //!
-//! RUN (Fedora VM). It MUST be run on a PRIVATE session bus, because it owns
-//! `org.freedesktop.portal.Desktop` — the test refuses to run if that name already
-//! has an owner, so it can never fight the real desktop portal:
+//! # The bus this runs on
+//!
+//! The test spawns its OWN `dbus-daemon` from a generated config with NO
+//! `<servicedir>`, and never touches the ambient session bus. Both properties are
+//! load-bearing:
+//!
+//!   * it owns `org.freedesktop.portal.Desktop`, which would be impossible (and rude)
+//!     on a desktop session bus;
+//!   * with no service directory the bus CANNOT activate anything. The first attempt
+//!     at this test ran under `dbus-run-session`, which inherits the system service
+//!     files: releasing the stub's name made D-Bus start the REAL
+//!     `xdg-desktop-portal`, the "no portal" call succeeded, and the negative control
+//!     reported `fallbacks: 0` — i.e. the control was not merely weak, it was wrong.
+//!     An activation-free bus is what makes "nothing owns the name" actually mean it.
+//!
+//! The daemon is killed by a `Drop` guard on every exit path, including panics.
+//!
+//! RUN (Fedora VM; needs `dbus-daemon` on PATH):
 //!
 //! ```sh
-//! dbus-run-session -- cargo test -p rustty-apprt --features gtk \
+//! cargo test -p rustty-apprt --features gtk \
 //!   --test gtk_portal_openuri -- --ignored --nocapture
 //! ```
 //!
@@ -58,8 +88,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+// `gio::prelude` re-exports `glib::prelude`, which is where `ToVariant` lives.
 use gio::prelude::*;
-use glib::prelude::*;
 
 use rustty_apprt::gtk::portal::{self, OpenUri};
 use rustty_apprt_api::action::{OpenUrl, OpenUrlKind};
@@ -94,6 +124,85 @@ struct Seen {
     ask: Option<bool>,
     /// The request object path the stub emitted `Response` on.
     response_path: Option<String>,
+}
+
+/// A private, ACTIVATION-FREE `dbus-daemon`. Killed on drop so no daemon can survive
+/// the test — including when an assertion panics.
+struct PrivateBus {
+    child: std::process::Child,
+    address: String,
+    _dir: std::path::PathBuf,
+}
+
+impl PrivateBus {
+    fn spawn() -> Self {
+        use std::io::{BufRead, BufReader};
+
+        let dir = std::env::temp_dir().join(format!("ws19-t8-bus-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let conf = dir.join("session.conf");
+        // No <servicedir>: this bus can never activate a service, so "the name has no
+        // owner" cannot be quietly undone by activation.
+        std::fs::write(
+            &conf,
+            format!(
+                r#"<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir={}</listen>
+  <policy context="default">
+    <allow own="*"/>
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+  </policy>
+</busconfig>
+"#,
+                dir.display()
+            ),
+        )
+        .expect("write bus config");
+
+        let mut child = std::process::Command::new("dbus-daemon")
+            .arg("--nofork")
+            .arg("--print-address")
+            .arg(format!("--config-file={}", conf.display()))
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("dbus-daemon must be installed to run this KAT");
+
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().expect("piped stdout"))
+            .read_line(&mut line)
+            .expect("dbus-daemon printed no address");
+        let address = line.trim().to_owned();
+        assert!(
+            address.starts_with("unix:"),
+            "unexpected bus address {address:?}"
+        );
+
+        Self {
+            child,
+            address,
+            _dir: dir,
+        }
+    }
+
+    fn connect(&self) -> gio::DBusConnection {
+        gio::DBusConnection::for_address_sync(
+            &self.address,
+            gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+                | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
+            None::<&gio::DBusAuthObserver>,
+            gio::Cancellable::NONE,
+        )
+        .expect("connect to the private bus")
+    }
+}
+
+impl Drop for PrivateBus {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// Ask the bus whether the portal name currently has an owner. Used both to refuse
@@ -132,31 +241,22 @@ fn pump_until(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
 }
 
 #[test]
-#[ignore = "needs a PRIVATE D-Bus session bus; run under dbus-run-session — see the module docs"]
+#[ignore = "spawns a private dbus-daemon; Linux + the gtk feature — see the module docs"]
 fn portal_open_uri_presubscribes_then_falls_back_without_a_portal() {
-    let client = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
-        .expect("a session bus (run under dbus-run-session)");
+    let bus = PrivateBus::spawn();
+    let client = bus.connect();
 
-    // --- refuse to run against the REAL portal -------------------------------
-    // This test OWNS the portal bus name. If it already has an owner we are on a
-    // desktop session bus, and taking the name would be both impossible and rude.
+    // --- the bus must be genuinely portal-free -------------------------------
+    // If this were ever true the negative control below would be measuring the real
+    // portal instead of the absence of one.
     let has_owner = portal_name_has_owner(&client).expect("NameHasOwner");
     assert!(
         !has_owner,
-        "{PORTAL_NAME} already has an owner: this test must run on a PRIVATE bus \
-         (dbus-run-session), never on the desktop session bus"
+        "{PORTAL_NAME} already has an owner on the private bus"
     );
 
     // --- the stub portal, on its own connection ------------------------------
-    let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS").expect("DBUS_SESSION_BUS_ADDRESS");
-    let stub = gio::DBusConnection::for_address_sync(
-        &addr,
-        gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
-            | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
-        None::<&gio::DBusAuthObserver>,
-        gio::Cancellable::NONE,
-    )
-    .expect("a second connection to the same bus");
+    let stub = bus.connect();
 
     let node = gio::DBusNodeInfo::for_xml(STUB_XML).expect("stub xml");
     let iface = node

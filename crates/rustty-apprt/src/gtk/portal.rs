@@ -62,8 +62,6 @@ pub fn format_token(token: usize) -> String {
 /// `error.NoDBusUniqueName`. That _should_ be impossible on an ordinary
 /// message-bus connection, but is handled rather than asserted (`portal.zig:29-31`).
 pub fn request_path(dbus: &gio::DBusConnection, token: usize) -> Option<String> {
-    use gio::prelude::DBusConnectionExt as _;
-
     // Get the unique name from D-Bus and strip the leading `:` (`portal.zig:27-32`).
     let unique_name = dbus.unique_name()?;
     let unique_name = unique_name.as_str().strip_prefix(':')?;
