@@ -173,6 +173,15 @@ GATE_REGISTRY=(
   # — from going unnoticed again. HARD: it is green today and its verdict has a
   # `--self-test` RED-flip proof.
   "G-REL|HARD|bash $GATES/check_release_lane.sh"
+  # G-GTKINIT (WS19 T4, audit row N3) — one `gtk4::init()` per test binary. GTK is
+  # thread-pinned and libtest gives every `#[test]` its own thread, so a second
+  # `gtk4::init()` in one binary ALWAYS panics. `tests/gtk_wayland_winproto.rs`
+  # shipped with two and nothing noticed, because the GTK KATs are `#[ignore]`d and
+  # only ever run by hand on the VM. This is a STATIC check on purpose: it binds on
+  # macOS too, where those KATs cannot even compile, so a macOS lane catches a bad
+  # merge. HARD: green at landing, milliseconds, and BOTH its FAIL arms (doubled
+  # init; vacuous zero-match) are mutation-proven.
+  "G-GTKINIT|HARD|bash $GATES/check_gtk_one_init.sh"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"

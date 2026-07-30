@@ -170,9 +170,17 @@ so the mutter-session run was deliberately not repeated. mutter implements the s
 
 **Recipe (any stable GNOME Wayland session):**
 ```
-cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_winproto \
+cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_set_urgent \
   -- --ignored --exact wayland_set_urgent_dispatches_activation_token
 ```
+> **RECIPE RETARGETED [WS19 T4, 2026-07-29 — audit row N3].** The binary was
+> ~~`--test gtk_wayland_winproto`~~ and would have run the WRONG binary. That file
+> carried TWO `gtk4::init()` calls, which can never both pass (GTK is thread-pinned;
+> libtest gives every `#[test]` its own thread even at `--test-threads=1`), so this
+> test was split into its own binary `tests/gtk_wayland_set_urgent.rs` following the
+> WS16 precedent `a7fa3b7`. Gate **G-GTKINIT**
+> (`.port/tools/gates/check_gtk_one_init.sh`) now fails if any test binary regains a
+> second `gtk4::init()`.
 **Expected:** `ok` in ~1 s (bounded at ~10 s — a broken seam fails, never hangs).
 
 ## V5. X11 winproto residuals: no native X11 session, no KWin, and NO synthetic keyboard input on this VM [WS16, 2026-07-29]
