@@ -209,7 +209,10 @@ mod stream;
 // already there) — library-completeness parity: `dynamic::Options.thread_pool`'s
 // `*mut crate::thread_pool::ThreadPool` field needs the type nameable by any
 // caller that wants to construct one, exactly as the macOS `Options` field does.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+// WS20: un-gated to ALL targets. `main.zig` exports `pub const ThreadPool =
+// @import("ThreadPool.zig")` unconditionally, and the module's only platform
+// surface is `std.Thread.Futex`, whose Windows and single-threaded (WASI /
+// freestanding wasm) arms are now ported alongside the Linux/Darwin ones.
 mod thread_pool;
 #[cfg(target_os = "macos")]
 mod timer;
@@ -546,6 +549,11 @@ pub use iocp::{
 };
 #[cfg(target_os = "windows")]
 pub use windows::{CallbackAction, CompletionState, Options, RunMode};
+
+// `main.zig`'s `pub const ThreadPool = @import("ThreadPool.zig")` — exported on
+// every target (WS20), matching the macOS/Linux re-exports above.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub use thread_pool::ThreadPool;
 
 // ---------------------------------------------------------------------------
 // REMAINING PORT WORK (explicitly NOT a scope exclusion). The `iocp` and

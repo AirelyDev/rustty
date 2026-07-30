@@ -844,7 +844,16 @@ impl Event {
 
 // PORT NOTE: `std.Thread.Futex.wait/wake` — Rust's std futex is not public, so
 // this binds the same OS primitives std itself uses: Linux `futex(2)`
-// (FUTEX_WAIT/WAKE_PRIVATE) and Darwin `__ulock_wait/wake` (UL_COMPARE_AND_WAIT).
+// (FUTEX_WAIT/WAKE_PRIVATE), Darwin `__ulock_wait/wake` (UL_COMPARE_AND_WAIT),
+// Windows `ntdll.RtlWaitOnAddress`/`RtlWakeAddress{Single,All}` (WS20), and — for
+// every remaining target, all of which are `builtin.single_threaded` in the
+// reference — Zig's `SingleThreadedImpl` (WS20).
+//
+// Each arm below is the direct map of the correspondingly-named `*Impl` struct in
+// `std/Thread/Futex.zig`, which is exactly what `std.Thread.Futex.wait/wake`
+// dispatches to. The pool always waits WITHOUT a timeout (`Event::wait` calls
+// `Futex.wait(&self.state, WAITING)`), so the `timeout: ?u64` parameter is
+// monomorphized to `null` in every arm.
 #[cfg(target_os = "linux")]
 fn futex_wait(atomic: &AtomicU32, expect: u32) {
     unsafe {
@@ -917,6 +926,115 @@ fn futex_wake(atomic: &AtomicU32, n: u32) {
     unsafe {
         __ulock_wake(op, atomic.as_ptr() as *mut core::ffi::c_void, 0);
     }
+}
+
+// ---------------------------------------------------------------------------
+// `WindowsImpl` (std/Thread/Futex.zig:132) — WS20.
+//
+// Verbatim reference comment (R3):
+//   // We use WaitOnAddress through NtDll instead of API-MS-Win-Core-Synch-l1-2-0.dll
+//   // as it's generally already a linked target and is autoloaded into all processes anyway.
+//
+// Hand-rolled `extern "system"` per repo convention (no `windows-sys` dep, no
+// `libc` reliance for Win32).
+// ---------------------------------------------------------------------------
+
+/// `windows.NTSTATUS` — only `.SUCCESS` (0) and `.TIMEOUT` (0x102) are reachable
+/// here; the reference's `else => unreachable`.
+#[cfg(windows)]
+#[allow(non_camel_case_types)]
+type NTSTATUS = i32;
+#[cfg(windows)]
+#[allow(non_camel_case_types)]
+type LARGE_INTEGER = i64;
+
+#[cfg(windows)]
+#[link(name = "ntdll")]
+extern "system" {
+    /// `windows.ntdll.RtlWaitOnAddress(ptr, &expect, @sizeOf(u32), timeout_ptr)`.
+    fn RtlWaitOnAddress(
+        address: *const core::ffi::c_void,
+        compare_address: *const core::ffi::c_void,
+        address_size: usize,
+        timeout: *const LARGE_INTEGER,
+    ) -> NTSTATUS;
+
+    /// `windows.ntdll.RtlWakeAddressSingle(address)`.
+    fn RtlWakeAddressSingle(address: *const core::ffi::c_void);
+
+    /// `windows.ntdll.RtlWakeAddressAll(address)`.
+    fn RtlWakeAddressAll(address: *const core::ffi::c_void);
+}
+
+#[cfg(windows)]
+fn futex_wait(atomic: &AtomicU32, expect: u32) {
+    // NTDLL functions work with time in units of 100 nanoseconds.
+    // Positive values are absolute deadlines while negative values are relative
+    // durations. `timeout` is always null here (`Event::wait` never times out),
+    // so `timeout_ptr` stays null and `.TIMEOUT` is unreachable.
+    let expect_local = expect;
+    // SAFETY: `atomic` and `expect_local` are live for the duration of the call;
+    // `address_size` is the size of the compared word.
+    let rc = unsafe {
+        RtlWaitOnAddress(
+            atomic.as_ptr().cast::<core::ffi::c_void>(),
+            core::ptr::addr_of!(expect_local).cast::<core::ffi::c_void>(),
+            core::mem::size_of::<u32>(),
+            core::ptr::null(),
+        )
+    };
+    // switch (rc) { .SUCCESS => {}, .TIMEOUT => { assert(timeout != null); ... },
+    //               else => unreachable }
+    debug_assert!(rc == 0, "RtlWaitOnAddress: unexpected NTSTATUS {rc:#x}");
+}
+
+#[cfg(windows)]
+fn futex_wake(atomic: &AtomicU32, n: u32) {
+    // assert(max_waiters != 0);
+    debug_assert!(n != 0);
+    let address = atomic.as_ptr().cast::<core::ffi::c_void>();
+    // switch (max_waiters) { 1 => RtlWakeAddressSingle, else => RtlWakeAddressAll }
+    // SAFETY: `address` is a live, aligned `u32` the waiters compare against.
+    unsafe {
+        if n == 1 {
+            RtlWakeAddressSingle(address);
+        } else {
+            RtlWakeAddressAll(address);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `SingleThreadedImpl` (std/Thread/Futex.zig:105) — WS20.
+//
+// `Impl = if (builtin.single_threaded) SingleThreadedImpl else ...` is the FIRST
+// arm of the reference's dispatch chain, and every target left over here (WASI
+// without the threads proposal, freestanding wasm) is single-threaded. Verbatim
+// reference comments preserved (R3).
+// ---------------------------------------------------------------------------
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn futex_wait(atomic: &AtomicU32, expect: u32) {
+    // if (ptr.raw != expect) return;
+    if atomic.load(Relaxed) != expect {
+        return;
+    }
+
+    // There are no threads to wake us up.
+    // So if we wait without a timeout we would never wake up.
+    //
+    // (`const delay = timeout orelse { unreachable; // deadlock detected };` —
+    // the pool never passes a timeout, so this arm is the reference's
+    // `unreachable`. Reaching it IS the deadlock the reference declares
+    // impossible: with no other threads, nothing can ever have parked here.)
+    unreachable!("deadlock detected");
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn futex_wake(atomic: &AtomicU32, n: u32) {
+    // There are no other threads to possibly wake up
+    let _ = atomic;
+    let _ = n;
 }
 
 // ---------------------------------------------------------------------------
