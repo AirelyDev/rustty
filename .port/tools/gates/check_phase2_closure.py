@@ -117,7 +117,12 @@ CLOSED_RE = re.compile(
     # disposition FORMS these ledgers actually use; both are unambiguous (a date or a
     # workstream attribution follows), unlike a bare "done" in prose.
     r"|\[RESOLVED\b|✅|\bDONE \(WS"
-    r"|\bOUT-OF-SCOPE-BY-PLATFORM\b|\bout-of-scope-by-platform\b"
+    # NOTE: `OUT-OF-SCOPE-BY-PLATFORM` was accepted here and has been REMOVED.
+    # It let unported work close by asserting a platform is not a target. The
+    # standing rule is the opposite: everything the reference supports gets
+    # PORTED; inability to build or verify on this host is VERIFICATION DEBT with
+    # a runnable recipe, never a scope exclusion. Removing it re-opened the
+    # libxev iocp/wasi_poll (2376 + 1648 reference lines) and termio Windows rows.
     r"|\bNO ACTION\b|\bVERIFICATION DEBT\b|\bJUSTIFIED R1 DIVERGENCE\b",
     re.I,
 )
@@ -181,11 +186,26 @@ def derive_workstreams(roadmap_text):
             closed_ws.add(first)
         else:
             open_ws.add(first)
-    # Phase 3 is always an acceptable owner: it is the next phase and it exists
-    # (`.port/phase-3/`), with a re-vet list a row can be added to.
-    open_ws.add("Phase 3")
-    open_ws.add("Phase-3")
+    # "Phase 3" is NO LONGER a blanket acceptable owner.
+    #
+    # It was, and 12 rows were green ONLY on that basis — which made "deferred to
+    # the next phase" a passing disposition, i.e. exactly the deferral the closure
+    # rule forbids. Phase 3 is legitimate for ONE case: work whose source is the
+    # beyond-pin upstream range, which by definition cannot be done until the pin
+    # advances (e.g. the BL-5 render_state split, `cursor_scroll_region_up` from
+    # `77190bd02`). Such a row must say so explicitly by carrying the marker
+    # BEYOND-PIN, which `row_is_beyond_pin()` checks at the call site. Phase-2
+    # implementation work may NOT be parked here.
     return open_ws, closed_ws
+
+
+BEYOND_PIN = re.compile(r"\bBEYOND-PIN\b")
+
+
+def row_is_beyond_pin(text):
+    """True when a row's own text proves its source is the beyond-pin upstream
+    range, which is the only case where 'Phase 3' is an acceptable owner."""
+    return bool(BEYOND_PIN.search(text))
 
 
 def entries_for(path, text):
@@ -263,6 +283,11 @@ def check_verification_debt(path, rel, open_ws, closed_ws, verbose):
         live = owners & open_ws
         dead = owners & closed_ws
         has_recipe = "```" in body
+        # 'Phase 3' is an acceptable owner ONLY for beyond-pin upstream work,
+        # which cannot be done until the pin advances. The row must prove that
+        # about itself by carrying the BEYOND-PIN marker.
+        if not live and {"Phase 3", "Phase-3"} & owners and row_is_beyond_pin(body):
+            live = {"Phase 3 (BEYOND-PIN)"}
         if not live:
             why = (f"owner is a CLOSED workstream ({','.join(sorted(dead))})"
                    if dead else "NO owner named")
