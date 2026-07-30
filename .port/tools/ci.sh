@@ -241,16 +241,20 @@ GATE_REGISTRY=(
   # (`.port/tools/gates/fixtures/phase2-closure-{orphan,owned}.md`), which is the bar
   # G6b and G-REL met. When the last two items land it goes green and STAYS green.
   "G-P2|HARD|$PY $GATES/check_phase2_closure.py"
-  # G-XEVSCOPE (WS19 T7) — the falsifiable half of the `iocp`/`wasi_poll` "out of
-  # scope by platform" divergence. `rustty-xev`'s `unsupported_target_seam` panics
-  # in 10 handle methods; that is only a scope boundary for as long as NO artifact
-  # rustty builds can reach it. Windows needs no check (no Windows artifact
-  # exists), but `backend.rs` DOES select `Backend::WasiPoll` for
-  # `target_family = "wasm"`, so a new xev edge on any wasm deliverable would turn
-  # the seam back into real unported work. The gate asserts `rustty-xev` is absent
-  # from all four wasm graphs and that `rustty-os`'s xev edge stays macOS-gated.
-  # HARD: green at landing, seconds, and BOTH FAIL arms are mutation-proven.
-  "G-XEVSCOPE|HARD|sh $GATES/xev_scope_boundary_gate.sh"
+  # G-XEVREACH (WS20, 2026-07-30 — was G-XEVSCOPE, WS19 T7). The gate's FACT is
+  # unchanged; its CONCLUSION is deleted. It used to justify classifying the
+  # `iocp`/`wasi_poll` backends as "out of scope by platform" — that
+  # classification was WRONG and is retracted (both backends are now PORTED:
+  # `crates/rustty-xev/src/{iocp,windows,wasi_poll,wasi}.rs`), so the gate no
+  # longer says anything about scope. What it still holds is a plain dependency
+  # invariant worth keeping on its own terms: the wasm artifacts
+  # (`rustty-wasm`, `rustty-web-canvas`, `rustty-vt-c`) run the synchronous C-ABI
+  # with no event loop, so an xev edge in one of their trees is an unintended
+  # dependency, and `rustty-os`'s single xev edge must stay macOS-gated or every
+  # wasm artifact inherits it. HARD: green at landing, seconds, and BOTH FAIL arms
+  # are mutation-proven (the `--self-test` arm drives the real macOS `rustty-os`
+  # edge through the same detection).
+  "G-XEVREACH|HARD|sh $GATES/xev_scope_boundary_gate.sh"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"

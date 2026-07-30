@@ -867,6 +867,28 @@ MAP = {
     # inline in watcher/async.zig's `AsyncEventFd`, and the other two are a
     # std.net/loop.zig-twin slice), so there is nothing to count them against.
     "xev_timerfd":       ([f"{GHXEV}/linux/timerfd.zig"], [f"{RSXEV}/linux/timerfd.rs"], 0),
+    # ---------------------------------------------------------------------
+    # WS20: the last two reference backends. These were previously UNMAPPED
+    # because they were (wrongly) recorded as out-of-scope-by-platform. They are
+    # ported, so they are counted like every other backend. Both files are
+    # `#[cfg]`-gated to a target this host does not run, which is EXACTLY why the
+    # count gate matters here: it is static text on both sides, so it binds on any
+    # host even though the tests themselves cannot execute here.
+    # ---------------------------------------------------------------------
+    # backend/wasi_poll.zig: 8 quoted `test "wasi: ..."` (+1 anon `test {}` inside
+    # Batch, which zig_count skips) → zig=8. wasi_poll.rs ports all 9 (the anon one
+    # as `batch_get_put`; `wasi: file` as a documented skip-stub whose fixture needs
+    # a WASI preopen — see VERIFICATION_DEBT.md) → rust=9 >= 8.
+    "xev_wasi_poll":     ([f"{GHXEV}/backend/wasi_poll.zig"], [f"{RSXEV}/wasi_poll.rs"], 0),
+    # backend/iocp.zig: 14 quoted `test "iocp: ..."` → zig=14. iocp.rs ports all 14
+    # (9 live loop/timer/noop tests; the 2 file-IO and 3 socket tests as documented
+    # skip-stubs whose FIXTURES need `sliceToPrefixedFileW` / Winsock startup — see
+    # VERIFICATION_DEBT.md) → rust=14 >= 14.
+    "xev_iocp":          ([f"{GHXEV}/backend/iocp.zig"], [f"{RSXEV}/iocp.rs"], 0),
+    # `windows.rs` (libxev's own src/windows.zig) and `wasi.rs` are intentionally
+    # UNMAPPED for the same reason `net.rs` and `linux.rs` are: windows.zig carries
+    # 0 `test{}`, and wasi.rs is a std.os.wasi/loop.zig-twin slice with no 1:1
+    # reference oracle.
 }
 
 def expand(globs):

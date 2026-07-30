@@ -1,23 +1,38 @@
 #!/bin/sh
-# xev SCOPE-BOUNDARY gate (WS19 T7).
+# xev REACHABILITY gate — G-XEVREACH.
 #
-# `crates/rustty-xev/src/lib.rs`'s `unsupported_target_seam` carries 10 panicking
-# handle methods for the `iocp` (Windows) and `wasi_poll` (WASI/wasm) backends.
-# Those are recorded as a permanent Justified R1 Divergence (out of scope by
-# platform), and that classification rests on ONE falsifiable claim:
+# ── WHAT CHANGED, AND WHY (WS20, 2026-07-30) ────────────────────────────────
+# This file used to be the "xev SCOPE-BOUNDARY gate" (G-XEVSCOPE). It asserted a
+# FACT — no wasm artifact links `rustty-xev` — and then drew a CONCLUSION from it:
+# "therefore the iocp/wasi_poll seam bodies are unreachable in every shipped
+# build", which was the load-bearing leg of a DEFERRALS.md entry classifying both
+# backends as OUT OF SCOPE BY PLATFORM.
 #
-#     no artifact rustty actually builds can reach those bodies.
+# That conclusion is VOID. The rule for this port is that everything the
+# reference supports gets ported; an inability to build or run a target on the
+# porting host is verification debt, never a scope exclusion. Both backends are
+# now ported in full (`crates/rustty-xev/src/{iocp,windows,wasi_poll,wasi}.rs`),
+# and the DEFERRALS entry that rested on this gate is RETRACTED.
 #
-# Windows needs no check — the port emits no Windows artifact at all. wasm DOES:
-# `backend.rs` selects `Backend::WasiPoll` for `target_family = "wasm"`, so if any
-# wasm deliverable ever grew an xev edge, the seam would stop being a scope
-# boundary and become real unported work. This gate is that check: it asserts
-# `rustty-xev` is absent from the dependency graph of every wasm artifact, and
-# that `rustty-os`'s single xev edge stays macOS-gated.
+# The gate is REPURPOSED rather than retired because its FACT is still worth
+# holding, for a reason that has nothing to do with scope:
 #
-# Exit 0 = pass (scope boundary holds); 1 = FAIL (a wasm artifact links xev — the
-# divergence entry is void and the backend must be ported); 3 = environment
-# missing (cargo absent), never a silent green.
+#   * R4 (acyclic, minimal crate graph) and the wasm artifacts' size/shape budget.
+#     `rustty-wasm`, `rustty-web-canvas` and `rustty-vt-c` run the SYNCHRONOUS
+#     C-ABI with no event loop. An xev edge appearing in one of their trees would
+#     be an unintended dependency, not a scope violation — the same class of
+#     regression as any other accidental edge, and this is the cheapest check for
+#     it.
+#   * The `rustty-os -> rustty-xev` edge must stay macOS-gated, or every wasm
+#     artifact inherits it transitively.
+#
+# So: the assertions are unchanged, the CONCLUSION is deleted, and the messages no
+# longer say anything about scope. If a wasm artifact grows an xev edge, this gate
+# goes RED and someone must decide whether that edge is wanted — it is no longer a
+# claim that any code became "real work".
+#
+# Exit 0 = pass; 1 = FAIL (an unintended xev edge); 3 = environment missing
+# (cargo absent), never a silent green.
 #
 # Run:  sh .port/tools/gates/xev_scope_boundary_gate.sh
 set -u
@@ -45,9 +60,10 @@ check() {
     exit 3
   }
   if echo "$out" | grep -q 'rustty-xev'; then
-    echo "FAIL: $pkg ($target) DEPENDS ON rustty-xev — the wasi_poll seam is reachable."
-    echo "      The 'out of scope by platform' divergence for wasi_poll is VOID;"
-    echo "      port the backend or drop the edge."
+    echo "FAIL: $pkg ($target) DEPENDS ON rustty-xev — an unintended edge."
+    echo "      These artifacts run the synchronous C-ABI with no event loop;"
+    echo "      pulling the event-loop crate into a wasm tree is a dependency"
+    echo "      regression. Drop the edge, or update this gate deliberately."
     fail=1
   else
     echo "ok: $pkg ($target) — no rustty-xev edge"
@@ -101,11 +117,13 @@ fi
 
 if [ "$fail" -ne 0 ]; then
   echo
-  echo ">> xev scope-boundary gate: RED"
+  echo ">> xev reachability gate (G-XEVREACH): RED"
   exit 1
 fi
 
 echo
-echo ">> xev scope-boundary gate: GREEN — no wasm artifact links rustty-xev;"
-echo "   the iocp/wasi_poll seam bodies are unreachable in every shipped build."
+echo ">> xev reachability gate (G-XEVREACH): GREEN — no wasm artifact links"
+echo "   rustty-xev, and the one sub-app-tier xev edge stays macOS-gated."
+echo "   (This gate draws NO scope conclusion: the iocp and wasi_poll backends"
+echo "    are PORTED — see the RETRACTED entry in .port/phase-2/DEFERRALS.md.)"
 exit 0
