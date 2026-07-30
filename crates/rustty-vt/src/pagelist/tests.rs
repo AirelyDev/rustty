@@ -2726,23 +2726,42 @@ fn pagelist_decommit_pool_item_zeroes_the_dirty_region() {
     // SAFETY: len > 0 and the layout is valid.
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     assert!(!ptr.is_null());
-    // SAFETY: `ptr` is a live allocation of `len` bytes.
-    let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+    // PORT NOTE (WS7 Phase E): every slice over the buffer is derived FRESH
+    // from `ptr` and dropped before `decommit_pool_item` runs. Holding one
+    // `&mut [u8]` across the call and reading it afterwards is Stacked-Borrows
+    // UB: `decommit_pool_item` mutates the same bytes through its own `*mut u8`,
+    // which pops the outer reference's tag off the borrow stack, so the
+    // post-call read through the stale slice is a use of an invalidated tag
+    // (deterministic under Miri). This is a defect in the *test*, not in
+    // `decommit_pool_item`/`mem::decommit`, which only ever hold the raw
+    // pointer. Same convention as the raw-pointer arguments used throughout the
+    // page/row code.
+
+    // SAFETY (each block): `ptr` is a live allocation of `len` zeroed bytes and
+    // no other reference to it exists for the duration of the block.
 
     // Fully dirty item.
-    buf.iter_mut().for_each(|b| *b = 0xAA);
+    unsafe { core::slice::from_raw_parts_mut(ptr, len) }
+        .iter_mut()
+        .for_each(|b| *b = 0xAA);
     super::decommit_pool_item(ptr, len, len);
-    assert!(buf.iter().all(|&b| b == 0));
+    assert!(unsafe { core::slice::from_raw_parts(ptr, len) }
+        .iter()
+        .all(|&b| b == 0));
 
     // Partially dirty item: an item that hosted a page smaller than the item is
     // only dirty up to the page length; the rest is zero by invariant and must
     // remain zero.
-    buf[0..1024].iter_mut().for_each(|b| *b = 0xAA);
+    unsafe { core::slice::from_raw_parts_mut(ptr, 1024) }
+        .iter_mut()
+        .for_each(|b| *b = 0xAA);
     super::decommit_pool_item(ptr, len, 1024);
-    assert!(buf.iter().all(|&b| b == 0));
+    assert!(unsafe { core::slice::from_raw_parts(ptr, len) }
+        .iter()
+        .all(|&b| b == 0));
 
     // SAFETY: `ptr`/`layout` are the pair returned by `alloc_zeroed` above and
-    // `buf` is dead here.
+    // no slice over the buffer is live here.
     unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
