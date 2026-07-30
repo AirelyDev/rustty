@@ -94,7 +94,19 @@ fn no_c_unwind_in_c_api_sources() {
     // The two C-API crates plus rustty-renderer: PORT_RULES DG5 records the
     // renderer's C-ABI callback surface (display path) as verified C-unwind
     // free; keep that claim gated, not a one-time grep.
-    for krate in ["rustty-apprt-c", "rustty-vt-c", "rustty-renderer"] {
+    //
+    // WS14 adds `rustty-font` and `rustty-wasm`: both now carry `extern "C"`
+    // surface bound by a JS host (`atlas_*` from `Atlas.zig`'s `Wasm` block, and
+    // the `main_wasm.zig` retention module). `wasm32-unknown-unknown` has no
+    // unwinder at all, so a `C-unwind` ABI there is not merely wrong per DG5 —
+    // it cannot work. Gating it means a future edit cannot quietly introduce one.
+    for krate in [
+        "rustty-apprt-c",
+        "rustty-vt-c",
+        "rustty-renderer",
+        "rustty-font",
+        "rustty-wasm",
+    ] {
         scan_dir_for_c_unwind(&root.join("crates").join(krate).join("src"), &mut hits);
     }
     assert!(

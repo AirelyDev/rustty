@@ -25,12 +25,16 @@ workspace = true
 doctest = false
 
 [features]
-# The wasm C-ABI/JS-canvas surface (Atlas.zig's `Wasm` struct, config/Wasm.zig,
-# the vt wasm exports) is feature-gated OFF by default and never compiled into
-# the desktop font cluster. Pure rustty-font has no os/wasm or zig-js infra, so
-# the reference `Wasm` struct is recorded as a verbatim commented reference in
-# `atlas.rs`; the gate exists so the `cfg(feature = "wasm")` is never "unexpected".
-wasm = []
+# The wasm C-ABI/JS-canvas surface — `Atlas.zig`'s `Wasm` struct, ported LIVE in
+# `atlas.rs` as `atlas::wasm_exports` (WS14 T4). OFF by default so the desktop font
+# cluster never compiles it and every native artifact stays byte-identical (R5); it
+# is turned on by `rustty-wasm` (the `main_wasm.zig` artifact) and by the browser
+# harness. It enables `rustty-os/wasm-host-owned` — the `toHostOwned`/`isHostOwned`/
+# `toModuleOwned` tracker `Atlas.Wasm` calls, which upstream deleted in `9dc2e5978`
+# and rustty resurrected (WS14 T3). No new crate edge: `rustty-os` is already a
+# dependency, and the Canvas `env` imports of `atlas_debug_canvas` are declared
+# LOCALLY (rustty-font must never gain a shaper/vt edge — R4).
+wasm = ["rustty-os/wasm-host-owned"]
 
 [dependencies]
 rustty-os = { workspace = true }
