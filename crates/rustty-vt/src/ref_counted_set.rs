@@ -455,8 +455,54 @@ where
             core::slice::from_raw_parts_mut(table.ptr(base), l.table_cap).fill(Id::ZERO);
         }
         // @memset(items.ptr(base)[0..l.cap], .{});
+        //
+        // PORT NOTE (WS7 Phase E, uninit-in-page-mapping fix): this is
+        // DELIBERATELY not the obvious `slice.fill(Item::default())`. A typed
+        // Rust write of `Item<T, ..>` initializes only the bytes covered by the
+        // struct's fields and the *active* payload of each enum inside them;
+        // every other byte of the destination — struct padding, and the unused
+        // payload bytes of a `style::Color::None` / `Color::Palette` — is left
+        // UNINITIALIZED. Because this array lives inside the terminal page's
+        // backing mapping, and `compress::CompressedPage::init` compresses that
+        // mapping as one `&[u8]` (exactly as the oracle's `compress/Page.zig`
+        // compresses `page.memory`), a typed fill here makes the compressor read
+        // uninitialized memory: Miri aborts with "constructing invalid value of
+        // type `[u8; 8]`: encountered uninitialized memory" inside
+        // `lz4::compress`. See `.port/phase-2/MIRI_EXCEPTIONS.md`.
+        //
+        // Instead we zero every byte of the item array (so no byte of the
+        // mapping is ever uninitialized) and then set the metadata FIELD BY
+        // FIELD. A field-wise write only touches that field's bytes, so it
+        // cannot re-poison the surrounding ones.
+        //
+        // This is faithful, not a weakening: the reference's `Item.value` field
+        // has no default — the reference comment on `value` is that it is
+        // `undefined` — so the reference's `.{}` leaves `value` unspecified and
+        // reads of a dead item's value are already forbidden. Storing zeroes
+        // there is strictly more defined than the reference. `meta` gets exactly
+        // the reference's defaults (`bucket = maxInt(Id)`, `psl = 0`, `ref = 0`).
+        // The all-zero `value` state is also already reachable today: the page
+        // mapping arrives zeroed from mmap and `Page::reinit` re-zeroes it.
         unsafe {
-            core::slice::from_raw_parts_mut(items.ptr(base), l.cap).fill(Item::default());
+            let items_ptr = items.ptr(base);
+            core::ptr::write_bytes(
+                items_ptr as *mut u8,
+                0,
+                l.cap * core::mem::size_of::<Item<T, Id, RefCount>>(),
+            );
+            let default_meta = Metadata::<Id, RefCount>::default();
+            for i in 0..l.cap {
+                let item = items_ptr.add(i);
+                core::ptr::write(
+                    core::ptr::addr_of_mut!((*item).meta.bucket),
+                    default_meta.bucket,
+                );
+                core::ptr::write(core::ptr::addr_of_mut!((*item).meta.psl), default_meta.psl);
+                core::ptr::write(
+                    core::ptr::addr_of_mut!((*item).meta.ref_count),
+                    default_meta.ref_count,
+                );
+            }
         }
 
         RefCountedSet {

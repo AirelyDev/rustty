@@ -57,6 +57,10 @@
 #   G8  check_baseline_regression.py no perf/mem/size/startup regress-> PROGRESS*
 #   G5  run_fuzz_smoke.sh            differential fuzz clean         -> PROGRESS*
 #   G6  check_leaks.sh               leak-free (tracking-alloc/Miri) -> PROGRESS*
+#   G6b check_pagelist_compress_leaks.sh
+#                                    PageList compressed-page encodings are not
+#                                    leaked (global-allocator Vec that no other
+#                                    memory gate can see)              -> HARD
 #
 #   D1-D9  Bun semantic-mismatch detectors (BUN_PORT_LEARNINGS §4) — each kills a
 #          class of invisible Zig->Rust divergence that slipped every Bun gate:
@@ -165,6 +169,17 @@ GATE_REGISTRY=(
   "G8|PROGRESS|$PY $GATES/check_baseline_regression.py"
   "G5|PROGRESS|bash $GATES/run_fuzz_smoke.sh"
   "G6|PROGRESS|bash $GATES/check_leaks.sh --all-done"
+  # G6b — PageList compressed-page encodings are not leaked (WS7 Phase E).
+  # `CompressedPage::encoded` is a GLOBAL-allocator Vec, so the page-allocator
+  # leak accounting cannot see it and G6's Miri lane cannot reach it (the
+  # PageList compression tests are Miri-intractable). Deleting the discard-restore
+  # loops from `PageList::{deinit,reset}` — the only thing that frees these
+  # encodings — leaves the entire native rustty-vt suite GREEN. This gate runs the
+  # mirihar-pagelist-compress harness's native counting-`#[global_allocator]`
+  # `leakcheck` scenario (milliseconds, no Miri). HARD: green today, fast, and its
+  # FAIL arm is proven reachable by `--self-test` (a negative control that
+  # `mem::forget`s a compressed list, i.e. the real leak via the real path).
+  "G6b|HARD|bash $GATES/check_pagelist_compress_leaks.sh"
   # D1-D9 — Bun semantic-mismatch detectors (.port/phase-2/BUN_PORT_LEARNINGS.md
   # §4). Each kills one class of the invisible Zig->Rust divergence that slipped
   # every Bun gate. They are ADDITIVE (weaken no existing gate, R5). Registered
