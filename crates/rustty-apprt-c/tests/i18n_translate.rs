@@ -5,14 +5,14 @@
 //! returned a string — the SAME string. So every assertion below is paired with a
 //! control that must differ:
 //!
-//!   * positive : LANG=de_DE.UTF-8, msgid "About Rustty"  -> "Über Rustty"
-//!   * control A: LANG=C           , msgid "About Rustty"  -> "About Rustty"
-//!   * control B: LANG=de_DE.UTF-8, msgid "About Ghostty" -> "About Ghostty"
-//!                (a msgid no catalog carries — the exact failure mode WS13 T2
-//!                fixed in the .blp; if this ever starts translating, a stale
-//!                Ghostty msgid has been re-added to the catalogs)
-//!   * control C: LANG=ja_JP.UTF-8, msgid "About Rustty"  -> the ja msgstr,
-//!                which differs from both the German and the English
+//! * positive : LANG=de_DE.UTF-8, msgid "About Rustty"  -> "Über Rustty"
+//! * control A: LANG=C           , msgid "About Rustty"  -> "About Rustty"
+//! * control B: LANG=de_DE.UTF-8, msgid "About Ghostty" -> "About Ghostty"
+//!   (a msgid no catalog carries — the exact failure mode WS13 T2 fixed in the
+//!   `.blp`; if this ever starts translating, a stale Ghostty msgid has been
+//!   re-added to the catalogs)
+//! * control C: LANG=ja_JP.UTF-8, msgid "About Rustty"  -> the ja msgstr,
+//!   which differs from both the German and the English
 //!
 //! The catalog tree is built here by `msgfmt` from the committed `po/`, so the
 //! test also covers the `GhosttyI18n.zig:33-43` compile step end to end.

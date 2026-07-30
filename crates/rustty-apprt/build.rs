@@ -473,11 +473,18 @@ fn gio_include_dirs() -> Vec<PathBuf> {
 /// was the side effect of `msgfmt` failing the build on a malformed catalog.
 ///
 /// It now delivers exactly that value and nothing else: `msgfmt --check` per
-/// catalog, output to the null device. `--check` is STRICTLY STRONGER than the
-/// old plain `-o` invocation — it additionally validates the header fields and
-/// the plural-form expressions (`--check-header`, `--check-domain`,
-/// `--check-format`), so a catalog whose `Plural-Forms:` is broken now fails
-/// the build where before it compiled happily into a `.mo` nobody read.
+/// catalog, output to the null device. `--check` is strictly stronger than the
+/// old plain `-o` invocation: it turns on `--check-header` and `--check-domain`
+/// as well as `--check-format`. Measured — a catalog missing
+/// `Project-Id-Version` / `MIME-Version` / `Content-Transfer-Encoding` passes
+/// plain `msgfmt -o` with `rc=0` and silence, and is diagnosed by
+/// `msgfmt --check`.
+///
+/// Demonstrated FAIL arm (WS13 T9, on the Linux+gtk host where this leg runs):
+/// appending an entry whose `msgstr` format specifier disagrees with its
+/// `msgid` makes `cargo build -p rustty-apprt --features gtk` fail with
+/// `msgfmt --check rejected …/po/de.po: … format specifications in 'msgid' and
+/// 'msgstr' for argument 1 are not the same`.
 ///
 /// Missing `po/` remains a warn-and-skip: the gresource pipeline, not
 /// translations, is this build script's gate.
