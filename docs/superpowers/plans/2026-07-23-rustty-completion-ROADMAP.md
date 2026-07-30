@@ -228,6 +228,24 @@ loud RED rather than an infinite CI wait.
 - [x] WS17 verification debt — authored (`ef7621a`); **NOT executed**. Open. Scope is
   V2/V3/V4/V1b **plus V5** (V5 was orphaned; WS19 T14 adds it).
 - [x] WS18 release lane — authored in-ROADMAP + EXECUTED + **MERGED `eeec83f`**. DONE.
+- [ ] WS20 Phase 2 finish — the residue the WS19 audit surfaced. **OPEN, not started.**
+  Owns everything the item-level audit (`.port/phase-3/PHASE2_FINAL_AUDIT.md`) found
+  still unported, none of which may be excused as scope: **vaxis `WindowsTty`** (7 stubs
+  vs `vaxis/src/tty.zig:189-691`, ~503 reference lines, + the `Loop.zig` arms); the
+  **Windows font backend** (`DeferredFace.Windows` payload + the whole `Windows`
+  discoverer, commented out at `discovery.rs:1911-2073`, while `Backend::FreetypeWindows`
+  already exists); the **flatpak spawn tier** (`exec.rs:109` holds an EMPTY local
+  placeholder while `rustty_os::FlatpakHostCommand` is fully ported at
+  `flatpak.rs:202-700`); the **9 GTK files with zero counterpart** (~950 LOC:
+  `ipc/{DBus,new_window,toggle_quick_terminal}`, `pre_exec`, `post_fork`, `cgroup`,
+  `flatpak`, `class/config_errors_dialog`, `build/blueprint`); the **libxev watcher layer
+  instantiated against `iocp`/`wasi_poll`** (8 `watcher_seam` sites) and **`ThreadPool`'s
+  Windows futex arm**; the 2 GTK `v4_14`-ceiling forced-legacy arms; and the Linux
+  `GL-ATTACH` no-op (confirm its premise first). Also owns **V8/V9** (the new backends
+  are cross-compile-verified but never executed) and **V7** (RTL layout), all three of
+  which were filed against CLOSED workstreams or against `Phase 3` without being
+  beyond-pin. NOT in scope: BL-5's `render_state` split and `cursor_scroll_region_up`,
+  which are genuinely BEYOND-PIN and belong to Phase 3.
 - [ ] WS19 Phase 2 closeout — authored
   (`docs/superpowers/plans/2026-07-29-ws19-phase2-closeout.md`); **IN FLIGHT, not
   executed to completion — open.** Lands the standing closure gate **G-P2** and closes

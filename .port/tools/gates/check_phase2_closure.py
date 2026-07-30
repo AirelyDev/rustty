@@ -100,7 +100,7 @@ OPEN_MARKERS = [
 
 # An owner: a workstream id, or Phase 3 (the upstream-resync phase). `WS-n` in prose
 # ("fix in WS-n") is a placeholder, not an owner, and is deliberately not matched.
-OWNER_RE = re.compile(r"\b(WS(?:1[0-9]|[1-9]))\b|\b(Phase[ -]3)\b")
+OWNER_RE = re.compile(r"\b(WS(?:[1-9][0-9]|[1-9]))\b|\b(Phase[ -]3)\b")
 
 # Text that marks an entry as no longer open.
 # STRONG disposition markers only. Deliberately NOT included: bare "DONE", "PORTED",
@@ -162,12 +162,12 @@ def derive_workstreams(roadmap_text):
         rows.append(cur)
 
     for line in rows:
-        ids = {m.group(1) for m in re.finditer(r"\b(WS(?:1[0-9]|[1-9]))\b", line)}
+        ids = {m.group(1) for m in re.finditer(r"\b(WS(?:[1-9][0-9]|[1-9]))\b", line)}
         if not ids:
             continue
         # Only the row's OWN id is decided by the row; ids mentioned in prose
         # ("inherits WS8's row") must not be classified from here.
-        first = re.search(r"\b(WS(?:1[0-9]|[1-9]))\b", line).group(1)
+        first = re.search(r"\b(WS(?:[1-9][0-9]|[1-9]))\b", line).group(1)
         # Precedence matters, and it is deliberately biased towards CLOSED:
         #   1. an explicit "NOT executed" / "not executed" / "open" -> OPEN, even when
         #      the box is ticked (the box tracks PLAN AUTHORING, not execution — WS12,
@@ -431,7 +431,7 @@ def check_audit_index(path, rel, open_ws, closed_ws, verbose):
             r"|\bDELETED\b|\bSUPERSEDED\b|\bpermanent divergence\b"
             r"|\bJustified R1 Divergence\b|\bverification debt\b"
             r"|\bout-of-scope-by-platform\b|\bOUT-OF-SCOPE\b|✅"
-            r"|\broute to WS(?:1[0-9]|[1-9])\b|\bRECORDED\b|\bfixed in-line\b"
+            r"|\broute to WS(?:[1-9][0-9]|[1-9])\b|\bRECORDED\b|\bfixed in-line\b"
             r"|\bre-vet\b|\bpin-sequenced\b|\bWAS WRONG\b",
             line,
             re.I,
