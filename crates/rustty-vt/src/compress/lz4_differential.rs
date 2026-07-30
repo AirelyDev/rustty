@@ -590,13 +590,31 @@ fn lz4_differential_light() {
     run_suite(&LIGHT_BUDGET, 0x4C5A_3403);
 }
 
+// P3-W0 T7 step 3. `#[ignore]` is load-bearing, not cosmetic.
+//
+// The env-gated early return below is faithful to the oracle's shape
+// (`GHOSTTY_LZ4_SLOW` is likewise unset by default), but it is WORSE in one
+// specific way: Zig's `error.SkipZigTest` reports **SKIPPED**, while a Rust
+// early return reports **PASSED**. A reader of `cargo test` output was
+// therefore actively misinformed that 4 seeds x the exhaustive budget had just
+// run. With `#[ignore]` the default run reports it as ignored — the honest
+// equivalent of SKIPPED — and the env gate stays as the second guard so that
+// `--include-ignored` without the variable is still a no-op rather than a
+// surprise multi-minute run.
+//
+// The variable is set nowhere in the repo by design; the periodic lane that
+// DOES set it is `bash .port/tools/ci.sh --lz4-slow`.
 #[test]
+#[ignore = "slow (~minutes); run via `bash .port/tools/ci.sh --lz4-slow`, or \
+            RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release \
+            --ignored lz4_differential_exhaustive"]
 fn lz4_differential_exhaustive() {
     // Slow. Enable explicitly, ideally together with a test filter:
-    //   RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib lz4_differential --release
+    //   RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release --ignored lz4_differential_exhaustive
     //
     // PORT NOTE: the oracle returns `error.SkipZigTest`; Rust's harness has no
-    // runtime skip, so an unset gate makes this test a no-op.
+    // runtime skip, so the `#[ignore]` above carries that reporting semantic
+    // and this early return remains the value gate.
     if std::env::var_os("RUSTTY_LZ4_SLOW").is_none() {
         return;
     }
@@ -605,4 +623,11 @@ fn lz4_differential_exhaustive() {
     for seed in 0..4u64 {
         run_suite(&EXHAUSTIVE_BUDGET, 0x4C5A_4000 + seed);
     }
+
+    // ANTI-VACUITY side channel. Both "the suite ran" and "the env gate
+    // early-returned" report `1 passed`, so a lane that only reads the test
+    // result cannot tell them apart — which is the exact confusion this test
+    // caused for its whole life. `ci.sh --lz4-slow` runs with `--nocapture` and
+    // greps for this marker, so the lane fails LOUDLY if the gate did not take.
+    println!("RUSTTY_LZ4_SLOW_RAN seeds=4");
 }

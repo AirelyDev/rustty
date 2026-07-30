@@ -59,3 +59,22 @@ rustty-lib = { workspace = true }
 # The `std.mem.Allocator` map used by every benchmark's `create(alloc, ..)` and by
 # `Terminal`/`Screen` (`allocator_api2::alloc::Global` == the process allocator).
 allocator-api2 = { workspace = true }
+
+# P3-W0 T7 step 3. A DEV-dependency on purpose, not a normal one: the feature
+# must be ON for `cargo test -p rustty-bench` and OFF for the shipped
+# `rustty-bench` binary, which has to measure the REAL kernel decommit path.
+# Cargo only pulls dev-dependencies into test/bench/example builds, so this
+# split gives exactly that.
+#
+# Why the feature exists at all: `cfg(test)` is not transitive across crates.
+# Zig's `builtin.is_test` is true for the WHOLE module graph under
+# `zig build test`, so upstream's benchmark tests see the zeroing simulation in
+# mem.rs; rustty-bench's tests link rustty-vt with `cfg(test)` FALSE and would
+# instead exercise the real `MADV_FREE_REUSABLE` path. They pass on macOS/arm64
+# today, but `scrollback_compression_restores_cold_terminal_pages` asserts
+# `compressed_pages > 0`, which then depends on a real kernel call succeeding —
+# on any target where `can_reclaim(Strict)` is false (non-Darwin, non-Linux,
+# non-64-bit) it would FAIL where upstream's equivalent passes.
+# See .port/phase-3/REVIEW_CLASSES.md section 3.
+[dev-dependencies]
+rustty-vt = { workspace = true, features = ["simd", "test-decommit-sim"] }

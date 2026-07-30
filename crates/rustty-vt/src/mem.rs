@@ -105,7 +105,7 @@ pub fn can_reclaim(mode: DecommitMode) -> bool {
             // successful reclamation by zeroing the requested range instead,
             // so both modes are always available to tests on every target.
             // `cfg!(miri)` joins them (see the note in `decommit`).
-            if cfg!(test) || cfg!(miri) {
+            if cfg!(test) || cfg!(miri) || cfg!(feature = "test-decommit-sim") {
                 return true;
             }
 
@@ -170,7 +170,7 @@ pub unsafe fn decommit(mode: DecommitMode, ptr: *mut u8, len: usize, dirty_len: 
     // under `cfg(miri)`, which is not an OS mapping. This is what lets
     // `.port/phase-2/mirihar-pagelist-compress` interpret the real compression
     // paths.
-    if cfg!(test) || cfg!(miri) {
+    if cfg!(test) || cfg!(miri) || cfg!(feature = "test-decommit-sim") {
         // SAFETY: caller contract — `ptr` is live for `len >= dirty_len` bytes.
         unsafe { core::ptr::write_bytes(ptr, 0, dirty_len) };
         return true;
@@ -251,7 +251,7 @@ pub unsafe fn recommit(ptr: *mut u8, len: usize) {
     debug_assert!((ptr as usize).is_multiple_of(PAGE_SIZE_MIN));
     debug_assert!(len.is_multiple_of(PAGE_SIZE_MIN));
 
-    if cfg!(test) || cfg!(miri) {
+    if cfg!(test) || cfg!(miri) || cfg!(feature = "test-decommit-sim") {
         return;
     }
 

@@ -99,5 +99,54 @@ for profile in "" "--release"; do
   echo "OK: $n tests (floor $MIN_TESTS)"
 done
 
+# ---------------------------------------------------------------------------
+# ORACLE-DRIVEN ACTION-SET PARITY (P3-W0 T7 step 2).
+#
+# The checked-in list in `bench_every_action_round_trips_through_from_name`
+# (crates/rustty-bench/src/cli.rs) pins rustty against ITSELF: it catches a
+# deleted action, but an action upstream ADDS is invisible to it, which is
+# exactly how `hyperlink-map` and `apc-parser` were absent with the suite green
+# until WS10 T11. Drive the comparison from the ORACLE instead, so the arm
+# cannot go vacuous by rustty shrinking its own list.
+#
+# `git show` only — NEVER a checkout. Oracle absent => exit 3 BLOCKED.
+# ---------------------------------------------------------------------------
+ORACLE="/Users/gael/projects/ghostty"
+echo "=== G-BENCH: oracle action-set parity ==="
+if [ ! -d "$ORACLE/.git" ]; then
+  echo "BLOCKED: ghostty oracle checkout not found at $ORACLE (R3 — the external"
+  echo "         oracle never ships to CI); the action-set parity arm cannot bind."
+  exit 3
+fi
+T="${TMPDIR:-/tmp}"
+git -C "$ORACLE" show origin/main:src/benchmark/cli.zig 2>/dev/null \
+  | sed -n '/^pub const Action = enum {/,/^};/p' \
+  | sed -n 's/^    @"\([a-z0-9-]*\)",$/\1/p' | sort -u > "$T/gbench_oracle.txt"
+if [ ! -s "$T/gbench_oracle.txt" ]; then
+  echo "BLOCKED: read 0 actions from oracle origin/main:src/benchmark/cli.zig."
+  echo "         An empty reference side would make this arm VACUOUS (R5)."
+  exit 3
+fi
+sed -n 's/^            (b"\([a-z0-9-]*\)", Action::.*/\1/p' \
+  "$RUSTTY_ROOT/crates/rustty-bench/src/cli.rs" | sort -u > "$T/gbench_rustty.txt"
+if [ ! -s "$T/gbench_rustty.txt" ]; then
+  echo "RED: parsed 0 actions out of crates/rustty-bench/src/cli.rs's checked-in" >&2
+  echo "     list. A parser that matches nothing must be a loud failure." >&2
+  exit 1
+fi
+missing="$(comm -23 "$T/gbench_oracle.txt" "$T/gbench_rustty.txt")"
+extra="$(comm -13 "$T/gbench_oracle.txt" "$T/gbench_rustty.txt")"
+if [ -n "$missing" ] || [ -n "$extra" ]; then
+  echo "RED: the rustty-bench action set differs from the oracle's." >&2
+  [ -n "$missing" ] && { echo "  in the oracle, ABSENT from rustty:" >&2; \
+                         printf '%s\n' "$missing" | sed 's/^/    /' >&2; }
+  [ -n "$extra" ]   && { echo "  in rustty, absent from the oracle:" >&2; \
+                         printf '%s\n' "$extra" | sed 's/^/    /' >&2; }
+  echo "  Port the action, or (for a removal) drop it from cli.rs and its list." >&2
+  rc=1
+else
+  echo "OK: $(wc -l < "$T/gbench_oracle.txt" | tr -d ' ') actions, identical to the oracle's"
+fi
+
 [ "$rc" -eq 0 ] && echo "G-BENCH: PASS"
 exit "$rc"

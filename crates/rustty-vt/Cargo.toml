@@ -28,6 +28,23 @@ workspace = true
 oniguruma = ["dep:rustty-oniguruma"]
 # Whether to build SIMD-accelerated code paths (reference `simd`). Off by default.
 simd = []
+# P3-W0 T7 step 3 — the decommit SIMULATION, gated CRATE-EXTERNALLY.
+#
+# `mem.rs` branches on `cfg!(test) || cfg!(miri)` to port Zig's
+# `builtin.is_test`. Those are NOT equivalent: `zig build test` compiles the
+# whole terminal module with `is_test = true`, so upstream's BENCHMARK tests see
+# the zeroing simulation, whereas `cfg(test)` is per-compilation-unit and is
+# FALSE when `rustty-bench` links `rustty-vt` — so rustty's bench tests exercise
+# the real kernel `MADV_FREE_REUSABLE` path instead. They pass on macOS/arm64
+# today, but `scrollback_compression_restores_cold_terminal_pages` asserts
+# `compressed_pages > 0`, which then depends on a real kernel call succeeding:
+# on any target where `can_reclaim(Strict)` is false (non-Darwin, non-Linux,
+# non-64-bit) it FAILS where upstream's passes.
+#
+# This feature is the crate-EXTERNAL switch that restores `is_test` semantics
+# for such a consumer. `rustty-bench` enables it on its `rustty-vt` dependency.
+# It must stay off in production builds.
+test-decommit-sim = []
 # Whether the wuffs image-decode binding is available (the reference
 # `@import("wuffs")` inside sys.zig's `decodePngWuffs`). The reference default
 # is comptime: `artifact == .lib` -> null, else `&decodePngWuffs` — and ONLY the

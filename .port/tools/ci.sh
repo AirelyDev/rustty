@@ -141,12 +141,59 @@ PERF_METRICS="${PERF_METRICS:-${TMPDIR:-/tmp}/rustty-perf-metrics.json}"
 # Parsed and dispatched BEFORE the default run so `--webgl` is a lane you ask for,
 # not an addition to what CI runs by default.
 WEBGL_LANE=0
+LZ4_SLOW_LANE=0
 for arg in "$@"; do
   case "$arg" in
     --webgl) WEBGL_LANE=1 ;;
-    *) echo "ci.sh: unknown argument '$arg' (known opt-in lanes: --webgl)" >&2; exit 2 ;;
+    --lz4-slow) LZ4_SLOW_LANE=1 ;;
+    *) echo "ci.sh: unknown argument '$arg' (known opt-in lanes: --webgl, --lz4-slow)" >&2; exit 2 ;;
   esac
 done
+
+# P3-W0 T7 step 3 — the PERIODIC lane for the exhaustive LZ4 differential.
+#
+# `compress::lz4_differential::lz4_differential_exhaustive` early-returns unless
+# RUSTTY_LZ4_SLOW is set, and that variable was set NOWHERE in the repo: no
+# gate, no ci.sh entry, no workflow. The shape is faithful to upstream, but a
+# Rust early return reports PASSED where Zig's error.SkipZigTest reports
+# SKIPPED, so the default run read as "4 seeds x the exhaustive budget just
+# ran". The test is now `#[ignore]`d (honest reporting) AND this lane exists so
+# the coverage is actually obtainable rather than theoretical.
+#
+# Opt-in because it is minutes, not seconds. Run it on any change under
+# crates/rustty-vt/src/compress/, alongside G-LZ4.
+run_lz4_slow_lane() {
+  section "opt-in lane: exhaustive LZ4 differential  (--lz4-slow)"
+  echo "--- RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release --ignored lz4_differential_exhaustive"
+  local out
+  out="$(RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release -- --ignored --nocapture \
+          --exact compress::lz4_differential::lz4_differential_exhaustive 2>&1)"
+  local crc=$?
+  printf '%s\n' "$out" | tail -5
+  if [ "$crc" -ne 0 ]; then
+    echo ">> FAIL: the exhaustive LZ4 differential did not pass" >&2
+    return 1
+  fi
+  # ANTI-VACUITY: the whole point of this lane is that the test really ran. An
+  # `ignored` or `0 passed` result here means the env gate or the filter did not
+  # take effect, and must NOT be reported as coverage.
+  if ! printf '%s\n' "$out" | grep -q 'test result: ok\. 1 passed'; then
+    echo ">> FAIL: expected exactly 1 passed test; the exhaustive differential" >&2
+    echo "         did not actually run (filter did not take)." >&2
+    return 1
+  fi
+  # "1 passed" is ALSO what an env-gated early return prints, so it proves
+  # nothing on its own. The test emits this marker only after all four seeds
+  # have actually run.
+  if ! printf '%s\n' "$out" | grep -q 'RUSTTY_LZ4_SLOW_RAN seeds=4'; then
+    echo ">> FAIL: the test reported success but never emitted its" >&2
+    echo "         RUSTTY_LZ4_SLOW_RAN marker — the env gate did not take and" >&2
+    echo "         the suite did NOT run. This is not coverage." >&2
+    return 1
+  fi
+  echo "OK: the exhaustive LZ4 differential ran and passed."
+  return 0
+}
 
 # WS14 — the wasm/WebGL lane. Two commands, in order; the gate itself owns the
 # pass/fail verdict (positive arm must match AND both negative controls must fail)
@@ -468,6 +515,15 @@ if [ "$WEBGL_LANE" = "1" ]; then
     0) echo "CI RESULT (--webgl lane): PASS"; ;;
     3) echo "CI RESULT (--webgl lane): BLOCKED — environment missing, NOT green" >&2 ;;
     *) echo "CI RESULT (--webgl lane): FAIL (exit $rc)" >&2 ;;
+  esac
+  exit "$rc"
+fi
+if [ "$LZ4_SLOW_LANE" = "1" ]; then
+  run_lz4_slow_lane; rc=$?
+  hr
+  case "$rc" in
+    0) echo "CI RESULT (--lz4-slow lane): PASS"; ;;
+    *) echo "CI RESULT (--lz4-slow lane): FAIL (exit $rc)" >&2 ;;
   esac
   exit "$rc"
 fi
