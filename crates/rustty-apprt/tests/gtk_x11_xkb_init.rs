@@ -23,8 +23,6 @@
 #![cfg(all(target_os = "linux", feature = "x11"))]
 #![allow(non_snake_case)]
 
-use gtk4::prelude::*;
-
 use rustty_apprt::gtk::winproto::{App, Protocol};
 use rustty_config::Config as CoreConfig;
 
