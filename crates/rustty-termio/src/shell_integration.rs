@@ -1794,7 +1794,15 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         use std::path::PathBuf;
 
-        let raw: &[u8] = b"/tmp/ws19_\xffdir";
+        // Built at RUNTIME, not as a `b"..."` literal: clippy's
+        // `invalid_from_utf8` correctly points out that `from_utf8` on a literal whose
+        // invalidity is statically known "always returns an error". The vacuity check
+        // below is still worth making — it is what stops someone silently swapping in a
+        // UTF-8-safe fixture — so keep the check and remove the staticness.
+        let mut raw_owned: Vec<u8> = b"/tmp/ws19_".to_vec();
+        raw_owned.push(0xFF);
+        raw_owned.extend_from_slice(b"dir");
+        let raw: &[u8] = &raw_owned;
         let path = PathBuf::from(OsStr::from_bytes(raw));
 
         assert!(
