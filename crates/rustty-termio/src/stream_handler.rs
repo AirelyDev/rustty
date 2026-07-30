@@ -2528,6 +2528,12 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         self.vt(r);
     }
 
+    // .print_slice => { @branchHint(.likely); try self.terminal.printSlice(value.cps); },
+    fn print_slice(&mut self, cps: &[u32]) {
+        let r = self.term().print_slice(cps).map_err(|_| crate::Error);
+        self.vt(r);
+    }
+
     // .print_repeat => try self.terminal.printRepeat(value),
     fn print_repeat(&mut self, count: usize) {
         let r = self.term().print_repeat(count).map_err(|_| crate::Error);

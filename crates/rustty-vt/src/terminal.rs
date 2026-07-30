@@ -93,6 +93,185 @@ use rustty_unicode as unicode;
 
 use allocator_api2::alloc::Global as Allocator;
 
+/// The width class of a printSlice batch. Each batch contains only
+/// codepoints of a single width class because they fill cells
+/// differently: wide codepoints occupy a (wide, spacer_tail) cell
+/// pair while narrow codepoints occupy a single cell.
+//
+// PORT NOTE: the reference is `const PrintSliceWidth = enum(u1) { narrow, wide }`
+// used as a `comptime` parameter of `printSliceFill`/`printSliceEligible`.
+// Stable Rust cannot use a user enum as a const-generic parameter, so the two
+// tag VALUES of the `enum(u1)` are the const-generic argument directly and the
+// enum's one method (`cellsPerCp`) is a free `const fn` over that tag.
+const PRINT_SLICE_NARROW: u8 = 0;
+const PRINT_SLICE_WIDE: u8 = 1;
+
+/// The number of cells each codepoint of this width class occupies.
+// fn cellsPerCp(comptime self: PrintSliceWidth) usize
+const fn print_slice_cells_per_cp(width: u8) -> usize {
+    match width {
+        PRINT_SLICE_WIDE => 2,
+        _ => 1,
+    }
+}
+
+/// `simd.lanes(u32)` for the codepoint scans, and `simd.lanes(u64)` for the
+/// cell scans/stores (Cell's backing integer). Hoisted to module consts so the
+/// loop bodies below read like the reference's `if (simd.lanes(T)) |lanes|`.
+const CP_LANES: Option<usize> = rustty_simd::lanes(core::mem::size_of::<u32>());
+const CELL_LANES: Option<usize> = rustty_simd::lanes(core::mem::size_of::<u64>());
+
+/// Whether a codepoint above 0xFF is eligible for the batched print
+/// fast path with the given width class.
+#[inline]
+fn print_slice_eligible<const WIDTH: u8>(cp: u32) -> bool {
+    assert!(cp > 0xFF);
+    // if (comptime build_options.kitty_graphics) {
+    //     if (cp == kitty.graphics.unicode.placeholder) return false;
+    // }
+    if crate::options::KITTY_GRAPHICS && cp == kitty::graphics_unicode::PLACEHOLDER {
+        return false;
+    }
+
+    unicode::table().get(cp).width
+        == match WIDTH {
+            PRINT_SLICE_WIDE => 2,
+            _ => 1,
+        }
+}
+
+/// The expected value of a simple cell (per the check mask built from
+/// fieldMask in printSliceFill) that already has the given style
+/// (so no ref-counting is needed).
+#[inline]
+fn print_slice_check_expected(style_id: style::Id) -> u64 {
+    // var e: Cell = @bitCast(@as(u64, 0));
+    // e.style_id = style_id;
+    // return @bitCast(e);
+    let mut e = pagepkg::Cell::from_bits(0);
+    e.set_style_id(style_id);
+    e.to_bits()
+}
+
+/// Store a run of narrow codepoint cells built from a bit template:
+/// for each `idx` in `[from, to)`, `cells[idx]` is assigned the bits
+/// `template_bits | (cps[idx] << cp_shift)`.
+///
+/// The template is a complete Cell (content tag, style, wide state,
+/// etc. already baked in by the caller) whose codepoint content bits
+/// are zero. Since Cell is a packed struct(u64), OR-ing a codepoint
+/// into the content field's bit position yields a finished cell as a
+/// single integer, keeping the loop pure data movement: no per-cell
+/// field assignments and no branches.
+///
+/// This loop is manually vectorized: Zig 0.16 (LLVM 21) no longer
+/// auto-vectorizes the scalar form the way Zig 0.15 (LLVM 20) did.
+//
+// PORT NOTE: `cells`/`cps` are RAW pointers, not `&mut [Cell]`/`&[u32]`, per
+// the `rust-mut-args-strongly-protected` rule: the caller keeps its own raw
+// alias to the same row for the scan loops that bracket this call, and a
+// `&mut` argument here would be a Stacked-Borrows-protected retag that
+// invalidates it.
+///
+/// # Safety
+///
+/// `cells[from..to]` and `cps[from..to]` must both be in bounds.
+#[inline]
+unsafe fn print_slice_store_run(
+    cells: *mut pagepkg::Cell,
+    cps: *const u32,
+    from: usize,
+    to: usize,
+    template_bits: u64,
+) {
+    // The bit position of the `content` field within the packed
+    // Cell. A codepoint occupies the low bits of `content`, so
+    // shifting a codepoint left by this amount places it exactly
+    // where `.content = .{ .codepoint = .{ .data = cp } }` would.
+    const CP_SHIFT: u32 = pagepkg::CELL_CONTENT_SHIFT;
+
+    // Since codepoints are OR'd into the content field rather than
+    // assigned, any nonzero content bits in the template would
+    // corrupt the stored codepoints.
+    const CONTENT_MASK: u64 = ((1u64 << pagepkg::CELL_CONTENT_BITS) - 1) << CP_SHIFT;
+    debug_assert!(template_bits & CONTENT_MASK == 0);
+
+    let mut idx = from;
+
+    // Vectorized bulk of the run.
+    if let Some(lanes) = CELL_LANES {
+        while idx + lanes <= to {
+            // Load `lanes` decoded codepoints, widen each to the u64 cell
+            // size, shift into the content field's bit position, merge with
+            // the template, and store contiguously. Written over a
+            // fixed-length window so LLVM emits the same vector stores the
+            // reference's `@Vector(lanes, u64)` does.
+            for j in 0..lanes {
+                let cp = unsafe { *cps.add(idx + j) } as u64;
+                unsafe {
+                    *cells.add(idx + j) =
+                        pagepkg::Cell::from_bits(template_bits | (cp << CP_SHIFT));
+                }
+            }
+            idx += lanes;
+        }
+    }
+
+    // Scalar tail: the final `< lanes` cells of the run, or the
+    // entire run on targets without SIMD. Note `idx` carries over
+    // from the vector loop above. This is the same computation as
+    // the vector body, one cell at a time.
+    while idx < to {
+        let cp = unsafe { *cps.add(idx) } as u64;
+        unsafe { *cells.add(idx) = pagepkg::Cell::from_bits(template_bits | (cp << CP_SHIFT)) };
+        idx += 1;
+    }
+}
+
+/// Store `(wide, spacer_tail)` cell pairs for `[from, to)` (which must be
+/// pair-aligned). Manually vectorized for the same reason as
+/// `print_slice_store_run`: build a vector of wide cells, interleave with
+/// spacer tails, and store pairs several at a time.
+///
+/// # Safety
+///
+/// `cells[from..to]` and `cps[from/2..to/2]` must both be in bounds.
+#[inline]
+unsafe fn print_slice_store_pairs(
+    cells: *mut pagepkg::Cell,
+    cps: *const u32,
+    from: usize,
+    to: usize,
+    wide_bits: u64,
+    spacer_bits: u64,
+) {
+    const CP_SHIFT: u32 = pagepkg::CELL_CONTENT_SHIFT;
+
+    let mut idx = from;
+    if let Some(lanes) = CELL_LANES {
+        let pair_lanes = lanes / 2;
+        while idx + 2 * pair_lanes <= to {
+            for j in 0..pair_lanes {
+                let cp = unsafe { *cps.add(idx / 2 + j) } as u64;
+                unsafe {
+                    *cells.add(idx + 2 * j) =
+                        pagepkg::Cell::from_bits(wide_bits | (cp << CP_SHIFT));
+                    *cells.add(idx + 2 * j + 1) = pagepkg::Cell::from_bits(spacer_bits);
+                }
+            }
+            idx += 2 * pair_lanes;
+        }
+    }
+    while idx < to {
+        let cp = unsafe { *cps.add(idx / 2) } as u64;
+        unsafe {
+            *cells.add(idx) = pagepkg::Cell::from_bits(wide_bits | (cp << CP_SHIFT));
+            *cells.add(idx + 1) = pagepkg::Cell::from_bits(spacer_bits);
+        }
+        idx += 2;
+    }
+}
+
 // PORT NOTE: `vtStream` threads `self.gpa()` (a `std.mem.Allocator`) into the
 // OSC parser via `Stream.initAlloc`, which in Rustty wants a
 // `ZigAllocatorRef<'static>`. The reference `gpa()` returns the screen's
@@ -770,6 +949,596 @@ impl Terminal {
         Ok(())
     }
 
+    /// Print multiple codepoints to the terminal at once. This is
+    /// semantically identical to calling `print` for each codepoint in
+    /// order, but is much faster because it can batch cell writes and
+    /// hoist per-codepoint checks out of the hot loop.
+    ///
+    /// The codepoints must all be printable: it is illegal for any
+    /// codepoint in this slice to be a C0 control character. Therefore,
+    /// this should only be called as a result of a proper VT parser
+    /// (like our own).
+    ///
+    /// This is optimized for the common case: ASCII, soft-wrap, etc.
+    /// Sequences of codepoints that require special handling (e.g. wide characters,
+    /// grapheme clustering) are handled correctly but fall back to the
+    /// slower per-codepoint path. They're less common and this is optimized
+    /// for the aforementioned cases.
+    pub fn print_slice(&mut self, cps: &[u32]) -> Result<(), OutOfMemory> {
+        let mut i: usize = 0;
+        while i < cps.len() {
+            // Try the fast-path print first. This will return the number of
+            // codepoints it consumed.
+            let consumed = self.print_slice_fast(&cps[i..])?;
+            if consumed > 0 {
+                i += consumed;
+                continue;
+            }
+
+            // Consuming zero bytes means that the fast path can't handle
+            // the next codepoint or the terminal is in a state we can't
+            // fast-path. Fall back to the slow cp-by-cp print then try
+            // fast paths again.
+            self.print(cps[i])?;
+            i += 1;
+        }
+        Ok(())
+    }
+
+    /// Attempt to print a prefix of `cps` using a batched fast path that
+    /// writes cells directly. Returns the number of codepoints consumed.
+    /// A return value of zero means the caller must print the first
+    /// codepoint via the normal `print` path.
+    ///
+    /// The fast path handles runs of narrow (width 1) and wide (width 2)
+    /// codepoints being written to simple cells. Everything else (zero
+    /// width codepoints, grapheme cluster continuations, insert mode,
+    /// charset mapping, hyperlinks, complex cells, etc.) is rejected so
+    /// `print` can handle it with full generality.
+    fn print_slice_fast(&mut self, cps: &[u32]) -> Result<usize, OutOfMemory> {
+        // Only the main display is supported.
+        if self.status_display != ansi::StatusDisplay::Main {
+            return Ok(0);
+        }
+
+        // Modes that require per-codepoint handling in print(). Wraparound
+        // is required (its the default) so that our row-fill logic below can
+        // assume soft-wrap semantics. Insert mode shifts cells per print.
+        if self.modes.get(modespkg::Mode::Insert) {
+            return Ok(0);
+        }
+        if !self.modes.get(modespkg::Mode::Wraparound) {
+            return Ok(0);
+        }
+
+        // const screen: *Screen = self.screens.active;
+        let screen: *mut Screen = self.screens.active;
+
+        // Charset must map ASCII as-is (true unless a DEC special charset
+        // is actively invoked, which is rare).
+        if unsafe { (*screen).charset.single_shift }.is_some() {
+            return Ok(0);
+        }
+        match unsafe { (*screen).charset.charsets.get((*screen).charset.gl) } {
+            charsets::Charset::Utf8 | charsets::Charset::Ascii => {}
+            _ => return Ok(0),
+        }
+
+        // Hyperlinks require per-cell map bookkeeping.
+        if unsafe { (*screen).cursor.hyperlink_id } != 0 {
+            return Ok(0);
+        }
+
+        // Codepoints in [0x10, 0xFF] are always narrow (width 1, matching
+        // the c <= 0xFF fast path in print) and can never interact with
+        // grapheme clustering (which requires a codepoint > 0xFF).
+        //
+        // Codepoints above 0xFF are batchable if their width is 1 or 2
+        // (excluding zero-width characters such as combining marks, ZWJ,
+        // and variation selectors) and, when grapheme clustering (mode
+        // 2027) is enabled, if they are a grapheme break from the
+        // previously printed codepoint (so print would never attach them
+        // to the previous cell).
+        let grapheme_cluster = self.modes.get(modespkg::Mode::GraphemeCluster);
+
+        // When grapheme clustering is enabled and a left margin is set,
+        // print() consults the cell left of the margin after wrapping,
+        // which we can't reason about here. Restrict the fast path to
+        // the [0x10, 0xFF] range in that case (those never cluster).
+        let allow_unicode = !grapheme_cluster || self.scrolling_region.left == 0;
+
+        // Codepoints in [0x10, 0xFF] are always narrow: print()
+        // hardcodes width 1 for c <= 0xFF (no width table lookup).
+        // They also can never interact with grapheme clustering,
+        // which print() only performs for c > 0xFF, so they're
+        // immediately eligible for the narrow fill with no further
+        // checks.
+        let cp0 = cps[0];
+        if cp0 <= 0xFF {
+            // C0 control characters (0x00-0x0F) aren't printable. The
+            // stream never sends these (they're routed to execute), but
+            // printSlice is a public API so defer to print() for safety.
+            if cp0 < 0x10 {
+                return Ok(0);
+            }
+            return self.print_slice_fill::<PRINT_SLICE_NARROW>(
+                cps,
+                grapheme_cluster,
+                allow_unicode,
+            );
+        }
+
+        if !allow_unicode {
+            return Ok(0);
+        }
+        // if (comptime build_options.kitty_graphics) {
+        //     // The Kitty graphics placeholder requires row bookkeeping.
+        //     if (cp0 == kitty.graphics.unicode.placeholder) return 0;
+        // }
+        if crate::options::KITTY_GRAPHICS && cp0 == kitty::graphics_unicode::PLACEHOLDER {
+            return Ok(0);
+        }
+
+        // The first codepoint requires care when grapheme clustering is
+        // enabled: print() examines the previous *cell* which can hold
+        // state (grapheme data) that we can't cheaply reason about here.
+        // Note this includes the pending-wrap state: print() may attach
+        // to the pending cell *instead of wrapping*. We only take the
+        // first codepoint if the cursor is at column zero with no pending
+        // wrap, where print() skips clustering entirely.
+        if grapheme_cluster
+            && (unsafe { (*screen).cursor.pending_wrap } || unsafe { (*screen).cursor.x } != 0)
+        {
+            return Ok(0);
+        }
+
+        // The width lookup is a runtime value while printSliceFill is
+        // specialized at comptime by width class, so this switch selects
+        // between the two instantiations rather than passing the width
+        // through as an argument.
+        match unicode::table().get(cp0).width {
+            1 => self.print_slice_fill::<PRINT_SLICE_NARROW>(cps, grapheme_cluster, allow_unicode),
+            2 => self.print_slice_fill::<PRINT_SLICE_WIDE>(cps, grapheme_cluster, allow_unicode),
+            _ => Ok(0),
+        }
+    }
+
+    /// The row-filling portion of the printSlice fast path, specialized by
+    /// width class. The first codepoint must already be validated by the
+    /// caller (printSliceFast).
+    fn print_slice_fill<const WIDTH: u8>(
+        &mut self,
+        cps: &[u32],
+        grapheme_cluster: bool,
+        allow_unicode: bool,
+    ) -> Result<usize, OutOfMemory> {
+        let screen: *mut Screen = self.screens.active;
+
+        // PORT NOTE: the reference declares `simple_mask` and `cp_shift` here
+        // and uses them in the row-fill body below; that body is
+        // `print_slice_fill_inner` in this port (see its doc comment), so both
+        // consts live there.
+
+        // Determine the run of codepoints in the same width class that we
+        // can batch. For codepoints after the first, the previous codepoint
+        // in the run is always written as a fresh, single-codepoint cell,
+        // so the grapheme break check against it is exact.
+        let run_len: usize = 'run: {
+            let mut idx: usize = 1;
+
+            // Vectorized scan for the narrow class: codepoints in
+            // [0x10, 0xFF] are always eligible with no further checks
+            // and dominate real-world input, so scan for the first
+            // codepoint outside that range several lanes at a time.
+            // Anything else (including eligible unicode) proceeds via
+            // the scalar loop below.
+            if WIDTH == PRINT_SLICE_NARROW {
+                if let Some(lanes) = CP_LANES {
+                    while idx + lanes <= cps.len() {
+                        // const in_range = (v >= lo) & (v <= hi);
+                        // if (!@reduce(.And, in_range)) { idx += @ctz(~bits); break; }
+                        let mut first_bad: Option<usize> = None;
+                        for j in 0..lanes {
+                            let v = cps[idx + j];
+                            if !(0x10..=0xFF).contains(&v) {
+                                first_bad = Some(j);
+                                break;
+                            }
+                        }
+                        if let Some(j) = first_bad {
+                            idx += j;
+                            break;
+                        }
+                        idx += lanes;
+                    }
+                }
+            }
+
+            while idx < cps.len() {
+                let cp = cps[idx];
+                if WIDTH == PRINT_SLICE_NARROW && (0x10..=0xFF).contains(&cp) {
+                    idx += 1;
+                    continue;
+                }
+                if cp > 0xFF && allow_unicode && print_slice_eligible::<WIDTH>(cp) {
+                    if !grapheme_cluster {
+                        idx += 1;
+                        continue;
+                    }
+                    let mut state = unicode::grapheme::BreakState::Default;
+                    if unicode::graphemeBreak(cps[idx - 1], cp, &mut state) {
+                        idx += 1;
+                        continue;
+                    }
+                }
+                break 'run idx;
+            }
+            cps.len()
+        };
+        assert!(run_len > 0);
+
+        // After doing any printing, wrapping, scrolling, etc. we want to
+        // ensure that our screen remains in a consistent state.
+        // defer screen.assertIntegrity();
+        let result = self.print_slice_fill_inner::<WIDTH>(cps, run_len);
+        unsafe { (*screen).assert_integrity() };
+        result
+    }
+
+    /// The body of `print_slice_fill` after the run scan; split out only so
+    /// the reference's `defer screen.assertIntegrity()` (which covers every
+    /// exit below it, including the error return from `printWrap`) has a Rust
+    /// model. Same split as `print`/`print_inner`.
+    fn print_slice_fill_inner<const WIDTH: u8>(
+        &mut self,
+        cps: &[u32],
+        run_len: usize,
+    ) -> Result<usize, OutOfMemory> {
+        const SIMPLE_MASK: u64 = pagepkg::cell_field_mask(&[
+            pagepkg::CellField::ContentTag,
+            pagepkg::CellField::StyleId,
+            pagepkg::CellField::Wide,
+            pagepkg::CellField::Hyperlink,
+        ]);
+        const CP_SHIFT: u32 = pagepkg::CELL_CONTENT_SHIFT;
+
+        // The number of cells each codepoint occupies.
+        // const cells_per_cp: usize = comptime width.cellsPerCp();
+        let cells_per_cp: usize = print_slice_cells_per_cp(WIDTH);
+
+        let mut printed: usize = 0;
+        'outer: while printed < run_len {
+            // If we're soft-wrapping, handle that first so that our cursor
+            // is in the row/column that will receive the next codepoint.
+            if unsafe { (*self.screens.active).cursor.pending_wrap } {
+                self.print_wrap()?;
+            }
+
+            let screen: *mut Screen = self.screens.active;
+
+            // Our right margin depends on where our cursor is now,
+            // matching the logic in print().
+            let right_limit: usize = if unsafe { (*screen).cursor.x } > self.scrolling_region.right
+            {
+                self.cols as usize
+            } else {
+                self.scrolling_region.right as usize + 1
+            };
+
+            // A degenerate 1-wide region can't hold a wide char; print()
+            // has special handling so fall back to it.
+            if WIDTH == PRINT_SLICE_WIDE && right_limit - self.scrolling_region.left as usize <= 1 {
+                break;
+            }
+
+            // const cursor = &screen.cursor;
+            let cursor: *mut crate::screen::Cursor = unsafe { &raw mut (*screen).cursor };
+            let avail: usize = right_limit - unsafe { (*cursor).x } as usize;
+            assert!(avail > 0);
+
+            // const page = &cursor.page_pin.node.data;
+            let page: *mut Page =
+                unsafe { crate::pagelist::Node::page((*(*cursor).page_pin).node) };
+            // const cells: [*]Cell = @ptrCast(cursor.page_cell);
+            let cells: *mut pagepkg::Cell = unsafe { (*cursor).page_cell };
+            let style_id = unsafe { (*cursor).style_id };
+            let template: pagepkg::Cell = {
+                let mut t = pagepkg::Cell::zeroed();
+                t.set_content_tag(pagepkg::ContentTag::Codepoint);
+                t.set_content_codepoint(0);
+                t.set_style_id(style_id);
+                t.set_wide(pagepkg::Wide::Narrow);
+                t.set_protected(unsafe { (*cursor).protected });
+                t.set_semantic_content(unsafe { (*cursor).semantic_content });
+                t
+            };
+            let template_bits: u64 = template.to_bits();
+            let check_expected: u64 = print_slice_check_expected(style_id);
+
+            if WIDTH == PRINT_SLICE_WIDE && avail == 1 {
+                // Only one cell left in the row: print() writes a
+                // spacer head (or a blank narrow cell if we're inside
+                // a right margin) and wraps. We require a simple cell,
+                // otherwise fall back to print() for the cleanup.
+                let bits: u64 = unsafe { (*cells).to_bits() };
+                if (bits & SIMPLE_MASK) != check_expected {
+                    break;
+                }
+
+                let mut spacer = template;
+                if right_limit == self.cols as usize {
+                    unsafe { (*(*cursor).page_row).set_wrap(true) };
+                    spacer.set_wide(pagepkg::Wide::SpacerHead);
+                }
+                unsafe { (*(*cursor).page_row).set_dirty(true) };
+                if style_id != style::DEFAULT_ID {
+                    unsafe { (*(*cursor).page_row).set_styled(true) };
+                }
+                unsafe { *cells = spacer };
+                self.print_wrap()?;
+                continue 'outer;
+            }
+
+            // Number of codepoints and cells we're writing to this row.
+            let count = core::cmp::min(avail / cells_per_cp, run_len - printed);
+            assert!(count > 0);
+            let cell_count = count * cells_per_cp;
+
+            // Wide cells always come in (wide, spacer_tail) pairs.
+            let spacer_bits: u64 = if WIDTH == PRINT_SLICE_WIDE {
+                let mut spacer = template;
+                spacer.set_wide(pagepkg::Wide::SpacerTail);
+                spacer.to_bits()
+            } else {
+                0 // `undefined` in the reference; never read for the narrow class.
+            };
+            let wide_bits: u64 = if WIDTH == PRINT_SLICE_WIDE {
+                let mut w = template;
+                w.set_wide(pagepkg::Wide::Wide);
+                w.to_bits()
+            } else {
+                0 // `undefined` in the reference; never read for the narrow class.
+            };
+
+            let mut k: usize = 0; // cells written
+            'fill: while k < cell_count {
+                // Find the run of simple cells so the store loop below is
+                // branch-free (and vectorizable). This is an early-exit
+                // search loop that LLVM won't auto-vectorize, and reused
+                // rows typically match the whole way through, so scan
+                // several cells at a time manually.
+                let mut simple = k;
+                'simple: {
+                    if let Some(lanes) = CELL_LANES {
+                        while simple + lanes <= cell_count {
+                            let mut first_bad: Option<usize> = None;
+                            for j in 0..lanes {
+                                let bits = unsafe { (*cells.add(simple + j)).to_bits() };
+                                if (bits & SIMPLE_MASK) != check_expected {
+                                    first_bad = Some(j);
+                                    break;
+                                }
+                            }
+                            if let Some(j) = first_bad {
+                                simple += j;
+                                break 'simple;
+                            }
+                            simple += lanes;
+                        }
+                    }
+                    while simple < cell_count {
+                        let bits: u64 = unsafe { (*cells.add(simple)).to_bits() };
+                        if (bits & SIMPLE_MASK) != check_expected {
+                            break;
+                        }
+                        simple += 1;
+                    }
+                }
+
+                if WIDTH == PRINT_SLICE_WIDE {
+                    // We can only write whole (wide, spacer) pairs.
+                    let pair_end = k + (simple - k) / 2 * 2;
+                    unsafe {
+                        print_slice_store_pairs(
+                            cells,
+                            cps.as_ptr().add(printed),
+                            k,
+                            pair_end,
+                            wide_bits,
+                            spacer_bits,
+                        )
+                    };
+                    // If the simple run ended mid-pair we stop at the pair
+                    // boundary and handle the offending cell below.
+                    k = pair_end;
+                    if simple != pair_end {
+                        // The first cell of the next pair is simple but the
+                        // second isn't; handle both via the general path.
+                        //
+                        // PORT NOTE: this assignment is dead in the reference
+                        // too — nothing below reads `simple` and the next
+                        // `fill` iteration re-derives it. Kept verbatim
+                        // (rustc's `unused_assignments` allowed at the
+                        // statement) rather than dropped, so the ported body
+                        // matches the reference line for line.
+                        #[allow(unused_assignments)]
+                        {
+                            simple = pair_end;
+                        }
+                    }
+                } else {
+                    unsafe {
+                        print_slice_store_run(
+                            cells,
+                            cps.as_ptr().add(printed),
+                            k,
+                            simple,
+                            template_bits,
+                        )
+                    };
+                    k = simple;
+                }
+                if k >= cell_count {
+                    break;
+                }
+
+                // Bulk path for runs of cells that differ from the
+                // expected simple cell only by their style: this is the
+                // common case when styled text overwrites previously
+                // styled (or default-styled) rows, e.g. TUI redraws.
+                // These runs are handled wholesale: one scan to find the
+                // run of identical old styles, two ref-count updates,
+                // and a branch-free fill.
+                if WIDTH == PRINT_SLICE_NARROW {
+                    'bulk: {
+                        let first = unsafe { (*cells.add(k)).to_bits() } & SIMPLE_MASK;
+
+                        // The old cell must be a plain narrow codepoint cell
+                        // with no hyperlink whose only difference is the
+                        // style id (see printSliceCheckExpected: every other
+                        // masked field must be zero).
+                        let style_shift = pagepkg::CELL_STYLE_ID_SHIFT;
+                        let old_style: style::Id = (first >> style_shift) as style::Id;
+                        if first != print_slice_check_expected(old_style) {
+                            break 'bulk;
+                        }
+                        assert!(old_style != style_id); // it failed the simple check
+
+                        // Find the run of cells with identical masked bits.
+                        let mut m = k + 1;
+                        'scan: {
+                            if let Some(lanes) = CELL_LANES {
+                                while m + lanes <= cell_count {
+                                    let mut first_bad: Option<usize> = None;
+                                    for j in 0..lanes {
+                                        let bits = unsafe { (*cells.add(m + j)).to_bits() };
+                                        if (bits & SIMPLE_MASK) != first {
+                                            first_bad = Some(j);
+                                            break;
+                                        }
+                                    }
+                                    if let Some(j) = first_bad {
+                                        m += j;
+                                        break 'scan;
+                                    }
+                                    m += lanes;
+                                }
+                            }
+                            while m < cell_count {
+                                if (unsafe { (*cells.add(m)).to_bits() } & SIMPLE_MASK) != first {
+                                    break;
+                                }
+                                m += 1;
+                            }
+                        }
+
+                        // Fix up the style ref counts for the whole run at
+                        // once. Each of the old cells held a reference to
+                        // old_style so the release is safe by construction.
+                        let n = m - k;
+                        unsafe {
+                            let base = (*page).memory_ptr();
+                            if old_style != style::DEFAULT_ID {
+                                (*page)
+                                    .styles
+                                    .release_multiple(base, old_style, n as style::Id);
+                            }
+                            if style_id != style::DEFAULT_ID {
+                                (*page).styles.use_multiple(base, style_id, n as style::Id);
+                            }
+                        }
+
+                        unsafe {
+                            print_slice_store_run(
+                                cells,
+                                cps.as_ptr().add(printed),
+                                k,
+                                m,
+                                template_bits,
+                            )
+                        };
+                        k = m;
+                        continue 'fill;
+                    }
+                }
+
+                // General path for cells that failed the masked check:
+                // style-only mismatches are handled inline; anything that
+                // needs cleanup (wide chars and their spacers, grapheme
+                // data, hyperlinks) falls back to print().
+                let general_count: usize = cells_per_cp;
+                for offset in 0..general_count {
+                    let cell = unsafe { &*cells.add(k + offset) };
+                    if cell.wide() != pagepkg::Wide::Narrow
+                        || cell.has_grapheme()
+                        || cell.hyperlink()
+                    {
+                        break 'fill;
+                    }
+                }
+                for offset in 0..general_count {
+                    let cell = unsafe { &*cells.add(k + offset) };
+                    if cell.style_id() != style_id {
+                        unsafe {
+                            let base = (*page).memory_ptr();
+                            if cell.style_id() != style::DEFAULT_ID {
+                                (*page).styles.release(base, cell.style_id());
+                            }
+                            if style_id != style::DEFAULT_ID {
+                                (*page).styles.use_id(base, style_id);
+                            }
+                        }
+                    }
+                }
+                if WIDTH == PRINT_SLICE_WIDE {
+                    unsafe {
+                        *cells.add(k) = pagepkg::Cell::from_bits(
+                            wide_bits | ((cps[printed + k / 2] as u64) << CP_SHIFT),
+                        );
+                        *cells.add(k + 1) = pagepkg::Cell::from_bits(spacer_bits);
+                    }
+                } else {
+                    unsafe {
+                        *cells.add(k) = pagepkg::Cell::from_bits(
+                            template_bits | ((cps[printed + k] as u64) << CP_SHIFT),
+                        );
+                    }
+                }
+                k += cells_per_cp;
+            }
+
+            if k > 0 {
+                assert!(k.is_multiple_of(cells_per_cp));
+                unsafe { (*(*cursor).page_row).set_dirty(true) };
+                if style_id != style::DEFAULT_ID {
+                    unsafe { (*(*cursor).page_row).set_styled(true) };
+                }
+                self.previous_char = Some(cps[printed + k / cells_per_cp - 1]);
+                printed += k / cells_per_cp;
+
+                // Advance the cursor. If we filled through the right limit
+                // then the cursor stays on the last cell with the pending
+                // wrap flag set, matching print().
+                if unsafe { (*cursor).x } as usize + k >= right_limit {
+                    assert!(unsafe { (*cursor).x } as usize + k == right_limit);
+                    unsafe { (*screen).cursor_right((k - 1) as size::CellCountInt) };
+                    unsafe { (*cursor).pending_wrap = true };
+                } else {
+                    unsafe { (*screen).cursor_right(k as size::CellCountInt) };
+                }
+            }
+
+            // We hit a cell that requires the slow path. The cursor is
+            // exactly at that cell so return and let the caller print the
+            // next codepoint via print().
+            if k < cell_count {
+                break;
+            }
+        }
+
+        Ok(printed)
+    }
+
     pub fn print(&mut self, c: u32) -> Result<(), OutOfMemory> {
         // log.debug("print={x} y={} x={}", .{ c, self.screens.active.cursor.y, self.screens.active.cursor.x });
 
@@ -885,6 +1654,29 @@ impl Terminal {
         Ok(())
     }
 
+    // PERF(port) RECONCILED (WS10 T16, `47e26df60`): upstream's `print_slice`
+    // fast path does NOT subsume this outlining, and BOTH STAY. They are
+    // complementary, not alternatives:
+    //   - `print_slice_fast`'s eligibility check is a WHOLE-BATCH gate. Every
+    //     codepoint it rejects — zero-width marks, grapheme continuations,
+    //     insert mode, DEC charsets, hyperlinks, the Kitty placeholder, wide
+    //     chars in a 1-column region, and every cell needing real cleanup —
+    //     is handed straight back to `print` one codepoint at a time
+    //     (`print_slice`'s `self.print(cps[i])` arm, and `print_slice_fill`
+    //     deliberately returns with the cursor parked on the offending cell).
+    //     So `print`'s own hot path is exactly as hot as before for all
+    //     non-batchable input, which is the input the outlining was measured
+    //     on.
+    //   - The outlining is about `print`'s FRAME (6 callee-saved pairs on
+    //     every printed character); `print_slice` never enters `print` at all
+    //     on the batched path, so it neither benefits from nor conflicts with
+    //     the reshape.
+    // Deleting the outlining to "match upstream" would be a silent
+    // pessimisation of the fallback path with no upstream counterpart — the
+    // reference has no equivalent frame cost because Zig inlines those blocks
+    // differently. Recorded here rather than in a ledger because it is
+    // discharged inside this workstream.
+    //
     // PERF(port): the three cold blocks of `print` are outlined into
     // per-codepoint helpers so the hot narrow-print path (the overwhelming
     // majority of printed cells) does not carry their register pressure —
@@ -14627,6 +15419,344 @@ mod tests {
         }
 
         t.deinit(Global);
+    }
+
+    // test "Terminal: printSlice simple ascii"
+    #[test]
+    fn terminal_print_slice_simple_ascii() {
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+
+        t.print_slice(&['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, 'o' as u32])
+            .unwrap();
+        assert_eq!(5, unsafe { (*t.screens.active).cursor.x });
+        assert_eq!('o' as u32, t.previous_char.unwrap());
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "hello".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: printSlice wraps and scrolls"
+    #[test]
+    fn terminal_print_slice_wraps_and_scrolls() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        // 12 chars: fills row 1 (5), row 2 (5), wraps+scrolls, 2 more.
+        t.print_slice(&[
+            'a' as u32, 'b' as u32, 'c' as u32, 'd' as u32, 'e' as u32, 'f' as u32, 'g' as u32,
+            'h' as u32, 'i' as u32, 'j' as u32, 'k' as u32, 'l' as u32,
+        ])
+        .unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "fghij\nkl".as_bytes());
+        }
+        assert_eq!(2, unsafe { (*t.screens.active).cursor.x });
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: printSlice pending wrap state"
+    #[test]
+    fn terminal_print_slice_pending_wrap_state() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        t.print_slice(&['a' as u32, 'b' as u32, 'c' as u32, 'd' as u32, 'e' as u32])
+            .unwrap();
+        assert_eq!(4, unsafe { (*t.screens.active).cursor.x });
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "abcde".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    /// Differential testing helper: applies the same logical print
+    /// operations to two terminals, one using per-codepoint print() and
+    /// the other using printSlice() with random chunking, verifying that
+    /// the results are identical.
+    //
+    // PORT NOTE: `std.Random.DefaultPrng` + `rand.intRangeAtMost` become a
+    // seeded LCG plus a `range` helper below. The generator differs from Zig's
+    // xoshiro, so the exact operation sequence differs from upstream's — the
+    // test's value is the differential invariant (print vs print_slice must
+    // agree after EVERY op), which holds for any deterministic sequence, and
+    // the seeds are fixed so failures are reproducible.
+    fn test_print_slice_differential(
+        rand: &mut TestRand,
+        ops: usize,
+        cols: size::CellCountInt,
+        rows: size::CellCountInt,
+    ) {
+        let mut t1 = Terminal::init(Global, opts(cols, rows)).unwrap();
+        let mut t2 = Terminal::init(Global, opts(cols, rows)).unwrap();
+
+        // Alphabet of interesting codepoints: ascii, latin-1, combining
+        // marks, CJK (wide), emoji (wide), ZWJ, variation selectors.
+        let alphabet: [u32; 40] = [
+            'a' as u32,
+            'b' as u32,
+            'Z' as u32,
+            '0' as u32,
+            ' ' as u32,
+            0x10,
+            0x1F,
+            0x7F,
+            'é' as u32,
+            0xFF,
+            0x301,
+            0x4E00,
+            0x4E01,
+            0x1F600,
+            0x200D,
+            0xFE0F,
+            'x' as u32,
+            'y' as u32,
+            0x1F9D1,
+            0x0308,
+            0xAD,
+            0x3042,
+            0xAC00,
+            'q' as u32,
+            'r' as u32,
+            's' as u32,
+            't' as u32,
+            'u' as u32,
+            'v' as u32,
+            'w' as u32,
+            '1' as u32,
+            '2' as u32,
+            0x1F1E6,
+            0x1F1E7,
+            0x1100,
+            0x1161,
+            0x11A8,
+            0x200C,
+            0x0430,
+            0x03B1,
+        ];
+
+        let mut cps_buf: [u32; 64] = [0; 64];
+        let mut last_n: usize = 0;
+
+        for _ in 0..ops {
+            match rand.range(0, 20) {
+                // Print a run of codepoints (most common op).
+                0..=9 => {
+                    let n = rand.range(1, cps_buf.len());
+                    last_n = n;
+                    for cp in cps_buf[0..n].iter_mut() {
+                        *cp = alphabet[rand.range_less_than(alphabet.len())];
+                    }
+
+                    // t1: per-codepoint print
+                    for &cp in &cps_buf[0..n] {
+                        t1.print(cp).unwrap();
+                    }
+
+                    // t2: printSlice with random chunking
+                    let mut i: usize = 0;
+                    while i < n {
+                        let chunk = rand.range(1, n - i);
+                        t2.print_slice(&cps_buf[i..i + chunk]).unwrap();
+                        i += chunk;
+                    }
+                }
+                10 => {
+                    t1.carriage_return();
+                    t2.carriage_return();
+                    t1.linefeed().unwrap();
+                    t2.linefeed().unwrap();
+                }
+                11 => {
+                    let row = rand.range(1, rows as usize);
+                    let col = rand.range(1, cols as usize);
+                    t1.set_cursor_pos(row, col);
+                    t2.set_cursor_pos(row, col);
+                }
+                12 => {
+                    let attr: sgr::Attribute = match rand.range(0, 3) {
+                        0 => sgr::Attribute::Unset,
+                        1 => sgr::Attribute::Bold,
+                        2 => sgr::Attribute::DirectColorFg(color::RGB {
+                            r: rand.byte(),
+                            g: rand.byte(),
+                            b: rand.byte(),
+                        }),
+                        3 => sgr::Attribute::Color8Fg(color::Name::Red),
+                        _ => unreachable!(),
+                    };
+                    t1.set_attribute(attr).unwrap();
+                    t2.set_attribute(attr).unwrap();
+                }
+                13 => {
+                    let v = rand.boolean();
+                    t1.modes.set(modespkg::Mode::Insert, v);
+                    t2.modes.set(modespkg::Mode::Insert, v);
+                }
+                14 => {
+                    let v = rand.boolean();
+                    t1.modes.set(modespkg::Mode::Wraparound, v);
+                    t2.modes.set(modespkg::Mode::Wraparound, v);
+                }
+                15 => {
+                    let v = rand.boolean();
+                    // Erase the display first: grapheme clusters created
+                    // while mode 2027 was off can trip a pre-existing
+                    // debug assert in print()'s cluster walk when the mode
+                    // is toggled on (unrelated to printSlice; it reproduces
+                    // with per-codepoint print alone).
+                    t1.erase_display(csi::EraseDisplay::Complete, false);
+                    t2.erase_display(csi::EraseDisplay::Complete, false);
+                    t1.modes.set(modespkg::Mode::GraphemeCluster, v);
+                    t2.modes.set(modespkg::Mode::GraphemeCluster, v);
+                }
+                16 => {
+                    // Margins.
+                    t1.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+                    t2.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+                    let left = rand.range(1, cols as usize / 2);
+                    let right = rand.range(cols as usize / 2, cols as usize);
+                    t1.set_left_and_right_margin(left, right);
+                    t2.set_left_and_right_margin(left, right);
+                }
+                17 => {
+                    t1.set_left_and_right_margin(0, 0);
+                    t2.set_left_and_right_margin(0, 0);
+                }
+                18 => {
+                    t1.active_mut()
+                        .start_hyperlink(b"http://example.com", None)
+                        .unwrap();
+                    t2.active_mut()
+                        .start_hyperlink(b"http://example.com", None)
+                        .unwrap();
+                }
+                19 => {
+                    t1.active_mut().end_hyperlink();
+                    t2.active_mut().end_hyperlink();
+                }
+                20 => {
+                    let set: charsets::Charset = if rand.boolean() {
+                        charsets::Charset::DecSpecial
+                    } else {
+                        charsets::Charset::Utf8
+                    };
+                    t1.configure_charset(charsets::Slots::G0, set);
+                    t2.configure_charset(charsets::Slots::G0, set);
+                }
+                _ => unreachable!(),
+            }
+
+            // Cursor state must match exactly after every op.
+            assert_eq!(unsafe { (*t1.screens.active).cursor.x }, unsafe {
+                (*t2.screens.active).cursor.x
+            });
+            assert_eq!(unsafe { (*t1.screens.active).cursor.y }, unsafe {
+                (*t2.screens.active).cursor.y
+            });
+            assert_eq!(
+                unsafe { (*t1.screens.active).cursor.pending_wrap },
+                unsafe { (*t2.screens.active).cursor.pending_wrap }
+            );
+
+            // Full screen contents must match after every op. On failure,
+            // dump diagnostics that make the failure reproducible.
+            {
+                let str1 = t1
+                    .active_mut()
+                    .dump_string_alloc(Global, point::Point::Screen(point::Coordinate::default()))
+                    .unwrap();
+                let str2 = t2
+                    .active_mut()
+                    .dump_string_alloc(Global, point::Point::Screen(point::Coordinate::default()))
+                    .unwrap();
+                if str1 != str2 {
+                    eprintln!("last print cps: {:?}", &cps_buf[0..last_n]);
+                    eprintln!(
+                        "modes: 2027={} insert={} wrap={} sr.left={} sr.right={} cols={}",
+                        t1.modes.get(modespkg::Mode::GraphemeCluster),
+                        t1.modes.get(modespkg::Mode::Insert),
+                        t1.modes.get(modespkg::Mode::Wraparound),
+                        t1.scrolling_region.left,
+                        t1.scrolling_region.right,
+                        cols,
+                    );
+                    assert_eq!(
+                        String::from_utf8_lossy(&str1),
+                        String::from_utf8_lossy(&str2)
+                    );
+                }
+            }
+        }
+
+        // Page integrity (styles refcounts, grapheme maps, etc.) must hold.
+        unsafe {
+            let p1 = crate::pagelist::Node::page((*(*t1.screens.active).cursor.page_pin).node);
+            (*p1).verify_integrity().unwrap();
+            let p2 = crate::pagelist::Node::page((*(*t2.screens.active).cursor.page_pin).node);
+            (*p2).verify_integrity().unwrap();
+        }
+
+        t1.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    /// Deterministic PRNG standing in for `std.Random.DefaultPrng` (see the
+    /// PORT NOTE on `test_print_slice_differential`).
+    struct TestRand(u64);
+
+    impl TestRand {
+        fn init(seed: u64) -> TestRand {
+            TestRand(seed)
+        }
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 17
+        }
+        // rand.intRangeAtMost(T, lo, hi)
+        fn range(&mut self, lo: usize, hi: usize) -> usize {
+            if hi <= lo {
+                return lo;
+            }
+            lo + (self.next() as usize) % (hi - lo + 1)
+        }
+        // rand.intRangeLessThan(T, 0, n)
+        fn range_less_than(&mut self, n: usize) -> usize {
+            (self.next() as usize) % n
+        }
+        // rand.boolean()
+        fn boolean(&mut self) -> bool {
+            self.next() & 1 == 1
+        }
+        // rand.int(u8)
+        fn byte(&mut self) -> u8 {
+            self.next() as u8
+        }
+    }
+
+    // test "Terminal: printSlice differential fuzz vs print"
+    #[test]
+    fn terminal_print_slice_differential_fuzz_vs_print() {
+        // Multiple seeds and terminal sizes for coverage, including a
+        // tiny terminal to stress wrap/scroll edge cases.
+        let mut prng = TestRand::init(0xC0FFEE);
+        test_print_slice_differential(&mut prng, 500, 80, 24);
+        test_print_slice_differential(&mut prng, 500, 10, 4);
+        test_print_slice_differential(&mut prng, 500, 5, 2);
+        test_print_slice_differential(&mut prng, 200, 2, 2);
     }
 
     // test "Terminal: printAttributes"

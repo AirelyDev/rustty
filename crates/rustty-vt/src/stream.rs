@@ -73,6 +73,10 @@ use crate::utf8_decoder::UTF8Decoder;
 // const debug = false;
 const DEBUG: bool = false;
 
+/// `simd.lanes(u32)` for the printable-run scan in `next_slice_capped`
+/// (f2a7652ab). See `rustty_simd::lanes`.
+const PRINT_RUN_LANES: Option<usize> = rustty_simd::lanes(core::mem::size_of::<u32>());
+
 // The possible actions that can be emitted by the Stream
 // function for handling.
 // pub const Action = union(Key) { ... };
@@ -288,6 +292,36 @@ pub trait Handler {
     /// `print` — draw a unicode codepoint to the screen.
     // .print => self.handler.vt(.print, .{ .cp = c });
     fn print(&mut self, _cp: u32) {}
+
+    /// `print_slice` — a run of printable codepoints.
+    ///
+    /// A run of printable codepoints. This is emitted instead of
+    /// individual print actions when the stream can decode multiple
+    /// printable codepoints at once, so handlers can process them in
+    /// batch with per-run rather than per-codepoint overhead (see
+    /// Terminal.printSlice). A naive handler can simply loop and
+    /// handle each codepoint like a print action.
+    ///
+    /// The slice is only valid for the duration of the handler call.
+    //
+    // .print_slice => self.handler.vt(.print_slice, .{ .cps = cps[i..end] });
+    //
+    // PORT NOTE (47e26df60, WS10 T16): the reference adds `print_slice:
+    // PrintSlice` to the `Action` union, which is EXHAUSTIVE — every handler's
+    // `vt` switch must gain an arm or fail to compile, and the commit adds one
+    // to each of the three in-tree handlers. rustty models the union as this
+    // trait, whose methods have defaults, so a new method with an empty default
+    // would SILENTLY drop all printable text in every handler that only
+    // implements `print` (25+ of them in-tree, almost all tests). The default
+    // here is therefore the loop the reference's own doc comment prescribes for
+    // a naive handler, which makes `print_slice` exactly equivalent to the
+    // stream of `print` actions it replaces. Handlers that want the batch
+    // (`stream_terminal`, `termio`) override it.
+    fn print_slice(&mut self, cps: &[u32]) {
+        for &cp in cps {
+            self.print(cp);
+        }
+    }
 
     /// `print_repeat` (REP) — repeat the previous char N times.
     //
@@ -768,16 +802,66 @@ impl<'a, H: Handler> Stream<'a, H> {
         while self.parser.state == parser::State::Ground && offset < input.len() {
             // const res = simd.vt.utf8DecodeUntilControlSeq(input[offset..], cp_buf);
             let res = rustty_simd::vt::utf8DecodeUntilControlSeq(&input[offset..], cp_buf);
-            // for (cp_buf[0..res.decoded]) |cp| {
-            for &cp in &cp_buf[0..res.decoded] {
+            // const cps = cp_buf[0..res.decoded];
+            let cps = &cp_buf[0..res.decoded];
+
+            // Hand runs of printable codepoints to the handler as
+            // print_slice actions so it can process them with
+            // per-run rather than per-codepoint overhead.
+            // var i: usize = 0;
+            let mut i: usize = 0;
+            // while (i < cps.len) {
+            while i < cps.len() {
+                // const cp = cps[i];
+                let cp = cps[i];
                 // if (cp <= 0xF) {
                 if cp <= 0xF {
+                    // @branchHint(.unlikely);
+                    // PORT NOTE: `@branchHint(.unlikely)` has no stable Rust
+                    // equivalent (`core::intrinsics::likely` is nightly); the
+                    // branch structure is otherwise identical.
                     // self.execute(@intCast(cp));
                     self.execute(cp as u8);
-                } else {
-                    // self.print(@intCast(cp));
-                    self.print(cp);
+                    i += 1;
+                    continue;
                 }
+
+                // Find the end of the printable run. This is an
+                // early-exit search loop that LLVM won't
+                // auto-vectorize, and printable runs dominate real
+                // input, so scan several codepoints at a time
+                // manually (same idiom as the printSliceFill run
+                // scan).
+                // var end = i + 1;
+                let mut end = i + 1;
+                'scan: {
+                    if let Some(lanes) = PRINT_RUN_LANES {
+                        while end + lanes <= cps.len() {
+                            // const gt = v > threshold;
+                            // if (!@reduce(.And, gt)) { end += @ctz(~bits); break :scan; }
+                            let mut first_bad: Option<usize> = None;
+                            for j in 0..lanes {
+                                if cps[end + j] <= 0xF {
+                                    first_bad = Some(j);
+                                    break;
+                                }
+                            }
+                            if let Some(j) = first_bad {
+                                end += j;
+                                break 'scan;
+                            }
+                            end += lanes;
+                        }
+                    }
+                    // while (end < cps.len and cps[end] > 0xF) end += 1;
+                    while end < cps.len() && cps[end] > 0xF {
+                        end += 1;
+                    }
+                }
+                // self.handler.vt(.print_slice, .{ .cps = cps[i..end] });
+                self.handler.print_slice(&cps[i..end]);
+                // i = end;
+                i = end;
             }
             // Consume the bytes we just processed.
             // offset += res.consumed;
@@ -3847,6 +3931,162 @@ mod tests {
     //
     // This is the falsifiable form of `253e4f9c3`'s "guaranteeing byte-for-byte
     // identical semantics with the per-byte fast path it hoists".
+    // ---------------------------------------------------------------------
+    // WS10 T16 (47e26df60 + f2a7652ab): print_slice run batching in the
+    // ground-state SIMD loop.
+    // ---------------------------------------------------------------------
+
+    /// Drive the input through the GROUND-STATE loop in `next_slice_capped`,
+    /// which is where `47e26df60`'s printable-run batching and `f2a7652ab`'s
+    /// vectorized run scan live.
+    ///
+    /// THIS IS NOT `next_slice`, AND THAT IS THE POINT — same vacuity trap
+    /// `drive_bulk` documents above: `next_slice` opens with
+    /// `if DEBUG || !crate::options::SIMD { per-byte; return; }`, and `simd` is
+    /// OFF by default, so a test written against `next_slice` would compare the
+    /// per-byte path with itself in a default `cargo test` build and never
+    /// reach a single `print_slice`. `next_slice_capped` has no such gate, so
+    /// calling it directly exercises the batching in BOTH feature
+    /// configurations.
+    fn drive_ground<H: Handler + Default>(input: &[u8]) -> H {
+        let mut s: Stream<H> = Stream::init(H::default());
+        let mut cp_buf: [u32; 4096] = [0; 4096];
+        assert!(input.len() <= cp_buf.len());
+        s.next_slice_capped(input, &mut cp_buf);
+        s.handler
+    }
+
+    /// Records the `print_slice` runs verbatim (rather than fanning them out
+    /// to `print` the way the trait default does), so a test can assert on the
+    /// RUN STRUCTURE and not just the resulting codepoints.
+    #[derive(Default)]
+    struct PrintSliceRecorder {
+        runs: Vec<Vec<u32>>,
+        singles: Vec<u32>,
+        bells: usize,
+    }
+
+    impl Handler for PrintSliceRecorder {
+        fn print(&mut self, cp: u32) {
+            self.singles.push(cp);
+        }
+        fn print_slice(&mut self, cps: &[u32]) {
+            self.runs.push(cps.to_vec());
+        }
+        fn bell(&mut self) {
+            // 0x07 is the control the tests below use as a run separator; the
+            // stream's `execute` routes it here.
+            self.bells += 1;
+        }
+    }
+
+    /// The printable-run batching must be observationally identical to the
+    /// per-byte `print` stream it replaces: `RecordingHandler` does NOT
+    /// override `print_slice`, so its trait default fans each run back out to
+    /// `print` and the two logs must be equal byte for byte.
+    ///
+    /// This is the falsifiable form of `47e26df60`'s "semantically identical
+    /// to calling `print` for each codepoint in order".
+    #[test]
+    // MIRI: `next_slice_capped` calls `rustty_simd_decode_utf8_until_control_seq`,
+    // a foreign (C++/highway) function Miri cannot execute ("unsupported
+    // operation: can't call foreign function"). Structural, not a soundness
+    // finding — no Rust unsafe code of this port goes unverified, because the
+    // raw-pointer cell writes these tests reach live in `print_slice_fill` and
+    // ARE Miri-covered by `terminal_print_slice_*`, which drive
+    // `Terminal::print_slice` directly with no SIMD decode. Registered in
+    // .port/phase-2/MIRI_EXCEPTIONS.md (WS10 T16).
+    #[cfg_attr(miri, ignore)]
+    fn stream_print_slice_matches_per_byte() {
+        const CORPUS: &[&[u8]] = &[
+            b"hello world",
+            b"",
+            b"a",
+            b"\x07",
+            b"hello\nworld\r\n",
+            b"one\x07two\x08three",
+            // Multi-byte UTF-8 mixed with ASCII and controls.
+            "caf\u{e9} \u{4e00}\u{4e01} \u{1f600}!".as_bytes(),
+            // Every C0 in range, interleaved with printables.
+            b"a\x00b\x01c\x02d\x03e\x04f\x05g\x06h\x07i\x08j\x09k\x0al\x0bm\x0cn\x0do\x0ep\x0fq",
+            // A run longer than any plausible vector width, then a control.
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\x07b",
+            // Control first.
+            b"\x0aabc",
+            // Escape sequences bracketing printable runs.
+            b"abc\x1b[31mdef\x1b[0mghi",
+        ];
+
+        for input in CORPUS {
+            let per_byte = drive_per_byte::<RecordingHandler>(input);
+            let ground = drive_ground::<RecordingHandler>(input);
+            assert_eq!(
+                per_byte.log,
+                ground.log,
+                "print_slice batching diverged from per-byte path on {:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
+    }
+
+    /// The run scan must actually BATCH: a contiguous printable run arrives as
+    /// ONE `print_slice` carrying every codepoint, and a C0 splits it into two
+    /// runs with the control executed in between. Without this, the previous
+    /// test still passes with a `print_slice` that emits one codepoint at a
+    /// time (which is what an off-by-one in the vectorized `end` scan would
+    /// produce), so this is the negative control for `f2a7652ab`'s lane loop.
+    #[test]
+    // MIRI: `next_slice_capped` calls `rustty_simd_decode_utf8_until_control_seq`,
+    // a foreign (C++/highway) function Miri cannot execute ("unsupported
+    // operation: can't call foreign function"). Structural, not a soundness
+    // finding — no Rust unsafe code of this port goes unverified, because the
+    // raw-pointer cell writes these tests reach live in `print_slice_fill` and
+    // ARE Miri-covered by `terminal_print_slice_*`, which drive
+    // `Terminal::print_slice` directly with no SIMD decode. Registered in
+    // .port/phase-2/MIRI_EXCEPTIONS.md (WS10 T16).
+    #[cfg_attr(miri, ignore)]
+    fn stream_print_slice_batches_printable_runs() {
+        // 70 'a's is longer than 2x any native vector width for u32, so the
+        // vector loop runs to completion and hands off to the scalar tail.
+        let mut input = vec![b'a'; 70];
+        input.push(0x07); // BEL, a C0 -> execute
+        input.extend_from_slice(b"bcd");
+
+        let h = drive_ground::<PrintSliceRecorder>(&input);
+        assert_eq!(2, h.runs.len(), "expected exactly two printable runs");
+        assert_eq!(70, h.runs[0].len());
+        assert!(h.runs[0].iter().all(|&c| c == 'a' as u32));
+        assert_eq!(
+            vec!['b' as u32, 'c' as u32, 'd' as u32],
+            h.runs[1],
+            "the run after the control must be batched too"
+        );
+        assert_eq!(1, h.bells);
+        assert!(
+            h.singles.is_empty(),
+            "the ground loop must emit print_slice, never bare print"
+        );
+
+        // Every lane boundary: a control at offset N for N across a full
+        // vector's worth of positions must split exactly there.
+        for n in 0..40usize {
+            let mut input: Vec<u8> = vec![b'x'; n];
+            input.push(0x07);
+            input.extend_from_slice(b"yz");
+            let h = drive_ground::<PrintSliceRecorder>(&input);
+            let expect_runs = if n == 0 { 1 } else { 2 };
+            assert_eq!(expect_runs, h.runs.len(), "n={n}");
+            if n > 0 {
+                assert_eq!(n, h.runs[0].len(), "n={n}");
+            }
+            assert_eq!(
+                vec!['y' as u32, 'z' as u32],
+                *h.runs.last().unwrap(),
+                "n={n}"
+            );
+        }
+    }
+
     #[test]
     fn stream_csi_bulk_params_match_per_byte() {
         for input in CSI_DIFFERENTIAL_CORPUS {

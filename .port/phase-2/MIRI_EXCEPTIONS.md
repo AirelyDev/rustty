@@ -1765,3 +1765,42 @@ in UB is not a measurement of that test's cost**, and any exception table that h
 * **The 11 kitty-graphics annotations and the `search_thread` interpreter ICE were not
   re-measured.** Neither class is assertion-bound (real-OS temp files, zlib FFI, an upstream
   rustc bug), so the G6c lever cannot apply to them; they keep their existing entries.
+
+## WS10 T16 — the two `print_slice` STREAM tests (foreign SIMD decoder), 2026-07-30
+
+`47e26df60`'s printable-run batching is emitted from the ground-state loop in
+`Stream::next_slice_capped`, which calls
+`rustty_simd::vt::utf8DecodeUntilControlSeq`. That wrapper's `SIMD` const is
+`true` unconditionally in `rustty-simd` (it is not the `rustty-vt` `simd`
+feature), so it always invokes the cc-built C++/highway kernel
+`rustty_simd_decode_utf8_until_control_seq`. Miri reports:
+
+```
+error: unsupported operation: can't call foreign function
+  `rustty_simd_decode_utf8_until_control_seq` on OS `macos`
+ --> crates/rustty-simd/src/vt.rs:38:12
+```
+
+Same class as the existing kqueue / openpty / Metal / zlib entries above:
+structural interpreter limitation, not a soundness finding.
+
+| test | file | annotation |
+|---|---|---|
+| `stream_print_slice_matches_per_byte` | `stream.rs` | `cfg_attr(miri, ignore)` |
+| `stream_print_slice_batches_printable_runs` | `stream.rs` | `cfg_attr(miri, ignore)` |
+
+### Criterion 3 (no uncovered unsafe path) — the teeth
+
+Every line of `unsafe` T16 adds is in `Terminal::print_slice_fill_inner`,
+`print_slice_store_run` and `print_slice_store_pairs` (raw-pointer cell writes
+through `cursor.page_cell`). Those are reached with NO SIMD decode at all by
+`Terminal::print_slice`, and the four ported oracle tests
+(`terminal_print_slice_simple_ascii`, `terminal_print_slice_wraps_and_scrolls`,
+`terminal_print_slice_pending_wrap_state`, and the
+`terminal_print_slice_differential_fuzz_vs_print` fuzz) drive exactly that entry
+point and DO run under Miri. The two excepted tests add no unsafe of their own —
+they assert the stream's RUN STRUCTURE (that batching happens at all, and where
+the run boundaries fall), which is a logic property fully covered natively in
+both the `simd` and non-`simd` configurations.
+
+Owned by WS10 (OPEN).

@@ -1407,6 +1407,11 @@ impl<'a> stream::Handler for Handler<'a> {
         self.vt(|t| t.print(cp));
     }
 
+    // .print_slice => try self.terminal.printSlice(value.cps),
+    fn print_slice(&mut self, cps: &[u32]) {
+        self.vt(|t| t.print_slice(cps));
+    }
+
     // .print_repeat => try self.terminal.printRepeat(value),
     fn print_repeat(&mut self, count: usize) {
         self.vt(|t| t.print_repeat(count));
