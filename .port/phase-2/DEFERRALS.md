@@ -3517,7 +3517,9 @@ DEFERRED (documented; not needed to boot a shell on macOS — the permanent fina
   re-exported.
 - **Other backends** (`backend/epoll` 12t, `io_uring` 13t — **both since PORTED**;
   `iocp` 14t, `wasi_poll` 9t — out-of-scope-by-platform per `ROADMAP:214`, not
-  deferrals), ~~**`watcher/file`** (8t, `xev.File` — zero ghostty uses),
+  deferrals; **formally ledgered with a 4-criterion basis + the G-XEVSCOPE gate by
+  WS19 T7, 2026-07-30** — see "libxev `iocp` (Windows) + `wasi_poll` …" in the
+  `# Justified R1 Divergences` section), ~~**`watcher/file`** (8t, `xev.File` — zero ghostty uses),
   **`watcher/tcp`** (5t), **`watcher/udp`** (6t), **`c_api.zig`** (1t, libxev's C ABI —
   rustty consumers use the Rust API) — whole follow-up ports (§1). Non-macOS handle
   types stay `lib.rs` placeholders.~~
@@ -3558,7 +3560,10 @@ imports the package as `@import("xev").Dynamic` and `Xev(bes)` short-circuits to
 `#[cfg(not(target_os = "macos"))]` placeholder seam (no-op `unimplemented!()`
 handles) is NARROWED to `not(any(macos, linux))` and renamed `deferred_backend_seam`
 — it now stands in only for the `wasi_poll`/`iocp` targets it actually describes
-(notably the wasm32 build, which has no event loop at all).
+(notably the wasm32 build, which has no event loop at all). **[WS19 T7, 2026-07-30:
+renamed again to `unsupported_target_seam` and re-worded — these are a permanent
+SCOPE BOUNDARY, not a deferral; see the `# Justified R1 Divergences` entry and the
+`G-XEVSCOPE` gate.]**
 
 **[ADV-FIX F7] gate wiring:** `check_test_counts.py` gains four rows against the
 SAME pinned `GHXEV` libxev package the macOS rows use (the Linux read-only oracle
@@ -5289,7 +5294,10 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
    `target/wasm32-unknown-unknown/release/rustty_web_canvas.wasm` (**1.06 MB, 199
    exports, 14 imports, `WebAssembly.Module.imports` modules = `["env"]` only — ZERO
    wasi imports**; the "936 KB / 184 exports" first recorded here was stale-low and
-   is corrected to the 2026-07-30 measurement so the row stays checkable), loadable
+   is corrected to the 2026-07-30 measurement so the row stays checkable. **Now 1.12
+   MB / 205 exports / 14 imports** after the WS19 T7 `DeferredFace` web_canvas port
+   added the six `rustty_wc_deferred_*` harness exports — see the
+   `rustty-font-shaper` section below), loadable
    directly in a browser with no wasi shim. Achieved by
    making the wasm build PURE RUST: `rustty-simd` scalar-Rust fallbacks under
    cfg(wasm) for every simdutf/highway kernel (base64, codepoint_width, index_of,
@@ -5347,6 +5355,34 @@ fork:
   `Backend::WebCanvas` wasm backend (Canvas FFI replaces `zig-js`; faceFromIndex →
   modern `Collection::get_face`). Browser-verified in real Chrome. See the WASM/web
   section RESIDUAL #1/#2 above for the full record.
+- ~~**`deferred_face.rs:735/738/745` — the 3 WebCanvas `DeferredFace` arms**
+  (`unimplemented!("WebCanvas DeferredFace is DEFERRED (wasm backend)")` on
+  `has_codepoint`/`name`/`load`)~~ **RESOLVED (2026-07-30, WS19 T7).** The premise
+  had gone STALE the moment WS14 resurrected the `web_canvas` face: the oracle
+  (`src/font/DeferredFace.zig`) has real `.web_canvas` bodies for `familyName`,
+  `name`, `hasCodepoint` and `loadWebCanvas`, and every primitive they need
+  (`Face.initNamed`, `Face.glyphIndex`) was already ported in
+  `face/web_canvas.rs`. All four are now real ports in a new
+  `deferred_face::web_canvas_payload` module, alongside the reference
+  `DeferredFace.WebCanvas` payload struct (`font_str: Vec<u8>` — byte-slice
+  fidelity, never a lossy `String` — plus `presentation`); the wasm `_deferred: ()`
+  placeholder field is replaced by the real `wc: Option<WebCanvasData>`, mirroring
+  the macOS `ct` / Linux `fc` shape. **No `unimplemented!` remains in this file.**
+  **Falsifiable gate** (this port is wasm-only, so a host `#[test]` cannot reach
+  it): six LOCAL `rustty_wc_deferred_*` harness exports were added to the
+  `rustty-web-canvas` cdylib root — the same "local helper export" class as
+  `rustty_wc_atlas_*`, NOT a port of anything (the reference `DeferredFace.zig`
+  carries no `Wasm` C-ABI) — and `.port/tools/web-canvas-instantiate.mjs` gained a
+  `(c4)` block that ASSERTS values, not merely "did not trap":
+  `name`/`family_name` must equal the payload's font string exactly, and
+  `has_codepoint` must be `true` for a null presentation, `true` for a matching
+  one, and `false` for a mismatched one (the reference's no-face-init fast path).
+  Recipe: `sh .port/tools/build-web-canvas-wasm.sh --release && node
+  .port/tools/web-canvas-instantiate.mjs`. **Mutation-proven RED twice:** neutering
+  the presentation fast-path (`if false && …`) →
+  `FAIL: deferred has_codepoint('A', emoji) should be false`; truncating the `name`
+  copy (`&wc.font_str[..1]`) → `FAIL: deferred name = "b"`. Both reverted, green
+  re-confirmed.
 
 The cli C2 entry's "Non-macOS Fontconfig discovery is still DEFERRED in the
 shaper" note points here.
@@ -6287,6 +6323,67 @@ Divergences from the oracle that are intentional and will NOT be "completed"
 later. Each records what diverges, why fidelity was overruled, and how the
 divergence is bounded. Anything here must be a conscious decision with a
 rationale — never an accident.
+
+## libxev `iocp` (Windows) + `wasi_poll` (WASI/wasm) backends — OUT OF SCOPE BY PLATFORM
+
+**[FILED — WS19 T7, 2026-07-30.]** `crates/rustty-xev/src/lib.rs`'s
+`unsupported_target_seam` (formerly `deferred_backend_seam`) carried **10**
+`unimplemented!("xev has no backend for this target (XEV_BLUEPRINT §1):
+wasi_poll/iocp deferred")` bodies. The word "deferred" was wrong in both
+directions: DEFERRALS.md §"Other backends" already classified `iocp` (14t) and
+`wasi_poll` (9t) as *out-of-scope-by-platform, not deferrals*, and the WS19 T19
+row at `D:4900` lists them alongside every `#[cfg(windows)]` seam — but the code
+said "deferred", with no owner and no check. Re-worded at all 10 sites and
+ledgered here.
+
+**What diverges.** libxev upstream implements `backend/iocp.zig` and
+`backend/wasi_poll.zig`. rustty ports neither; the handle types
+(`Loop`/`Async`/`Completion`/`Timer`/`Process`/`Stream`/`WriteRequest`/`WriteQueue`)
+exist on those targets as type-check-only placeholders whose methods panic.
+
+**4-criterion basis:**
+1. **The targets are out of the port's scope, permanently.** `iocp` is Windows;
+   the port emits no Windows artifact and Windows is out of scope at the ROADMAP
+   level (`ROADMAP:214`), the same boundary as the `#[cfg(windows)]` seams in
+   `rustty-vaxis` (`tty.rs`, `loop_.rs`) and `rustty-termio` (`exec.rs:2506`).
+   There is no owner to name because there is no plan for the target — which is
+   the definition of a scope boundary rather than a deferral.
+2. **No artifact rustty builds can reach the bodies — and that is CHECKED, not
+   argued.** `wasi_poll` is the subtle half, because WS14 widened `backend.rs` to
+   select `Backend::WasiPoll` for `all(target_family = "wasm", not(emscripten))`,
+   so a wasm build does compile this seam. It never *executes* it: `rustty-xev`
+   is in NO wasm dependency graph. All four wasm builds
+   (`rustty-wasm`, `rustty-web-canvas`, `rustty-vt-c` on
+   `wasm32-unknown-unknown`, and `rustty-vt-c` on `wasm32-wasip1`) run the
+   SYNCHRONOUS C-ABI with no event loop, and the only sub-app-tier xev edge —
+   `rustty-os → rustty-xev` — is `#[cfg(target_os = "macos")]`.
+   **Gate: `.port/tools/gates/xev_scope_boundary_gate.sh`** (wired into `ci.sh`
+   as HARD gate **G-XEVSCOPE**) asserts exactly that, so the day someone adds an
+   xev edge to a wasm deliverable this entry goes RED and the backend becomes
+   real work again. Mutation-proven RED on BOTH arms: appending
+   `rustty-xev = { workspace = true }` to `crates/rustty-web-canvas/Cargo.toml`
+   → `FAIL: rustty-web-canvas (wasm32-unknown-unknown) DEPENDS ON rustty-xev`;
+   re-gating the `rustty-os` edge to `cfg(unix)` →
+   `FAIL: rustty-os -> rustty-xev is NOT macOS-gated`. Both reverted, green
+   re-confirmed.
+3. **The placeholders are load-bearing for type-checking only, and are named for
+   it.** They exist so `cargo check -p rustty-xev --target wasm32-*` still
+   type-checks the crate's public surface. Deleting them would break that check
+   for zero behavioural gain; filling them would port two backends no rustty
+   artifact links. The module and every doc comment now say "out of scope by
+   platform", and the panic messages point at this entry — a stale *name* here is
+   precisely what would let a future target land on panicking handles while
+   believing it had a backend (the LT8 lesson, preserved).
+4. **R5-safe: nothing on a supported target changes.** The 10 bodies are inside
+   `#[cfg(not(any(target_os = "macos", target_os = "linux")))]`; macOS keeps the
+   flat kqueue Api and Linux keeps the real `Dynamic`/`epoll`/`io_uring` surface.
+   `cargo test -p rustty-xev` and the whole workspace are byte-identical in
+   behaviour before and after — this change is comments and panic strings on a
+   module no supported target compiles into an artifact.
+
+**Un-diverge trigger:** rustty adopting Windows as a target, or a wasm artifact
+growing a genuine event loop. Either flips G-XEVSCOPE (or makes it moot) and this
+entry must be reopened as a real port.
 
 ## wayland `Globals::bind_global` — duplicate re-advertisement of a SINGLETON global leaves a stale `name→tag` entry
 

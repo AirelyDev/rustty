@@ -241,6 +241,16 @@ GATE_REGISTRY=(
   # (`.port/tools/gates/fixtures/phase2-closure-{orphan,owned}.md`), which is the bar
   # G6b and G-REL met. When the last two items land it goes green and STAYS green.
   "G-P2|HARD|$PY $GATES/check_phase2_closure.py"
+  # G-XEVSCOPE (WS19 T7) — the falsifiable half of the `iocp`/`wasi_poll` "out of
+  # scope by platform" divergence. `rustty-xev`'s `unsupported_target_seam` panics
+  # in 10 handle methods; that is only a scope boundary for as long as NO artifact
+  # rustty builds can reach it. Windows needs no check (no Windows artifact
+  # exists), but `backend.rs` DOES select `Backend::WasiPoll` for
+  # `target_family = "wasm"`, so a new xev edge on any wasm deliverable would turn
+  # the seam back into real unported work. The gate asserts `rustty-xev` is absent
+  # from all four wasm graphs and that `rustty-os`'s xev edge stays macOS-gated.
+  # HARD: green at landing, seconds, and BOTH FAIL arms are mutation-proven.
+  "G-XEVSCOPE|HARD|sh $GATES/xev_scope_boundary_gate.sh"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"

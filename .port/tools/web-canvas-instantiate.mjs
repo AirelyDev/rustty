@@ -111,6 +111,59 @@ const count = ex.rustty_wc_shaper_shape(shaper, 0, cpsPtr, clPtr, n, outCells, n
 if (count < 0) throw new Error("FAIL: rustty_wc_shaper_shape rc=" + count);
 console.log('shaper_shape "' + text + '": OK (' + count + " cells produced)");
 
+// (c4) the web_canvas `DeferredFace` arms (familyName / name / load /
+// hasCodepoint). These are ASSERTED, not merely "did not trap": the payload
+// carries a known font string and a known presentation, so a regression in any
+// arm changes an observable value.
+{
+  const dfBytes = enc.encode("bold 1em monospace");
+  const dfPtr = writeBytes(dfBytes);
+  // presentation 0 = text.
+  const df = ex.rustty_wc_deferred_new(dfPtr, dfBytes.length, 0);
+  ex.rustty_wc_free(dfPtr, dfBytes.length);
+  if (df === 0) throw new Error("FAIL: rustty_wc_deferred_new returned null");
+
+  const readInto = (fn) => {
+    const cap = 128;
+    const p = ex.rustty_wc_alloc(cap);
+    const len = fn(df, p, cap);
+    if (len === 0xffffffff || len > cap)
+      throw new Error("FAIL: deferred name/family_name error (len=" + len + ")");
+    const s = new TextDecoder().decode(memU8().slice(p, p + len));
+    ex.rustty_wc_free(p, cap);
+    return s;
+  };
+
+  const nm = readInto(ex.rustty_wc_deferred_name);
+  if (nm !== "bold 1em monospace")
+    throw new Error("FAIL: deferred name = " + JSON.stringify(nm));
+  const fam = readInto(ex.rustty_wc_deferred_family_name);
+  if (fam !== "bold 1em monospace")
+    throw new Error("FAIL: deferred family_name = " + JSON.stringify(fam));
+  console.log("deferred name/family_name: OK (" + JSON.stringify(nm) + ")");
+
+  // hasCodepoint: presentation 2 = null (`?Presentation` = none) -> slow path.
+  const cpA = "A".codePointAt(0);
+  if (ex.rustty_wc_deferred_has_codepoint(df, cpA, 2) !== 1)
+    throw new Error("FAIL: deferred has_codepoint('A', null) should be true");
+  // Matching presentation (text) -> still true.
+  if (ex.rustty_wc_deferred_has_codepoint(df, cpA, 0) !== 1)
+    throw new Error("FAIL: deferred has_codepoint('A', text) should be true");
+  // MISMATCHED presentation (emoji vs a text payload) -> the reference's
+  // fast-path returns false WITHOUT initializing a face.
+  if (ex.rustty_wc_deferred_has_codepoint(df, cpA, 1) !== 0)
+    throw new Error("FAIL: deferred has_codepoint('A', emoji) should be false");
+  console.log("deferred has_codepoint: OK (null=true, text=true, emoji=false)");
+
+  // load(): yields a real Canvas Face carrying the same font string.
+  const loaded = ex.rustty_wc_deferred_load(df, 14.0);
+  if (loaded === 0) throw new Error("FAIL: rustty_wc_deferred_load returned null");
+  ex.rustty_wc_face_free(loaded);
+  console.log("deferred load: OK (handle=" + loaded + ")");
+
+  ex.rustty_wc_deferred_free(df);
+}
+
 // cleanup
 ex.rustty_wc_free(cpsPtr, n * 4);
 ex.rustty_wc_free(clPtr, n * 4);

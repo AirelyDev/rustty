@@ -150,6 +150,159 @@ pub unsafe extern "C" fn rustty_wc_atlas_size(ptr: *mut Atlas<Global>) -> u32 {
     unsafe { &*ptr }.size()
 }
 
+// --- DeferredFace (web_canvas payload) harness exports ---------------------
+//
+// The reference `DeferredFace.zig` carries NO `pub const Wasm = struct` C-ABI, so
+// these are LOCAL harness exports of this deliverable (exactly like the
+// `rustty_wc_atlas_*` helpers above) — not a port of anything. They exist so
+// `.port/tools/web-canvas-instantiate.mjs` can drive the ported `web_canvas`
+// `DeferredFace` arms (`familyName`/`name`/`load`/`hasCodepoint`) against the
+// mock Canvas and assert their behaviour, instead of the port resting on a
+// compile-only claim.
+
+#[cfg(target_arch = "wasm32")]
+use rustty_font_shaper::deferred_face::WebCanvasData;
+#[cfg(target_arch = "wasm32")]
+use rustty_font_shaper::face::{
+    DesiredSize, Face, Options, DEFAULT_DPI, FREETYPE_LOAD_FLAGS_DEFAULT,
+};
+#[cfg(target_arch = "wasm32")]
+use rustty_font_shaper::library::Library;
+#[cfg(target_arch = "wasm32")]
+use rustty_font_shaper::{DeferredFace, Presentation};
+
+/// `presentation`: 0 = text, non-zero = emoji.
+#[cfg(target_arch = "wasm32")]
+fn presentation_from_u16(p: u16) -> Presentation {
+    if p == 0 {
+        Presentation::Text
+    } else {
+        Presentation::Emoji
+    }
+}
+
+/// Build a `DeferredFace` carrying a `web_canvas` payload for the CSS "font"
+/// string `ptr[..len]`. Free with `rustty_wc_deferred_free`.
+///
+/// # Safety
+/// `ptr[..len]` must be a readable byte range.
+#[cfg(target_arch = "wasm32")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_wc_deferred_new(
+    ptr: *const u8,
+    len: usize,
+    presentation: u16,
+) -> *mut DeferredFace {
+    let raw = unsafe { core::slice::from_raw_parts(ptr, len) };
+    Box::into_raw(Box::new(DeferredFace {
+        wc: Some(WebCanvasData {
+            font_str: raw.to_vec(),
+            presentation: presentation_from_u16(presentation),
+        }),
+    }))
+}
+
+/// Free a `DeferredFace` from `rustty_wc_deferred_new`.
+///
+/// # Safety
+/// `ptr` must be null or a live pointer from `rustty_wc_deferred_new`.
+#[cfg(target_arch = "wasm32")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_wc_deferred_free(ptr: *mut DeferredFace) {
+    if !ptr.is_null() {
+        let mut df = unsafe { Box::from_raw(ptr) };
+        df.deinit();
+    }
+}
+
+/// `DeferredFace.name` into `out[..cap]`; returns the byte length written, or
+/// `usize::MAX` on error.
+///
+/// # Safety
+/// `ptr` must be live; `out[..cap]` must be writable.
+#[cfg(target_arch = "wasm32")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_wc_deferred_name(
+    ptr: *mut DeferredFace,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    let df = unsafe { &*ptr };
+    let buf = unsafe { core::slice::from_raw_parts_mut(out, cap) };
+    match df.name(buf) {
+        Ok(s) => s.len(),
+        Err(_) => usize::MAX,
+    }
+}
+
+/// `DeferredFace.familyName` into `out[..cap]`; returns the byte length written,
+/// or `usize::MAX` on error.
+///
+/// # Safety
+/// `ptr` must be live; `out[..cap]` must be writable.
+#[cfg(target_arch = "wasm32")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_wc_deferred_family_name(
+    ptr: *mut DeferredFace,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    let df = unsafe { &*ptr };
+    let buf = unsafe { core::slice::from_raw_parts_mut(out, cap) };
+    match df.family_name(buf) {
+        Ok(s) => s.len(),
+        Err(_) => usize::MAX,
+    }
+}
+
+/// `DeferredFace.hasCodepoint`. `presentation`: 0 = text, 1 = emoji, 2 = null
+/// (`?Presentation` = none). Returns 1/0.
+///
+/// # Safety
+/// `ptr` must be a live pointer from `rustty_wc_deferred_new`.
+#[cfg(target_arch = "wasm32")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_wc_deferred_has_codepoint(
+    ptr: *mut DeferredFace,
+    cp: u32,
+    presentation: u16,
+) -> i32 {
+    let df = unsafe { &*ptr };
+    let p = if presentation >= 2 {
+        None
+    } else {
+        Some(presentation_from_u16(presentation))
+    };
+    i32::from(df.has_codepoint(cp, p))
+}
+
+/// `DeferredFace.load` at `pts` points. Returns a `Face` to be freed with
+/// `rustty_wc_face_free`, or null on error.
+///
+/// # Safety
+/// `ptr` must be a live pointer from `rustty_wc_deferred_new`.
+#[cfg(target_arch = "wasm32")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_wc_deferred_load(ptr: *mut DeferredFace, pts: f32) -> *mut Face {
+    let df = unsafe { &mut *ptr };
+    let lib = match Library::init() {
+        Ok(lib) => lib,
+        Err(_) => return core::ptr::null_mut(),
+    };
+    let opts = Options {
+        size: DesiredSize {
+            points: pts,
+            xdpi: DEFAULT_DPI,
+            ydpi: DEFAULT_DPI,
+        },
+        freetype_load_flags: FREETYPE_LOAD_FLAGS_DEFAULT,
+    };
+    match df.load(lib, opts) {
+        Ok(face) => Box::into_raw(Box::new(face)),
+        Err(_) => core::ptr::null_mut(),
+    }
+}
+
 // --- wasm host-memory conveniences (the `rustty_wasm_*` pattern from vt-c) ---
 
 /// Allocate `len` bytes in the module's linear memory (align 1). Free with
