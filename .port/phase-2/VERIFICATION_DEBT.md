@@ -489,9 +489,16 @@ RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/debug/rustty
 
 ---
 
-## V7. RTL (Hebrew) UI layout sign-off (blocked: no RTL session; human visual judgment) — **OWNER: Phase 3**
+## V7. RTL (Hebrew) UI layout sign-off (blocked: no RTL session; human visual judgment) — **OWNER: WS20**
 
-> **Why Phase 3 and not WS13.** WS13's IMPLEMENTATION work is complete and merged —
+> **Why WS20 and not WS13 or Phase 3.** WS13 is CLOSED, so filing here orphaned the
+> row (that is how 21 items were lost before G-P2 existed). And `Phase 3` is NOT a
+> valid owner for this: the closure gate now accepts Phase 3 only for work whose
+> SOURCE is the beyond-pin upstream range (marked `BEYOND-PIN`), which this is not —
+> it is Phase-2 verification debt that merely needs an RTL session. It is owned by
+> the open WS20.
+>
+> **Original rationale (WS13 implementation is complete).** WS13's IMPLEMENTATION work is complete and merged —
 > nothing here is unported, and every mechanical property that CAN be asserted is
 > asserted (see below). What remains needs a desktop session with `he_IL.UTF-8`
 > generated and a human looking at a mirrored layout, which is exactly the class of

@@ -2114,7 +2114,17 @@ rustty_core::Surface<embedded::App>` bound against a REAL backend (core's C0 gat
 used a dummy `A`). The E1 leaves at `core`/`rt_app`/… are now RESOLVED (real
 bodies). Deferred out of E2:
 
-1. **`Inspector` E2→E4 SEQUENCING STUB (the dcimgui tier [LANDED: WS6]/Metal leaf).** `Surface`
+1. ~~**`Inspector` E2→E4 SEQUENCING STUB (the dcimgui tier [LANDED: WS6]/Metal leaf).**~~
+   **RESOLVED — verified 2026-07-30 (WS20 ledger pass).** The row was FALSELY OPEN.
+   `crates/rustty-apprt/src/embedded.rs` contains exactly ONE real `unimplemented!()`
+   call site — `:2275` `renderMetal`, which is Darwin-only and unreachable off macOS
+   (a faithful platform arm, not a seam). The `Inspector` `deinit` leaf this row
+   describes no longer exists; the dcimgui tier landed in WS6 as the row's own
+   `[LANDED: WS6]` annotation already noted. Evidence:
+   `grep -n 'unimplemented!(' crates/rustty-apprt/src/embedded.rs` → one code hit
+   (`:2275`); every other hit is a doc comment.
+   Original text follows for provenance:
+   ~~`Surface`
    carries `inspector: Option<*mut Inspector>` and `deinit` calls `freeInspector`,
    so the `Inspector` type must exist NOW. E2 defines a MINIMAL opaque `Inspector`
    (`#[allow(dead_code)]`) whose `deinit` is an `unimplemented!()` leaf; `deinit`/
@@ -2124,9 +2134,13 @@ bodies). Deferred out of E2:
    context). **Target: E4, EMBEDDED_BLUEPRINT §7** (`Inspector`, embedded.zig
    992-1243). Chunk-sequencing + Phase-3 leaf, not a permanent gap.
 
-2. **`Surface::queueInspectorRender` — E3/E4 `unimplemented!()` leaf (carried from
-   E1).** Reaches the `render_inspector` action (dcimgui/Metal Phase-3). Called by
-   `App::redrawInspector`; kept an `unimplemented!()` placeholder. **Target: E3/E4.**
+2. ~~**`Surface::queueInspectorRender` — E3/E4 `unimplemented!()` leaf (carried from
+   E1).**~~ **RESOLVED — verified 2026-07-30 (WS20 ledger pass).** Also FALSELY OPEN:
+   `queueInspectorRender` is IMPLEMENTED at `embedded.rs:1687` and dispatches the
+   `render_inspector` action through the same `performAction` host-callback seam every
+   other apprt action routes through; its live call site is `embedded.rs:532`. There is
+   no `unimplemented!()` anywhere in that region. Evidence: `sed -n '1685,1705p'` shows
+   zero `unimplemented!` occurrences.
 
 3. **GPU/xev runtime leaves reachable THROUGH E2's `init`/`deinit`.**
    `Surface::init` calls core `Surface::init` (surface.rs) which constructs the
