@@ -1,0 +1,250 @@
+c3b5cab94 wayland/Hotkeys: polish & simplify
+a34bf0dce Update VOUCHED list (#13511)
+9fc2a3085 url: exclude trailing spaces from path matches
+1cc5e7bec update zig-gobject to 0.3.2
+232d40c06 Update VOUCHED list (#13499)
+4b586231a docs: clarify macOS dependencies
+7bea975bd Update VOUCHED list (#13497)
+07f6c6bb0 mirror deps
+6c8c07981 terminal: add visibility reports
+2f3814ca5 gtk: honor suspended window state
+95befb337 Update VOUCHED list (#13495)
+d320cd7df cli: fix list-themes preview lifecycle
+d71695550 config: update info about global keybinds on Linux
+4a22eed6d renderer/metal: fix 2x sizeof over-allocation in Buffer.sync
+d0e72a3ab font/sprite: update to z2d 0.12.1, use native path insetting
+2729996ea terminal: update event tests for constructor API
+628adaf30 terminal: share progress state enum
+28f02ac3c Update VOUCHED list (#13487)
+10e6ace6b GhosttyI18n: fix build on freebsd with zig 0.16
+47d602c42 terminal: expose progress report effect
+c3655ba25 terminal: expose desktop notification effect
+5fd2973b9 lib-vt: better docs for C options
+a27e04e8f lib-vt: readers for configured scrollback limits
+03d5fa268 lib-vt: move scrollback limits to terminal_set
+f4c68d65e terminal: support runtime scrollback limits
+659a60ae5 terminal/search: fix tests
+1092204df config: support unlimited scrollback limits
+65c48213b config: expose scrollback line limit
+10bc43420 terminal: make scrollback byte limit optional
+86f81fb5b terminal: expose scrollback line limit
+5b2d3b7df terminal: limit scrollback by physical lines
+3b4600014 clarify comments
+84254a9d8 build: avoid MSVC C++ runtime in no-libcxx builds
+1fe1b2d23 build: fix static libghostty-vt linking on Windows
+39ae85f04 lib-vt: handle DECRQSS
+cb2fef390 terminal: preserve underline style in DECRQSS
+20c3eae04 memset should match the C ABI
+7ee3ac9ec refactor: use arena allocator
+0075c75b6 refactor: remove unneeded appendAssumeCapacity
+3024c5d19 refactor: address nits
+a6edca2d7 macOS: free surface synchronously in deinit on main thread
+35790a7e5 Revert "macOS: fix undo new tab will cause a crash (#9512)"
+5caf20e3e terminal: avoid reallocating tabstop storage
+2de5e7d38 Update VOUCHED list (#13463)
+9c6f287aa chore: regenerate translations
+88bd4fdce feat: implement vicinae-hotkey-v1
+4c1d69696 deps: Update iTerm2 color schemes
+e31f729b3 deps: update translate-c backport
+4c725242b Update VOUCHED list (#13437)
+f8e13f31e Fix desktop detection tests when running from Gnome
+fa3802a70 macOS: change split drag's point style to match HIG
+d65cb5128 build: link libghostty-vt on Apple hosts with native linker
+e663d5405 os/hostname: switch to std.Io.net.HostName.validate
+960c2cca5 fix: fix kitty temp directory copy length mismatch
+d97a57424 ci: test with Xcode 27
+1c861e3c4 pkg/apple-sdk: support Xcode 27 SDK headers
+dac134d25 pkg/apple-sdk: enable libc++ availability annotations
+b988efcfe fix some 0.16 translation regressions
+a77c706a1 fix process and global error handling
+7121ab6c3 global: state should default to null
+495666870 vt: get rid of log spam on tests
+048619a6b global: take minimal instead of juicy main
+da04b65d4 terminal: init_single_threaded for C API
+f2a7652ab mitchell's touchups
+e8525c0fd Update to Zig 0.16.0
+88b4cd047 gitignore: add zig-pkg so switching between branches doesn't produce noise
+30e1f3bb8 Update VOUCHED list (#13404)
+f5477459e build(deps): bump actions/checkout from 7.0.0 to 7.0.1
+74d0c72fd Update VOUCHED list (#13401)
+ee9d5b352 terminal: handle page capacity errors in eraseRow
+043326249 terminal: handle page capacity errors in cursorScrollAbove
+2104e0749 macOS: hide visible NSScrollPocket for hidden title bar
+a65e11cc9 kitty images: add support for transient usage hints
+2da02f4d2 config: update `background-blur` to reflect growing adoption
+c9c017e8e Update VOUCHED list (#13383)
+b513f1b20 deps: Update iTerm2 color schemes
+c594031d5 terminal: move cursor defaults into terminal state
+439d35e27 libghostty: mark semantic stream failures
+f21d37688 Update VOUCHED list (#13368)
+a3c1caba5 terminal: resize failures are now almost fully safe
+dde3d4d6b terminal: screen resize failures are now safe
+89b103dd5 terminal: more full featured resize (cell geo, sync rendering, etc.)
+0f0ede81d build(deps): bump namespacelabs/nscloud-cache-action from 1.6.0 to 1.6.1
+68376f5ac build(deps): bump cachix/install-nix-action from 31.10.7 to 31.11.0
+42b4c5972 cleanup: remove dead code line
+59c3a0836 build(deps): bump softprops/action-gh-release from 3.0.1 to 3.0.2
+f8041e849 Update VOUCHED list (#13330)
+0ac423d57 build(deps): bump mitchellh/vouch/action/sync-codeowners
+97f70cccf build(deps): bump mitchellh/vouch/action/manage-by-discussion
+3f6b9a16b build(deps): bump mitchellh/vouch/action/check-issue
+8093d2d43 build(deps): bump mitchellh/vouch/action/check-pr from 1.4.2 to 1.5.0
+76222008e build(deps): bump mitchellh/vouch/action/manage-by-issue
+bc8bb6c0f terminal/search: don't clear storage when updating fingerprint
+71522c311 remove unneeded comments
+7fa43764b add nushell complete attribute
+a3ac713b7 Update VOUCHED list (#13309)
+9659167ec terminal/search: reuse viewport fingerprint storage
+fedd42e8d terminal: use backward-shift deletion in page maps
+78a9731c9 Update VOUCHED list (#13299)
+ae76cfbfc i18n: fix untranslated Close Split string in zh_CN.po
+65f953e8e terminal: avoid duplicate probes when moving cell data
+7e14347c1 terminal: bound page map probe lengths
+89eca063e terminal/search: avoid pruning history on reload
+0bad91adb terminal: renew generations for direct row shifts
+634ef7198 terminal: make clipboard writes protocol neutral
+f6d9a582e terminal: rename page serial floor as epoch
+dd956f37c terminal: renew generations for shifted rows
+d0a26d146 terminal: reschedule compression after page replacement
+a89c6133c terminal/search: validate history before reload
+c9ad708ef terminal: validate flattened highlight generations
+c243d89bd terminal/search: include generations in viewport fingerprints
+83aada205 terminal/search: preserve serial order in reverse matches
+91a63e528 terminal: invalidate split source page refs
+a804e3ac7 terminal: invalidate partially erased page refs
+f1a5fab45 terminal: keep page serial floor conservative
+8c523ed03 terminal: vectorize APC payload scanning
+9b466e9c5 terminal: fix count-limited page iteration
+73ac36fa5 terminal/search: discard destroyed screen state
+86e1f7b8b terminal/search: reject replaced result pages
+5d8eb78b7 terminal/search: reset pins while feeding
+d239f9805 terminal/search: drop pruned selections
+cfce1cd56 terminal: duplicate hyperlinks before replacement
+dace6d1c6 terminal: handle aliased title updates
+a14a619ce terminal: handle aliased pwd updates
+0c299000f terminal: preserve aliased selection pins
+91f0cf67d terminal: preserve tabstops on resize failure
+fdd255c78 terminal: reserve title terminator atomically
+1d5b6f90e terminal: reserve pwd terminator atomically
+04810273a terminal: wrap implicit hyperlink identifiers
+b287f6d1a terminal: handle stored grapheme boundaries
+e727a3658 terminal: clear rows using stored page width
+b6f34be44 terminal: clamp mirrored selection corners
+607160657 terminal: clamp cloned selections to page width
+08e376f23 terminal: bound selection drag geometry
+a55850c98 terminal: use previous page width for cursor cells
+a9f5b7eba terminal: clamp selection rows to page width
+fa8cae88b terminal: use destination width for line selection
+3d08161b5 terminal: handle empty tabstop ranges
+8f1c2fe95 terminal: handle backwards selection timestamps
+0cb004734 terminal: ignore empty cell clears
+d6e24d985 terminal: make pin traversal width-aware
+30b42f42a terminal: reject unrepresentable pin coordinates
+e6e4a9fdc terminal: widen cell screen coordinates
+afbf5ba15 terminal: handle minimum prompt scroll delta
+c753fe4a4 terminal: handle minimum row scroll delta
+0aaedf436 terminal: saturate origin cursor offsets
+0ff4e41b2 terminal: fix pin wrapping at row boundaries
+5bc6588e4 terminal/search: ignore empty search needles
+627518447 terminal/search: reset cached results after resize
+035ae8ddb build(deps): bump cachix/install-nix-action from 31.10.6 to 31.10.7
+f6f79acce terminal: dispatch APC string bytes in bulk slices
+4f53b846b renderer: move State declaration to top of file
+9a4bd2120 terminal: optimize LZ4 decoding and add differential tests
+d34b54e9b renderer: hand off state mutex to avoid starving frames
+25e624569 renderer: avoid starving scrollback compression
+172f15da3 terminal: expose compression through libghostty-vt
+6d5dda40d inspector: clarify page compression memory
+0fb89f4ff terminal: configure scrollback compression
+95685afd2 terminal: compress offscreen scrollback history
+181254d36 terminal: debounce compression by page activity
+b9bb50c83 terminal: optimize page compression codec
+461562ca4 terminal: enable idle scrollback compression
+f8c217e55 terminal: track pending scrollback compression
+0d015b2fc terminal: preserve compressed pages during search
+e7969ed43 terminal: make PageList compression self-contained
+70e788f06 terminal: add incremental scrollback compression
+9156ada16 terminal: add cold-history compression pass
+421fe8dab terminal: integrate compressed pages into PageList
+f6fd4cb08 terminal: generalize page memory reclamation
+ebc3ffd22 terminal: add compressed page representation
+c62c15984 terminal: add standalone LZ4 block codec
+9c9cf3e82 renderer: avoid allocating when there are no active links
+60121a039 Revert "termio: bound POSIX read-ahead on non-Darwin"
+896aca499 terminal: return free-listed page memory to the OS
+c442eb4b3 terminal: document the pool reuse zeroing invariant
+e44f5cb0f terminal: guard RefCountedSet lookups against zero-capacity sets
+8307349ec terminal: fix increaseCapacity growth from zero-capacity dimensions
+16e4b5e98 terminal: track page ownership explicitly on pagelist nodes
+b953bb346 terminal: fix bitmap allocator chunk region sizing
+14c829883 terminal: report OSC color queries in lib-vt
+20a1bfa5f fix: pass RGB color inputs by pointer
+bb0ac4c72 termio: don't bridge pty reads while the parser is idle
+751a60df6 macos: route IME preedit commits through key events
+bed47168c termio: bound POSIX read-ahead on non-Darwin
+77190bd02 terminal: handful of scroll region optimizations
+d8464a5f5 Update VOUCHED list (#13229)
+446f80f4e terminal: render state update optimizations (~2.7x to ~11x less lock hold)
+b5053153f terminal: log unsupported-input messages once per distinct value
+8d663a76e terminal: release style refs per run instead of per cell in clearCells
+cb2d78587 terminal: fill style-only cell runs in bulk in printSliceFill
+300f42c7a terminal: handle CSI entry bytes inline in consumeUntilGround
+083d9709b terminal: decode ASCII inline in the SIMD scan for ESC
+e8f3f6c43 font/sprite: add regression test for cursor-height metric
+dac341cad font/sprite: make cursor height respect adjust-cursor-height
+cb4c49fbf terminal: scalar UTF-8 decode consumes partial sequences cut off by ESC
+4c5b1d5d5 bench: terminal-stream reads 64KiB chunks to match the IO thread
+cee35cabf terminal: skip style map update when SGR leaves style unchanged
+253e4f9c3 terminal: bulk-parse CSI parameter bytes at the slice level
+1a88f3622 terminal: dispatch CSI finals directly from stream fast paths
+47e26df60 terminal: batch printed codepoint runs into direct row fills
+258de36d1 benchmark: terminal-stream uses the full terminal handler
+6e267d336 macOS: use the  `getOpinionatedStringContents` same as paste
+2f0e6659d termio: pipeline pty reads to overlap parsing with draining
+2970e9a2a lib-vt: many more color utility APIs
+f00e90694 lib-vt: add color scheme report encoder
+243f7df7c Update VOUCHED list (#13202)
+004c88e41 fix: set max window clamp to current monitor size
+131ca6d9e Update VOUCHED list (#13199)
+02504bcce deps: Update iTerm2 color schemes
+65e61282a lib-vt: add unicode grapheme width API
+61ce641fc Update VOUCHED list (#13183)
+3a2e28329 lib-vt: add scroll-to-row viewport scrolling
+fc5a72772 lib-vt: add unicode codepoint width API
+0a410f18e terminal: add clipboard_set effect for OSC 52 clipboard writes
+8fe5913f7 kitty/gfx: fix build on targets without 64-bit atomics
+bdc0b6c19 kitty/gfx: add generation stamps, delete transmit time
+10565995b macOS: only read file urls for new-terminal services
+49806fc4c macOS: read string contents per pasteboard item in order
+acd09c0a6 macos: add tests for NSPasteboard.getOpinionatedStringContents
+3b63c6dc6 Manually vouch `eunos-1128` & denounce `VectorPeak`
+9314b2c55 Update VOUCHED list (#13165)
+78733419a build(deps): bump dorny/paths-filter from 4.0.1 to 4.0.2
+f245cdc66 lib-vt: expose selection gesture to Zig
+aea63d71f libghostty: fix utf-8 grapheme length overflow
+5a699032f build(deps): bump docker/build-push-action from 7.2.0 to 7.3.0
+df5cee238 Update VOUCHED list (#13141)
+480edb45e ci: skip tip release when only non-artifact files change
+c6b0c0dcb build(deps): bump namespacelabs/nscloud-cache-action from 1.5.0 to 1.6.0
+5d476024b build(deps): bump namespacelabs/nscloud-cache-action from 1.4.3 to 1.5.0
+0274e7ad8 macos: fix quick terminal restoring stale size after display reconnect
+28f9367be Update VOUCHED list (#13119)
+07a56d08b deps: Update iTerm2 color schemes
+e1e2e5f34 build(deps): bump mitchellh/vouch/action/check-issue
+f9194f93d Update VOUCHED list (#13098)
+f52f8aab9 macos: avoid notification publisher retain cycle
+5e872a6a6 Update VOUCHED list (#13093)
+0a117e079 gtk: fix missing dbus connection causing crash
+4789bbdb9 Update VOUCHED list (#13072)
+632aa6756 macOS: fix tabs frame on macOS 27 beta 2
+45db2c255 Update VOUCHED list (#13065)
+1fcc622d6 build(deps): bump softprops/action-gh-release from 3.0.0 to 3.0.1
+dc8d38503 deps: Update iTerm2 color schemes
+5fa37f2b7 Use correct type for number of remaining rows so that PageList.scroll works with long scrollback history.
+b3cc5000e build(deps): bump actions/checkout from 6.0.3 to 7.0.0
+c488ccda6 terminal: correct OSC 72 doc comments for m, i, o, y, X, Y keys
+a6132c18b terminal: add doc comments to OSC 72 EventType and Option enums
+dd6c09bcf terminal: clean up OSC 72 parser comments and add tests
+91c87e2cf terminal: parse kitty drag and drop protocol (OSC 72)
+b5f5ca078 Add "available since"
+5ea45919d config: add gtk-horizontal-tab-scroll option
