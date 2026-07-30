@@ -367,6 +367,19 @@ GATE_REGISTRY=(
   # it reports BLOCKED (exit 3) on a box without `zig` or the oracle checkout; a
   # genuine mismatch is still escalated by run_gate's PROGRESS-went-RED branch.
   "D10|PROGRESS|bash $GATES/check_stb_resize_parity.sh"
+  # D11 — no CLOSED #[repr(C)] enum may be received BY VALUE across the C ABI.
+  # An out-of-range tag is materialized by the callee's prologue, before any
+  # `match` can narrow it; every flagged enum's header declaration carries a
+  # `…_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE` enumerator, so the header itself
+  # documents that value as writable by a conforming C caller.
+  # (P3-W0 T3 calls this "D10" in prose; that id was taken by the stb gate
+  # above, so it is D11.)
+  # RED ON ARRIVAL by design — 33 sites across 27 exports, including
+  # rustty_terminal_scroll_viewport(behavior.tag), whose ScrollViewportTag
+  # gained `Row = 3` in 3a2e28329 inside the Phase 3 range. A gate that lands
+  # green is unproven; this one is provably non-vacuous the day it lands.
+  # PROGRESS while P3-W6 T2 sweeps the sites; promote to HARD after that.
+  "D11|PROGRESS|bash $GATES/check_closed_enum_abi.sh"
   # A3 — the rustty-embed.h product-umbrella ABI gate (rebrand Task 4; formerly
   # the ghostty.h byte-freeze). Asserts include/rustty-embed.h is EXACTLY
   # ghostty's upstream include/ghostty.h (read from the pinned $ORACLE_HEADER_PATH
