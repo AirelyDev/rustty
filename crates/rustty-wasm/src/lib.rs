@@ -5,13 +5,18 @@
 //! This is the main file for the WASM module. The WASM module has to
 //! export a C ABI compatible API.
 //!
-//! PORT STATUS: ported (host-buildable rlib; the wasm32 cdylib link is gated on
-//! the B2 cross-workspace wasm32 gating — see the workstream report). The
-//! reference's `comptime { _ = @import(...); }` retention block is modelled by
+//! PORT STATUS: ported — COMPLETE (WS14). This crate produces a REAL freestanding
+//! artifact: `target/wasm32-unknown-unknown/release/rustty_wasm.wasm`, built by
+//! `.port/tools/build-main-wasm.sh --release`, with ZERO wasi imports (only the
+//! `env` Canvas imports of `Atlas.Wasm`'s debug canvas) and no C cross-compiled.
+//! `crates/rustty-wasm/tests/artifact_shape.rs` asserts its shape.
+//!
+//! The reference's `comptime { _ = @import(...); }` retention block is modelled by
 //! (a) the crate DEPENDENCY edges (`rustty-os`/`rustty-config`/`rustty-vt`/
-//! `rustty-core` — the `@import` analog that pulls each module into the link)
+//! `rustty-font` — the `@import` analog that pulls each module into the link)
 //! plus (b) the `#[used]` fn-pointer retention statics below that pin the
-//! `config_*` C-ABI exports so `--gc-sections`/`wasm-opt` cannot drop them.
+//! `config_*`/`atlas_*` C-ABI exports so `--gc-sections`/`wasm-opt` cannot drop
+//! them.
 
 // PORT: `const std = @import("std");` / `const builtin = @import("builtin");`.
 // The Rust std/builtins are used directly; the optimization-mode switch below
@@ -30,26 +35,38 @@
 // The `_ = @import(...)` idiom force-ANALYZES a module so its `export fn`s are
 // retained in the wasm artifact. In Rust two mechanisms combine:
 //
-//   * The crate DEPENDENCY edges on `rustty-os` (`os/wasm.zig`), `rustty-vt`
-//     (`terminal/main.zig`), and `rustty-core` (`App.zig`) pull those modules
-//     into the link — the `_ = @import` analog. (`font/main.zig`'s wasm export
-//     block is BLOCKED — B1, the `web_canvas` shaper+face — and recorded as a
-//     documented-deferral in `rustty-font-shaper::shape::web_canvas`; it is NOT
-//     depended on here, so nothing selects that unportable arm.)
+//   * The crate DEPENDENCY edges on `rustty-os` (`os/wasm.zig`), `rustty-font`
+//     (`font/main.zig`), `rustty-vt` (`terminal/main.zig`) and `rustty-config`
+//     (`config.zig`) pull those modules into the link — the `_ = @import` analog.
 //
 //   * `#[no_mangle]` symbols in an rlib DEPENDENCY are dropped by the linker
 //     unless referenced, and `pub use` does NOT re-export a symbol from a
-//     cdylib. So the four `config.zig`.`Wasm` C-ABI exports are pinned by the
-//     `#[used]` retention tuple below (the faithful `_ = ...Wasm` analog).
+//     cdylib. So the `config.zig`.`Wasm` and `font/Atlas.zig`.`Wasm` C-ABI
+//     exports are pinned by the `#[used]` retention tuples below (the faithful
+//     `_ = ...Wasm` analog).
 //
-// The `config.zig`.`Wasm` exports are compiled unconditionally here because the
-// `rustty-config` dependency is declared with `features = ["wasm"]` (Cargo.toml),
-// so `rustty_config::wasm::wasm_exports` is always present in this crate's link.
+// RETENTION SET STATUS (WS14): 4 of the reference's 5 retentions map to a crate
+// edge plus, where the module carries `export fn`s, a `#[used]` static. The 5th,
+// `_ = @import("App.zig").Wasm`, needs NO edge: that block is an EMPTY struct
+// whose three exports are commented out UPSTREAM (`App.zig:577-604`), so
+// retaining it emits zero symbols and pulls no App implementation — see the
+// completed port at `rustty-core/src/app.rs` and the Cargo.toml rationale. A
+// `rustty-core` edge would over-retain an entire application tier and make the
+// freestanding link impossible (rustty-inspector → dcimgui-sys → freetype-sys →
+// zlib-sys).
+//
+// The `config.zig`.`Wasm` and `Atlas.Wasm` exports are compiled unconditionally
+// here because both dependencies are declared with `features = ["wasm"]`
+// (Cargo.toml), so their `wasm_exports` modules are always in this crate's link.
 mod retain {
     use rustty_config::wasm::wasm_exports::{
         config_finalize, config_free, config_load_string, config_new,
     };
     use rustty_config::Config;
+    use rustty_font::atlas::wasm_exports::{
+        atlas_clear, atlas_free, atlas_grow, atlas_new, atlas_reserve, atlas_set,
+    };
+    use rustty_font::atlas::{Atlas, Region};
 
     // A `#[used]` static of the four `config_*` C-ABI function pointers. `#[used]`
     // forbids dead-symbol elimination of this static, and its initializers name
@@ -62,6 +79,35 @@ mod retain {
         unsafe extern "C" fn(*mut Config, *const u8, usize),
         unsafe extern "C" fn(*mut Config),
     ) = (config_new, config_free, config_load_string, config_finalize);
+
+    // The same mechanism for `font/Atlas.zig`'s `Wasm` block (WS14 T4) — the
+    // retention the reference's `_ = @import("font/main.zig")` performs.
+    // `atlas_debug_canvas` is deliberately NOT in this tuple: it is additionally
+    // `#[cfg(target_arch = "wasm32")]` (it needs the browser's Canvas via `env`
+    // imports), and a `#[used]` static naming it would not compile on the host,
+    // where this crate must also build as an rlib. On wasm32 it is a `#[no_mangle]`
+    // export of a cdylib crate's own dependency graph reached through this same
+    // module, and the artifact-shape test asserts the six names below directly.
+    // A named tuple type keeps clippy::type_complexity quiet without changing the
+    // mechanism (the `#[used]` static must still NAME each export).
+    type AtlasWasmExports = (
+        extern "C" fn(u32, u8) -> *mut Atlas,
+        unsafe extern "C" fn(*mut Atlas),
+        unsafe extern "C" fn(*mut Atlas, u32, u32) -> *mut Region,
+        unsafe extern "C" fn(*mut Atlas, *const Region, *const u8, usize),
+        unsafe extern "C" fn(*mut Atlas, u32) -> bool,
+        unsafe extern "C" fn(*mut Atlas),
+    );
+
+    #[used]
+    static RETAIN_ATLAS_WASM_EXPORTS: AtlasWasmExports = (
+        atlas_new,
+        atlas_free,
+        atlas_reserve,
+        atlas_set,
+        atlas_grow,
+        atlas_clear,
+    );
 }
 
 /// The `std.log.Level` analog for the wasm module's compile-time log level.

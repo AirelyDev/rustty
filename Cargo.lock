@@ -1653,7 +1653,7 @@ name = "rustty-wasm"
 version = "0.1.0"
 dependencies = [
  "rustty-config",
- "rustty-core",
+ "rustty-font",
  "rustty-os",
  "rustty-vt",
 ]
