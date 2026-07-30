@@ -1175,3 +1175,73 @@ feature configurations, and the suite is run under `--features simd` as well.
 Anything else in this repo that verifies a `next_slice` fast path without either
 enabling `simd` or calling the inner function directly is suspect for the same
 reason.
+
+---
+
+## WS10 T15 — `083d9709b`, the ASCII-inline SIMD ESC scan
+
+**Ported:** `crates/rustty-simd/cbits/simd/vt.cpp` +125/−36 — `WidenAsciiStore`
+(including the `HWY_TARGET == HWY_SCALAR` arm), `DecodeNonAsciiUntilControlSeq`,
+and the rewritten `DecodeUTF8UntilControlSeqImpl` that fuses the ESC scan with an
+ASCII widening decode and only falls into simdutf on the first byte >= 0x80.
+
+**This is the FIRST commit in the WS10 stream family whose effect this host's
+corpora can actually see**, because it fires on plain printable ASCII — which is
+exactly what `ascii.bin` is made of (see the T10 section: 64 MiB, zero ESC).
+
+Paired A/B, same session, `+terminal-stream`, release-fast, N=9 medians with one
+discarded warmup, **loaded box (load 7.85) — PROVISIONAL**:
+
+| corpus | before | after | Δ |
+|---|--:|--:|--:|
+| `ascii.bin` | 525.5 ms (min 396.6) | 469.9 ms (min 444.0) | **−10.6%** |
+| `utf8.bin` | 701.6 ms (min 694.7) | 698.0 ms (min 680.6) | −0.5% |
+
+The direction matches upstream's rationale exactly: ASCII gets the fused widening
+path (upstream measured +5.4% on an 87%-ASCII real-session corpus; a 100%-ASCII
+corpus should and does move more), and non-ASCII text "takes exactly the same
+code as before" (−0.5%, i.e. noise). The `ascii` spread is wide under this load
+(min 396.6 before vs 444.0 after) so the −10.6% is a direction, not a figure;
+re-measurement belongs to V17 (`BEYOND-PIN`).
+
+### Verification that is NOT a benchmark
+
+- `decode_simd_matches_scalar` (T5's 10 000-iteration differential fuzz vs the
+  scalar reference) passes against the rewritten kernel. This is the guard
+  `083d9709b` itself introduces upstream, and it is now doing real work.
+- **New:** `decode_ascii_fast_path_tight_output_no_overwrite`. The ASCII path
+  stores a WHOLE vector chunk unconditionally (`WidenAsciiStore(d, input_vec,
+  output + i); if (stop < 0) continue;`) — a speculative write the pre-commit
+  kernel never made. The existing `decode_tight_buffer_no_overread` cannot see
+  it: it sizes the output at `input.len() + 64`, so a chunk overwrite lands in
+  slack. The new test sizes output at exactly `input.len()` (the contract
+  minimum asserted by `utf8DecodeUntilControlSeq`) and sweeps len 0..=257 x stop
+  position x {ESC, non-ASCII}.
+- **ASan, armed and proven:** all 28 `rustty-simd` lib tests green under
+  `-Zsanitizer=address`. Mutation: `WidenAsciiStore(..., output + i + 1)` ->
+  `ERROR: AddressSanitizer: heap-buffer-overflow ... in hwy::N_NEON_BF16::StoreU`.
+- **The `HWY_SCALAR` arm compiles and is reachable.** `D-terminal-subsystems.md`
+  warns that omitting it breaks wasm and scalar highway targets. Proven with a
+  direct syntax compile:
+  `c++ -fsyntax-only -DHWY_COMPILE_ONLY_SCALAR -I crates/rustty-simd/cbits
+   -I crates-sys/highway-sys/vendor -I crates-sys/simdutf-sys/vendor
+   crates/rustty-simd/cbits/simd/vt.cpp` -> clean. Mutation: a syntax error
+  inside the `#if HWY_TARGET == HWY_SCALAR` arm makes THAT command fail while
+  the same command WITHOUT `-DHWY_COMPILE_ONLY_SCALAR` still compiles clean —
+  which proves the arm is both selected by the define and skipped without it.
+
+### Two gates that are RED on `main`, independently of this work
+
+Both were checked by stashing and re-running on the unmodified tree:
+
+- `check_sanitizer_canary.sh` -> **exit 1 on `main`**, on `valgrind.supp`
+  entries 2433-2437 lacking per-entry WHY comments (rule c). Pre-existing.
+- `.port/tools/build-vt-wasm.sh` + `wasm-vt-roundtrip.mjs` -> **exit 1 on
+  `main`**: the roundtrip script looks for
+  `target/wasm32-wasip1/release/rustty_vt_c.wasm`, which the build does not
+  produce at that path. Pre-existing. So T15 Step 4's "wasm is the `HWY_SCALAR`
+  arm's proof" could not be executed as written; the compile-and-mutate proof
+  above stands in its place, and it is arguably stronger — the wasm build does
+  not compile the C++ kernel at all (`crates/rustty-simd/src/vt.rs:14`
+  `#[cfg(not(target_arch = "wasm32"))]`), so the wasm roundtrip could never have
+  exercised `HWY_SCALAR` anyway.

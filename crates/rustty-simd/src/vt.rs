@@ -240,6 +240,46 @@ mod tests {
         }
     }
 
+    // rustty-only regression for `083d9709b` (WS10 T15). The ASCII fast path
+    // widens and stores a WHOLE vector chunk unconditionally —
+    //
+    //     WidenAsciiStore(d, input_vec, output + i);
+    //     if (stop < 0) continue;
+    //
+    // — writing N `uint32`s even when the run stops mid-chunk, on the stated
+    // contract that "output is guaranteed to be at least as large as input"
+    // (asserted here by `utf8DecodeUntilControlSeq`'s
+    // `assert(output.len() >= input.len())`). That is a speculative store the
+    // pre-commit kernel never made: before this commit `DecodeUTF8` only ever
+    // wrote one codepoint per byte it had already consumed.
+    //
+    // `decode_tight_buffer_no_overread` above cannot see the new hazard: it
+    // sizes the output at `input.len() + 64`, i.e. with 64 words of slack, so a
+    // chunk overwrite would land in slack. This test sizes the output at
+    // EXACTLY `input.len()` — the documented minimum — so under ASan a
+    // red-zoned heap allocation catches any write past the contract. Lengths
+    // sweep 0..=257 to cross every plausible vector width (16/32/64 lanes) and
+    // every mid-chunk stop position, with the stop byte placed at each offset
+    // in turn, as both an ESC and a non-ASCII lead.
+    #[test]
+    fn decode_ascii_fast_path_tight_output_no_overwrite() {
+        for len in 0..=257usize {
+            for stop_at in 0..=len {
+                for stop_byte in [0x1Bu8, 0xC3u8] {
+                    let mut input = vec![b'a'; len];
+                    if stop_at < len {
+                        input[stop_at] = stop_byte;
+                    }
+                    // Exactly `input.len()` words — the contract minimum.
+                    let mut output = vec![0u32; input.len()];
+                    let res = utf8DecodeUntilControlSeq(&input, &mut output);
+                    assert!(res.consumed <= input.len());
+                    assert!(res.decoded <= output.len());
+                }
+            }
+        }
+    }
+
     #[test]
     fn decode_no_escape() {
         let mut output: [u32; 1024] = [0; 1024];
