@@ -1053,26 +1053,70 @@ decision, not a measurement.
 additionally emit `binary_sizes_bytes` for the mapped rustty artifacts, then
 restore `--strict` on the G8 line in `.port/tools/ci.sh` and confirm GREEN.
 
-## V17. The rustty-side perf drift since `a3a2b23` is CONFIRMED but NOT BISECTED — **OWNER: WS10**
+## V17. The oracle-anchored perf measurement campaign — **OWNER: Phase 3 — `BEYOND-PIN`**
 
-Two configs are reproducibly slower than the r5-SHIP record while the oracle
-column reproduces to ~2% in the same session (see `PERF_LOG.md`, WS10 Layer 0):
+**Scope decision (user, 2026-07-30): perf *measurement/verification* may be
+deferred until after Phase 3; perf *implementation* may not.** This row is the
+single ledger entry for the deferred measurement. The gate/fence *machinery*,
+its three FAIL arms, the G8 vacuity fix and all BL-4 code changes are **not**
+covered here — they landed in WS10.
+
+**Enabling condition — this is why the owner is Phase 3 and why the row carries
+`BEYOND-PIN`.** Every oracle-anchored figure depends on one irreplaceable
+prebuilt binary, because the pinned oracle `4749c4e93` requires **Zig 0.15.2**
+and this host now has **0.16.0** (see V15). **Phase 3's final task advances the
+pin to `origin/main`, which itself requires 0.16.0** — so once that lands the
+oracle builds from source again and every oracle-anchored comparison becomes
+cleanly reproducible instead of depending on a binary that cannot be regenerated.
+The pin advance is therefore the literal precondition for doing this work well,
+which is exactly the case `check_phase2_closure.py`'s `row_is_beyond_pin()`
+admits `Phase 3` as an owner for.
+
+### What is already MEASURED and must NOT be redone
+
+Done on 2026-07-30 and recorded in `PERF_LOG.md` (PROVISIONAL — load 4.76-5.80
+against `IDLE_MAX` 2.0, so not authoritative, but the first figures since the
+four core-pinning `yes` processes were killed):
+
+- **Fence 1 (ORACLE), 14 configs, N=9, paired vs the pinned binary — GREEN,
+  14/14 holds**, thinnest margin `codepoint-width.wcwidth` −7.0%.
+- **The suspected drift REPRODUCES**: `terminal-parser` **+17.8%**,
+  `screen-clone.clone` **+20.0%** vs the r5-SHIP record, while the oracle column
+  reproduces its historical values to ~2% **in the same session** — the control
+  that proves the gap is rustty-side and not contention.
+- **The `origin/main` comparison (V15) was RUN**, and found something larger than
+  the expected `quirks_memset` effect: the *benchmarks themselves* diverged
+  beyond the pin. See V15.
+- Both gate self-tests and the live simd flip proof — see `PERF_LOG.md`.
+
+### What remains UNMEASURED
+
+1. **An authoritative IDLE 14-config baseline.** Everything above is provisional.
+2. **The bisection of the confirmed drift** — the substantive open item.
+3. Re-running V15's `origin/main` comparison once the benches are comparable.
+
+### The drift, for whoever bisects it
 
 | config | r5-SHIP | 2026-07-30 | drift | rust spread |
 |---|--:|--:|--:|--:|
 | `terminal-parser` | 92.5 ms | 109.01 ms | **+17.8%** | 1.097 |
 | `screen-clone.clone` | 20.9 ms | 25.07 ms | **+20.0%** | 1.163 |
 
-The oracle control rules out contention as the cause (load moves both columns;
-this gap is one-sided). This is a **pre-existing rustty regression**, not a WS10
-one — WS10 Layer 0 modified no hot path.
+This is a **pre-existing rustty regression**, not a WS10 one — WS10 modified no
+hot path. Prime suspects in order: **WS7 Phase A-E** (BL-1 compression — it
+touched `Page`/`PageList`/`Screen` hard, which are exactly these two configs' hot
+paths), then WS5, WS8, WS19.
 
-**Not run because the box is loaded.** At load ~5 a 12 s rebuild competes with
-the measurement, and the per-step difference a bisection must resolve is the
-same order as these configs' spreads. A contended bisection returns a confident
-wrong answer, which is worse than none.
+**Not attempted at load ~5:** a 12 s rebuild competes with the measurement and
+the per-step delta a bisection must resolve is the same order as these configs'
+spreads (1.097 / 1.163). A contended bisection returns a confident wrong answer,
+which is worse than none.
 
-**Runnable recipe (requires 1-min load average ≤ 2.0):**
+**`.perf-bins/rustty-bench-ws10-entry-RF` is a DEGRADED anchor.** It carries this
+drift, so Fence 2 will happily hold the 20% regression in place. Re-stash the
+entry binary after the drift is fixed.
+
+### Runnable recipe (requires 1-min load average ≤ 2.0)
 
 ```sh
 cd /Users/gael/projects/rustty
@@ -1080,15 +1124,36 @@ for ref in a3a2b23 74226dd <WS7 Phase A..E merges> <WS8 merge> <WS19 merge> main
   git checkout "$ref" -- crates/ && cargo build -p rustty-bench --profile release-fast
   cp target/release-fast/rustty-bench ".perf-bins/bisect-$ref"
 done
-# then pair each against the entry binary on the two drifted configs only:
+# pair each against the entry binary on the two drifted configs only:
 python3 .port/tools/perf/ws10_suite.py --rust .perf-bins/bisect-<ref> \
     --self .perf-bins/rustty-bench-ws10-entry-RF --no-oracle -n 9
+
+# and, once the pin has advanced, the authoritative oracle baseline:
+python3 .port/tools/perf/ws10_suite.py --rust target/release-fast/rustty-bench -n 9 \
+    --emit-metrics /tmp/ws10-metrics.json
 ```
 
-Prime suspects, in order: **WS7 Phase A-E** (BL-1 compression — it touched
-`Page`/`PageList`/`Screen` hard, and those are exactly `screen-clone.clone`'s and
-`terminal-parser`'s hot paths), then WS5, WS8, WS19.
+### ⚠ `quirks_memset` caveat — read before interpreting ANY post-pin oracle run
 
-**If the drift is a fixable regression it must be fixed before the self fence's
-anchor is trusted**, since `.perf-bins/rustty-bench-ws10-entry-RF` is currently
-a *degraded* binary: Fence 2 would happily hold a 20% regression in place.
+Upstream added `src/quirks_memset.zig` in the pin→head range, which makes the
+oracle **~2.8× faster on `+terminal-stream`** (measured here at **10.5×**;
+`.port/phase-3/assessments/E-os-termio-platform.md` row E34). **A shrunken rustty
+margin — or an outright loss — on `terminal-stream` against a post-pin oracle is
+the ORACLE GETTING FASTER, not rustty regressing.** Do not "fix" a phantom.
+
+**`quirks_memset` must NOT be ported.** `rustc` lowers `@llvm.memset` to the
+platform libc `memset` (Apple `libSystem`; glibc IFUNC on Linux), both already
+SIMD + `dc zva`. Exporting a strong `memset` from a Rust dylib would pessimize
+rustty and risk ODR/interposition breakage.
+
+And per V15: after the pin advances, `+terminal-stream` and `+screen-clone` also
+*measure different work* than they did at the pin, so the comparison is only
+like-for-like once rustty has ported the BL-4 bench-corpus commits.
+
+---
+
+## ~~V17-old. The rustty-side perf drift since `a3a2b23` is CONFIRMED but NOT BISECTED — OWNER: WS10~~ — **SUPERSEDED by V17 above [2026-07-30]**
+
+Re-owned from WS10 to **Phase 3 (`BEYOND-PIN`)** under the scope decision above.
+Content merged into V17. Retained as a heading only so the id's history is
+traceable.
