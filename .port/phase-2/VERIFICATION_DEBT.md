@@ -12,7 +12,20 @@ and delete it here.
 
 ---
 
-## V1. macOS build + test of `rustty-xev` (blocked: no macOS toolchain on this VM)
+## V1. macOS build + test of `rustty-xev` — **DISCHARGED [2026-07-23]; row was STALE**
+
+**Status: CLOSED.** Flagged by the WS19 Phase 2 closure audit as row **W11** — a
+claimed-open item that had shipped weeks earlier. `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md:41`
+records "VD:V1 (rustty-xev never compiled on macOS) — DISCHARGED 2026-07-23", and every
+workstream since gates on `cargo build --workspace` + `cargo test` on macOS as a merge
+condition (ROADMAP sequencing rule 2), which compiles and runs `rustty-xev` including
+the `__ulock_wait`/`__ulock_wake` shim and the `thread_pool` lifecycle tests. This row
+was never deleted even though this file's own header says to delete verified items.
+**Owner of the deletion: WS19 T14** (it stays here, marked, until WS19 rewrites the
+file — deleting it silently now would lose the audit trail). The historical recipe is
+retained below for anyone re-checking the shim in isolation.
+
+### Historical (the original V1 text)
 
 **What changed that macOS consumes.** The `xev-libxev-completion` branch (12 commits,
 `eb655ba..9de16be`) edited SHARED code that the macOS build compiles:
@@ -163,6 +176,16 @@ cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_winproto \
 **Expected:** `ok` in ~1 s (bounded at ~10 s — a broken seam fails, never hangs).
 
 ## V5. X11 winproto residuals: no native X11 session, no KWin, and NO synthetic keyboard input on this VM [WS16, 2026-07-29]
+
+> **OWNER [WS19 audit, 2026-07-29]: WS17.** V5 was filed by WS16 on 2026-07-29, six
+> days AFTER the WS17 plan was authored (2026-07-23), so WS17's stated scope
+> ("V2 real-GPU sign-off, V3 KDE/KWin, V4 mutter `set_urgent`, and WS6's V1b cross-DPI
+> residual") does **not** name it — V5 was ORPHANED. It is verification debt, not an
+> implementation deferral, and its recipe below is already runnable, so it belongs to
+> WS17: **items 2 and 3 are discharged by the very KDE-Plasma-on-X11 box V3 already
+> requires** (a native X11 session *and* KWin), and item 1 (a physical keypress) is the
+> one part that needs real hardware input. WS19 T14 adds V5 to WS17's scope table; WS17
+> must either discharge it on that box or restate it as a precisely-worded residual.
 
 **Context.** The x11 winproto arm is complete and verified live (WS16) but ONLY under
 `GDK_BACKEND=x11` against the VM's rootless `Xwayland :0` inside a GNOME/mutter
