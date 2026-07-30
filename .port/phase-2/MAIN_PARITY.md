@@ -150,11 +150,11 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `3ff6d08fa` | lib-vt: report OSC and Kitty color queries (#13239) | n/a-merge | constituents below |
 | `14c829883` | terminal: report OSC color queries in lib-vt | **PORTED** | encode_rgb8/16 + color_for_xterm/kitty + has_terminal_query_color + osc reset fix + stream reporting + vt-c KATs (WS5 T9-T10) |
 | `20a1bfa5f` | fix: pass RGB color inputs by pointer | **PORTED** | rustty_color_rgb_get by-pointer ABI (WS5 T2) |
-| `bb0ac4c72` | termio: don't bridge pty reads while the parser is idle | missing BL-4 | rustty-termio exec |
+| `bb0ac4c72` | termio: don't bridge pty reads while the parser is idle | **PORTED** | landed WITH `2f0e6659d` as one change (WS10 T20, `a788346`) — 110 lines that only exist on top of the ring they modify |
 | `bed47168c` | termio: bound POSIX read-ahead on non-Darwin | n/a | reverted upstream by `60121a039` |
 | `77190bd02` | terminal: handful of scroll region optimizations | missing BL-4 | screen.rs/terminal.rs scroll paths (496/38, has tests); WS7 Phase C divergence #11 — blocks porting `0bad91adb`'s 4th `invalidateNodeLayout` site (`Screen::cursor_scroll_region_up`), see DEFERRALS.md |
 | `cabbdee32` | Fix adjust-cursor-height regression (#13225) | n/a-merge | constituents `dac341cad`+`e8f3f6c43` — PORTED |
-| `446f80f4e` | terminal: render state update optimizations | missing BL-4 | render.rs + c/render + lib_vt (1348/209) |
+| `446f80f4e` | terminal: render state update optimizations | **PORTED** | WS10 T19 (`56dba9c`): `page::Mask` + `begin_update`/`end_update` + `pending_styles` + chunked update in render.rs; `rustty_render_state_{begin,end}_update` in vt-c + `include/rustty/vt/render.h`; renderer two-phase; three `screen-clone` render modes. Measured lock-hold 2.88x-11.19x. The `Terminal.zig` hunk is a refactor of T16's `printSliceFill`, which does not exist in rustty yet — `Mask` is landed for it; adoption is T16's. |
 | `b5053153f` | terminal: log unsupported-input messages once per distinct value | missing BL-4 | stream.rs logging dedup (85/10) |
 | `8d663a76e` | terminal: release style refs per run in clearCells | pending-small BL-3 | screen.rs clear_cells style-ref batching (15/3) |
 | `cb2d78587` | terminal: fill style-only cell runs in bulk in printSliceFill | missing BL-4 | terminal.rs print slice fill (BL-4 fast-path family) |
@@ -169,7 +169,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `1a88f3622` | terminal: dispatch CSI finals directly from stream fast paths | missing BL-4 | stream.rs (89/0) |
 | `47e26df60` | terminal: batch printed codepoint runs into direct row fills | missing BL-4 | stream/terminal/termio print pipeline (726/3) |
 | `258de36d1` | benchmark: terminal-stream uses full terminal handler | missing BL-4 | rustty-bench |
-| `2f0e6659d` | termio: pipeline pty reads to overlap parsing with draining | missing BL-4 | rustty-termio exec (342/57) |
+| `2f0e6659d` | termio: pipeline pty reads to overlap parsing with draining | **PORTED** | WS10 T20 (`a788346`): `io-gather` thread + 4x64 KiB ring with a raw-pointer slot handoff, proven SB+TB clean on `.port/phase-2/mirihar-ws10-pipeline` against three negative controls. The QoS hunk landed separately as T8 (`7725606`) and is now applied to both threads. |
 | `63e75e86c` | lib-vt: many more color utility APIs (#13206) | n/a-merge | constituent below |
 | `2970e9a2a` | lib-vt: many more color utility APIs | **PORTED** | color.rs/x11_color.rs + vt-c color.rs/lib.rs/types.rs + color.h/sgr.h + config delegation (WS5 T3-T6) |
 | `4a7cabc4f` | lib-vt: color scheme report encoder (#13192) | n/a-merge | constituent below |

@@ -1,5 +1,34 @@
 # Perf Comparison — Rust `rustty-bench` vs Zig `ghostty-bench`
 
+> ## READ FIRST — what these numbers are comparable to (added 2026-07-30, WS10 T21)
+>
+> **Every figure in this document is comparable to the PINNED oracle
+> `4749c4e93` (`.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench`,
+> sha256 `0fb47d26…`) and to NO other oracle revision.**
+>
+> `origin/main` **cannot be built on this host**: its `build.zig.zon` requires
+> Zig **0.16.0** and the installed toolchain is **0.15.2**. A future run against
+> a newer oracle will show a **smaller rustty margin** on `+terminal-stream`,
+> because upstream added `src/quirks_memset.zig` beyond the pin (~2.8× on that
+> config). That is **the oracle getting faster, not rustty regressing**. Do not
+> read it as a regression, and do not port `quirks_memset` (rustc already lowers
+> `@llvm.memset` to the platform libc `memset`, and exporting a strong `memset`
+> from a Rust dylib risks ODR/interposition breakage). The `origin/main`
+> comparison is verification debt owned by **Phase 3** (`BEYOND-PIN`).
+>
+> **One config is no longer an oracle-comparable ratio at all.**
+> `screen-clone.render/small`: WS10 T12 re-scaled `stepRender` from 1 000 to
+> 50 000 iterations to match upstream `446f80f4e`, while the pinned oracle binary
+> predates that commit and is still at 1 000 — so rustty does **50× the work**
+> there. It is tracked as `INCOMPARABLE` in `ws10_suite.py` and `BASIS_CHANGED`
+> in `check_baseline_regression.py`, excluded from the oracle fence only, and
+> still fully fenced against rustty's own entry binary.
+>
+> **The current WS10 table is in `.port/phase-2/PERF_LOG.md`, section
+> "WS10 T21 — the final paired re-measure (2026-07-30)"**: 13/13 comparable
+> paired configs win against the pinned oracle, plus a final-vs-entry self fence.
+> It is stamped PROVISIONAL (1-min load 6.08 vs `IDLE_MAX` 2.0).
+
 **Machine.** Apple M4 Pro (`Mac16,7`), arm64, 14 logical cores, macOS 26.5.1
 (build 25F80).
 **Date.** 2026-07-15.

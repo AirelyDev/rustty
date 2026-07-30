@@ -19,18 +19,23 @@ Driven by .port/tools/gates/check_sanitizer_canary.sh (the D6 gate). Two checks:
     build-option switches the port must eventually map to cfg — advisory only,
     since full per-switch verification needs the port complete.)
 
-(c) SUPPRESSION WHY — every sanitizer suppression entry needs a per-entry WHY:
-        * each non-comment line of a `*.supp` file;
+(c) SUPPRESSION WHY — every sanitizer suppression ENTRY needs a per-entry WHY:
+        * each suppression entry of a `*.supp` file — a LINE in the LSan/TSan
+          one-per-line format, a `{ … }` BLOCK in the Valgrind format;
         * each suppressive sanitizer-runtime toggle in the gate scripts
           (`detect_leaks=0`, `halt_on_error=0`, `detect_odr_violation=0`,
           `*_OPTIONS=…suppressions=…`);
-    must have an explanatory comment on the same line (or, for `.supp`, the line
-    above). An unexplained suppression FAILS — an unexplained `detect_leaks=0`
-    silently disables the very leak detection D6 exists to protect.
+    must have an explanatory comment on the same line (or, for `.supp` entries,
+    above the entry / its comment-introduced group). An unexplained suppression
+    FAILS — an unexplained `detect_leaks=0` silently disables the very leak
+    detection D6 exists to protect. Block entries that predate the rule and come
+    verbatim from the pinned oracle are frozen by content hash in
+    `d6_supp_baseline.txt`; see `_load_supp_baseline()`.
 
 Exit: 0 GREEN (no findings), 1 RED (>=1 finding). Oracle absence only skips the
 advisory census; the binding first-party checks always run.
 """
+import hashlib
 import os
 import re
 import sys
@@ -84,15 +89,29 @@ def check_global_allocators():
         except OSError:
             continue
         for i, line in enumerate(lines):
-            if not GA_RE.search(line):
+            m = GA_RE.search(line)
+            if not m:
+                continue
+            # `#[global_allocator]` NAMED INSIDE A COMMENT is prose, not an
+            # attribute — the PORT NOTE in rustty-renderer/src/link.rs that
+            # explains why the test uses a counting allocator was being reported
+            # as a second, un-gated allocator site.
+            code = line.split("//", 1)[0]
+            if m.start() >= len(code):
                 continue
             scanned += 1
             # cfg_attr(..., global_allocator) is a proper cfg-gated allocator.
             window = "\n".join(lines[max(0, i - 1):i + 1])
             if CFG_ATTR_GA_RE.search(window):
                 continue
-            # An adjacent D6-ALLOW(<why>) on the 3 lines above is an explicit waiver.
-            ctx = "\n".join(lines[max(0, i - 3):i + 1])
+            # A D6-ALLOW(<why>) anywhere in the CONTIGUOUS comment block directly
+            # above is an explicit waiver. (Scanning a fixed 3-line window
+            # rejected a waiver whose justification ran longer than 3 lines —
+            # which pushed authors toward terser, worse justifications.)
+            j = i - 1
+            while j >= 0 and lines[j].lstrip().startswith("//"):
+                j -= 1
+            ctx = "\n".join(lines[j + 1:i + 1])
             if D6_ALLOW_RE.search(ctx):
                 continue
             findings.append((
@@ -199,19 +218,139 @@ def check_suppression_toggles():
             ))
 
 
-def check_supp_files():
+# A `.supp` file comes in one of two shapes, and rule (c) counts ENTRIES, not
+# lines, in both:
+#
+#   * LINE format (LSan / TSan / UBSan): one suppression per line —
+#     `leak:pattern`, `race:pattern`, `interceptor_via_fun:foo`, … Here an entry
+#     IS a line, so the per-line WHY check is the entry check.
+#
+#   * BLOCK format (Valgrind Memcheck): an entry is a `{ … }` block whose body is
+#     a name, a `Memcheck:*` kind and a call-stack of `fun:`/`obj:` frames. The
+#     ORIGINAL implementation of this check was the LINE rule applied to every
+#     non-comment line, so a single 15-frame Valgrind entry was reported as ~15
+#     unexplained "entries" — `valgrind.supp` (233 entries) produced 2048
+#     findings and D6 sat permanently RED, i.e. ignorable. That was a bug in the
+#     checker, not 2048 unexplained suppressions. Block files are now parsed as
+#     blocks.
+#
+# For a block entry the WHY may be a comment INSIDE the block, or the comment
+# paragraph that introduces the entry's group — that grouping ("# Reproduction:
+# 1. Launch Rustty … 5. Exit" over the two entries it explains) is how the file
+# is actually written. A group ends at the first blank line AFTER an entry, so
+# appending an undocumented entry to the end of a file is still a finding: the
+# FAIL arm stays reachable (proved by `check_sanitizer_canary.sh --self-test`).
+BLOCK_SUPP_KIND = re.compile(r"^\s*(Memcheck|Helgrind|DRD|exp-sgcheck):")
+
+
+def _norm_entry(body):
+    """Content identity of a block entry: its frames, whitespace-normalized."""
+    return hashlib.sha256(
+        "\n".join(l.strip() for l in body if l.strip()).encode()
+    ).hexdigest()[:16]
+
+
+def _load_supp_baseline():
+    """Hashes of block entries inherited verbatim from the pinned oracle.
+
+    `valgrind.supp` is an R1-verbatim port of the oracle's file (233 entries,
+    126 comment lines — identical counts on both sides), and upstream documents
+    its suppressions in GROUPS, leaving 148 entries with no WHY of their own.
+    Inventing 148 rationales for third-party GTK/GLib frames we did not diagnose
+    would be fabrication, so those exact entries are FROZEN by content hash.
+    The freeze is not a waiver of the rule: a NEW entry, or an EDIT to a frozen
+    one (the hash covers every frame), is not on the list and FAILS. The debt can
+    only shrink — `--print-supp-baseline` regenerates the list and any hash that
+    no longer appears in a file is reported as stale.
+    """
+    path = os.path.join(os.path.dirname(__file__), "d6_supp_baseline.txt")
+    out = {}
+    if not os.path.isfile(path):
+        return out
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        h, _, name = line.partition(" ")
+        out[h] = name
+    return out
+
+
+def iter_supp_entries(lines):
+    """Yield (start_line, body_lines, has_why) for each block-format entry."""
+    group_why = False
+    seen_entry = False
+    i, n = 0, len(lines)
+    while i < n:
+        s = lines[i].strip()
+        if s.startswith("#") and re.search(r"[A-Za-z]", s):
+            group_why, seen_entry = True, False
+            i += 1
+            continue
+        if not s:
+            # A blank line ends a group only once the group has produced an
+            # entry, so `# why` / blank / `{ … }` still counts as documented.
+            if seen_entry:
+                group_why, seen_entry = False, False
+            i += 1
+            continue
+        if s == "{":
+            start, body = i, []
+            i += 1
+            while i < n and lines[i].strip() != "}":
+                body.append(lines[i])
+                i += 1
+            i += 1
+            seen_entry = True
+            inline = any(l.strip().startswith("#") and re.search(r"[A-Za-z]", l)
+                         for l in body)
+            yield start + 1, body, (group_why or inline)
+            continue
+        i += 1
+
+
+def check_supp_files(print_baseline=False, check_stale=True):
+    baseline = _load_supp_baseline()
+    seen_hashes = set()
+    frozen = 0
+    regen = []
     for dirpath, dirnames, filenames in os.walk(ROOT):
         dirnames[:] = [d for d in dirnames if d not in ("target", ".git", "vendor")]
-        for fn in filenames:
+        for fn in sorted(filenames):
             if not fn.endswith(".supp"):
                 continue
             p = os.path.join(dirpath, fn)
             lines = open(p, encoding="utf-8", errors="replace").read().splitlines()
+            if any(l.strip() == "{" for l in lines):
+                # BLOCK format (Valgrind & friends): one finding per ENTRY.
+                for ln, body, has_why in iter_supp_entries(lines):
+                    h = _norm_entry(body)
+                    seen_hashes.add(h)
+                    name = body[0].strip() if body else "<unnamed>"
+                    if BLOCK_SUPP_KIND.match(name) or not name:
+                        name = "<unnamed>"
+                    if has_why:
+                        continue
+                    if print_baseline:
+                        regen.append(f"{h} {rel(p)}: {name}")
+                        continue
+                    if h in baseline:
+                        frozen += 1
+                        continue
+                    findings.append((
+                        "suppression-why",
+                        f"{rel(p)}:{ln}",
+                        f"suppression entry `{name}` has no per-entry WHY comment "
+                        "and is not in d6_supp_baseline.txt (rule c). Add a `#` "
+                        "comment above the entry (or inside the block) saying what "
+                        "it hides and why that cannot hide a rustty defect.",
+                    ))
+                continue
+            # LINE format (LSan/TSan/UBSan): one suppression per line.
             for i, line in enumerate(lines):
                 s = line.strip()
                 if not s or s.startswith("#"):
                     continue
-                # Entry needs a WHY: trailing `#…` OR a `#` comment on the line above.
                 has_inline = "#" in line and SAME_LINE_WHY.search(line[line.index("#"):])
                 prev = lines[i - 1].strip() if i > 0 else ""
                 has_above = prev.startswith("#") and re.search(r"[A-Za-z]", prev)
@@ -222,9 +361,102 @@ def check_supp_files():
                     f"{rel(p)}:{i + 1}",
                     "suppression entry has no per-entry WHY comment (rule c).",
                 ))
+    if print_baseline:
+        print("# d6_supp_baseline.txt — regenerated by "
+              "`d6_cfg_mapping_audit.py --print-supp-baseline`.")
+        print("# See _load_supp_baseline() for what this freeze does and does not "
+              "waive.")
+        for r in regen:
+            print(r)
+        return 0
+    stale = [h for h in baseline if h not in seen_hashes] if check_stale else []
+    for h in stale:
+        findings.append((
+            "suppression-why",
+            "d6_supp_baseline.txt",
+            f"stale freeze `{h}` ({baseline[h]}) matches no suppression entry any "
+            "more — the entry was edited or removed; drop the line (the debt only "
+            "shrinks).",
+        ))
+    if frozen:
+        print(f"  (c) {frozen} block suppression entr(ies) frozen by "
+              f"d6_supp_baseline.txt (oracle-verbatim, no upstream WHY); a new or "
+              f"edited entry is NOT frozen and fails.")
+    return 0
+
+
+# ---- self-test: prove every arm of (b)+(c) can still turn RED ----------------
+SELF_TEST_CASES = [
+    ("un-gated first-party #[global_allocator]",
+     {"crates/x/src/lib.rs": "#[global_allocator]\nstatic A: X = X;\n"},
+     "cfg-mapping"),
+    ("NEW undocumented Valgrind block entry",
+     {"t.supp": "# why: documented one\n{\n  a\n  Memcheck:Leak\n  fun:g_malloc\n}"
+                "\n\n{\n  undocumented\n  Memcheck:Leak\n  fun:g_free\n}\n"},
+     "suppression-why"),
+    ("EDITED frozen Valgrind entry (hash no longer matches)",
+     {"t.supp": "{\n  a\n  Memcheck:Leak\n  fun:g_malloc_EDITED\n}\n"},
+     "suppression-why"),
+    ("undocumented LSan line suppression",
+     {"t.supp": "leak:libfoo.so\n"},
+     "suppression-why"),
+    ("un-WHY'd detect_leaks=0 in a gate script",
+     {".port/tools/gates/x.sh": "ASAN_OPTIONS=detect_leaks=0\n"},
+     "suppression-why"),
+]
+
+
+def self_test():
+    """Every FAIL arm must be reachable, and the clean tree must be GREEN."""
+    import shutil
+    import tempfile
+    global ROOT, findings
+    real_root = ROOT
+    ok = True
+    for name, files, kind in SELF_TEST_CASES:
+        td = tempfile.mkdtemp(prefix="d6-selftest-")
+        try:
+            for rp, txt in files.items():
+                fp = os.path.join(td, rp)
+                os.makedirs(os.path.dirname(fp), exist_ok=True)
+                open(fp, "w").write(txt)
+            ROOT, findings = td, []
+            check_global_allocators()
+            check_suppression_toggles()
+            check_supp_files(check_stale=False)
+            hit = [f for f in findings if f[0] == kind]
+            print(f"  {'✅' if hit else '❌'} FAIL arm reachable: {name} "
+                  f"-> {len(hit)} [{kind}] finding(s)")
+            ok = ok and bool(hit)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+    # And the negative control: an empty tree must produce NO finding, so the
+    # arms above are the rule firing, not the checker failing open on anything.
+    td = tempfile.mkdtemp(prefix="d6-selftest-clean-")
+    try:
+        open(os.path.join(td, "t.supp"), "w").write(
+            "# why: documented\n{\n  a\n  Memcheck:Leak\n  fun:g_malloc\n}\n")
+        ROOT, findings = td, []
+        check_global_allocators()
+        check_suppression_toggles()
+        check_supp_files(check_stale=False)
+        clean = not findings
+        print(f"  {'✅' if clean else '❌'} negative control: a documented tree is "
+              f"GREEN -> {len(findings)} finding(s)")
+        ok = ok and clean
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+        ROOT = real_root
+        findings = []
+    return 0 if ok else 1
 
 
 def main():
+    if "--print-supp-baseline" in sys.argv:
+        return check_supp_files(print_baseline=True)
+    if "--self-test" in sys.argv:
+        print("D6 (b)+(c) audit self-test — each arm must be able to go RED")
+        return self_test()
     print("D6 (b)+(c) cfg-mapping + suppression audit")
     ga = check_global_allocators()
     print(f"  (b) first-party #[global_allocator] sites scanned: {ga} "

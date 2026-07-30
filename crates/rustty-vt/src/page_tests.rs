@@ -2889,4 +2889,71 @@ mod tests {
         drop(copy);
         page.deinit();
     }
+
+    // test "Mask" (446f80f4e, WS10 T19)
+    #[test]
+    fn mask() {
+        type M = Mask<Cell, { cell_field_mask(&[CellField::ContentTag, CellField::StyleId]) }, 4>;
+
+        let plain: Cell = Cell::init('A' as u32);
+        let mut styled: Cell = Cell::init('B' as u32);
+        styled.set_style_id(5);
+        let mut styled2: Cell = Cell::init('C' as u32);
+        styled2.set_style_id(5);
+        let mut other: Cell = Cell::init('D' as u32);
+        other.set_style_id(6);
+
+        // match: plain cells only
+        {
+            let mut cells: [Cell; 4] = [plain, plain, plain, plain];
+            assert!(M::match_group(&cells, 0));
+            assert!(M::match_scalar(plain));
+
+            cells[2] = styled;
+            assert!(!M::match_group(&cells, 0));
+            assert!(!M::match_scalar(styled));
+        }
+
+        // eql: runs of matching masked fields, other fields may vary
+        {
+            let expected = M::pattern(styled);
+            let mut cells: [Cell; 4] = [styled, styled2, styled, styled2];
+            assert!(M::eql(&cells, 0, expected));
+            assert!(M::eql_scalar(styled2, expected));
+
+            cells[1] = other;
+            assert!(!M::eql(&cells, 0, expected));
+            assert!(!M::eql_scalar(other, expected));
+        }
+
+        // eqlPrefix: count of leading values matching the pattern
+        {
+            let expected = M::pattern(styled);
+            let mut cells: [Cell; 4] = [styled, styled2, other, styled];
+            assert_eq!(2, M::eql_prefix(&cells, 0, expected));
+
+            cells[2] = styled;
+            assert_eq!(4, M::eql_prefix(&cells, 0, expected));
+        }
+
+        // eqlExact: bit-identical values only
+        {
+            let expected = M::bits(styled);
+            let mut cells: [Cell; 4] = [styled, styled, styled, styled];
+            assert!(M::eql_exact(&cells, 0, expected));
+
+            // Same masked fields but different codepoint is not exact.
+            cells[3] = styled2;
+            assert!(!M::eql_exact(&cells, 0, expected));
+        }
+
+        // strip: compare values while ignoring the masked fields
+        {
+            let mut styled_other: Cell = Cell::init('B' as u32);
+            styled_other.set_style_id(6);
+            assert_eq!(M::strip(styled), M::strip(styled_other));
+            assert!(M::strip(styled) != M::strip(styled2));
+        }
+    }
+
 }

@@ -433,6 +433,58 @@ pub unsafe fn update(state_: RenderState, terminal_: terminal_c::Terminal) -> Re
     }
 }
 
+// pub fn begin_update(
+//     state_: RenderState,
+//     terminal_: terminal_c.Terminal,
+// ) callconv(lib.calling_conv) Result {
+//     const state = state_ orelse return .invalid_value;
+//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//
+//     state.state.beginUpdate(state.alloc, t) catch return .out_of_memory;
+//     return .success;
+// }
+/// # Safety
+/// `state_`/`terminal_`, if non-null, must be live handles.
+pub unsafe fn begin_update(state_: RenderState, terminal_: terminal_c::Terminal) -> Result {
+    if state_.is_null() {
+        return Result::InvalidValue;
+    }
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `terminal_` is a live wrapper; raw-ptr read of the sibling field.
+    let t = unsafe { (*terminal_).terminal };
+
+    let gpa = allocator_api2::alloc::Global;
+    // SAFETY: `state_`/`t` are live (caller contract); they are independent
+    // allocations, so the two `&mut`s do not alias.
+    let state = unsafe { &mut *state_ };
+    let t_ref = unsafe { &mut *t };
+    match state.state.begin_update(gpa, t_ref) {
+        Ok(()) => Result::Success,
+        Err(_oom) => Result::OutOfMemory,
+    }
+}
+
+// pub fn end_update(
+//     state_: RenderState,
+// ) callconv(lib.calling_conv) Result {
+//     const state = state_ orelse return .invalid_value;
+//     state.state.endUpdate();
+//     return .success;
+// }
+/// # Safety
+/// `state_`, if non-null, must be a live handle.
+pub unsafe fn end_update(state_: RenderState) -> Result {
+    if state_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `state_` is live (caller contract).
+    let state = unsafe { &mut *state_ };
+    state.state.end_update();
+    Result::Success
+}
+
 // pub fn get(state_: RenderState, data: Data, out: ?*anyopaque) ... Result {
 //     if (comptime std.debug.runtime_safety) {
 //         _ = std.meta.intToEnum(Data, @intFromEnum(data)) catch {

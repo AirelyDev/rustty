@@ -1889,6 +1889,31 @@ pub unsafe extern "C" fn rustty_render_state_update(
     unsafe { render::update(state, terminal) }.to_c_int()
 }
 
+// pub const render_state_begin_update = render.begin_update;
+/// C: rustty_render_state_begin_update
+///
+/// # Safety
+/// `state`/`terminal`, if non-null, must be live handles.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_render_state_begin_update(
+    state: render::RenderState,
+    terminal: terminal::Terminal,
+) -> c_int {
+    // SAFETY: `state`/`terminal` validity is the caller's contract.
+    unsafe { render::begin_update(state, terminal) }.to_c_int()
+}
+
+// pub const render_state_end_update = render.end_update;
+/// C: rustty_render_state_end_update
+///
+/// # Safety
+/// `state`, if non-null, must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_render_state_end_update(state: render::RenderState) -> c_int {
+    // SAFETY: `state` validity is the caller's contract.
+    unsafe { render::end_update(state) }.to_c_int()
+}
+
 // pub const render_state_get = render.get;
 /// C: rustty_render_state_get
 ///

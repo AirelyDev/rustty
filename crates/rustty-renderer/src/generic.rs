@@ -4562,8 +4562,13 @@ mod macos_impl {
                     }
                 }
 
-                // Update our terminal state
-                self.terminal_state.update(self.alloc, unsafe { &mut *t })?;
+                // Begin the update of our terminal state. Work that
+                // doesn't require terminal access (e.g. style
+                // denormalization) is deferred to the end_update call
+                // outside of this critical section, keeping our lock
+                // hold time as short as possible.
+                self.terminal_state
+                    .begin_update(self.alloc, unsafe { &mut *t })?;
 
                 // If our terminal state is dirty at all we need to redo
                 // the viewport search.
@@ -4656,6 +4661,11 @@ mod macos_impl {
                     overlay_features,
                 }
             };
+
+            // Outside the critical area, complete the update we began
+            // within it. This must be done before anything reads the
+            // render state (e.g. rebuild_cells).
+            self.terminal_state.end_update();
 
             // Outside the critical area we can update our links to contain
             // our regex results.

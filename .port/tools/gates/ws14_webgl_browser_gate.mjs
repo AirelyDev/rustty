@@ -24,7 +24,7 @@
 //
 // Usage: .port/tools/gates/ws14_webgl_browser_gate.sh [--keep-open]
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -51,13 +51,37 @@ function die(code, msg) {
 }
 
 // ------------------------------------------------------------------ environment
+// The artifact is a BUILD PRODUCT of this repo, not an external dependency, so
+// its absence is not an "environment missing" condition — the gate builds it.
+// It used to exit 3 whenever nobody had run `build-main-wasm.sh` by hand, which
+// on a fresh clone or a fresh worktree is ALWAYS, so the gate never actually ran
+// and its exit-3 was read as a permanent red. Exit 3 is now reserved for what it
+// means: a missing *external* input (the wasm32 rustc target, Chrome).
+// `--no-build` restores the old behaviour for a CI stage that builds separately.
 if (!existsSync(ARTIFACT)) {
-  die(
-    3,
-    `WS14 gate: MISSING the wasm artifact\n  ${ARTIFACT}\n\n` +
-      `Build it first:\n  .port/tools/build-main-wasm.sh --release\n\n` +
-      `Exiting 3 (environment missing) rather than passing vacuously.`,
+  if (process.argv.includes("--no-build")) {
+    die(
+      3,
+      `WS14 gate: MISSING the wasm artifact (and --no-build was passed)\n  ${ARTIFACT}\n\n` +
+        `Build it first:\n  .port/tools/build-main-wasm.sh --release\n\n` +
+        `Exiting 3 (environment missing) rather than passing vacuously.`,
+    );
+  }
+  console.error(`WS14 gate: building the wasm artifact (absent) …`);
+  const built = spawnSync(
+    join(ROOT, ".port/tools/build-main-wasm.sh"),
+    ["--release"],
+    { cwd: ROOT, stdio: ["ignore", "inherit", "inherit"] },
   );
+  if (built.status !== 0 || !existsSync(ARTIFACT)) {
+    die(
+      3,
+      `WS14 gate: could not build ${ARTIFACT}\n` +
+        `  .port/tools/build-main-wasm.sh --release exited ${built.status}\n` +
+        `  (is the wasm32-unknown-unknown target installed? \`rustup target add wasm32-unknown-unknown\`)\n\n` +
+        `Exiting 3 (environment missing) rather than passing vacuously.`,
+    );
+  }
 }
 const CHROME = CHROME_CANDIDATES.find((p) => existsSync(p));
 if (!CHROME) {

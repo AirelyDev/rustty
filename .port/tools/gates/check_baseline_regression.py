@@ -66,6 +66,31 @@ LOWER_BETTER = {"median_s", "min_s", "mean_s", "ns_per_op", "seconds", "wall_s"}
 #: only half of BASELINE.json that may be compared against them.
 CANDIDATE_OPTIMIZE = "ReleaseFast"
 
+#: Benchmark ids whose WORKLOAD BASIS changed on the rustty side, so the frozen
+#: BASELINE.json row (measured from the pinned oracle binary) is no longer the
+#: same amount of work and a ratio against it is meaningless.
+#:
+#: This is NOT a tolerance and NOT a waiver. A tolerance says "a bit slower is
+#: fine"; this says "these two numbers are not a ratio at all". The distinction
+#: is what keeps it honest, and it costs the gate nothing, because every id
+#: listed here is STILL fenced -- by `ws10_suite.py`'s FENCE 2, which compares
+#: the candidate against rustty's own entry binary, where both sides run the
+#: identical workload by construction. An id may only be listed with the change
+#: that caused it, the normalized comparison, and the event that ends it.
+#:
+#: The set is REPORTED on every run (never silently skipped) and is exercised by
+#: --self-test, which asserts that a listed id cannot turn the gate red no matter
+#: how large the raw delta is, AND that an unlisted id still can.
+BASIS_CHANGED = {
+    "screen-clone.render/small":
+        "WS10 T12 ported 446f80f4e's bench hunk: stepRender went from 1_000 to "
+        "50_000 x --loops iterations. BASELINE.json's row is the PINNED oracle "
+        "(4749c4e93) at 1_000. rustty therefore does 50x the work in this "
+        "config: 0.0163 s baseline vs 0.385 s candidate is 0.0077 s normalized, "
+        "i.e. -53% -- a WIN reported as +2258% by a raw ratio. Re-base when the "
+        "oracle pin advances past 446f80f4e (Phase 3).",
+}
+
 
 def bench_index(obj):
     """{(id, optimize): (metric_key, value, direction)} for a benchmarks[] list.
@@ -177,6 +202,7 @@ def run(args):
 
     regressions = []
     missing = []
+    basis_changed = []
     compared = 0
 
     # benchmarks. Only the CANDIDATE_OPTIMIZE half of BASELINE.json is eligible:
@@ -192,6 +218,9 @@ def run(args):
             missing.append(("bench", bid))
             continue
         _ckey, cval, _cd = cand_bench[key]
+        if bid in BASIS_CHANGED:
+            basis_changed.append((bid, bval, cval))
+            continue
         compared += 1
         t = tol["throughput"] if direction == "higher" else tol["time"]
         if direction == "higher":
@@ -230,7 +259,13 @@ def run(args):
                     regressions.append((f"{axis} {name}", bv, cv, pct(bv, cv)))
 
     print(f"compared {compared} metrics; regressions {len(regressions)}; "
-          f"missing-from-candidate {len(missing)}")
+          f"missing-from-candidate {len(missing)}; "
+          f"basis-changed {len(basis_changed)}")
+    for (bid, bval, cval) in basis_changed:
+        print(f"    BASIS-CHANGED {bid}: baseline={bval} now={cval} "
+              f"({pct(bval, cval)*100:+.2f}%) -- NOT a ratio, excluded from the "
+              f"verdict; still fenced by ws10_suite.py FENCE 2")
+        print(f"      why: {BASIS_CHANGED[bid]}")
     for (name, bval, cval, p) in regressions:
         print(f"    REGRESS {name}: baseline={bval} now={cval} ({p*100:+.2f}%)")
     if args.strict:
@@ -323,6 +358,49 @@ def self_test():
     r = invoke("--metrics", m)
     print(f"[e] throughput -2% (within band) -> exit {r.returncode} (expect 0)")
     ok &= (r.returncode == 0)
+
+    # (e2) BASIS_CHANGED must be an EXCLUSION, not a hole (WS10 T21). A listed
+    #      id cannot turn the gate red however large the delta -- and an unlisted
+    #      id with the SAME delta still must. Without the second half, the
+    #      mechanism would be indistinguishable from a blanket waiver.
+    def write_basis_metrics(bid, throughput):
+        p = os.path.join(tmp, "metrics_basis.json")
+        with open(p, "w") as fh:
+            json.dump({
+                "benchmarks": [
+                    {"id": bid, "metric": "throughput_MiB_per_s",
+                     "throughput_MiB_per_s": throughput, "median_s": 0.25},
+                ],
+                "binary_sizes_bytes": {"libvt.a": {"bytes": 1000000}},
+            }, fh)
+        return p
+
+    if BASIS_CHANGED:
+        listed = sorted(BASIS_CHANGED)[0]
+        # Rewrite the synthetic baseline so the listed id exists in it.
+        baseline["benchmarks"] = [
+            {"id": listed, "optimize": "ReleaseFast",
+             "metric": "throughput_MiB_per_s", "throughput_MiB_per_s": 250.0},
+            {"id": "terminal-parser/utf8", "optimize": "ReleaseFast",
+             "metric": "throughput_MiB_per_s", "throughput_MiB_per_s": 250.0},
+        ]
+        with open(os.path.join(bdir, "BASELINE.json"), "w") as fh:
+            json.dump(baseline, fh)
+
+        m = write_basis_metrics(listed, 5.0)          # 50x worse
+        r = invoke("--metrics", m)
+        shown = "BASIS-CHANGED" in r.stdout
+        print(f"[e2] listed id 50x worse -> exit {r.returncode} (expect 0), "
+              f"reported={shown} (expect True)")
+        ok &= (r.returncode == 0 and shown)
+
+        m = write_basis_metrics("terminal-parser/utf8", 5.0)  # same delta, unlisted
+        r = invoke("--metrics", m)
+        print(f"[e2] UNLISTED id 50x worse -> exit {r.returncode} "
+              f"(expect non-zero)")
+        ok &= (r.returncode != 0 and "REGRESS" in r.stdout)
+    else:
+        print("[e2] BASIS_CHANGED empty -> nothing to exercise")
 
     shutil.rmtree(tmp, ignore_errors=True)
 

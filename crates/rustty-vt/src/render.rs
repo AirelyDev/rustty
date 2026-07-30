@@ -118,6 +118,34 @@ pub struct RenderState {
     /// The cached selection so we can avoid expensive selection calculations
     /// if possible.
     pub selection_cache: Option<SelectionCache>,
+
+    /// The pending style runs requiring an `end_update` call, in the order they
+    /// were recorded. If multiple begins happen without an `end_update` call,
+    /// runs accumulate; rows rebuilt more than once may then have superseded
+    /// (stale) runs in this list, which is harmless: newer runs are appended
+    /// later so they win, and cells not covered by newer runs have a default
+    /// style ID in their raw data so their style is undefined by contract
+    /// anyway. See `begin_update`.
+    pub pending_styles: Vec<StyleRun>,
+}
+
+/// A run of cells within one row sharing one style, pending denormalization
+/// into the per-cell data. This is populated by `begin_update` and consumed by
+/// `end_update`. This exists so that the (potentially large) denormalization of
+/// styles into cells can happen outside of any terminal locks. See
+/// `begin_update`.
+#[derive(Clone, Copy, Debug)]
+pub struct StyleRun {
+    /// The viewport row.
+    pub y: size::CellCountInt,
+
+    /// Start (inclusive) x coordinate.
+    pub start: size::CellCountInt,
+    /// End (exclusive) x coordinate.
+    pub end: size::CellCountInt,
+
+    /// The style for this cell range.
+    pub style: Style,
 }
 
 /// The color state for the terminal.
@@ -444,6 +472,12 @@ impl CellList {
             &mut self.grapheme_buf,
         )
     }
+
+    /// `row_cells[run.y].slice().items(.style)` — the style column alone, for
+    /// `RenderState::end_update`'s denormalization pass.
+    fn style_mut(&mut self) -> &mut [Style] {
+        &mut self.style
+    }
 }
 
 // Dirty state.
@@ -503,6 +537,7 @@ impl RenderState {
             screen: crate::screen_set::Key::Primary,
             viewport_pin: None,
             selection_cache: None,
+            pending_styles: Vec::new(),
         }
     }
 
@@ -512,13 +547,77 @@ impl RenderState {
     // simply clears the storage for API parity.
     pub fn deinit(&mut self, _alloc: Allocator) {
         self.row_data = Vec::new();
+        self.pending_styles = Vec::new();
     }
 
     /// Update the render state to the latest terminal state.
     ///
+    /// This is a convenience function that performs a full update in one call,
+    /// equivalent to `begin_update` immediately followed by `end_update`.
+    /// Callers that hold a lock over the terminal state should prefer calling
+    /// the two phases directly so that the lock is only held for
+    /// `begin_update`.
+    ///
     /// This will reset the terminal dirty state since it is consumed
     /// by this render state update.
     pub fn update(&mut self, alloc: Allocator, t: &mut Terminal) -> Result<(), OutOfMemory> {
+        self.begin_update(alloc, t)?;
+        self.end_update();
+        Ok(())
+    }
+
+    /// Complete a prior `begin_update` call by performing any deferred work. At
+    /// the time of writing, this denormalizes the pending style runs into the
+    /// per-cell style data.
+    ///
+    /// This only reads and writes memory owned by the render state, so it is
+    /// safe to call while the terminal is being modified (no terminal lock is
+    /// required).
+    pub fn end_update(&mut self) {
+        // Common case: no styled rows were rebuilt.
+        if self.pending_styles.is_empty() {
+            return;
+        }
+
+        let row_len = self.row_data.len();
+        for run in self.pending_styles.iter() {
+            // Defensive: the row data may have changed shape if the caller
+            // violated ordering (e.g. an error path skipped an `end_update`
+            // between updates). Any update that changes dimensions clears the
+            // pending list (redraw), so this should never actually trigger, but
+            // the cost is trivial.
+            if run.y as usize >= row_len {
+                continue;
+            }
+            let styles = self.row_data[run.y as usize].cells.style_mut();
+            let end = core::cmp::min(run.end as usize, styles.len());
+            let start = core::cmp::min(run.start as usize, end);
+            styles[start..end].fill(run.style);
+        }
+        self.pending_styles.clear();
+    }
+
+    /// Begin an update of the render state to the latest terminal state. Every
+    /// begin must be completed with an `end_update` call before the render
+    /// state is read.
+    ///
+    /// This two-phase structure exists for callers that lock the terminal
+    /// state: only this function requires terminal access, so a caller can hold
+    /// its lock for this call only and then call `end_update` after releasing
+    /// it. `end_update` exclusively reads and writes memory owned by the render
+    /// state.
+    ///
+    /// Work that doesn't require terminal access may be deferred to
+    /// `end_update` to keep this call (and therefore lock hold time) as short
+    /// as possible. At the time of writing, the deferred work is the per-cell
+    /// style denormalization, so between this call and `end_update` the
+    /// per-cell `style` data of any updated rows is stale and must not be read.
+    /// More work may be deferred in the future; callers should treat the render
+    /// state as incomplete until `end_update` is called.
+    ///
+    /// This will reset the terminal dirty state since it is consumed
+    /// by this render state update.
+    pub fn begin_update(&mut self, alloc: Allocator, t: &mut Terminal) -> Result<(), OutOfMemory> {
         let s: *mut Screen = t.screens.active;
         let viewport_pin = unsafe { (*s).pages.get_top_left(point::Tag::Viewport) };
         let redraw: bool = 'redraw: {
@@ -589,7 +688,15 @@ impl RenderState {
 
         // Colors.
         self.colors.cursor = t.colors.cursor.get();
-        self.colors.palette = t.colors.palette.current;
+
+        // The palette is a relatively large copy (768 bytes at the time
+        // of writing) so we only copy it when it could have changed. All
+        // palette modifications set a terminal-level dirty flag (see
+        // Terminal.Dirty.palette), and any terminal-level dirty flag
+        // forces a redraw, so checking redraw is sufficient.
+        if redraw {
+            self.colors.palette = t.colors.palette.current;
+        }
         'bg_fg: {
             // Background/foreground can be unset initially which would
             // depend on "default" background/foreground. The expected use
@@ -654,250 +761,195 @@ impl RenderState {
         // PORT NOTE: the reference splits `row_data` into per-field slices; the
         // Rust port indexes `self.row_data[y]` directly (the `Vec<Row>` layout).
 
-        // Track the last page that we know was dirty. This lets us
-        // more quickly do the full-page dirty check.
-        let mut last_dirty_page: *mut page::Page = core::ptr::null_mut();
-
-        // Go through and setup our rows.
-        let mut row_it = unsafe {
-            (*s).pages.row_iterator(
-                Direction::RightDown,
-                point::Point::Viewport(point::Coordinate { x: 0, y: 0 }),
-                None,
-            )
-        };
-        let mut y: size::CellCountInt = 0;
-        let mut any_dirty: bool = false;
-        'rows: while let Some(row_pin) = row_it.next() {
-            // Find our cursor if we haven't found it yet. We do this even
-            // if the row is not dirty because the cursor is unrelated.
-            if self.cursor.viewport.is_none()
-                && core::ptr::eq(row_pin.node, unsafe { (*(*s).cursor.page_pin).node })
-                && row_pin.y == unsafe { (*(*s).cursor.page_pin).y }
-            {
-                self.cursor.viewport = Some(Viewport {
-                    y,
-                    x: unsafe { (*s).cursor.x },
-
-                    // Future: we should use our own state here to look this
-                    // up rather than calling this.
-                    wide_tail: if unsafe { (*s).cursor.x } > 0 {
-                        unsafe { (*(*s).cursor_cell_left(1)).wide() == page::Wide::Wide }
-                    } else {
-                        false
-                    },
-                });
-            }
-
-            // Store our pin and its node generation. We have to store these
-            // even if we're not dirty because dirty is only a renderer
-            // optimization. It doesn't apply to memory movement. This will let
-            // us remap any cell pins back to an exact entry in our RenderState
-            // and validate them later without dereferencing a potentially
-            // stale node.
-            //
-            // INSPECT, NOT RESTORE: `node.serial` lives in the pagelist Node,
-            // never in the page mapping, so reading it must not restore a
-            // compressed page. (The `Node::page` call below is the RESTORE this
-            // path legitimately needs: `update` copies the row's cells out.)
-            self.row_data[y as usize].pin = row_pin;
-            // serial.* = node_serial;
-            self.row_data[y as usize].serial = unsafe { (*row_pin.node).serial };
-
-            // Get all our cells in the page.
-            let p: *mut page::Page = unsafe { crate::pagelist::Node::page(row_pin.node) };
-            let page_rac = row_pin.row_and_cell();
-
-            'dirty: {
-                // If we're redrawing then we're definitely dirty.
-                if redraw {
-                    break 'dirty;
-                }
-
-                // If our page is the same as last time then its dirty.
-                if core::ptr::eq(p, last_dirty_page) {
-                    break 'dirty;
-                }
-                if unsafe { (*p).dirty } {
-                    // If this page is dirty then clear the dirty flag
-                    // of the last page and then store this one. This benchmarks
-                    // faster than iterating pages again later.
-                    if !last_dirty_page.is_null() {
-                        unsafe { (*last_dirty_page).dirty = false };
-                    }
-                    last_dirty_page = p;
-                    break 'dirty;
-                }
-
-                // If our row is dirty then we're dirty.
-                if unsafe { (*page_rac.row).dirty() } {
-                    break 'dirty;
-                }
-
-                // Not dirty!
-                y += 1;
-                continue 'rows;
-            }
-
-            // Set that at least one row was dirty.
-            any_dirty = true;
-
-            // Clear our row dirty, we'll clear our page dirty later.
-            // We can't clear it now because we have more rows to go through.
-            unsafe { (*page_rac.row).set_dirty(false) };
-
-            // Promote our arena. State is copied by value so we need to
-            // restore it on all exit paths so we don't leak memory.
-            // (PORT NOTE: no arena in the Rust port — owned `Vec`s instead.)
-
-            // PERF(port): hoist the row projection once per row — the
-            // reference hoists the `row_data.slice()` column pointers before
-            // the loop (render.zig:383-390); repeated `self.row_data[y]`
-            // indexing paid a bounds check per touch (and per cell in the
-            // managed loop below).
-            let row: &mut Row = &mut self.row_data[y as usize];
-
-            // Reset our cells if we're rebuilding this row.
-            if !row.cells.is_empty() {
-                // _ = arena.reset(.retain_capacity);
-                // clearRetainingCapacity()
-                row.cells.clear_retaining_capacity();
-                row.selection = None;
-                row.highlights = Vec::new();
-            }
-            row.dirty = true;
-
-            // Get all our cells in the page.
-            let page_cells: &[page::Cell] = unsafe { &*(*p).get_cells(page_rac.row) };
-            assert!(page_cells.len() == self.cols as usize);
-
-            // Copy our raw row data
-            row.raw = unsafe { *page_rac.row };
-
-            // Note: our cells MultiArrayList uses our general allocator.
-            // We do this on purpose because as rows become dirty, we do
-            // not want to reallocate space for cells (which are large). This
-            // was a source of huge slowdown.
-            //
-            // Our per-row arena is only used for temporary allocations
-            // pertaining to cells directly (e.g. graphemes, hyperlinks).
-            // try cells.resize(alloc, self.cols);
-            // We always copy our raw cell data. In the case we have no
-            // managed memory, we can skip setting any other fields.
-            //
-            // This is an important optimization. For plain-text screens
-            // this ends up being something around 300% faster based on
-            // the `screen-clone` benchmark.
-            // fastmem.copy(page.Cell, cells_slice.items(.raw), page_cells);
-            //
-            // PERF(port): restore the reference's SoA raw-column memcpy
-            // (render.zig:492-505). `rebuild_raw` fills the whole `raw` column
-            // with one `extend_from_slice` and leaves `style`/`grapheme`
-            // untouched (written below only for flagged cells), instead of the
-            // prior per-cell `push(Cell { .. })` with a capacity check +
-            // `Style::default()`/`Vec::new()` stores + drop glue per cell.
-            row.cells.rebuild_raw(page_cells);
-            if !unsafe { (*page_rac.row).managed_memory() } {
-                y += 1;
-                continue;
-            }
-
-            // const arena_alloc = arena.allocator();
-            // const cells_grapheme = cells_slice.items(.grapheme);
-            // const cells_style = cells_slice.items(.style);
-            //
-            // PERF(port): hoist the mutable column borrows once per row (the
-            // reference's hoisted column pointers above, render.zig:508-510)
-            // instead of calling `&mut self` helpers per cell — see
-            // `CellList::slice_mut`. The `[..n]` re-slices cannot panic:
-            // `rebuild_raw` (called above on the same `page_cells`) enforces
-            // `style.len() == grapheme_spans.len() == raw.len() ==
-            // page_cells.len()`, letting the compiler elide the per-write
-            // bounds checks against the loop bound.
-            let n = page_cells.len();
-            let (cells_style, cells_spans, grapheme_buf) = row.cells.slice_mut();
-            let cells_style = &mut cells_style[..n];
-            let cells_spans = &mut cells_spans[..n];
-            // PERF(port): hoist the style-set base resolution once per row —
-            // `(*p).memory_ptr()` and the set's items offset are loop-invariant
-            // (nothing in this loop writes through `p`), but the grapheme arm's
-            // `extend_from_slice` call clobbers memory, so LLVM re-loads both
-            // per styled cell unless they live in pre-loop locals. The zip
-            // iteration replaces indexed column writes (`cells_style[x]`),
-            // folding the per-write bounds checks into the shared loop bound.
-            // `get(base, id)` == `get_at(items_ptr(base), id)` — see
-            // `RefCountedSet::items_ptr` / `get_at`.
-            let styles: *const crate::style::Set = unsafe { core::ptr::addr_of!((*p).styles) };
-            let style_items = unsafe { (*styles).items_ptr((*p).memory_ptr()) };
-            for ((page_cell, style_slot), span_slot) in page_cells
-                .iter()
-                .zip(cells_style.iter_mut())
-                .zip(cells_spans.iter_mut())
-            {
-                // Append assuming its a single-codepoint, styled cell
-                // (most common by far).
-                if page_cell.style_id() > 0 {
-                    // cells_style[x] = p.styles.get(p.memory, page_cell.style_id).*;
-                    let style = unsafe { *(*styles).get_at(style_items, page_cell.style_id()) };
-                    *style_slot = style;
-                }
-
-                // Switch on our content tag to handle less likely cases.
-                match page_cell.content_tag() {
-                    page::ContentTag::Codepoint => {
-                        // @branchHint(.likely);
-                        // Primary codepoint goes into `raw` field.
-                    }
-
-                    // If we have a multi-codepoint grapheme, look it up and
-                    // set our content type.
-                    page::ContentTag::CodepointGrapheme => {
-                        // @branchHint(.unlikely);
-                        // cells_grapheme[x] = try arena_alloc.dupe(u21, ... orelse &.{});
-                        //
-                        // PORT NOTE (reshape): the arena `dupe` — append the
-                        // grapheme codepoints into the row's reusable
-                        // `grapheme_buf` and record their span.
-                        let g: &[u32] = unsafe {
-                            match (*p).lookup_grapheme(page_cell as *const page::Cell) {
-                                Some(s) => s,
-                                None => &[],
-                            }
-                        };
-                        let off = grapheme_buf.len() as u32;
-                        grapheme_buf.extend_from_slice(g);
-                        *span_slot = (off, g.len() as u32);
-                    }
-
-                    page::ContentTag::BgColorRgb => {
-                        // @branchHint(.unlikely);
-                        // cells_style[x] = .{ .bg_color = .{ .rgb = ... } };
-                        let rgb = page_cell.content_color_rgb();
-                        *style_slot = Style {
-                            bg_color: crate::style::Color::Rgb(color::RGB {
-                                r: rgb.r,
-                                g: rgb.g,
-                                b: rgb.b,
-                            }),
-                            ..Style::default()
-                        };
-                    }
-
-                    page::ContentTag::BgColorPalette => {
-                        // @branchHint(.unlikely);
-                        // cells_style[x] = .{ .bg_color = .{ .palette = ... } };
-                        *style_slot = Style {
-                            bg_color: crate::style::Color::Palette(
-                                page_cell.content_color_palette(),
-                            ),
-                            ..Style::default()
-                        };
-                    }
-                }
-            }
-
-            y += 1;
+        // If we're redrawing then every row will be rebuilt, superseding
+        // any pending style runs from prior updates. Clearing also
+        // guarantees pending runs always match the current dimensions
+        // (dimension changes force a redraw).
+        if redraw {
+            self.pending_styles.clear();
         }
+
+        // Go through and setup our rows. We iterate page chunks rather
+        // than individual rows so that per-page work (dirty flags, cursor
+        // detection, memory pointers) is hoisted out of the row loop. This
+        // makes the common case of a clean (or mostly clean) frame very
+        // cheap: a contiguous scan of row dirty flags.
+        //
+        // PORT NOTE: the reference builds a `RowBuilder` struct holding the
+        // `row_data` column slices plus `&pending_styles`, then calls
+        // `builder.row(...)`. rustty's `row_data` is a `Vec<Row>` (AoS with
+        // per-row owned `Vec`s), so there are no column slices to hold; the
+        // equivalent is the free function `row_builder` below, which takes the
+        // two disjoint `&mut` field borrows at each call site. That keeps the
+        // borrow short-lived, so `self.cursor` stays writable in the same loop.
+        let cols = self.cols;
+        let rows = self.rows;
+        let mut y: usize = 0;
+        let mut any_dirty: bool = false;
+        let mut page_it = viewport_pin.page_iterator(Direction::RightDown, None);
+        while y < rows as usize {
+            let chunk = match page_it.next() {
+                Some(c) => c,
+                None => break,
+            };
+            let node = chunk.node;
+            let p: *mut page::Page = unsafe { crate::pagelist::Node::page(node) };
+
+            // The number of rows we consume from this chunk. The chunk
+            // may extend beyond the viewport (the viewport is always
+            // exactly `rows` tall) so we clamp.
+            let take: usize = core::cmp::min((chunk.end - chunk.start) as usize, rows as usize - y);
+
+            // Find our cursor if we haven't found it yet. We do this even
+            // if rows are not dirty because the cursor is unrelated. We
+            // can check the chunk bounds once rather than every row.
+            if self.cursor.viewport.is_none()
+                && core::ptr::eq(node, unsafe { (*(*s).cursor.page_pin).node })
+            {
+                'cursor: {
+                    let cy = unsafe { (*(*s).cursor.page_pin).y };
+                    if cy < chunk.start || (cy as usize) >= chunk.start as usize + take {
+                        break 'cursor;
+                    }
+                    self.cursor.viewport = Some(Viewport {
+                        y: (y + (cy - chunk.start) as usize) as size::CellCountInt,
+                        x: unsafe { (*s).cursor.x },
+
+                        // Future: we should use our own state here to look this
+                        // up rather than calling this.
+                        wide_tail: if unsafe { (*s).cursor.x } > 0 {
+                            unsafe { (*(*s).cursor_cell_left(1)).wide() == page::Wide::Wide }
+                        } else {
+                            false
+                        },
+                    });
+                }
+            }
+
+            // The page-level dirty flag applies to every row in the chunk.
+            // We consume (clear) it now; each node appears at most once in
+            // this iteration and we're the only consumer of dirty state.
+            let page_dirty = unsafe { (*p).dirty };
+            if page_dirty {
+                unsafe { (*p).dirty = false };
+            }
+
+            // Get our contiguous rows for this chunk.
+            //
+            // RAW-PTR DISCIPLINE (memory: rust-mut-args-strongly-protected): the
+            // rows live in the page's own mapping, which `row_builder` also
+            // reads through `p`. We therefore keep the rows as a raw base
+            // pointer and only ever form a SHARED `&[page::Row]` for the mask
+            // scans (which never write), taking a fresh raw element pointer for
+            // the `set_dirty(false)` write and for the builder.
+            let page_rows_ptr: *mut page::Row =
+                unsafe { (*p).rows.ptr((*p).memory_ptr()).add(chunk.start as usize) };
+            let page_rows: &[page::Row] =
+                unsafe { core::slice::from_raw_parts(page_rows_ptr, take) };
+            debug_assert!(unsafe { (*p).size.cols } == cols);
+
+            // Store our pins. We have to store these even for rows that
+            // aren't dirty because dirty is only a renderer optimization;
+            // it doesn't apply to memory movement. This lets us remap any
+            // cell pins back to an exact entry in our RenderState.
+            //
+            // We can skip the writes when the pins are unchanged: if we're
+            // not redrawing, every pin was stored by a prior update (row
+            // count changes force a redraw). Within a single update a node
+            // appears at most once and its stored pins have consecutive y
+            // values, so if the first and last pins of this chunk's range
+            // already match then every pin in between matches too.
+            //
+            // PORT NOTE: rustty also stores `node.serial` per row (the
+            // compressed-page INSPECT-not-RESTORE discipline; see
+            // `update_highlights_flattened`). The serial is a per-NODE value, so
+            // it is read once per chunk and folded into the same skip test.
+            let node_serial = unsafe { (*node).serial };
+            if redraw
+                || !core::ptr::eq(self.row_data[y].pin.node, node)
+                || self.row_data[y].pin.y != chunk.start
+                || self.row_data[y].serial != node_serial
+                || !core::ptr::eq(self.row_data[y + take - 1].pin.node, node)
+                || self.row_data[y + take - 1].pin.y != chunk.start + take as size::CellCountInt - 1
+            {
+                for (i, py) in (chunk.start..chunk.start + take as size::CellCountInt).enumerate() {
+                    let row = &mut self.row_data[y + i];
+                    row.pin = Pin {
+                        node,
+                        y: py,
+                        x: 0,
+                        garbage: false,
+                    };
+                    row.serial = node_serial;
+                }
+            }
+
+            if !redraw && !page_dirty {
+                // Only dirty rows (usually none) need a rebuild. Scan the
+                // dirty flags a group at a time; the dirty bit is directly
+                // testable on the packed row representation.
+                let mut i: usize = 0;
+                while take - i >= RowDirtyMask::GROUP_LEN {
+                    if RowDirtyMask::match_group(page_rows, i) {
+                        // @branchHint(.likely)
+                        i += RowDirtyMask::GROUP_LEN;
+                        continue;
+                    }
+
+                    for j in i..i + RowDirtyMask::GROUP_LEN {
+                        let page_row = unsafe { page_rows_ptr.add(j) };
+                        if !unsafe { (*page_row).dirty() } {
+                            continue;
+                        }
+                        unsafe { (*page_row).set_dirty(false) };
+                        any_dirty = true;
+                        row_builder(
+                            &mut self.row_data,
+                            &mut self.pending_styles,
+                            cols,
+                            p,
+                            page_row,
+                            y + j,
+                        );
+                    }
+                    i += RowDirtyMask::GROUP_LEN;
+                }
+                while i < take {
+                    let page_row = unsafe { page_rows_ptr.add(i) };
+                    if unsafe { (*page_row).dirty() } {
+                        unsafe { (*page_row).set_dirty(false) };
+                        any_dirty = true;
+                        row_builder(
+                            &mut self.row_data,
+                            &mut self.pending_styles,
+                            cols,
+                            p,
+                            page_row,
+                            y + i,
+                        );
+                    }
+                    i += 1;
+                }
+            } else {
+                // Rebuild every row in the chunk.
+                any_dirty = true;
+                for i in 0..take {
+                    let page_row = unsafe { page_rows_ptr.add(i) };
+                    unsafe { (*page_row).set_dirty(false) };
+                    row_builder(
+                        &mut self.row_data,
+                        &mut self.pending_styles,
+                        cols,
+                        p,
+                        page_row,
+                        y + i,
+                    );
+                }
+            }
+
+            y += take;
+        }
+        let y = y as size::CellCountInt;
         assert!(y == self.rows);
 
         // If our screen has a selection, then mark the rows with the
@@ -1016,11 +1068,6 @@ impl RenderState {
             // above did this.
         } else if any_dirty && self.dirty == Dirty::False {
             self.dirty = Dirty::Partial;
-        }
-
-        // Finalize our final dirty page
-        if !last_dirty_page.is_null() {
-            unsafe { (*last_dirty_page).dirty = false };
         }
 
         // Clear our dirty flags
@@ -1325,6 +1372,257 @@ fn write_codepoint(writer: &mut Vec<u8>, cp: u32) -> Result<(), ()> {
                     Ok(())
                 }
                 _ => Err(()),
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Group scans (446f80f4e, WS10 T19)
+// =============================================================================
+
+/// The number of rows/cells we scan as a single group when looking for
+/// dirty rows or special cells. Rows and cells are small packed structs
+/// so a group is scanned with a handful of vector operations.
+const SCAN_GROUP_LEN: usize = 8;
+
+/// Group scan helper for the row dirty flag. A row that matches has
+/// its dirty flag unset.
+type RowDirtyMask =
+    page::Mask<page::Row, { page::row_field_mask(&[page::RowField::Dirty]) }, SCAN_GROUP_LEN>;
+
+/// Group scan helper for the cell fields that require managed memory
+/// handling. A cell that matches is a plain (possibly zero) codepoint
+/// with a default style, requiring no work beyond the raw copy. See
+/// `row_builder`.
+type CellSpecialMask = page::Mask<
+    page::Cell,
+    { page::cell_field_mask(&[page::CellField::ContentTag, page::CellField::StyleId]) },
+    SCAN_GROUP_LEN,
+>;
+
+/// Internal helper for `RenderState::begin_update` that rebuilds a single row of
+/// the render state from the current page contents.
+///
+/// PORT NOTE: reference `const RowBuilder = struct { ... fn row(...) }`. The
+/// reference's struct exists to carry the hoisted `row_data` COLUMN slices;
+/// rustty's `row_data` is a `Vec<Row>` of owned rows, so the equivalent is a
+/// free function over the two disjoint `&mut` field borrows. It is infallible
+/// here because rustty's row storage is `Vec`-backed and `Vec` aborts on OOM
+/// (the reference's `Allocator.Error!void` is threaded through
+/// `begin_update`'s signature for API parity).
+#[allow(clippy::needless_range_loop)]
+fn row_builder(
+    row_data: &mut [Row],
+    pending_styles: &mut Vec<StyleRun>,
+    cols: size::CellCountInt,
+    p: *mut page::Page,
+    page_row: *const page::Row,
+    vy: usize,
+) {
+    // Reset our per-row state if we're rebuilding this row. A non-zero cell
+    // length means the row was populated by a prior update.
+    //
+    // PORT NOTE: the reference promotes/resets a per-row arena here; rustty has
+    // no arena (owned `Vec`s), so the reset is `clear_retaining_capacity`.
+    {
+        let row = &mut row_data[vy];
+        if !row.cells.is_empty() {
+            row.cells.clear_retaining_capacity();
+            row.selection = None;
+            row.highlights = Vec::new();
+        }
+        row.dirty = true;
+
+        // Copy our raw row data
+        row.raw = unsafe { *page_row };
+    }
+
+    // Get all our cells in the page.
+    let page_cells: &[page::Cell] = unsafe {
+        core::slice::from_raw_parts((*page_row).cells().ptr((*p).memory_ptr()), cols as usize)
+    };
+
+    // Note: our cells MultiArrayList uses our general allocator.
+    // We do this on purpose because as rows become dirty, we do
+    // not want to reallocate space for cells (which are large). This
+    // was a source of huge slowdown.
+    //
+    // We always copy our raw cell data. In the case we have no
+    // managed memory, we can skip setting any other fields.
+    //
+    // This is an important optimization. For plain-text screens
+    // this ends up being something around 300% faster based on
+    // the `screen-clone` benchmark.
+    //
+    // PERF(port) [PRESERVED across 446f80f4e]: `rebuild_raw` fills the whole
+    // `raw` column with one `extend_from_slice` and leaves `style`/`grapheme`
+    // untouched, instead of a per-cell `push(Cell { .. })`. The reference's
+    // `fastmem.copy(page.Cell, cells_slice.items(.raw), page_cells)` is
+    // unchanged by this commit, so the divergence is still live and still
+    // needed.
+    row_data[vy].cells.rebuild_raw(page_cells);
+    if !unsafe { (*page_row).managed_memory() } {
+        return;
+    }
+
+    let n = page_cells.len();
+    // PERF(port) [PRESERVED]: hoist the style-set base resolution once per row —
+    // `(*p).memory_ptr()` and the set's items offset are loop-invariant, but the
+    // grapheme arm's `extend_from_slice` clobbers memory, so LLVM re-loads both
+    // per styled cell unless they live in pre-loop locals.
+    let styles: *const crate::style::Set = unsafe { core::ptr::addr_of!((*p).styles) };
+    let style_items = unsafe { (*styles).items_ptr((*p).memory_ptr()) };
+
+    let mut x: usize = 0;
+    'scan: while x < n {
+        // Skip runs of plain cells a group at a time. Cells that
+        // need managed handling are often rare even within rows that
+        // have managed memory (e.g. a row is "styled" if a single
+        // cell has a style) so groups are skipped with a few vector
+        // operations.
+        while n - x >= CellSpecialMask::GROUP_LEN {
+            if !CellSpecialMask::match_group(page_cells, x) {
+                break;
+            }
+            x += CellSpecialMask::GROUP_LEN;
+        }
+
+        // Scalar scan to the next special cell.
+        loop {
+            if x >= n {
+                break 'scan;
+            }
+            if !CellSpecialMask::match_scalar(page_cells[x]) {
+                break;
+            }
+            x += 1;
+        }
+
+        let page_cell = &page_cells[x];
+
+        match page_cell.content_tag() {
+            // Single-codepoint styled cells are by far the most
+            // common special cells, and they usually come in long
+            // runs sharing one style ID (e.g. a fully styled row
+            // usually uses a single style). Find the run and record
+            // it: this does one style lookup per run and defers the
+            // (large) per-cell fill to `end_update`, outside of any
+            // terminal locks.
+            page::ContentTag::Codepoint => {
+                // @branchHint(.likely);
+                let sid = page_cell.style_id();
+                debug_assert!(sid > 0); // special + codepoint implies styled
+                let style_val: Style = unsafe { *(*styles).get_at(style_items, sid) };
+
+                // A cell continues the run if its masked special bits are
+                // exactly the style ID of the run (in particular the content tag
+                // must be a plain codepoint). We can check groups of cells at a
+                // time this way.
+                let pattern = CellSpecialMask::pattern(*page_cell);
+                let start = x;
+                x += 1;
+                while n - x >= CellSpecialMask::GROUP_LEN {
+                    if !CellSpecialMask::eql(page_cells, x, pattern) {
+                        break;
+                    }
+                    x += CellSpecialMask::GROUP_LEN;
+                }
+                while x < n {
+                    if !CellSpecialMask::eql_scalar(page_cells[x], pattern) {
+                        break;
+                    }
+                    x += 1;
+                }
+
+                pending_styles.push(StyleRun {
+                    y: vy as size::CellCountInt,
+                    start: start as size::CellCountInt,
+                    end: x as size::CellCountInt,
+                    style: style_val,
+                });
+            }
+
+            // If we have a multi-codepoint grapheme, look it up and set our
+            // content type. Note grapheme cells may also be styled. The style
+            // must be recorded as a run (rather than written directly) so that
+            // it is ordered correctly relative to possibly-stale runs from prior
+            // updates.
+            page::ContentTag::CodepointGrapheme => {
+                if page_cell.style_id() > 0 {
+                    let style_val: Style =
+                        unsafe { *(*styles).get_at(style_items, page_cell.style_id()) };
+                    pending_styles.push(StyleRun {
+                        y: vy as size::CellCountInt,
+                        start: x as size::CellCountInt,
+                        end: (x + 1) as size::CellCountInt,
+                        style: style_val,
+                    });
+                }
+
+                // PORT NOTE (reshape): the reference arena-`dupe`s the grapheme;
+                // rustty appends the codepoints into the row's reusable
+                // `grapheme_buf` and records their span.
+                let g: &[u32] = unsafe {
+                    match (*p).lookup_grapheme(page_cell as *const page::Cell) {
+                        Some(s) => s,
+                        None => &[],
+                    }
+                };
+                let (_, cells_spans, grapheme_buf) = row_data[vy].cells.slice_mut();
+                let off = grapheme_buf.len() as u32;
+                grapheme_buf.extend_from_slice(g);
+                cells_spans[x] = (off, g.len() as u32);
+                x += 1;
+            }
+
+            // Background-color-only cells. The style is derived entirely from
+            // the cell contents. Consecutive cleared cells with the same
+            // background are bit-identical, so we run-detect on full equality
+            // (e.g. a line cleared with a background color pending is one run).
+            page::ContentTag::BgColorRgb | page::ContentTag::BgColorPalette => {
+                let style_val: Style = match page_cell.content_tag() {
+                    page::ContentTag::BgColorRgb => {
+                        let rgb = page_cell.content_color_rgb();
+                        Style {
+                            bg_color: crate::style::Color::Rgb(color::RGB {
+                                r: rgb.r,
+                                g: rgb.g,
+                                b: rgb.b,
+                            }),
+                            ..Style::default()
+                        }
+                    }
+                    page::ContentTag::BgColorPalette => Style {
+                        bg_color: crate::style::Color::Palette(page_cell.content_color_palette()),
+                        ..Style::default()
+                    },
+                    // else => unreachable
+                    _ => unreachable!(),
+                };
+
+                let first_bits = CellSpecialMask::bits(*page_cell);
+                let start = x;
+                x += 1;
+                while n - x >= CellSpecialMask::GROUP_LEN {
+                    if !CellSpecialMask::eql_exact(page_cells, x, first_bits) {
+                        break;
+                    }
+                    x += CellSpecialMask::GROUP_LEN;
+                }
+                while x < n {
+                    if CellSpecialMask::bits(page_cells[x]) != first_bits {
+                        break;
+                    }
+                    x += 1;
+                }
+
+                pending_styles.push(StyleRun {
+                    y: vy as size::CellCountInt,
+                    start: start as size::CellCountInt,
+                    end: x as size::CellCountInt,
+                    style: style_val,
+                });
             }
         }
     }
@@ -2239,4 +2537,365 @@ mod tests {
 
     #[allow(unused_imports)]
     use Key as _Key;
+
+    /// Verifies that an incrementally updated render state has identical
+    /// contents to a from-scratch rebuild. This is the load-bearing check
+    /// for our dirty tracking: if any terminal operation changes row
+    /// contents without setting a dirty signal that `update` honors
+    /// (terminal dirty, screen dirty, page dirty, row dirty, viewport pin,
+    /// or dimensions), the incremental state will contain stale rows and
+    /// this comparison will fail.
+    fn test_compare_states(incremental: &RenderState, fresh: &RenderState) {
+        // Row metadata that is allowed to be stale in an incremental
+        // update. Dirty tracking only guarantees that VISUAL changes are
+        // flagged (see page.Row.dirty); these fields are non-visual
+        // metadata that the terminal may change without dirtying the row
+        // (e.g. Screen.cursorResetWrap clears wrap flags without a dirty
+        // mark). This staleness predates the chunked update
+        // implementation; it is present in the row-iterator implementation
+        // as well.
+        type StaleOkMask = page::Mask<
+            page::Row,
+            {
+                page::row_field_mask(&[
+                    page::RowField::Wrap,
+                    page::RowField::WrapContinuation,
+                    page::RowField::SemanticPrompt,
+                    page::RowField::Dirty,
+                ])
+            },
+            1,
+        >;
+
+        assert_eq!(fresh.rows, incremental.rows);
+        assert_eq!(fresh.cols, incremental.cols);
+        assert_eq!(fresh.cursor.active, incremental.cursor.active);
+        assert_eq!(
+            fresh
+                .cursor
+                .viewport
+                .as_ref()
+                .map(|v| (v.y, v.x, v.wide_tail)),
+            incremental
+                .cursor
+                .viewport
+                .as_ref()
+                .map(|v| (v.y, v.x, v.wide_tail)),
+        );
+        assert_eq!(
+            fresh.cursor.cell.to_bits(),
+            incremental.cursor.cell.to_bits()
+        );
+
+        assert_eq!(fresh.row_data.len(), incremental.row_data.len());
+        for y in 0..fresh.row_data.len() {
+            let inc = &incremental.row_data[y];
+            let new = &fresh.row_data[y];
+
+            // Pins must match exactly.
+            assert!(
+                core::ptr::eq(new.pin.node, inc.pin.node),
+                "mismatch on row y={y}: pin node"
+            );
+            assert_eq!(new.pin.y, inc.pin.y, "mismatch on row y={y}: pin y");
+
+            // Raw row data must match, except for non-visual metadata
+            // fields which may legitimately be stale (see StaleOkMask).
+            assert_eq!(
+                StaleOkMask::strip(new.raw),
+                StaleOkMask::strip(inc.raw),
+                "mismatch on row y={y}: raw"
+            );
+
+            let inc_cells = inc.cells.slice();
+            let new_cells = new.cells.slice();
+            assert_eq!(
+                new_cells.len(),
+                inc_cells.len(),
+                "mismatch on row y={y}: len"
+            );
+            let managed = new.raw.managed_memory();
+            for x in 0..new_cells.len() {
+                // Raw cell contents must match.
+                let inc_cell = inc_cells.raw[x];
+                let new_cell = new_cells.raw[x];
+                assert_eq!(
+                    new_cell.to_bits(),
+                    inc_cell.to_bits(),
+                    "mismatch on row y={y} cell x={x}"
+                );
+
+                // The style is only defined if the cell is styled or is
+                // a bg-color cell within a row that has managed memory.
+                if new_cell.style_id() != 0
+                    || (managed
+                        && matches!(
+                            new_cell.content_tag(),
+                            page::ContentTag::BgColorRgb | page::ContentTag::BgColorPalette
+                        ))
+                {
+                    assert!(
+                        new_cells.style[x].eql(&inc_cells.style[x]),
+                        "mismatch on row y={y} cell x={x}: style"
+                    );
+                }
+
+                // Graphemes are only defined for grapheme cells.
+                if new_cell.content_tag() == page::ContentTag::CodepointGrapheme {
+                    assert_eq!(
+                        new_cells.grapheme(x),
+                        inc_cells.grapheme(x),
+                        "mismatch on row y={y} cell x={x}: grapheme"
+                    );
+                }
+            }
+        }
+    }
+
+    // PORT NOTE: reference `std.Random.DefaultPrng` (xoshiro256++) seeded with a
+    // fixed constant. The port uses the same algorithm inline so the sequence is
+    // reproducible without pulling a `rand` dependency into `rustty-vt`.
+    struct Prng {
+        s: [u64; 4],
+    }
+
+    impl Prng {
+        fn init(seed: u64) -> Prng {
+            // SplitMix64 seeding, exactly as xoshiro reference implementations do.
+            let mut x = seed;
+            let mut next = || {
+                x = x.wrapping_add(0x9E3779B97F4A7C15);
+                let mut z = x;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+                z ^ (z >> 31)
+            };
+            Prng {
+                s: [next(), next(), next(), next()],
+            }
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let r = self.s[0]
+                .wrapping_add(self.s[3])
+                .rotate_left(23)
+                .wrapping_add(self.s[0]);
+            let t = self.s[1] << 17;
+            self.s[2] ^= self.s[0];
+            self.s[3] ^= self.s[1];
+            self.s[1] ^= self.s[2];
+            self.s[0] ^= self.s[3];
+            self.s[2] ^= t;
+            self.s[3] = self.s[3].rotate_left(45);
+            r
+        }
+
+        /// `rand.intRangeAtMost(T, lo, hi)` — inclusive on both ends.
+        fn range(&mut self, lo: u64, hi: u64) -> u64 {
+            lo + self.next_u64() % (hi - lo + 1)
+        }
+
+        fn boolean(&mut self) -> bool {
+            self.next_u64() & 1 == 1
+        }
+    }
+
+    // test "incremental updates match full rebuild"
+    #[test]
+    fn incremental_updates_match_full_rebuild() {
+        let alloc = Global;
+
+        // Deterministic so failures are reproducible.
+        let mut rand = Prng::init(0xB0BA_CAFE);
+
+        let mut t = Terminal::init(alloc, opts_sb(20, 8, 500)).unwrap();
+        let mut inc: RenderState = RenderState::empty();
+
+        for _ in 0..300 {
+            // Perform a random batch of operations between updates.
+            {
+                let mut s = t.vt_stream();
+                for _ in 0..rand.range(1, 6) {
+                    match rand.range(0, 18) {
+                        // Plain text (possibly wrapping and scrolling).
+                        0..=2 => {
+                            for _ in 0..rand.range(1, 30) {
+                                s.next_slice(&[rand.range(b'A' as u64, b'Z' as u64) as u8]);
+                            }
+                        }
+
+                        // Newlines to build scrollback and trigger pruning.
+                        3 | 4 => {
+                            for _ in 0..rand.range(1, 10) {
+                                s.next_slice(b"x\r\n");
+                            }
+                        }
+
+                        // Cursor movement.
+                        5 => s.next_slice(
+                            format!("\x1b[{};{}H", rand.range(1, 8), rand.range(1, 20)).as_bytes(),
+                        ),
+
+                        // Styling: bold, truecolor bg, palette fg, reset.
+                        6 => s.next_slice(match rand.range(0, 3) {
+                            0 => b"\x1b[1m".as_slice(),
+                            1 => b"\x1b[48;2;30;60;90m".as_slice(),
+                            2 => b"\x1b[38;5;120m".as_slice(),
+                            _ => b"\x1b[0m".as_slice(),
+                        }),
+
+                        // Erase ops (EL, ED variants including scrollback).
+                        7 => s.next_slice(match rand.range(0, 4) {
+                            0 => b"\x1b[K".as_slice(),
+                            1 => b"\x1b[1K".as_slice(),
+                            2 => b"\x1b[J".as_slice(),
+                            3 => b"\x1b[2J".as_slice(),
+                            _ => b"\x1b[3J".as_slice(),
+                        }),
+
+                        // Insert/delete lines (row rotations within regions).
+                        8 => s.next_slice(format!("\x1b[{}L", rand.range(1, 4)).as_bytes()),
+                        9 => s.next_slice(format!("\x1b[{}M", rand.range(1, 4)).as_bytes()),
+
+                        // Scroll up/down (page-dirty row rotations).
+                        10 => s.next_slice(format!("\x1b[{}S", rand.range(1, 4)).as_bytes()),
+                        11 => s.next_slice(format!("\x1b[{}T", rand.range(1, 4)).as_bytes()),
+
+                        // Set/reset scroll regions to exercise bounded scrolls.
+                        12 => {
+                            let top = rand.range(1, 4);
+                            let bot = rand.range(top + 1, 8);
+                            s.next_slice(format!("\x1b[{top};{bot}r").as_bytes());
+                        }
+
+                        // Insert/delete/erase chars within a row.
+                        13 => s.next_slice(format!("\x1b[{}@", rand.range(1, 5)).as_bytes()),
+                        14 => s.next_slice(format!("\x1b[{}P", rand.range(1, 5)).as_bytes()),
+
+                        // Reverse index (scroll down at top).
+                        15 => s.next_slice(b"\x1bM"),
+
+                        // Wide chars and multi-codepoint graphemes.
+                        16 => s.next_slice("字👨‍👩‍👧".as_bytes()),
+
+                        // Alternate screen switching (screen key redraw path).
+                        17 => s.next_slice(if rand.boolean() {
+                            b"\x1b[?1049h".as_slice()
+                        } else {
+                            b"\x1b[?1049l".as_slice()
+                        }),
+
+                        // DECALN full-screen fill.
+                        18 => s.next_slice(b"\x1b#8"),
+
+                        _ => unreachable!(),
+                    }
+                }
+                s.deinit();
+            }
+
+            // Occasionally scroll the viewport into scrollback and back.
+            match rand.range(0, 9) {
+                0 => t.scroll_viewport(ScrollViewport::Delta(-3)),
+                1 => t.scroll_viewport(ScrollViewport::Delta(2)),
+                2 => t.scroll_viewport(ScrollViewport::Bottom),
+                3 => t.scroll_viewport(ScrollViewport::Top),
+                _ => {}
+            }
+
+            // Update our incremental state first: it must consume the dirty
+            // state. The fresh state always fully rebuilds (its dimensions
+            // start empty so it always redraws) and so does not depend on
+            // any dirty flags.
+            inc.update(alloc, &mut t).unwrap();
+
+            let mut fresh: RenderState = RenderState::empty();
+            fresh.update(alloc, &mut t).unwrap();
+
+            test_compare_states(&inc, &fresh);
+            fresh.deinit(alloc);
+        }
+
+        inc.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "begin and end update"
+    #[test]
+    fn begin_and_end_update() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mAB"); // Bold
+            s.next_slice(b"\x1b[0;3mC"); // Italic
+            s.deinit();
+        }
+
+        let mut state: RenderState = RenderState::empty();
+        state.begin_update(alloc, &mut t).unwrap();
+
+        // We should have pending style runs on row 0: one for the bold
+        // run and one for the italic run.
+        {
+            let runs = &state.pending_styles;
+            assert_eq!(2, runs.len());
+            assert_eq!(0, runs[0].y);
+            assert_eq!(0, runs[0].start);
+            assert_eq!(2, runs[0].end);
+            assert!(runs[0].style.flags.bold);
+            assert_eq!(0, runs[1].y);
+            assert_eq!(2, runs[1].start);
+            assert_eq!(3, runs[1].end);
+            assert!(runs[1].style.flags.italic);
+        }
+
+        // End our update. This should denormalize the runs into cells
+        // and clear the pending runs.
+        state.end_update();
+        {
+            assert_eq!(0, state.pending_styles.len());
+            assert!(state.row_data[0].cells.get(0).style.flags.bold);
+            assert!(state.row_data[0].cells.get(1).style.flags.bold);
+            assert!(state.row_data[0].cells.get(2).style.flags.italic);
+        }
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "bg color cells"
+    #[test]
+    fn bg_color_cells() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        // Write a styled cell (so the row has managed memory) then erase
+        // the rest of the line with a palette background pending. The
+        // erase produces bg_color content cells rather than styled cells.
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mA\x1b[48;5;1m\x1b[K");
+            s.deinit();
+        }
+
+        let mut state: RenderState = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+
+        {
+            let cell = state.row_data[0].cells.get(0);
+            assert_eq!('A' as u32, cell.raw.codepoint());
+            assert!(cell.style.flags.bold);
+        }
+        for x in 1..10 {
+            let cell = state.row_data[0].cells.get(x);
+            assert_eq!(page::ContentTag::BgColorPalette, cell.raw.content_tag());
+            assert!(crate::style::Color::Palette(1).eql(cell.style.bg_color));
+        }
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
 }

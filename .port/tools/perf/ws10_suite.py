@@ -130,6 +130,31 @@ IDLE_MAX = 2.0
 #: waivers. Empty at T3 by design.
 ACCEPTED_TRADEOFFS: "dict[str, str]" = {}
 
+#: Configs where rustty's bench and the PINNED oracle binary no longer measure
+#: the same amount of work, so a rustty-vs-oracle ratio is meaningless. These are
+#: excluded from FENCE 1 (oracle) and KEPT in FENCE 2 (self vs entry), where both
+#: sides run the identical rustty bench and the basis matches by construction.
+#:
+#: This is NOT a waiver and NOT a tradeoff. A waiver says "rustty is slower and
+#: we accept it"; this says "the two numbers are not a ratio". The distinction
+#: matters because a waiver would let a REAL regression hide behind it, whereas
+#: an incomparable config is still fully fenced against rustty's own entry
+#: binary. Every entry must carry the workload-basis mismatch that causes it and
+#: the normalized comparison, so the exclusion can be checked rather than
+#: trusted. The set is printed on every run.
+INCOMPARABLE: "dict[str, str]" = {
+    "screen-clone.render/small":
+        "WS10 T12 ported 446f80f4e's bench hunk, which re-scaled stepRender from "
+        "1_000 to 50_000 x --loops iterations. The PINNED oracle binary is at "
+        "4749c4e93, i.e. still 1_000 (verified: "
+        "`git -C ../ghostty show 4749c4e93:src/benchmark/ScreenClone.zig` line "
+        "181), so rustty does 50x the oracle's work in this config. Measured "
+        "T21: zig 17.69ms (1_000 iters) vs rust 388.32ms (50_000 iters) = "
+        "7.77ms normalized, i.e. -56% against the oracle -- a WIN, reported as "
+        "+2096% by a raw ratio. Comparability returns when the oracle pin "
+        "advances past 446f80f4e (Phase 3).",
+}
+
 
 # --------------------------------------------------------------------------
 # Pure verdict logic (no subprocesses -- this is what --self-test exercises)
@@ -139,6 +164,13 @@ def evaluate_oracle(zig_med, rust_med):
     lines, ok = [], True
     for bid in ALL_IDS:
         if bid not in zig_med or bid not in rust_med:
+            continue
+        if bid in INCOMPARABLE:
+            z, r = zig_med[bid], rust_med[bid]
+            delta = (r - z) / z * 100.0
+            lines.append(f"    INCOMPARABLE {bid:26s} zig={z*1000:8.2f}ms "
+                         f"rust={r*1000:8.2f}ms ({delta:+.1f}%) -- NOT a ratio; "
+                         f"see INCOMPARABLE[]")
             continue
         z, r = zig_med[bid], rust_med[bid]
         limit = z if bid in STRICT_IDS else z * ORACLE_BAND
@@ -325,6 +357,27 @@ def self_test():
           f"+20% -> ok={out_band} (expect False)")
     ok &= in_band and (not out_band)
 
+    # (e) an INCOMPARABLE config cannot turn FENCE 1 red no matter how bad the
+    #     raw ratio is -- but it MUST still be reported, and it MUST still be
+    #     fenced by FENCE 2. Anything less would make the exclusion a hole.
+    for bid in INCOMPARABLE:
+        if bid not in ALL_IDS:
+            print(f"[e] INCOMPARABLE names an unknown config {bid!r}")
+            ok = False
+            continue
+        r = {k: v * 0.9 for k, v in base.items()}
+        r[bid] = base[bid] * 50.0
+        lines, good = evaluate_oracle(base, r)
+        shown = any(f"INCOMPARABLE {bid}" in ln for ln in lines)
+        # ... and Fence 2 still catches a self-regression on the same config.
+        c = dict(base)
+        c[bid] = base[bid] * 1.30
+        _l, self_ok = evaluate_self(base, c)
+        print(f"[e] {bid}: 50x oracle -> fence1 ok={good} (expect True), "
+              f"reported={shown} (expect True); +30% vs entry -> fence2 "
+              f"ok={self_ok} (expect False)")
+        ok &= good and shown and (not self_ok)
+
     print("SELF-TEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -373,6 +426,13 @@ def main():
             print(f"   {k}: {v}")
     else:
         print("ACCEPTED_TRADEOFFS: (none)")
+    if INCOMPARABLE:
+        print("INCOMPARABLE (excluded from FENCE 1 only; still fenced by "
+              "FENCE 2):")
+        for k, v in INCOMPARABLE.items():
+            print(f"  {k}: {v}")
+    else:
+        print("INCOMPARABLE: (none)")
     print("NOTE: all numbers are comparable to oracle 4749c4e93 "
           f"(sha256 {ORACLE_SHA256[:8]}...) and to NO other oracle revision.")
 

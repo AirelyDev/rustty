@@ -98,18 +98,19 @@ cp "$T/vt_exp.txt" "$T/a5_have.txt"
 # a red gate green — that is R5. Adding a row requires a ledger entry naming the
 # owner (`.port/phase-2/DEFERRALS.md` / `.port/phase-3/README.md`).
 #
-#   rustty_render_state_begin_update / _end_update
+# The list is currently EMPTY, and that is the point: every oracle export has a
+# rustty_* counterpart.
+#
+#   STRUCK (WS10 T19): rustty_render_state_begin_update / _end_update
 #     Found by THIS arm on the day it landed (WS19 T3). The oracle split
-#     `RenderState.update` into `beginUpdate` + `endUpdate` beyond the pin, adding a
-#     `pending_styles` field and deferring per-cell style denormalization so a
-#     locking caller can shorten its lock hold. rustty's `RenderState` has no
-#     `pending_styles` (grep: 0 hits) — this is a FEATURE port, not a signature
-#     split, and it is beyond-pin.
-#     OWNER: Phase 3, BL-5 re-vet assertion P3-RV5 (`.port/phase-3/README.md`).
-#     TRIGGER: the upstream resync, which re-vets all of BL-5 as POSSIBLY PARTIAL.
+#     `RenderState.update` into `beginUpdate` + `endUpdate` beyond the pin
+#     (446f80f4e), adding a `pending_styles` field and deferring per-cell style
+#     denormalization so a locking caller can shorten its lock hold. That was a
+#     FEATURE port, not a signature split. WS10 T19 ported the feature — the
+#     field, the two phases, the `page.Mask` group scans and the chunked update —
+#     so both exports now exist and the rows are struck rather than inherited by
+#     the Phase 3 BL-5 re-vet.
 cat > "$T/a5_allow.txt" <<'ALLOW'
-rustty_render_state_begin_update
-rustty_render_state_end_update
 ALLOW
 sort -u "$T/a5_allow.txt" -o "$T/a5_allow.txt"
 absent=$(comm -23 "$T/a5_oracle.txt" "$T/a5_have.txt")

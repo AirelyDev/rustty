@@ -1,0 +1,298 @@
+{
+  "benchmarks": [
+    {
+      "id": "terminal-parser/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.09786429069936275,
+      "reps_s": [
+        0.09569029184058309,
+        0.10013016732409596,
+        0.096991749946028,
+        0.09786429069936275,
+        0.10498179215937853,
+        0.09835620783269405,
+        0.0976896658539772
+      ],
+      "min_s": 0.09569029184058309,
+      "max_s": 0.10498179215937853,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 653.9668304203705
+    },
+    {
+      "id": "terminal-stream/ascii",
+      "optimize": "ReleaseFast",
+      "corpus": "ascii.bin",
+      "n_reps": 7,
+      "median_s": 0.34825600031763315,
+      "reps_s": [
+        0.34825600031763315,
+        0.35387637512758374,
+        0.3481984161771834,
+        0.34890383295714855,
+        0.34277520794421434,
+        0.343128583393991,
+        0.3497454999014735
+      ],
+      "min_s": 0.34277520794421434,
+      "max_s": 0.35387637512758374,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 183.7728565814448
+    },
+    {
+      "id": "codepoint-width.noop/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.003698000218719244,
+      "reps_s": [
+        0.004186625126749277,
+        0.0043579996563494205,
+        0.0038409996777772903,
+        0.003698000218719244,
+        0.0032738749869167805,
+        0.0032210000790655613,
+        0.003554833121597767
+      ],
+      "min_s": 0.0032210000790655613,
+      "max_s": 0.0043579996563494205,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 17306.651220849737
+    },
+    {
+      "id": "codepoint-width.table/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.2099560839124024,
+      "reps_s": [
+        0.21045812498778105,
+        0.20813379110768437,
+        0.2146964999847114,
+        0.2085817912593484,
+        0.20611387491226196,
+        0.21184991719201207,
+        0.2099560839124024
+      ],
+      "min_s": 0.20611387491226196,
+      "max_s": 0.2146964999847114,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 304.8256511904747
+    },
+    {
+      "id": "codepoint-width.simd/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.4681701250374317,
+      "reps_s": [
+        0.46445170883089304,
+        0.46369683276861906,
+        0.47387662529945374,
+        0.4682708331383765,
+        0.4681701250374317,
+        0.4632817921228707,
+        0.4719307920895517
+      ],
+      "min_s": 0.4632817921228707,
+      "max_s": 0.47387662529945374,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 136.70244335834755
+    },
+    {
+      "id": "codepoint-width.wcwidth/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.23654512455686927,
+      "reps_s": [
+        0.23931033397093415,
+        0.23654512455686927,
+        0.23931787488982081,
+        0.23576775006949902,
+        0.24253741605207324,
+        0.2354891672730446,
+        0.23632925003767014
+      ],
+      "min_s": 0.2354891672730446,
+      "max_s": 0.24253741605207324,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 270.5614842829422
+    },
+    {
+      "id": "grapheme-break.noop/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.215596292167902,
+      "reps_s": [
+        0.22211758326739073,
+        0.21441629203036427,
+        0.215596292167902,
+        0.21741066686809063,
+        0.21421670820564032,
+        0.2140753329731524,
+        0.21937312511727214
+      ],
+      "min_s": 0.2140753329731524,
+      "max_s": 0.22211758326739073,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 296.8511162991528
+    },
+    {
+      "id": "grapheme-break.table/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.21319687459617853,
+      "reps_s": [
+        0.21319687459617853,
+        0.21283899992704391,
+        0.21244941605255008,
+        0.2176302089355886,
+        0.21666829194873571,
+        0.2106276247650385,
+        0.2157698329538107
+      ],
+      "min_s": 0.2106276247650385,
+      "max_s": 0.2176302089355886,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 300.1920179234521
+    },
+    {
+      "id": "is-symbol.table/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.20073633268475533,
+      "reps_s": [
+        0.20221354207023978,
+        0.19924075016751885,
+        0.20916062500327826,
+        0.20051887491717935,
+        0.20073633268475533,
+        0.2068903329782188,
+        0.198639000300318
+      ],
+      "min_s": 0.198639000300318,
+      "max_s": 0.20916062500327826,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 318.8261892803843
+    },
+    {
+      "id": "is-symbol.uucode/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "n_reps": 7,
+      "median_s": 0.2068998753093183,
+      "reps_s": [
+        0.2194225830025971,
+        0.20551537489518523,
+        0.20749545795843005,
+        0.20644145784899592,
+        0.2068998753093183,
+        0.20542687503620982,
+        0.21306958375498652
+      ],
+      "min_s": 0.20542687503620982,
+      "max_s": 0.2194225830025971,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 309.3283642840242
+    },
+    {
+      "id": "osc-parser/osc-parser",
+      "optimize": "ReleaseFast",
+      "corpus": "osc-parser.bin",
+      "n_reps": 7,
+      "median_s": 0.051537124905735254,
+      "reps_s": [
+        0.055823749862611294,
+        0.05269749974831939,
+        0.05147133395075798,
+        0.05121487518772483,
+        0.051537124905735254,
+        0.05208850000053644,
+        0.05103179207071662
+      ],
+      "min_s": 0.05103179207071662,
+      "max_s": 0.055823749862611294,
+      "corpus_bytes": 67108864,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 1241.8232510459238
+    },
+    {
+      "id": "screen-clone.noop/small",
+      "optimize": "ReleaseFast",
+      "corpus": "ascii-small.bin",
+      "n_reps": 7,
+      "median_s": 0.005744250025600195,
+      "reps_s": [
+        0.005617082584649324,
+        0.006376457866281271,
+        0.006298332940787077,
+        0.006574749946594238,
+        0.005533957853913307,
+        0.005744250025600195,
+        0.005599416792392731
+      ],
+      "min_s": 0.005533957853913307,
+      "max_s": 0.006574749946594238,
+      "corpus_bytes": 0,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 174087.1298330218
+    },
+    {
+      "id": "screen-clone.clone/small",
+      "optimize": "ReleaseFast",
+      "corpus": "ascii-small.bin",
+      "n_reps": 7,
+      "median_s": 0.0237529999576509,
+      "reps_s": [
+        0.023738333024084568,
+        0.0237529999576509,
+        0.02362962532788515,
+        0.023664208129048347,
+        0.03151383297517896,
+        0.02965120831504464,
+        0.024640999734401703
+      ],
+      "min_s": 0.02362962532788515,
+      "max_s": 0.03151383297517896,
+      "corpus_bytes": 0,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 42099.945345130924
+    },
+    {
+      "id": "screen-clone.render/small",
+      "optimize": "ReleaseFast",
+      "corpus": "ascii-small.bin",
+      "n_reps": 7,
+      "median_s": 0.38467275025323033,
+      "reps_s": [
+        0.37830566614866257,
+        0.38467275025323033,
+        0.39075687481090426,
+        0.393889875151217,
+        0.37684200005605817,
+        0.38187624979764223,
+        0.3923650002107024
+      ],
+      "min_s": 0.37684200005605817,
+      "max_s": 0.393889875151217,
+      "corpus_bytes": 0,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 2599.6122661189265
+    }
+  ]
+}

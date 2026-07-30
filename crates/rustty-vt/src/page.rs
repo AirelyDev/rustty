@@ -1362,6 +1362,371 @@ impl Capacity {
     }
 }
 
+// =============================================================================
+// Masked compares over the packed backing integers (446f80f4e, WS10 T19).
+// =============================================================================
+
+/// The backing integer of `Row`/`Cell`.
+///
+/// PORT NOTE: the reference exposes this per type as
+/// `pub const Backing = @typeInfo(Row).@"struct".backing_integer.?` so that code
+/// is resilient to the size changing. Rust has no such reflection over a
+/// hand-rolled bitfield, so the port names the type once here and both `Row` and
+/// `Cell` alias it as `Row::Backing`/`Cell::Backing` (the layout tests in
+/// `page_tests.rs` already assert both are 64 bits wide).
+pub type Backing = u64;
+
+/// A field of `Cell`, naming the bit range the masks operate on.
+///
+/// PORT NOTE: the reference identifies fields by comptime STRING
+/// (`fieldMask(Cell, &.{"content_tag", "style_id"})`) and resolves them with
+/// `@bitOffsetOf`/`@FieldType`. Rust cannot reflect over the port's hand-rolled
+/// bitfield accessors, so fields are named by this enum instead — which is
+/// strictly stronger than the reference here, because a typo is a compile error
+/// rather than a comptime lookup failure at the use site.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CellField {
+    ContentTag,
+    Content,
+    StyleId,
+    Wide,
+    Protected,
+    Hyperlink,
+    SemanticContent,
+}
+
+impl CellField {
+    /// `(shift, bits)` of this field in `Cell`'s backing integer.
+    pub const fn range(self) -> (u32, u32) {
+        match self {
+            CellField::ContentTag => (CELL_CONTENT_TAG_SHIFT, CELL_CONTENT_TAG_BITS),
+            CellField::Content => (CELL_CONTENT_SHIFT, CELL_CONTENT_BITS),
+            CellField::StyleId => (CELL_STYLE_ID_SHIFT, CELL_STYLE_ID_BITS),
+            CellField::Wide => (CELL_WIDE_SHIFT, CELL_WIDE_BITS),
+            CellField::Protected => (CELL_PROTECTED_SHIFT, 1),
+            CellField::Hyperlink => (CELL_HYPERLINK_SHIFT, 1),
+            CellField::SemanticContent => (CELL_SEMANTIC_CONTENT_SHIFT, CELL_SEMANTIC_CONTENT_BITS),
+        }
+    }
+}
+
+/// A field of `Row`. See `CellField`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RowField {
+    Cells,
+    Wrap,
+    WrapContinuation,
+    Grapheme,
+    Styled,
+    Hyperlink,
+    SemanticPrompt,
+    KittyVirtualPlaceholder,
+    Dirty,
+}
+
+impl RowField {
+    /// `(shift, bits)` of this field in `Row`'s backing integer.
+    pub const fn range(self) -> (u32, u32) {
+        match self {
+            RowField::Cells => (ROW_CELLS_SHIFT, ROW_CELLS_BITS),
+            RowField::Wrap => (ROW_WRAP_SHIFT, 1),
+            RowField::WrapContinuation => (ROW_WRAP_CONTINUATION_SHIFT, 1),
+            RowField::Grapheme => (ROW_GRAPHEME_SHIFT, 1),
+            RowField::Styled => (ROW_STYLED_SHIFT, 1),
+            RowField::Hyperlink => (ROW_HYPERLINK_SHIFT, 1),
+            RowField::SemanticPrompt => (ROW_SEMANTIC_PROMPT_SHIFT, ROW_SEMANTIC_PROMPT_BITS),
+            RowField::KittyVirtualPlaceholder => (ROW_KITTY_PLACEHOLDER_SHIFT, 1),
+            RowField::Dirty => (ROW_DIRTY_SHIFT, 1),
+        }
+    }
+}
+
+/// Returns a mask with all bits set for the given `(shift, bits)` field ranges,
+/// used for masked compares of raw backing-integer values.
+///
+/// PORT NOTE: reference `fn fieldMask(comptime T, comptime fields)` — an
+/// implementation detail of `Mask`, which is the public API built on top of it.
+pub const fn field_mask(fields: &[(u32, u32)]) -> Backing {
+    let mut m: Backing = 0;
+    let mut i = 0;
+    while i < fields.len() {
+        let (shift, bits) = fields[i];
+        // `mask(bits) << shift`, spelled out because `mask` is not a const fn.
+        let ones: Backing = if bits >= 64 {
+            Backing::MAX
+        } else {
+            (1 << bits) - 1
+        };
+        m |= ones << shift;
+        i += 1;
+    }
+    m
+}
+
+/// `field_mask` over `CellField`s.
+pub const fn cell_field_mask(fields: &[CellField]) -> Backing {
+    let mut m: Backing = 0;
+    let mut i = 0;
+    while i < fields.len() {
+        let (shift, bits) = fields[i].range();
+        let ones: Backing = if bits >= 64 {
+            Backing::MAX
+        } else {
+            (1 << bits) - 1
+        };
+        m |= ones << shift;
+        i += 1;
+    }
+    m
+}
+
+/// `field_mask` over `RowField`s.
+pub const fn row_field_mask(fields: &[RowField]) -> Backing {
+    let mut m: Backing = 0;
+    let mut i = 0;
+    while i < fields.len() {
+        let (shift, bits) = fields[i].range();
+        let ones: Backing = if bits >= 64 {
+            Backing::MAX
+        } else {
+            (1 << bits) - 1
+        };
+        m |= ones << shift;
+        i += 1;
+    }
+    m
+}
+
+/// A value whose whole representation is one `Backing` integer — `Row`, `Cell`.
+///
+/// PORT NOTE: `Mask` is generic over `comptime T: type` in the reference and
+/// gets `@bitCast` for free. In Rust the bit-cast has to be a trait, and it is
+/// the *transparency* of the `#[repr(transparent)] struct X(u64)` port shape
+/// that makes it sound: `to_bits`/`from_bits` are the identity.
+pub trait Packed: Copy {
+    fn to_bits(self) -> Backing;
+    fn from_bits(v: Backing) -> Self;
+}
+
+impl Packed for Cell {
+    #[inline]
+    fn to_bits(self) -> Backing {
+        Cell::to_bits(self)
+    }
+    #[inline]
+    fn from_bits(v: Backing) -> Self {
+        Cell::from_bits(v)
+    }
+}
+
+impl Packed for Row {
+    #[inline]
+    fn to_bits(self) -> Backing {
+        Row::to_bits(self)
+    }
+    #[inline]
+    fn from_bits(v: Backing) -> Self {
+        Row::from_bits(v)
+    }
+}
+
+/// A helper for classifying and comparing packed values (`Row`, `Cell`) in
+/// bulk, using masked compares of their raw backing integers.
+///
+/// Masked compares are the key to making bulk row/cell processing fast. Rows and
+/// cells are small packed structs specifically so that a single integer load
+/// observes every field at once. A masked compare can then answer a multi-field
+/// question with one AND and one compare, instead of extracting and branching on
+/// each field individually (each packed field access compiles to its own
+/// shift/mask). Just as importantly, the integer form vectorizes trivially:
+/// splat the mask and expected value, and whole groups of rows or cells can be
+/// classified with a few SIMD instructions.
+///
+/// Some real examples of this in use:
+///
+///   - Terminal print fast path: a cell can be overwritten by the simple/fast
+///     path only if its content tag is a plain codepoint, it has no style, isn't
+///     wide, and isn't a hyperlink. Masking with those fields and comparing
+///     against a template answers all four questions in one compare per cell.
+///
+///   - Render state updates: a cell whose masked `{content_tag, style_id}` bits
+///     are zero is a plain cell that needs no managed-memory handling, so an
+///     OR-reduce can skip entire groups of plain cells at once. Similarly, cells
+///     whose masked bits equal the first cell's form a run sharing one style,
+///     letting the update record one style lookup per run rather than per cell.
+///
+///   - Dirty scans: OR-reducing groups of rows against the `dirty` field mask
+///     finds whether any row in the group needs a rebuild without touching each
+///     row's flag individually.
+///
+/// `T` is the packed type, `MASK` the covered field bits (build it with
+/// `cell_field_mask`/`row_field_mask`), and `GROUP_LEN` the number of values
+/// processed at once by the group operations. Callers typically scan a slice
+/// with the group operations and fall back to the scalar variants for the
+/// remainder and for pinpointing values within a matched group.
+///
+/// PORT NOTE: the reference is `pub fn Mask(comptime T, comptime fields,
+/// comptime group_len) type` returning an anonymous struct; the Rust port is a
+/// ZST generic over the same three parameters, with the field list already
+/// reduced to its mask (Rust const generics take values, not slices). The
+/// reference's `@Vector(group_len, Backing)` becomes `[Backing; GROUP_LEN]` —
+/// LLVM auto-vectorizes fixed-size array ANDs/compares the same way, and unlike
+/// `@Vector` it needs no target-feature gate.
+pub struct Mask<T: Packed, const MASK: Backing, const GROUP_LEN: usize> {
+    _p: core::marker::PhantomData<T>,
+}
+
+impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP_LEN> {
+    /// The number of values processed at once by group operations.
+    pub const GROUP_LEN: usize = GROUP_LEN;
+
+    /// The field bits this mask covers.
+    pub const MASK: Backing = MASK;
+
+    /// Load a group of values from the slice starting at index `i`.
+    /// Panics (asserts) unless at least `GROUP_LEN` values are available.
+    #[inline]
+    fn load(values: &[T], i: usize) -> [Backing; GROUP_LEN] {
+        let mut out = [0 as Backing; GROUP_LEN];
+        let src = &values[i..i + GROUP_LEN];
+        let mut k = 0;
+        while k < GROUP_LEN {
+            out[k] = src[k].to_bits();
+            k += 1;
+        }
+        out
+    }
+
+    /// Returns the raw backing bits of a single value.
+    #[inline]
+    pub fn bits(v: T) -> Backing {
+        v.to_bits()
+    }
+
+    /// Returns the masked bits of a single value: the bits of the masked fields
+    /// with all other fields zeroed. Use this to build the expected value for
+    /// the `eql` functions.
+    #[inline]
+    pub fn pattern(v: T) -> Backing {
+        v.to_bits() & MASK
+    }
+
+    /// Returns the backing bits of a single value with the masked fields
+    /// zeroed: the complement of `pattern`. Use this to compare values while
+    /// ignoring the masked fields.
+    #[inline]
+    pub fn strip(v: T) -> Backing {
+        v.to_bits() & !MASK
+    }
+
+    /// Returns true if every value in the group of `GROUP_LEN` values starting
+    /// at index `i` matches, where a value matches when none of the masked
+    /// fields have any bits set: false for bools, zero for ints, the zero tag
+    /// for enums, and so on.
+    #[inline]
+    pub fn match_group(values: &[T], i: usize) -> bool {
+        let g = Self::load(values, i);
+        let mut acc: Backing = 0;
+        let mut k = 0;
+        while k < GROUP_LEN {
+            acc |= g[k];
+            k += 1;
+        }
+        acc & MASK == 0
+    }
+
+    /// Scalar variant of `match_group` for a single value.
+    #[inline]
+    pub fn match_scalar(v: T) -> bool {
+        v.to_bits() & MASK == 0
+    }
+
+    /// Returns true if the masked fields of every value in the group of
+    /// `GROUP_LEN` values starting at index `i` equal the expected pattern (see
+    /// `pattern`).
+    ///
+    /// This is a masked compare: fields outside the mask may vary freely. Use
+    /// this to detect runs of values that share the masked field contents while
+    /// other fields differ, e.g. a run of cells with the same style ID but
+    /// different codepoints. If the result you derive from a run depends on
+    /// fields outside the mask, use `eql_exact` instead.
+    #[inline]
+    pub fn eql(values: &[T], i: usize, expected: Backing) -> bool {
+        let g = Self::load(values, i);
+        let mut ok = true;
+        let mut k = 0;
+        while k < GROUP_LEN {
+            ok &= (g[k] & MASK) == expected;
+            k += 1;
+        }
+        ok
+    }
+
+    /// Scalar variant of `eql` for a single value.
+    #[inline]
+    pub fn eql_scalar(v: T, expected: Backing) -> bool {
+        Self::pattern(v) == expected
+    }
+
+    /// Like `eql` but returns the number of leading values whose masked fields
+    /// equal the expected pattern, i.e. `GROUP_LEN` if the entire group matches.
+    /// This is useful for early-exit run scans that need to pinpoint exactly
+    /// where a run ends rather than only whether the whole group matches.
+    #[inline]
+    pub fn eql_prefix(values: &[T], i: usize, expected: Backing) -> usize {
+        let g = Self::load(values, i);
+        let mut ok = [false; GROUP_LEN];
+        let mut all = true;
+        let mut k = 0;
+        while k < GROUP_LEN {
+            ok[k] = (g[k] & MASK) == expected;
+            all &= ok[k];
+            k += 1;
+        }
+
+        // Test the whole group before extracting the prefix count: turning a
+        // vector compare into a scalar bitmask is expensive on some targets
+        // (e.g. NEON has no movemask instruction) and run scans overwhelmingly
+        // see fully matching groups, so we only pay for the extraction on the
+        // final group of a run.
+        if all {
+            return GROUP_LEN;
+        }
+        let mut k = 0;
+        while k < GROUP_LEN {
+            if !ok[k] {
+                return k;
+            }
+            k += 1;
+        }
+        GROUP_LEN
+    }
+
+    /// Returns true if every value in the group of `GROUP_LEN` values starting
+    /// at index `i` is bit-identical to the expected value. Note: this compares
+    /// entire values; it is NOT affected by the field mask.
+    ///
+    /// This exists alongside `eql` for run detection where the derived result
+    /// depends on fields outside the mask, so a masked compare would incorrectly
+    /// extend the run. For example, the background color of a bg-color cell
+    /// lives in the content field: two such cells only share a background if
+    /// their content bits are identical, not merely their content tag. Values in
+    /// such runs are typically produced by bulk fills (e.g. erase with a pending
+    /// background) and are bit-identical in practice, so exact equality is both
+    /// correct and cheap.
+    #[inline]
+    pub fn eql_exact(values: &[T], i: usize, expected: Backing) -> bool {
+        let g = Self::load(values, i);
+        let mut ok = true;
+        let mut k = 0;
+        while k < GROUP_LEN {
+            ok &= g[k] == expected;
+            k += 1;
+        }
+        ok
+    }
+}
+
 // PORT NOTE: `@bitSizeOf(Row)` / `@bitSizeOf(Cell)`. Both are `packed
 // struct(u64)`, so their bit size is exactly 64.
 #[inline]
