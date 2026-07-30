@@ -637,3 +637,105 @@ that closing the surface makes `Exec.threadExit`'s `CancelIoEx` break the read
 loop instead of hanging. **Negative control:** stub `threadMainWindows` to return
 immediately and confirm the surface shows NO output — a passing run with a dead
 read thread would prove nothing.
+
+---
+
+## V10. `rustty-vaxis` Windows console backend: PORTED, but uncompilable for a Windows target on this host — **OWNER: WS20**
+
+**Filed WS20, 2026-07-30.** The whole `#[cfg(windows)]` family in `rustty-vaxis` is
+now LIVE, not a seam: `WindowsTty` (`vaxis/src/tty.zig:189-691` — console-mode +
+codepage setup, `deinit` restore, the buffered `WriteFile` writer, the
+`ReadConsoleInputW` pump and the full `INPUT_RECORD` key/mouse/resize/focus decode
+including UTF-16 surrogate pairing), the `.windows` arm of `Loop.ttyRun`, and the
+`.windows` arm of `handleEventGeneric` (`Loop.zig:167-234`, which is **not** a subset
+of the POSIX arm). Win32 is bound by hand-rolled `extern "system"` against `kernel32`,
+per the `rustty-os::windows` / `rustty-xev::windows` convention — no new crate.
+
+**Why it cannot be cross-checked here.** `rustty-vaxis → rustty-zigimg → zlib-sys`,
+and `zlib-sys`'s `cc`-driven build cannot cross-compile to MSVC from macOS:
+```
+$ cargo check -p rustty-vaxis --target x86_64-pc-windows-msvc --all-targets
+error: failed to run custom build command for `zlib-sys v0.1.0 (crates-sys/zlib-sys)`
+  cargo:warning=crates-sys/zlib-sys/vendor/zconf.h:446:14: fatal error: 'sys/types.h' file not found
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1):
+  LC_ALL="C" "cc" "-O0" ... "--target=x86_64-pc-windows-msvc" ... "-c" ".../vendor/adler32.c"
+```
+Same class as V9's `highway-sys`. `CC_FORCE_DISABLE=1` does not rescue it — cc-rs
+hard-errors instead of no-op'ing (`the `cc` crate's functionality has been disabled by
+the CC_FORCE_DISABLE environment variable`). No cross toolchain exists on this machine
+either (`x86_64-w64-mingw32-gcc`, `xwin`, `lld-link` all absent), so
+`x86_64-pc-windows-gnu` is equally blocked. That this is a **C-toolchain** limit and not
+a Rust-code limit is proven by a C-free crate cross-checking green:
+```
+$ cargo check -p rustty-xev --target x86_64-pc-windows-msvc --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.58s
+```
+
+**What WAS verified here.** `cargo check`/`cargo clippy` never link, so the Windows Rust
+code is fully type-checked and linted on this host by forcing the `cfg` arms — see
+`.port/phase-2/wincheck.sh`, which copies `crates/<crate>/src` to a scratch package and
+rewrites `#[cfg(windows)]` → `#[cfg(unix)]` (true here) and `#[cfg(not(windows))]` →
+`#[cfg(target_os = "wasi")]` (false here):
+```
+bash .port/phase-2/wincheck.sh "$PWD" rustty-vaxis
+cargo clippy --manifest-path /tmp/wincheck-rustty-vaxis/Cargo.toml --all-targets -- -D warnings
+```
+GREEN with zero diagnostics at WS20. It does NOT prove the Win32 struct layouts
+(`INPUT_RECORD` & co. are `#[repr(C)]` declarations checked by no linker and no run) and
+resolves no `kernel32` symbol.
+
+**Recipe (a Windows host, or a `windows-latest` CI runner with MSVC):**
+```
+cargo check  -p rustty-vaxis --target x86_64-pc-windows-msvc --all-targets
+cargo clippy -p rustty-vaxis --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+cargo test   -p rustty-vaxis --target x86_64-pc-windows-msvc
+```
+Then drive the real console: run a vaxis consumer in `conhost`/Windows Terminal and
+confirm (a) typing produces `key_press`/`key_release` with correct `mods` and text,
+including an astral-plane character (which exercises the two-record UTF-16 surrogate
+path), (b) mouse press/drag/release/wheel produce the right `Mouse.Button`/`Type` — the
+`last_mouse_button_press` XOR is the part most likely to be wrong, (c) resizing the
+window delivers a `winsize` whose size comes from `GetConsoleScreenBufferInfo`, not from
+the (inaccurate) record, and (d) alt-tab produces `focus_out`/`focus_in`.
+**Negative control:** force `event_from_record` to return `Ok(None)` for `EventType ==
+0x0002` and confirm mouse input goes dead while the keyboard still works — a green run
+with a dead mouse arm would prove nothing.
+
+---
+
+## V11. `rustty-font-shaper` Windows font discovery: PORTED, needs a stock Windows install to exercise — **OWNER: WS20**
+
+**Filed WS20, 2026-07-30.** `discovery.zig`'s `Windows` discoverer (the system +
+per-user font-directory scan, `%SYSTEMROOT%\Fonts` and
+`%LOCALAPPDATA%\Microsoft\Windows\Fonts`, with the FreeType `family_name` match and its
+SFNT-name-table fallback, `.ttc` multi-face probing, and the codepoint/CMap filter) and
+`DeferredFace`'s `win` payload (`path`/`face_index`/`variations`/`peek`/`presentation`,
+plus the `deinit`/`familyName`/`name`/`load`/`hasCodepoint` Windows arms) are LIVE.
+`Discover`/`Face`/`DeferredFace` now resolve to the `freetype_windows` backend on
+`target_os = "windows"` instead of falling through to the Fontconfig arm, matching
+`Backend.default`'s `.windows => .freetype_windows`.
+
+**Cross-check blocker:** identical to V10, one layer down — `rustty-font-shaper` pulls
+`freetype-sys`/`harfbuzz-sys`/`oniguruma-sys`, all `cc`-driven, all failing at the first
+`#include` when retargeted to `x86_64-pc-windows-msvc` from macOS.
+
+**Verified here:** `.port/phase-2/wincheck.sh` Recipe B, GREEN under
+`cargo clippy --all-targets -- -D warnings`; host `cargo test -p rustty-font-shaper`
+unchanged.
+
+**Runtime debt.** The reference's own `test "windows"` (`discovery.zig:1333-1352`) is
+ported as a documented skip-stub (`discovery::tests::windows`), matching this crate's
+existing `fontconfig`/`web_canvas` skip-stub precedent — it needs a stock Windows
+install, because it asserts that `Arial` is discoverable and has a glyph for `'A'`.
+
+**Recipe (Windows host with MSVC):**
+```
+cargo check  -p rustty-font-shaper --target x86_64-pc-windows-msvc --all-targets
+cargo clippy -p rustty-font-shaper --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+cargo test   -p rustty-font-shaper --target x86_64-pc-windows-msvc
+```
+Un-skip `discovery::tests::windows` by removing its early `return` once the backend is
+actually `freetype_windows`, then check the discovered `DeferredFace` loads and shapes.
+**Negative control:** ask for a family that is definitely absent (e.g. `"Nonexistent
+Family QQQ"`) and confirm the iterator yields `None` rather than the first font on disk —
+a passing `Arial` lookup alone does not prove the family filter works.

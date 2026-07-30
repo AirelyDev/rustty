@@ -58,12 +58,15 @@
 //! `Vaxis<'a>` object + the render diff-and-emit engine; chunk 4b — the `widgets` tier +
 //! the `TextInput` gap-buffer widget). The chunk sequence is FINISHED.
 //!
-//! REMAINING LIVE SEAMS: **the `#[cfg(windows)]` family ONLY** — `WindowsTty`
-//! (`tty.rs:419-445`), the windows `tty_run` arm (`loop_.rs:341`), and
-//! `TestTty::next_event` (`tty.rs:539`, Windows-API compat only). See DEFERRALS.md
-//! "rustty-vaxis Chunk 3b". These are undischargeable here *with evidence* rather than
-//! merely unfinished: the program has no Windows host and no Windows target, and the
-//! non-Windows build never names them.
+//! REMAINING LIVE SEAMS: **none.** The `#[cfg(windows)]` family — `WindowsTty`
+//! (`tty.rs`, the full `tty.zig:189-691` console backend), the windows `tty_run` +
+//! `handle_event_generic` arms (`loop_.rs`), and `TestTty::next_event` (whose upstream
+//! body IS `error.SkipZigTest`) — was PORTED by WS20 (2026-07-30). What remains is
+//! VERIFICATION debt, not port debt: this host has no Windows target toolchain
+//! (`zlib-sys`'s C build cannot cross-compile to `x86_64-pc-windows-msvc` from macOS),
+//! so the Windows arms are type-checked + clippy-clean via the host-side forced-`cfg`
+//! recipe in `.port/phase-2/VERIFICATION_DEBT.md` (owner WS20) rather than by a real
+//! Windows build.
 //!
 //! THE IMAGE TIER IS LIVE [WS12 T8–T11, 2026-07-29]. `Vaxis::transmit_image` and
 //! `Vaxis::load_image` run over `rustty_zigimg`, which re-homes the six zigimg operations
