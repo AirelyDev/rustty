@@ -92,13 +92,20 @@ fn utf8_decode_until_control_seq_scalar(input: &[u8], output: &mut [u32]) -> Dec
         let mut valid: usize = 1; // lead byte is valid
         for ci in 0..(seq.len as usize - 1) {
             if decode_offset + valid >= decode.len() {
-                // Truncated at end of buffer: treat as incomplete
-                // input that may be completed later. Stop decoding
-                // without consuming these bytes.
-                return DecodeResult {
-                    consumed: decode_offset,
-                    decoded: decode_count,
-                };
+                // The sequence is cut off by the end of the decode
+                // region. If the region ends at the true end of the
+                // input then it may be completed by future input, so
+                // stop without consuming these bytes. If the region
+                // was bounded by an ESC then the sequence can never
+                // be completed; the valid-so-far prefix is a maximal
+                // subpart which maps to a single U+FFFD below.
+                if decode.len() == input.len() {
+                    return DecodeResult {
+                        consumed: decode_offset,
+                        decoded: decode_count,
+                    };
+                }
+                break;
             }
             let cb = decode[decode_offset + valid];
             if cb < seq.ranges[ci][0] || cb > seq.ranges[ci][1] {
@@ -487,6 +494,156 @@ mod tests {
             assert_eq!(0xFFFD_u32, output[0]);
             assert_eq!(0x00E9_u32, output[1]);
             assert_eq!(0xFFFD_u32, output[2]);
+        }
+    }
+
+    #[test]
+    fn decode_partial_utf8_before_escape() {
+        // A valid-so-far but incomplete sequence cut off by an ESC can
+        // never be completed, so it is consumed and replaced by a single
+        // U+FFFD (maximal subpart) rather than left pending. Only
+        // sequences cut off by the true end of input are left pending.
+        let mut output: [u32; 64] = [0; 64];
+
+        // 2-byte lead cut off by ESC.
+        {
+            let str = b"hi\xc2\x1b[0m";
+            let result = utf8DecodeUntilControlSeq(str, &mut output);
+            assert_eq!(3_usize, result.consumed);
+            assert_eq!(3_usize, result.decoded);
+            assert_eq!(0xFFFD_u32, output[2]);
+        }
+
+        // 3-byte lead plus one valid continuation cut off by ESC:
+        // the whole prefix is one maximal subpart, one U+FFFD.
+        {
+            let str = b"\xe0\xa0\x1bX";
+            let result = utf8DecodeUntilControlSeq(str, &mut output);
+            assert_eq!(2_usize, result.consumed);
+            assert_eq!(1_usize, result.decoded);
+            assert_eq!(0xFFFD_u32, output[0]);
+        }
+    }
+
+    // Same two cases driven through the SCALAR decoder directly. This is the
+    // arm that actually covers `cb4c49fbf`: on every non-wasm target the public
+    // `utf8DecodeUntilControlSeq` takes the C++/simdutf kernel, so the test
+    // above never reaches the scalar code the fix edits. Before the fix both
+    // cases returned `consumed = 2` / `consumed = 0` with the trailing bytes
+    // left pending, diverging from the SIMD path.
+    #[test]
+    fn decode_partial_utf8_before_escape_scalar() {
+        let mut output: [u32; 64] = [0; 64];
+
+        {
+            let str = b"hi\xc2\x1b[0m";
+            let result = utf8_decode_until_control_seq_scalar(str, &mut output);
+            assert_eq!(3_usize, result.consumed);
+            assert_eq!(3_usize, result.decoded);
+            assert_eq!(0xFFFD_u32, output[2]);
+        }
+
+        {
+            let str = b"\xe0\xa0\x1bX";
+            let result = utf8_decode_until_control_seq_scalar(str, &mut output);
+            assert_eq!(2_usize, result.consumed);
+            assert_eq!(1_usize, result.decoded);
+            assert_eq!(0xFFFD_u32, output[0]);
+        }
+
+        // Control: truncation at the TRUE end of input must still leave the
+        // bytes pending (this is the half of the branch the fix preserves).
+        {
+            let str = b"hi\xc2";
+            let result = utf8_decode_until_control_seq_scalar(str, &mut output);
+            assert_eq!(2_usize, result.consumed);
+            assert_eq!(2_usize, result.decoded);
+        }
+    }
+
+    // PORT NOTE (divergence, deliberate): the reference drives this fuzz with
+    // `std.Random.DefaultPrng` (Xoshiro256++) seeded `0xf00dface`. Reproducing
+    // that bit-for-bit would mean duplicating ~80 lines of `std.Random` into
+    // this near-leaf crate (rustty-synthetic has the faithful port, but making
+    // rustty-simd dev-depend on it inverts the crate layering). The corpus
+    // bytes therefore differ from the reference's; the PROPERTY asserted --
+    // SIMD and scalar agree on consumed, decoded, and every decoded codepoint
+    // over 10k random mixtures -- is identical, and the seed is fixed so any
+    // failure is reproducible. This test is also the FIRST coverage the scalar
+    // decoder has ever had on a non-wasm target.
+    //
+    // Mirrors the reference's `if (comptime !options.simd) return SkipZigTest`:
+    // on wasm the public entry point IS the scalar decoder, so the comparison
+    // would be vacuous.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn decode_simd_matches_scalar() {
+        // SplitMix64 -- adequate for a differential corpus, and the same
+        // seeding primitive Zig's DefaultPrng uses.
+        struct Rng(u64);
+        impl Rng {
+            fn next(&mut self) -> u64 {
+                self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                z ^ (z >> 31)
+            }
+            /// Inclusive range, mirroring `std.Random.intRangeAtMost`.
+            fn range(&mut self, min: u64, max: u64) -> u64 {
+                min + self.next() % (max - min + 1)
+            }
+        }
+
+        let mut rng = Rng(0xf00d_face);
+        let mut input = [0u8; 257];
+        let mut out_simd = [0u32; 257];
+        let mut out_scalar = [0u32; 257];
+
+        for _ in 0..10_000 {
+            let len = rng.range(0, input.len() as u64) as usize;
+            let style = rng.range(0, 2);
+            for b in input[0..len].iter_mut() {
+                *b = match style {
+                    // Mostly ASCII with occasional specials.
+                    0 => match rng.range(0, 20) {
+                        0 => 0x1B,
+                        1 => rng.range(0, 0x1F) as u8,
+                        2 => rng.next() as u8,
+                        _ => rng.range(0x20, 0x7E) as u8,
+                    },
+                    // Heavy multi-byte/invalid UTF-8.
+                    1 => match rng.range(0, 3) {
+                        0 => rng.range(0x80, 0xBF) as u8,
+                        1 => rng.range(0xC0, 0xFF) as u8,
+                        2 => 0x1B,
+                        _ => rng.range(0x20, 0x7E) as u8,
+                    },
+                    // Fully random bytes.
+                    _ => rng.next() as u8,
+                };
+            }
+
+            let res_simd = utf8DecodeUntilControlSeq(&input[0..len], &mut out_simd);
+            let res_scalar = utf8_decode_until_control_seq_scalar(&input[0..len], &mut out_scalar);
+            assert_eq!(
+                res_scalar.consumed,
+                res_simd.consumed,
+                "consumed mismatch, input={:x?}",
+                &input[0..len]
+            );
+            assert_eq!(
+                res_scalar.decoded,
+                res_simd.decoded,
+                "decoded mismatch, input={:x?}",
+                &input[0..len]
+            );
+            assert_eq!(
+                out_scalar[0..res_scalar.decoded],
+                out_simd[0..res_simd.decoded],
+                "codepoint mismatch, input={:x?}",
+                &input[0..len]
+            );
         }
     }
 

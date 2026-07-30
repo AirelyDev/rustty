@@ -916,3 +916,244 @@ cargo check -p rustty-apprt --features gtk
 under `--features gtk` the unconditional arm fails to compile exactly as quoted,
 and under `--features gtk,gtk-v4_16` it compiles and the headed KAT passes on
 GTK 4.22.4.
+
+---
+
+> **ID NOTE [WS10 T22, 2026-07-30].** The WS10 plan names its two new rows "V6"
+> and "V7". Both ids were **already taken** in this file (V6 = Wayland
+> `default_mode`, V7 = RTL layout). The plan's numbering is errata; the rows
+> land here as **V15** and **V16**, plus **V17** for the drift bisection.
+
+## V15. The `origin/main` oracle cannot be compared against, and the PINNED oracle can no longer be rebuilt — **OWNER: Phase 3 — `BEYOND-PIN`**
+
+**Two halves, both about the reference oracle.**
+
+**(a) The pinned oracle binary is now irreplaceable.** Every rustty perf figure
+ever recorded is anchored on
+`.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench`, sha256
+`0fb47d268c7b9a7f9f93ed14834ca221383ba189404b69d15f750ff76abf5cdb`. That binary
+is oracle `4749c4e93`, which requires **Zig 0.15.2**. The installed Zig is now
+**0.16.0**, and the pin does not build under it: `src/build/zig.zig` carries a
+hard `@compileError` requiring 0.15.2, and there is real 0.15→0.16 std breakage
+on top of it (`build.zig:27`, `readFileAlloc` arity). Verified 2026-07-30.
+
+- **The binary is untracked** (`.gitignore` excludes reference-oracle build
+  outputs as "regenerable" — it is no longer regenerable on this host).
+- A verified byte-identical backup exists at
+  `~/rustty-oracle-artifacts/ghostty-bench-4749c4e93`.
+- **Do not delete, overwrite, or rebuild it.** If its sha256 ever differs from
+  the above, **STOP**: every historical number becomes incomparable. That is a
+  report-and-stop condition, not something to work around.
+
+**(b) `origin/main` is not a substitute, and comparing against it naively reads
+as a phantom rustty regression.** `origin/main` (`6ad1fe7d8`) *does* build (it
+wants 0.16.0). But upstream added `src/quirks_memset.zig` in the pin→head range,
+which makes the oracle **~2.8× faster on `+terminal-stream`**
+(`.port/phase-3/assessments/E-os-termio-platform.md` row E34). A rustty-vs-head
+run will therefore show a **much smaller rustty margin on terminal-stream, and
+possibly a loss** — **that is the oracle getting faster, NOT rustty regressing.**
+
+**`quirks_memset` must NOT be ported.** `rustc` lowers `@llvm.memset` to the
+platform libc `memset` (Apple `libSystem`; glibc IFUNC on Linux), both already
+SIMD + `dc zva`. Exporting a strong `memset` from a Rust dylib would pessimize
+rustty and risk ODR/interposition breakage.
+
+**Runnable recipe** (the oracle worktree must be created with `worktree add` —
+**never** `git checkout` in `../ghostty`, four lanes depend on its working tree
+staying at the pin):
+
+```sh
+git -C /Users/gael/projects/ghostty worktree add /tmp/ghostty-origin-main origin/main
+cd /tmp/ghostty-origin-main && zig build -Doptimize=ReleaseFast   # needs Zig 0.16.0
+
+# Compare, and read the result with the caveat above:
+cd /Users/gael/projects/rustty
+python3 .port/tools/perf/ws10_suite.py \
+    --rust target/release-fast/rustty-bench \
+    --oracle /tmp/ghostty-origin-main/zig-out/bin/ghostty-bench -n 9
+
+git -C /Users/gael/projects/ghostty worktree remove /tmp/ghostty-origin-main
+```
+
+**Pre-stated expected outcome** (so nobody misreads it): `terminal-stream`
+margin collapses by roughly 2.8× on the oracle side; the other 13 configs move
+little. A terminal-stream LOSS against head is **expected and is not a rustty
+regression**. The authoritative fence remains the **pinned** oracle.
+
+### WS10 execution status (2026-07-30): half (b) WAS RUN — and the result is worse than "the oracle got faster"
+
+`origin/main` (`6ad1fe7d8`) **does** build under Zig 0.16.0. Note the plan's
+recipe is incomplete: plain `zig build` installs `Ghostty.app` and **no bench
+binary**; the flag is **`-Demit-bench`** (`build.zig:105`, `Config.zig:391`).
+Built and run (PROVISIONAL — load 6.24, `IDLE_MAX` 2.0):
+
+| bench | PINNED zig ms | origin/main zig ms | oracle change | rust ms |
+|---|--:|--:|--:|--:|
+| terminal-stream | 543.97 | **51.59** | **10.5× FASTER** | 344.51 |
+| codepoint-width.wcwidth | 261.09 | **802.40** | **3.1× SLOWER** | 238.17 |
+| screen-clone.clone | 54.65 | **295.33** | **5.4× SLOWER** | 22.56 |
+| screen-clone.render | 16.64 | **420.01** | **25.2× SLOWER** | 14.71 |
+| screen-clone.noop | 6.87 | 9.91 | 1.4× slower | 5.38 |
+| codepoint-width.noop | 4.55 | 6.72 | 1.5× slower | 3.31 |
+| terminal-parser | 266.58 | 267.22 | flat | 106.40 |
+| the other 7 | — | — | within ~2% | — |
+
+**Verdict: `origin/main` is not a valid comparison target, and the reason is
+bigger than `quirks_memset`.** The expected phantom regression did appear —
+`LOST bench terminal-stream/ascii (STRICT): zig=51.59ms rust=344.51ms (+567.8%)`,
+the single RED in an otherwise 13/14 run — and at **10.5×**, not the ~2.8×
+E34 predicted. But four other configs moved the **opposite** way, up to 25×
+slower. A pure codegen win cannot do that.
+
+**The benchmarks themselves changed beyond the pin.** BL-4 contains the bench
+corpus commits: `258de36d1`/`4c5b1d5d5` swap `TerminalStream`'s handler and chunk
+size, and `446f80f4e` adds `--loops` plus three render modes to `ScreenClone`.
+So `+terminal-stream` and `+screen-clone` on `origin/main` **measure different
+work** than the same-named benches on the pin. Comparing rustty against them is
+not like-for-like in either direction, and neither column can be read as a
+speed-up or a slow-down.
+
+**Consequence for the port.** A rustty-vs-`origin/main` fence only becomes
+meaningful **after** rustty ports the BL-4 bench-corpus commits (plan T10-T12,
+T17) so both sides measure the same work again. Until then this row stays open
+and the **pinned** oracle remains the only valid fence. `quirks_memset` still
+must not be ported, for the reasons above.
+
+The oracle worktree was removed after the run (`git -C ../ghostty worktree
+remove`); the pinned working tree was never touched — no `checkout` was run in
+`../ghostty` at any point.
+
+Owner is Phase 3 because `origin/main` **is** the upstream resync range:
+`BEYOND-PIN`.
+
+## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **OWNER: WS20**
+
+`BASELINE.json` carries 9 `binary_sizes_bytes` labels (`libghostty-vt.a`,
+`ghostty-bench`, `ghostty-test`, …) at **0% tolerance** per DoP.
+`ws10_suite.py` measures the 14 benchmarks and **nothing else**, so
+`check_baseline_regression.py --metrics … --strict` reports:
+
+```
+compared 14 metrics; regressions 0; missing-from-candidate 9
+    NOT-MEASURED size: libghostty-vt.a (static) …
+RED: candidate is missing baseline metrics (strict)
+```
+
+G8 is therefore armed **without** `--strict` (WS10 T3). That is the honest
+option — the alternative was to emit fabricated or mismapped size numbers to
+turn the gate green, which R4/R5 forbids.
+
+**Why it is not trivial to discharge:** the 9 labels are *oracle* artifacts
+(Zig static libs / test executables). Comparing a Rust `.a` against a Zig `.a`
+at 0% tolerance is not a meaningful fence; discharging this needs a **rustty
+artifact→label mapping with its own justified tolerance**, which is a design
+decision, not a measurement.
+
+**Runnable recipe once that mapping exists:** have `ws10_suite.py --emit-metrics`
+additionally emit `binary_sizes_bytes` for the mapped rustty artifacts, then
+restore `--strict` on the G8 line in `.port/tools/ci.sh` and confirm GREEN.
+
+## V17. The oracle-anchored perf measurement campaign — **OWNER: Phase 3 — `BEYOND-PIN`**
+
+**Scope decision (user, 2026-07-30): perf *measurement/verification* may be
+deferred until after Phase 3; perf *implementation* may not.** This row is the
+single ledger entry for the deferred measurement. The gate/fence *machinery*,
+its three FAIL arms, the G8 vacuity fix and all BL-4 code changes are **not**
+covered here — they landed in WS10.
+
+**Enabling condition — this is why the owner is Phase 3 and why the row carries
+`BEYOND-PIN`.** Every oracle-anchored figure depends on one irreplaceable
+prebuilt binary, because the pinned oracle `4749c4e93` requires **Zig 0.15.2**
+and this host now has **0.16.0** (see V15). **Phase 3's final task advances the
+pin to `origin/main`, which itself requires 0.16.0** — so once that lands the
+oracle builds from source again and every oracle-anchored comparison becomes
+cleanly reproducible instead of depending on a binary that cannot be regenerated.
+The pin advance is therefore the literal precondition for doing this work well,
+which is exactly the case `check_phase2_closure.py`'s `row_is_beyond_pin()`
+admits `Phase 3` as an owner for.
+
+### What is already MEASURED and must NOT be redone
+
+Done on 2026-07-30 and recorded in `PERF_LOG.md` (PROVISIONAL — load 4.76-5.80
+against `IDLE_MAX` 2.0, so not authoritative, but the first figures since the
+four core-pinning `yes` processes were killed):
+
+- **Fence 1 (ORACLE), 14 configs, N=9, paired vs the pinned binary — GREEN,
+  14/14 holds**, thinnest margin `codepoint-width.wcwidth` −7.0%.
+- **The suspected drift REPRODUCES**: `terminal-parser` **+17.8%**,
+  `screen-clone.clone` **+20.0%** vs the r5-SHIP record, while the oracle column
+  reproduces its historical values to ~2% **in the same session** — the control
+  that proves the gap is rustty-side and not contention.
+- **The `origin/main` comparison (V15) was RUN**, and found something larger than
+  the expected `quirks_memset` effect: the *benchmarks themselves* diverged
+  beyond the pin. See V15.
+- Both gate self-tests and the live simd flip proof — see `PERF_LOG.md`.
+
+### What remains UNMEASURED
+
+1. **An authoritative IDLE 14-config baseline.** Everything above is provisional.
+2. **The bisection of the confirmed drift** — the substantive open item.
+3. Re-running V15's `origin/main` comparison once the benches are comparable.
+
+### The drift, for whoever bisects it
+
+| config | r5-SHIP | 2026-07-30 | drift | rust spread |
+|---|--:|--:|--:|--:|
+| `terminal-parser` | 92.5 ms | 109.01 ms | **+17.8%** | 1.097 |
+| `screen-clone.clone` | 20.9 ms | 25.07 ms | **+20.0%** | 1.163 |
+
+This is a **pre-existing rustty regression**, not a WS10 one — WS10 modified no
+hot path. Prime suspects in order: **WS7 Phase A-E** (BL-1 compression — it
+touched `Page`/`PageList`/`Screen` hard, which are exactly these two configs' hot
+paths), then WS5, WS8, WS19.
+
+**Not attempted at load ~5:** a 12 s rebuild competes with the measurement and
+the per-step delta a bisection must resolve is the same order as these configs'
+spreads (1.097 / 1.163). A contended bisection returns a confident wrong answer,
+which is worse than none.
+
+**`.perf-bins/rustty-bench-ws10-entry-RF` is a DEGRADED anchor.** It carries this
+drift, so Fence 2 will happily hold the 20% regression in place. Re-stash the
+entry binary after the drift is fixed.
+
+### Runnable recipe (requires 1-min load average ≤ 2.0)
+
+```sh
+cd /Users/gael/projects/rustty
+for ref in a3a2b23 74226dd <WS7 Phase A..E merges> <WS8 merge> <WS19 merge> main; do
+  git checkout "$ref" -- crates/ && cargo build -p rustty-bench --profile release-fast
+  cp target/release-fast/rustty-bench ".perf-bins/bisect-$ref"
+done
+# pair each against the entry binary on the two drifted configs only:
+python3 .port/tools/perf/ws10_suite.py --rust .perf-bins/bisect-<ref> \
+    --self .perf-bins/rustty-bench-ws10-entry-RF --no-oracle -n 9
+
+# and, once the pin has advanced, the authoritative oracle baseline:
+python3 .port/tools/perf/ws10_suite.py --rust target/release-fast/rustty-bench -n 9 \
+    --emit-metrics /tmp/ws10-metrics.json
+```
+
+### ⚠ `quirks_memset` caveat — read before interpreting ANY post-pin oracle run
+
+Upstream added `src/quirks_memset.zig` in the pin→head range, which makes the
+oracle **~2.8× faster on `+terminal-stream`** (measured here at **10.5×**;
+`.port/phase-3/assessments/E-os-termio-platform.md` row E34). **A shrunken rustty
+margin — or an outright loss — on `terminal-stream` against a post-pin oracle is
+the ORACLE GETTING FASTER, not rustty regressing.** Do not "fix" a phantom.
+
+**`quirks_memset` must NOT be ported.** `rustc` lowers `@llvm.memset` to the
+platform libc `memset` (Apple `libSystem`; glibc IFUNC on Linux), both already
+SIMD + `dc zva`. Exporting a strong `memset` from a Rust dylib would pessimize
+rustty and risk ODR/interposition breakage.
+
+And per V15: after the pin advances, `+terminal-stream` and `+screen-clone` also
+*measure different work* than they did at the pin, so the comparison is only
+like-for-like once rustty has ported the BL-4 bench-corpus commits.
+
+---
+
+## ~~V17-old. The rustty-side perf drift since `a3a2b23` is CONFIRMED but NOT BISECTED — OWNER: WS10~~ — **SUPERSEDED by V17 above [2026-07-30]**
+
+Re-owned from WS10 to **Phase 3 (`BEYOND-PIN`)** under the scope decision above.
+Content merged into V17. Retained as a heading only so the id's history is
+traceable.

@@ -54,7 +54,8 @@
 #                                    match in the port; 0 MISSING — closes the
 #                                    aggregate-count hole G3 can mask)
 #   G9  check_parity_surface.py      config/keybind/action/terminfo  -> PROGRESS*
-#   G8  check_baseline_regression.py no perf/mem/size/startup regress-> PROGRESS*
+#   G8  check_baseline_regression.py no perf/mem/size/startup regress-> ARMED
+#   G8b check_perf_fence.sh          paired same-session perf fence  -> PERF-FENCE
 #   G5  run_fuzz_smoke.sh            differential fuzz clean         -> PROGRESS*
 #   G6  check_leaks.sh               leak-free (tracking-alloc/Miri) -> PROGRESS*
 #   G6b check_pagelist_compress_leaks.sh
@@ -127,6 +128,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 GATES="$ROOT/.port/tools/gates"
 PY="${PYTHON:-python3}"
+# Metrics file G8b emits and G8 then consumes (WS10 T3). Under $TMPDIR so a CI
+# run with no measurement substrate simply leaves it absent -> G8 progress mode.
+PERF_METRICS="${PERF_METRICS:-${TMPDIR:-/tmp}/rustty-perf-metrics.json}"
 
 # ---- opt-in lanes ----------------------------------------------------------
 # Parsed and dispatched BEFORE the default run so `--webgl` is a lane you ask for,
@@ -265,7 +269,17 @@ GATE_REGISTRY=(
   "G3|PROGRESS|$PY $GATES/check_comments_fidelity.py"
   "G3b|PROGRESS|$PY $GATES/check_comment_coverage.py"
   "G9|PROGRESS|$PY $GATES/check_parity_surface.py"
-  "G8|PROGRESS|$PY $GATES/check_baseline_regression.py"
+  # G8b — the real perf regression fence (paired, same-session, vs a stored
+  # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
+  # untracked oracle binary/corpora are absent. MUST precede G8: it emits the
+  # metrics file G8 consumes.
+  "G8b|PERF-FENCE|bash $GATES/check_perf_fence.sh --emit-metrics $PERF_METRICS"
+  # G8 is ARMED once G8b has emitted that metrics file; with no substrate
+  # present G8b BLOCKs, the file is absent, and G8 falls back to progress mode.
+  # NOT run with --strict: this harness measures the 14 benchmarks but NOT the
+  # binary-size axis BASELINE.json also carries, and --strict would RED on those
+  # 9 absent size labels. That axis is verification debt, not faked green.
+  "G8|ARMED|$PY $GATES/check_baseline_regression.py --metrics $PERF_METRICS"
   "G5|PROGRESS|bash $GATES/run_fuzz_smoke.sh"
   "G6|PROGRESS|bash $GATES/check_leaks.sh --all-done"
   # G6b — PageList compressed-page encodings are not leaked (WS7 Phase E).
