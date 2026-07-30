@@ -6056,7 +6056,7 @@ From **WS7 Phase B review (I1)** — these need the final
    `mark_activity` site count from 10 to 11."* If the resync does **not** introduce it,
    the row closes with no work. **Owner: Phase 3. Trigger: the resync.**
 
-## ~~Deferred to WS8 upstream sweep~~ **→ OWNER: WS10 (BL-4 perf series), pin-sequenced** — WS7 Phase C divergence #11 (`Screen::cursor_scroll_region_up` unported) [re-owned WS19 T2, 2026-07-29 — audit row O3]
+## ~~Deferred to WS8 upstream sweep~~ ~~→ OWNER: WS10 (BL-4 perf series)~~ **→ OWNER: Phase 3 — BEYOND-PIN** — WS7 Phase C divergence #11 (`Screen::cursor_scroll_region_up` unported) [re-owned WS19 T2, 2026-07-29 — audit row O3; re-owned again WS10 T18, 2026-07-30]
 
 From **WS7 Phase C review (I2)**. The Phase C plan
 (`docs/superpowers/plans/2026-07-23-ws7-scrollback-compression.md:3790,3830`)
@@ -6092,16 +6092,37 @@ lines 11634, 11731, 11946).
 ORPHANED), **and** BL-4 is the `stream`/`terminal`/`termio` **performance series**,
 which has never been WS8's scope — it is **WS10**'s.
 
-**OWNER: WS10 (BL-4 perf series).**
+~~**OWNER: WS10 (BL-4 perf series).**~~ **OWNER: Phase 3 — `BEYOND-PIN`.**
+[re-owned WS10 T18, 2026-07-30]
 
-**Sequencing (a stated decision, NOT a deferral — the owner AND the trigger are both
-named).** `77190bd02` is **beyond the pin** (`../ghostty` working tree is pinned at
-`4749c4e93`). Porting a beyond-pin function into the pinned tree means
-hand-transcribing a commit that Phase 3's upstream re-vet will revisit anyway, so it
-is **cheaper AFTER Phase 3 advances the pin**, and WS10 should sequence it that way.
-When `77190bd02` is ported, its `invalidateNodeLayout` call site and the
-`screen_cursor_scroll_region_up_renews_page_generation` test land **alongside it** —
-not retrofitted into WS7.
+**Why this moved off WS10.** `77190bd02` is **beyond the pin** (`../ghostty` working
+tree is pinned at `4749c4e93`); its source is the **upstream resync range**, which is
+Phase 3's scope by definition. WS10 ported the rest of BL-4 from beyond-pin commits
+the way WS5/WS7/WS8 did, but this row's substance is not a perf change — it is a
+*missing function* whose absence is only visible against post-pin upstream, and
+hand-transcribing it into the pinned tree means writing code Phase 3's upstream
+re-vet will revisit anyway.
+
+**This is a re-owning, NOT a deferral.** The owner is named (Phase 3), the trigger is
+named (the pin advancing past `4749c4e93`), and the row carries the `BEYOND-PIN`
+marker that `check_phase2_closure.py` requires before it will accept `Phase 3` as an
+owner at all (`row_is_beyond_pin()`, gate lines 202-208 / 286-290). Phase 3 is not a
+blanket escape hatch in that gate: it is accepted for exactly this case, work whose
+source lies in the resync range.
+
+**What lands together when Phase 3 ports it.** `Screen::cursor_scroll_region_up` +
+`cursor_scroll_region_up_slow` + their 5 tests, `0bad91adb`'s 4th
+`invalidate_node_layout` site, and the test
+`screen_cursor_scroll_region_up_renews_page_generation` — **alongside** the function,
+not retrofitted into WS7. Note the other three Screen `invalidate_node_layout` sites
+from `0bad91adb` ARE already ported (`crates/rustty-vt/src/screen.rs:1536,1618,1651`),
+as is the Terminal one (`terminal.rs:3004`); the single missing site is the one inside
+this unported function.
+
+**Miri note for whoever ports it:** the row shifts are `&mut Page`/`&mut [Cell]`
+arguments re-read across `assert_integrity`, which is Stacked-Borrows UB in Rust
+(memory: `rust-mut-args-strongly-protected`). Use raw-pointer args and prove it on an
+isolated non-FFI Miri harness, per the `mirihar-chunk3b` precedent.
 
 ## Deferred to WS7 Phase E (Miri / gates)
 
@@ -7146,7 +7167,7 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 |---|---|---|---|---|
 | O1 | `D:5080` make `style::Color` padding-free, "listed for WS8" | **OPEN, real.** `crates/rustty-vt/src/style.rs:143` is a plain Rust `enum Color { None, Palette(u8), Rgb(RGB) }` — no `#[repr]`, payload-sized, so a typed write leaves the inactive payload uninit. Site count re-measured: **160** `Color::{None,Palette,Rgb}` occurrences across **18** files (ledger said 163/17 — mildly stale). Reproduction is the committed `mapinit_styled` harness scenario (seconds). | **fix in WS19 T5** — no other open WS touches vt style | **L** | **WS19 EXECUTION STATUS:** **RESOLVED — WS19 T5 (2026-07-29).** `style::Color` is a byte-complete `#[repr(C)] { tag: u8, data: [u8; 3] }` (size/align pinned by a `const _` assert); the ~160 construction sites are unchanged (associated const + associated constructors), only the ~22 pattern sites moved to `tag()` + `palette()`/`rgb()`. The same pass also fixed a NEWLY-FOUND second instance of the class: `RefCountedSet::insert`'s two whole-`Item` typed writes de-initialized `Item`'s 1 trailing padding byte, and are now field-wise. `mapinit_styled` before `[0x17c]` uninit → intermediate `[0x187]` uninit → after: "styled mapping of 16384 bytes fully initialized". vt suite unchanged at 2159/0/2. |
 | O2 | `D:5357` add a `-C debug-assertions=off` vt Miri lane, "NEW WS8 item" | **OPEN, real.** `check_leaks.sh` runs `cargo +nightly miri test -p rustty-vt --lib` with debug assertions ON; no second lane exists (`grep -rn 'debug-assertions' .port/tools/` → only `check_release_lane.sh` prose and this ledger). The 10 `cfg_attr(miri, ignore)` annotations are correct only *for the lane as it runs today*. | **fix in WS19 T6** | **M** | **WS19 EXECUTION STATUS:** **RESOLVED — WS19 T6 (2026-07-30).** The lane exists: `check_leaks.sh --debug-assertions-off` (**G6c**), registered in `ci.sh` as PROGRESS, ADDITIVE — G6 keeps debug assertions ON, unchanged (R5). The partition is carried by the annotation itself (`cfg_attr(all(miri, debug_assertions), ignore)` = ignored in G6, RUN in G6c) and G6c derives its test set by grepping those annotations, so the lanes cannot drift. Both FAIL arms are proven by `--debug-assertions-off --self-test`: flag-loss (the real crate goes `0 passed; 82 ignored` -> RED on the vacuity floor) and injected UB (RED, names it). **The whole 97-test `cfg_attr(miri, ignore)` inventory was re-measured per test, in isolation, against the new lane, and 82 of the 97 were NOT intractable at all** — the "multi-page PageList ... >20min" reason text was a class-level assumption, and most of those tests finish in 6-30s. Making them runnable also surfaced **10 real Stacked-Borrows violations** (cached raw `*PageList` read across `Terminal::active_mut()`), all test-code, all fixed here and re-verified UB-clean. 15 annotations remain, each with a measured per-test basis (11 TIMEOUT in BOTH lanes; 4 `debug_assertions`-only, which G6c makes inert rather than fast). Full evidence: `.port/phase-2/MIRI_EXCEPTIONS.md`, "WS19 T6 — the SECOND vt Miri lane". |
-| O3 | `D:4981`/`:5011` WS7 Phase C divergence #11 — `Screen::cursor_scroll_region_up` unported; "belongs to the WS8 upstream-sweep backlog (BL-4)" | **OPEN, real, and DOUBLY mis-filed.** `grep -rn 'cursor_scroll_region_up\|cursorScrollRegionUp' crates/` → **zero hits**. But BL-4 is the **perf series**, which is **WS10**'s scope, not WS8's — so the row names a closed WS *and* the wrong backlog. The blocking commit `77190bd02` is beyond the pin. | **route to WS10** (BL-4). Because `77190bd02` is beyond-pin, the port is **cheaper AFTER Phase 3 advances the pin** — WS19 T2 rewrites the row to say exactly that instead of leaving it in a closed WS. | **S** (row) / **M** (port, in WS10) | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** Owner is now **WS10** (BL-4), pin-sequenced; `77190bd02` is beyond-pin. |
+| O3 | `D:4981`/`:5011` WS7 Phase C divergence #11 — `Screen::cursor_scroll_region_up` unported; "belongs to the WS8 upstream-sweep backlog (BL-4)" | **OPEN, real, and DOUBLY mis-filed.** `grep -rn 'cursor_scroll_region_up\|cursorScrollRegionUp' crates/` → **zero hits**. But BL-4 is the **perf series**, which is **WS10**'s scope, not WS8's — so the row names a closed WS *and* the wrong backlog. The blocking commit `77190bd02` is beyond the pin. | **route to WS10** (BL-4). Because `77190bd02` is beyond-pin, the port is **cheaper AFTER Phase 3 advances the pin** — WS19 T2 rewrites the row to say exactly that instead of leaving it in a closed WS. | **S** (row) / **M** (port, in WS10) | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** **WS10 T18 STATUS (2026-07-30): re-owned to Phase 3 with the `BEYOND-PIN` marker.** `77190bd02`'s source is the upstream resync range, so it is Phase 3's by definition; WS10 did not port it. The marker is what lets `check_phase2_closure.py` accept `Phase 3` as an owner (`row_is_beyond_pin()`). |
 | O4 | `D:4960` inspector `pagelist.rs` CELL-detail path still restores compressed pages; "D6 must port that end state" | **OPEN — and WS7 D6 MERGED (`b8c40f9`) without closing it.** `crates/rustty-inspector/src/widgets/pagelist.rs` still calls `Node::page(cell.node)` at **6** sites (`:1701,:1703,:1759,:1889,:2163,:2379`). The guard at `:2414` asserts `!loop_src.contains("Node::page(")` over the **page-tree loop source only** — exactly the weaker form the deferral predicted — so the file-wide property is still unproven. | **fix in WS19 T7** (port the oracle `pages.pin` + `InspectedCell` restructure; tighten the guard to whole-file) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T7.** Ported the oracle `pin` + `InspectedCell` restructure; whole-file guard in a SIBLING file; FAIL arm mutation-proven. |
 | O5 | `D:4973` `PageList::Limits`/`Limits::enforce` has no rustty counterpart, so the oracle's 11th `mark_activity` site has nothing to port onto | **OPEN, correctly described.** Depends on a struct beyond the pin. | **route to Phase 3 as a re-vet row**, not a Phase-2 deferral: WS19 T2 restates it as pin-conditional with the exact assertion Phase 3 must make (`Limits::enforce` must `mark_activity` on entry) | **S** | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** Phase 3 re-vet assertion **P3-RV1**. |
 | O6 | `D:4046` GTK portal `OpenURI` — call site INHABITED, body unported; marked **OPEN**, no owner | **OPEN, real.** No `portal` module under `crates/rustty-apprt/src/gtk/`; `startup` fetches the `gio::DBusConnection` for GlobalShortcuts only. WS15 explicitly split this out and did not take it. | **fix in WS19 T8** (reuses the WS15 request-path pattern + its live gate harness) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T8, 2026-07-29.** Ported (`gtk/portal.rs` + `gtk/portal/open_uri.rs`), call site live in `application.rs`, and verified on the VM by `.port/tools/gates/ws19_portal_openuri_gate.sh` (stub-portal ordering with a demonstrated FAIL arm, live round-trip against the real `xdg-desktop-portal`, `dbus-monitor` wire shape; both negative controls exercised). The plan's "diff against installed ghostty 1.3.1" step was impossible — that build has no OpenURI portal path (`strings … | grep -c` → 0); see the resolved entry. |

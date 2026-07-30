@@ -916,3 +916,139 @@ cargo check -p rustty-apprt --features gtk
 under `--features gtk` the unconditional arm fails to compile exactly as quoted,
 and under `--features gtk,gtk-v4_16` it compiles and the headed KAT passes on
 GTK 4.22.4.
+
+---
+
+> **ID NOTE [WS10 T22, 2026-07-30].** The WS10 plan names its two new rows "V6"
+> and "V7". Both ids were **already taken** in this file (V6 = Wayland
+> `default_mode`, V7 = RTL layout). The plan's numbering is errata; the rows
+> land here as **V15** and **V16**, plus **V17** for the drift bisection.
+
+## V15. The `origin/main` oracle cannot be compared against, and the PINNED oracle can no longer be rebuilt — **OWNER: Phase 3 — `BEYOND-PIN`**
+
+**Two halves, both about the reference oracle.**
+
+**(a) The pinned oracle binary is now irreplaceable.** Every rustty perf figure
+ever recorded is anchored on
+`.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench`, sha256
+`0fb47d268c7b9a7f9f93ed14834ca221383ba189404b69d15f750ff76abf5cdb`. That binary
+is oracle `4749c4e93`, which requires **Zig 0.15.2**. The installed Zig is now
+**0.16.0**, and the pin does not build under it: `src/build/zig.zig` carries a
+hard `@compileError` requiring 0.15.2, and there is real 0.15→0.16 std breakage
+on top of it (`build.zig:27`, `readFileAlloc` arity). Verified 2026-07-30.
+
+- **The binary is untracked** (`.gitignore` excludes reference-oracle build
+  outputs as "regenerable" — it is no longer regenerable on this host).
+- A verified byte-identical backup exists at
+  `~/rustty-oracle-artifacts/ghostty-bench-4749c4e93`.
+- **Do not delete, overwrite, or rebuild it.** If its sha256 ever differs from
+  the above, **STOP**: every historical number becomes incomparable. That is a
+  report-and-stop condition, not something to work around.
+
+**(b) `origin/main` is not a substitute, and comparing against it naively reads
+as a phantom rustty regression.** `origin/main` (`6ad1fe7d8`) *does* build (it
+wants 0.16.0). But upstream added `src/quirks_memset.zig` in the pin→head range,
+which makes the oracle **~2.8× faster on `+terminal-stream`**
+(`.port/phase-3/assessments/E-os-termio-platform.md` row E34). A rustty-vs-head
+run will therefore show a **much smaller rustty margin on terminal-stream, and
+possibly a loss** — **that is the oracle getting faster, NOT rustty regressing.**
+
+**`quirks_memset` must NOT be ported.** `rustc` lowers `@llvm.memset` to the
+platform libc `memset` (Apple `libSystem`; glibc IFUNC on Linux), both already
+SIMD + `dc zva`. Exporting a strong `memset` from a Rust dylib would pessimize
+rustty and risk ODR/interposition breakage.
+
+**Runnable recipe** (the oracle worktree must be created with `worktree add` —
+**never** `git checkout` in `../ghostty`, four lanes depend on its working tree
+staying at the pin):
+
+```sh
+git -C /Users/gael/projects/ghostty worktree add /tmp/ghostty-origin-main origin/main
+cd /tmp/ghostty-origin-main && zig build -Doptimize=ReleaseFast   # needs Zig 0.16.0
+
+# Compare, and read the result with the caveat above:
+cd /Users/gael/projects/rustty
+python3 .port/tools/perf/ws10_suite.py \
+    --rust target/release-fast/rustty-bench \
+    --oracle /tmp/ghostty-origin-main/zig-out/bin/ghostty-bench -n 9
+
+git -C /Users/gael/projects/ghostty worktree remove /tmp/ghostty-origin-main
+```
+
+**Pre-stated expected outcome** (so nobody misreads it): `terminal-stream`
+margin collapses by roughly 2.8× on the oracle side; the other 13 configs move
+little. A terminal-stream LOSS against head is **expected and is not a rustty
+regression**. The authoritative fence remains the **pinned** oracle.
+
+**WS10 execution status (2026-07-30):** the worktree was created and the
+`origin/main` build was started to discharge (b). Result not recorded here —
+whatever its outcome, it is **not** a fence, because the box was at load ~5
+(`IDLE_MAX` 2.0) and the harness stamps such runs provisional. Owner is Phase 3
+because `origin/main` **is** the upstream resync range: `BEYOND-PIN`.
+
+## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **OWNER: WS20**
+
+`BASELINE.json` carries 9 `binary_sizes_bytes` labels (`libghostty-vt.a`,
+`ghostty-bench`, `ghostty-test`, …) at **0% tolerance** per DoP.
+`ws10_suite.py` measures the 14 benchmarks and **nothing else**, so
+`check_baseline_regression.py --metrics … --strict` reports:
+
+```
+compared 14 metrics; regressions 0; missing-from-candidate 9
+    NOT-MEASURED size: libghostty-vt.a (static) …
+RED: candidate is missing baseline metrics (strict)
+```
+
+G8 is therefore armed **without** `--strict` (WS10 T3). That is the honest
+option — the alternative was to emit fabricated or mismapped size numbers to
+turn the gate green, which R4/R5 forbids.
+
+**Why it is not trivial to discharge:** the 9 labels are *oracle* artifacts
+(Zig static libs / test executables). Comparing a Rust `.a` against a Zig `.a`
+at 0% tolerance is not a meaningful fence; discharging this needs a **rustty
+artifact→label mapping with its own justified tolerance**, which is a design
+decision, not a measurement.
+
+**Runnable recipe once that mapping exists:** have `ws10_suite.py --emit-metrics`
+additionally emit `binary_sizes_bytes` for the mapped rustty artifacts, then
+restore `--strict` on the G8 line in `.port/tools/ci.sh` and confirm GREEN.
+
+## V17. The rustty-side perf drift since `a3a2b23` is CONFIRMED but NOT BISECTED — **OWNER: WS10**
+
+Two configs are reproducibly slower than the r5-SHIP record while the oracle
+column reproduces to ~2% in the same session (see `PERF_LOG.md`, WS10 Layer 0):
+
+| config | r5-SHIP | 2026-07-30 | drift | rust spread |
+|---|--:|--:|--:|--:|
+| `terminal-parser` | 92.5 ms | 109.01 ms | **+17.8%** | 1.097 |
+| `screen-clone.clone` | 20.9 ms | 25.07 ms | **+20.0%** | 1.163 |
+
+The oracle control rules out contention as the cause (load moves both columns;
+this gap is one-sided). This is a **pre-existing rustty regression**, not a WS10
+one — WS10 Layer 0 modified no hot path.
+
+**Not run because the box is loaded.** At load ~5 a 12 s rebuild competes with
+the measurement, and the per-step difference a bisection must resolve is the
+same order as these configs' spreads. A contended bisection returns a confident
+wrong answer, which is worse than none.
+
+**Runnable recipe (requires 1-min load average ≤ 2.0):**
+
+```sh
+cd /Users/gael/projects/rustty
+for ref in a3a2b23 74226dd <WS7 Phase A..E merges> <WS8 merge> <WS19 merge> main; do
+  git checkout "$ref" -- crates/ && cargo build -p rustty-bench --profile release-fast
+  cp target/release-fast/rustty-bench ".perf-bins/bisect-$ref"
+done
+# then pair each against the entry binary on the two drifted configs only:
+python3 .port/tools/perf/ws10_suite.py --rust .perf-bins/bisect-<ref> \
+    --self .perf-bins/rustty-bench-ws10-entry-RF --no-oracle -n 9
+```
+
+Prime suspects, in order: **WS7 Phase A-E** (BL-1 compression — it touched
+`Page`/`PageList`/`Screen` hard, and those are exactly `screen-clone.clone`'s and
+`terminal-parser`'s hot paths), then WS5, WS8, WS19.
+
+**If the drift is a fixable regression it must be fixed before the self fence's
+anchor is trusted**, since `.perf-bins/rustty-bench-ws10-entry-RF` is currently
+a *degraded* binary: Fence 2 would happily hold a 20% regression in place.

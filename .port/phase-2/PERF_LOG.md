@@ -759,3 +759,213 @@ the live list the same way, so rustty is parity, not slower-than-oracle. Left
 unchanged per M3 (do not alter the algorithm to chase a synthetic worst case);
 flag for E3 to include a deep-scrollback + many-cached-results config in the
 14-config non-regression sweep if one isn't already representative of this path.
+
+---
+
+# WS10 — perf series (BL-4), Layer 0 [2026-07-30]
+
+## READ THIS BEFORE QUOTING ANY FIGURE IN THIS FILE
+
+**Every pre-2026-07-29 figure in this file was taken on a box with four cores
+pinned.** Four orphaned `yes` processes had each been burning ~99% of a core
+since 10 July (~343 CPU-hours apiece) and were killed on 2026-07-29. Any number
+in the earlier sections — including the **r5-SHIP record** the WS10 drift
+analysis below compares against — was measured under that contention.
+
+**The numbers in THIS section are also PROVISIONAL, for a different reason.**
+The `yes` processes are gone (verified: `pgrep -fl '^yes'` → nothing), but the
+box was **not idle** during WS10 execution. Instantaneous sampling (`top -l`,
+*not* `ps` lifetime averages, which are misleading for long-lived processes)
+showed Google Chrome pid 35028 spinning ~93-100% of a core continuously, plus
+two `Virtualization.framework` VMs. The 1-minute load average ranged **4.76 to
+5.80** across the WS10 session, against an `IDLE_MAX` of **2.0**.
+`ws10_suite.py` correctly stamped every run `provisional` and exited **2**.
+
+WS10 therefore **re-measured** rather than inheriting the plan's numbers, as
+required — but it could not produce an *authoritative idle* baseline. The
+re-measurement is still decisive for the questions asked of it; see "Why these
+numbers are still load-bearing".
+
+## Environment
+
+| | |
+|---|---|
+| machine | Apple M4 Pro (`Mac16,7`), arm64, 14 logical cores |
+| OS | macOS 26.5.1 (build 25F80) |
+| date | 2026-07-30 |
+| 1-min load average | 5.80 (Fence 1 run) / 4.76 (flip-proof run) |
+| background load | Chrome pid 35028 ~93-100% of one core; 2 Virtualization.framework VMs |
+| oracle binary | `.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench` |
+| oracle sha256 | `0fb47d268c7b9a7f9f93ed14834ca221383ba189404b69d15f750ff76abf5cdb` — verified unchanged; backup `~/rustty-oracle-artifacts/ghostty-bench-4749c4e93` verified byte-identical |
+| entry binary | `.perf-bins/rustty-bench-ws10-entry-RF` sha256 `4f769059470594fcc2b2307120f150d4bb5fc0d29e7d61f96b83e5cfb3cbad2a` |
+| harness | `.port/tools/perf/ws10_suite.py`, N=9 + 1 discarded warmup, paired same-session |
+| corpora | 4 files at 67108864 / 67108864 / 67108864 / 262144 B — verified |
+
+**Comparability — non-negotiable.** Every number here is comparable to oracle
+revision **`4749c4e93`** and to **no other oracle revision**. The pinned oracle
+**no longer builds on this host**: it requires Zig 0.15.2, and the installed Zig
+is now **0.16.0**. That binary is irreplaceable — see **V15**.
+
+## Fence 1 — ORACLE, 14 configs, N=9, paired (PROVISIONAL, load 5.80)
+
+| bench | zig ms | rust ms | Δ | rust spread | r5-SHIP rust | drift |
+|---|--:|--:|--:|--:|--:|--:|
+| terminal-parser | 266.58 | 109.01 | **−59.1%** | 1.097 | 92.5 | **+17.8%** |
+| terminal-stream | 543.97 | 345.87 | **−36.4%** | 1.047 | 343.3 | +0.7% |
+| codepoint-width.noop | 4.55 | 3.45 | −24.0% | 1.286 | 3.0 | +15.0% |
+| codepoint-width.table | 235.25 | 208.50 | −11.4% | 1.056 | 207.9 | +0.3% |
+| codepoint-width.simd | 507.87 | 467.87 | −7.9% | 1.028 | 466.4 | +0.3% |
+| codepoint-width.wcwidth | 261.09 | 242.81 | −7.0% | 1.083 | 237.6 | +2.2% |
+| grapheme-break.noop | 235.99 | 216.62 | −8.2% | 1.040 | 211.8 | +2.3% |
+| grapheme-break.table | 257.68 | 219.29 | −14.9% | 1.083 | 211.4 | +3.7% |
+| is-symbol.table | 241.35 | 201.89 | −16.4% | 1.060 | 200.5 | +0.7% |
+| is-symbol.uucode | 232.11 | 208.29 | −10.3% | 1.044 | 206.1 | +1.1% |
+| osc-parser | 59.49 | 51.67 | −13.1% | 1.143 | 49.4 | +4.6% |
+| screen-clone.noop | 6.87 | 5.53 | −19.5% | 1.257 | 4.6 | +20.2% |
+| screen-clone.clone | 54.65 | 25.07 | **−54.1%** | 1.163 | 20.9 | **+20.0%** |
+| screen-clone.render | 16.64 | 14.58 | −12.4% | 1.086 | 13.8 | +5.7% |
+
+**ORACLE FENCE: GREEN — 14/14.** Thinnest margin `codepoint-width.wcwidth` at
+−7.0%. Harness exit **2** (provisional), by design.
+
+### The three questions T1 Step 5 asks
+
+**1. Does 14/14 still hold?** **Yes.** Every strict config wins outright; no
+config is within its measured spread of losing.
+
+**2. Does the oracle column reproduce?** **Yes — and this is the load-bearing
+control.** Against the r5-SHIP zig column: cw.table 235.25 vs 234.3 (+0.4%),
+cw.simd 507.87 vs 501.1 (+1.4%), gb.noop 235.99 vs 231.0 (+2.2%), gb.table
+257.68 vs 256.4 (+0.5%), is.table 241.35 vs 238.6 (+1.2%), is.uucode 232.11 vs
+229.9 (+1.0%), osc 59.49 vs 57.1 (+4.2%), t-parser 266.58 vs 263.8 (+1.1%),
+t-stream 543.97 vs 551.5 (−1.4%), sc.render 16.64 vs 15.4 (+8.1%). Ten of
+fourteen within ±2.2%.
+
+**3. Is the rustty drift real?** **The suspected drift REPRODUCES, and the
+oracle control shows it is not contention.**
+
+- `terminal-parser` **+17.8%** (plan measured +14.4%), rust spread 1.097.
+- `screen-clone.clone` **+20.0%** (plan measured +20.1%), rust spread 1.163.
+- `screen-clone.noop` +20.2% and `codepoint-width.noop` +15.0% — but these are
+  3.4-5.5 ms process-spawn-floor configs with spreads of 1.257 / 1.286. Their
+  "drift" is inside their own noise and must **not** be read as signal.
+- `terminal-stream` did **not** reproduce: +0.7% here vs +5.7% in the plan.
+
+The asymmetry the plan flagged is confirmed: in the *same session*, on the *same
+box*, the oracle column reproduces its historical values to ~2% while two rustty
+configs sit 18-20% above their record. **Contention cannot produce that pattern**
+— it would move both columns together. The drift is rustty-side and
+pre-existing. It is **not** attributable to any WS10 change: WS10 Layer 0 has
+modified no hot path (its only non-doc code change is a wasm-only scalar
+decoder branch).
+
+**Bisection: NOT RUN — verification debt V17, owner WS10.** It requires building
+`rustty-bench` at each post-`a3a2b23` merge point (WS5 `74226dd`, the WS7 Phase
+A-E merges, WS8, WS19) and timing only `terminal-parser` and
+`screen-clone.clone`. Not run in this session because at load ~5 a 12s build
+competes with the measurement, and the two configs' spreads (1.097 / 1.163) are
+the same order as the per-step difference a bisection must resolve. Run
+contended, it would produce a confident wrong answer. Recipe in V17.
+
+### Why these numbers are still load-bearing despite being provisional
+
+All three questions are **comparative within one session** — rustty vs oracle
+measured alternately in the same process, and rustty-now vs the historical
+record with the oracle column acting as a control for the box itself. Load
+shifts both columns together; it cannot manufacture a 20% one-sided gap. What
+the load *does* forbid is treating any absolute figure here as a new baseline,
+and attempting the bisection, which must resolve differences near the noise floor.
+
+## Fence 2 — the LIVE FLIP PROOF (FAIL arm #3)
+
+Dropped `features = ["simd"]` from `crates/rustty-bench/Cargo.toml:44`, rebuilt
+at `--profile release-fast`, ran Fence 2 against the entry binary:
+
+```
+=== FENCE 2: SELF (candidate vs entry binary, N=9) ===
+  two-strike: re-running 1 config(s) at N=18
+    PASS         terminal-parser/utf8           entry=  106.46ms cand=   94.86ms (-10.9%)
+    SELF-REGRESS bench terminal-stream/ascii (+8.2%): entry=345.77ms cand=373.99ms (band +5%)
+    PASS         codepoint-width.noop/utf8      entry=    3.42ms cand=    3.18ms (-6.9%)
+    PASS         codepoint-width.table/utf8     entry=  208.90ms cand=  211.50ms (+1.2%)
+    PASS         codepoint-width.simd/utf8      entry=  472.47ms cand=  474.38ms (+0.4%)
+    PASS         codepoint-width.wcwidth/utf8   entry=  240.37ms cand=  240.34ms (-0.0%)
+    PASS         grapheme-break.noop/utf8       entry=  214.99ms cand=  218.34ms (+1.6%)
+    PASS         grapheme-break.table/utf8      entry=  219.12ms cand=  214.34ms (-2.2%)
+    PASS         is-symbol.table/utf8           entry=  202.37ms cand=  202.05ms (-0.2%)
+    PASS         is-symbol.uucode/utf8          entry=  209.34ms cand=  206.73ms (-1.2%)
+    PASS         osc-parser/osc-parser          entry=   52.05ms cand=   51.84ms (-0.4%)
+    PASS         screen-clone.noop/small        entry=    5.65ms cand=    5.91ms (+4.5%)
+    PASS         screen-clone.clone/small       entry=   24.18ms cand=   24.00ms (-0.7%)
+    PASS         screen-clone.render/small      entry=   15.26ms cand=   15.35ms (+0.6%)
+  SELF FENCE: RED
+```
+
+**The fence caught it**, after the automatic two-strike re-run at N=18.
+Restoring `Cargo.toml` and rebuilding produced a **byte-identical** binary
+(sha256 `4f769059…`, same as the entry binary) — a clean revert.
+
+**Two findings that qualify the plan's expectation:**
+
+1. **The magnitude is +8.2%, not the ~24% this file recorded for the same flag
+   at r5.** The r5 "FAIRNESS FIX" figure **no longer reproduces**; the simd
+   feature's terminal-stream effect is now about a third of what it was.
+   Something between r5 and today narrowed the SIMD-vs-scalar `next_slice` gap.
+   Not investigated here — recorded so nobody keeps quoting the 24%.
+2. **The band was NOT loosened.** +5% still catches +8.2%, so the plan's "if it
+   exits 0, tighten the band" branch was not taken. But the margin is **1.6×**,
+   not the ~5× the plan assumed, and terminal-stream's measured spread is 1.047.
+   **If the simd effect shrinks further this arm stops being a proof.** Whoever
+   next touches the stream fast path should re-run it and, if it falls below
+   ~+6%, replace the flip proof with a larger known pessimization.
+
+Also: `terminal-parser` ran **−10.9% FASTER** with simd off. Counter-intuitive,
+unexplained, not chased — recorded because someone should look.
+
+## Gate findings
+
+**G8's `(id, optimize)` bug — fixed, WS10 T2.** `BASELINE.json` carries 28 rows
+(14 ids × {ReleaseFast, Debug}) and `bench_index()` keyed on `id` alone, so the
+Debug rows silently overwrote the ReleaseFast ones. Pre-fix probe:
+
+```
+total rows: 28
+indexed ids: 14
+  terminal-stream/ascii    -> ('throughput_MiB_per_s', 2.0730996728385533, 'higher')
+  terminal-parser/utf8     -> ('throughput_MiB_per_s', 258.1555555184457,  'higher')
+  screen-clone.clone/small -> ('median_s',             5.486308874999992,  'lower')
+```
+
+ReleaseFast truths: 118.77 MiB/s, 249.83 MiB/s, 0.04935 s — so terminal-stream
+was fenced **57× loose** and screen-clone.clone **111× loose**. Note
+terminal-parser is the exception: its Debug row (258.2) is *stricter* than its
+ReleaseFast row (249.8), which is why the bug survived spot-checking.
+
+**G8 is STILL a weak fence after that fix — the more important finding.** G8
+compares rustty against the *oracle's* numbers, and rustty is 7-60% faster, so
+G8 spends that whole margin as headroom:
+
+| config | how much slower rustty may get before G8 fires |
+|---|--:|
+| screen-clone.clone | **110.6%** |
+| terminal-parser | **60.4%** |
+| terminal-stream | **40.3%** |
+| screen-clone.render | 19.7% |
+| is-symbol.table | 18.8% |
+| screen-clone.noop | 17.7% |
+| grapheme-break.table | 17.5% |
+| codepoint-width.table | 16.2% |
+| osc-parser / is-symbol.uucode | 12.9% |
+| codepoint-width.simd | 11.9% |
+| codepoint-width.wcwidth | 11.2% |
+| grapheme-break.noop (tightest) | 10.1% |
+
+Demonstrated live: a metrics file with `terminal-stream` throughput cut **30%**
+still exits **0** under the fixed, armed G8. **G8 is an oracle-parity fence, not
+a regression fence.** G8b/Fence 2 is the only real regression gate. Reproduce
+with `.port/tools/perf/headroom_probe.py <metrics.json>`.
+
+**G8 is armed WITHOUT `--strict`.** This harness measures the 14 benchmarks but
+not the binary-size axis `BASELINE.json` also carries, and `--strict` RED's on
+those 9 absent size labels. Filed as debt (**V16**) rather than faked green —
+the axis is genuinely unmeasured, and gates are not weakened to pass.
