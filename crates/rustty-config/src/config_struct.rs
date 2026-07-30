@@ -199,6 +199,7 @@ pub enum Key {
     WaitAfterCommand,
     AbnormalCommandExitRuntime,
     ScrollbackLimit,
+    ScrollbackCompression,
     Scrollbar,
     Link,
     LinkUrl,
@@ -487,6 +488,7 @@ impl Key {
             b"right-click-action" => Some(Key::RightClickAction),
             b"scroll-to-bottom" => Some(Key::ScrollToBottom),
             b"scrollback-limit" => Some(Key::ScrollbackLimit),
+            b"scrollback-compression" => Some(Key::ScrollbackCompression),
             b"scrollbar" => Some(Key::Scrollbar),
             b"search-background" => Some(Key::SearchBackground),
             b"search-foreground" => Some(Key::SearchForeground),
@@ -659,6 +661,7 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::WaitAfterCommand => TypeId::of::<bool>(),
         Key::AbnormalCommandExitRuntime => TypeId::of::<u32>(),
         Key::ScrollbackLimit => TypeId::of::<usize>(),
+        Key::ScrollbackCompression => TypeId::of::<bool>(),
         Key::Scrollbar => TypeId::of::<Scrollbar>(),
         Key::Link => TypeId::of::<RepeatableLink>(),
         Key::LinkUrl => TypeId::of::<bool>(),
@@ -2294,7 +2297,7 @@ pub struct Config {
     /// any exit code because of the way shell processes are launched via the login
     /// command.
     pub abnormal_command_exit_runtime: u32,
-    // @"scrollback-limit": usize = 10_000_000, // 10MB
+    // @"scrollback-limit": usize = 50_000_000, // 50MB
     /// The size of the scrollback buffer in bytes. This also includes the active
     /// screen. No matter what this is set to, enough memory will always be
     /// allocated for the visible screen and anything leftover is the limit for
@@ -2303,10 +2306,17 @@ pub struct Config {
     /// When this limit is reached, the oldest lines are removed from the
     /// scrollback.
     ///
-    /// Scrollback currently exists completely in memory. This means that the
-    /// larger this value, the larger potential memory usage. Scrollback is
-    /// allocated lazily up to this limit, so if you set this to a very large
-    /// value, it will not immediately consume a lot of memory.
+    /// Scrollback is stored in memory and allocated lazily up to this limit, so
+    /// setting a very large limit does not immediately consume that amount of
+    /// memory. On supported systems with scrollback compression enabled, Rustty
+    /// attempts to compress fully historical pages which are not currently visible
+    /// while the terminal is idle. This can reduce physical memory usage, depending
+    /// on the contents of the scrollback.
+    ///
+    /// This limit always measures the uncompressed logical size of the terminal
+    /// pages. Compression does not allow Rustty to retain more history than the
+    /// configured limit. Accessing compressed history restores it transparently
+    /// and may increase the terminal's physical memory usage again.
     ///
     /// This size is per terminal surface, not for the entire application.
     ///
@@ -2315,6 +2325,30 @@ pub struct Config {
     ///
     /// This can be changed at runtime but will only affect new terminal surfaces.
     pub scrollback_limit: usize,
+    // @"scrollback-compression": bool = true,
+    /// Whether to compress scrollback pages while the terminal is idle.
+    ///
+    /// Rustty does its best to only compress when idle and decompress
+    /// as needed. This means that compression doesn't lower IO throughput.
+    /// We recommend you keep it on.
+    ///
+    /// The scrollback limit remains an uncompressed logical limit regardless of
+    /// this setting, so disabling compression can increase physical memory usage
+    /// but does not change how much history is retained.
+    ///
+    /// Text-heavy terminal history generally compresses to approximately 10% to
+    /// 30% of its uncompressed page memory, corresponding to a 70% to 90% reduction
+    /// in physical memory for pages which are compressed. Compression savings are
+    /// content-dependent.
+    ///
+    /// Note that the way Rustty works is that we compress and discard the
+    /// physical/resident memory but we retain virtual mappings. You will not
+    /// see a decrease in virtual memory usage, but you will see a decrease
+    /// in physical/memory usage.
+    ///
+    /// Changing this at runtime affects future compression work. Pages which are
+    /// already compressed remain compressed until their contents are accessed.
+    pub scrollback_compression: bool,
     // scrollbar: Scrollbar = .system,
     /// Control when the scrollbar is shown to scroll the scrollback buffer.
     ///
@@ -4937,8 +4971,9 @@ impl Default for Config {
             input: RepeatableReadableIO::default(),
             wait_after_command: false,
             abnormal_command_exit_runtime: 250,
-            // 10_000_000 (10MB)
-            scrollback_limit: 10_000_000,
+            // 50_000_000 (50MB)
+            scrollback_limit: 50_000_000,
+            scrollback_compression: true,
             scrollbar: Scrollbar::System,
             link: RepeatableLink::default(),
             link_url: true,
@@ -7447,6 +7482,7 @@ impl Config {
             Key::WaitAfterCommand => c!(wait_after_command),
             Key::AbnormalCommandExitRuntime => c!(abnormal_command_exit_runtime),
             Key::ScrollbackLimit => c!(scrollback_limit),
+            Key::ScrollbackCompression => c!(scrollback_compression),
             Key::Scrollbar => c!(scrollbar),
             Key::Link => c!(link),
             Key::LinkUrl => c!(link_url),
@@ -7734,6 +7770,7 @@ impl Config {
         cv!(wait_after_command);
         cv!(abnormal_command_exit_runtime);
         cv!(scrollback_limit);
+        cv!(scrollback_compression);
         cv!(scrollbar);
         cv!(link);
         cv!(link_url);
@@ -7882,7 +7919,7 @@ impl Config {
 /// both `field.name` (the formatter key) and `@field(Key, field.name)` (used by
 /// the change-tracking branch). Rust has no struct reflection, so this explicit
 /// table provides the same ordered name+key sequence. It is a CONTRACT: the set
-/// of names equals `parse_tests::CONFIG_FIELD_NAMES` (203) and the set of keys
+/// of names equals `parse_tests::CONFIG_FIELD_NAMES` (204) and the set of keys
 /// equals the `Key` variants; declaration ORDER (not the sorted parse list) is
 /// what `FileFormatter` emits, matching the reference field order.
 pub(crate) const CONFIG_FIELDS: &[(&[u8], Key)] = &[
@@ -7987,6 +8024,7 @@ pub(crate) const CONFIG_FIELDS: &[(&[u8], Key)] = &[
         Key::AbnormalCommandExitRuntime,
     ),
     (b"scrollback-limit", Key::ScrollbackLimit),
+    (b"scrollback-compression", Key::ScrollbackCompression),
     (b"scrollbar", Key::Scrollbar),
     (b"link", Key::Link),
     (b"link-url", Key::LinkUrl),
@@ -8185,7 +8223,7 @@ impl Config {
     /// `formatter.formatEntry(field.type, field.name, value, writer)`.
     ///
     /// PORT NOTE: `key` is the field name bytes (e.g. `b"font-size"`), matching
-    /// the PARSE dispatch's `parse_into_field` keys; the 203 non-`_` fields each
+    /// the PARSE dispatch's `parse_into_field` keys; the 204 non-`_` fields each
     /// have exactly one arm. An unknown key is unreachable in the
     /// `FileFormatter` loop (it iterates the real field set), so it is a bug
     /// rather than a recoverable case — `debug_assert`-guarded and a no-op.
@@ -8495,6 +8533,8 @@ impl Config {
             b"abnormal-command-exit-runtime" => f_display!(abnormal_command_exit_runtime),
             // @"scrollback-limit": usize
             b"scrollback-limit" => f_display!(scrollback_limit),
+            // @"scrollback-compression": bool
+            b"scrollback-compression" => f_display!(scrollback_compression),
             // scrollbar: Scrollbar (bare enum)
             b"scrollbar" => f_enum!(scrollbar),
 
@@ -9815,6 +9855,8 @@ impl Target for Config {
             b"abnormal-command-exit-runtime" => field_int!(abnormal_command_exit_runtime, u32),
             // @"scrollback-limit": usize
             b"scrollback-limit" => field_int!(scrollback_limit, usize),
+            // @"scrollback-compression": bool
+            b"scrollback-compression" => field_bool!(scrollback_compression),
             // scrollbar: Scrollbar (bare enum)
             b"scrollbar" => field_enum!(scrollbar, Scrollbar::string_to_enum),
 
@@ -10303,7 +10345,7 @@ impl Target for Config {
 // built above. `parse_into_field_exhaustive` is the ONE exhaustiveness test
 // that replaces Zig's comptime completeness guarantee (the `inline for` over
 // `std.meta.fields(Config)`): it asserts every non-`_` Config field — the same
-// 203 names that derive the `Key` enum, a COUNT CONTRACT — dispatches to a real
+// 204 names that derive the `Key` enum, a COUNT CONTRACT — dispatches to a real
 // arm (never `InvalidField`), and that a bogus name does return `InvalidField`.
 // ===========================================================================
 #[cfg(test)]
@@ -10312,7 +10354,7 @@ mod parse_tests {
 
     /// The complete, ordered list of the non-`_` Config field names (the Zig
     /// hyphenated spellings). This is a CONTRACT: it must equal the set of
-    /// `Key` variants (203) and the set of `parse_into_field` arms. A drift in
+    /// `Key` variants (204) and the set of `parse_into_field` arms. A drift in
     /// any of the three is a parity blocker.
     const CONFIG_FIELD_NAMES: &[&[u8]] = &[
         b"abnormal-command-exit-runtime",
@@ -10468,6 +10510,7 @@ mod parse_tests {
         b"resize-overlay-position",
         b"right-click-action",
         b"scroll-to-bottom",
+        b"scrollback-compression",
         b"scrollback-limit",
         b"scrollbar",
         b"search-background",
@@ -10524,7 +10567,7 @@ mod parse_tests {
     // reference) from `std.meta.fields(Config)`, so their counts must match.
     #[test]
     fn config_field_names_count_is_contract() {
-        assert_eq!(CONFIG_FIELD_NAMES.len(), 203);
+        assert_eq!(CONFIG_FIELD_NAMES.len(), 204);
     }
 
     // Every non-`_` Config field dispatches to a real parse arm. We use the
@@ -10600,6 +10643,30 @@ mod parse_tests {
             cfg.parse_into_field(b"font-thicken-strength", Some(b"999")),
             Err(Error::InvalidValue)
         );
+    }
+
+    /// PORTS: oracle 0fb89f4ff — a default-on scrollback compression option, and
+    /// a 50 MB default logical scrollback limit.
+    ///
+    /// PORT NOTE: the plan's sketch used `Config::parse_line` /
+    /// `Config::format_entry`, neither of which exists here; the real per-field
+    /// dispatch pair is `parse_into_field` / `format_entry_field`.
+    #[test]
+    fn config_scrollback_compression_defaults_and_parses() {
+        let c = Config::default();
+        assert!(c.scrollback_compression);
+        assert_eq!(c.scrollback_limit, 50_000_000);
+
+        let mut c = Config::default();
+        c.parse_into_field(b"scrollback-compression", Some(b"false"))
+            .unwrap();
+        assert!(!c.scrollback_compression);
+
+        // Round-trips through the formatter.
+        let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+        c.format_entry_field(b"scrollback-compression", &mut buf)
+            .unwrap();
+        assert_eq!(buf.written(), b"scrollback-compression = false\n");
     }
 
     // Optional integer field.
@@ -10849,6 +10916,7 @@ mod clone_changed_tests {
         Key::WaitAfterCommand,
         Key::AbnormalCommandExitRuntime,
         Key::ScrollbackLimit,
+        Key::ScrollbackCompression,
         Key::Scrollbar,
         Key::Link,
         Key::LinkUrl,
@@ -10973,7 +11041,7 @@ mod clone_changed_tests {
     // (its `inline for` over the field/`Key` set is a compile error if an arm is
     // missing) with a runtime check over the explicit Rust dispatch tables.
     //
-    // - `ALL_KEYS` enumerates every variant (its length is checked == 203, the
+    // - `ALL_KEYS` enumerates every variant (its length is checked == 204, the
     //   `Key`-count contract, and == `CONFIG_FIELDS`).
     // - Each `Key` maps to exactly one `(name, key)` in `CONFIG_FIELDS` (the
     //   ordered name+key table shared by parse/format/clone).
@@ -10987,10 +11055,10 @@ mod clone_changed_tests {
     //   was deep-copied.
     #[test]
     fn key_exhaustive_parse_format_clone_changed() {
-        // `Key`-count contract: 203 variants, matching `CONFIG_FIELDS` and the
-        // 203 field names.
-        assert_eq!(ALL_KEYS.len(), 203);
-        assert_eq!(CONFIG_FIELDS.len(), 203);
+        // `Key`-count contract: 204 variants, matching `CONFIG_FIELDS` and the
+        // 204 field names.
+        assert_eq!(ALL_KEYS.len(), 204);
+        assert_eq!(CONFIG_FIELDS.len(), 204);
 
         let default = Config::default();
 

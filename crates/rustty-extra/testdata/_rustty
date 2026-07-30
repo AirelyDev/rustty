@@ -101,6 +101,7 @@ _config() {
     "--wait-after-command" \
     "--abnormal-command-exit-runtime=-:::( )" \
     "--scrollback-limit=-:::( )" \
+    "--scrollback-compression" \
     "--scrollbar=-:::(system never)" \
     "--link=-:::( )" \
     "--link-url" \

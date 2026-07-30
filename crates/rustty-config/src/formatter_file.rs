@@ -103,7 +103,7 @@ impl<'a> FileFormatter<'a> {
         // PORT NOTE: the comptime `inline for` over the struct fields (skipping
         // `_`-prefixed internals) becomes a runtime loop over `CONFIG_FIELDS` —
         // the ordered `(field.name, @field(Key, field.name))` pairs for exactly
-        // the non-`_` fields (the same 203 fields, a COUNT CONTRACT).
+        // the non-`_` fields (the same 204 fields, a COUNT CONTRACT).
         for &(name, key) in CONFIG_FIELDS {
             // const value = @field(self.config, field.name);
             // const do_format = if (default) |d| format: {

@@ -139,6 +139,7 @@ _rustty() {
     config+=" '--wait-after-command '"
     config+=" --abnormal-command-exit-runtime="
     config+=" --scrollback-limit="
+    config+=" '--scrollback-compression '"
     config+=" --scrollbar="
     config+=" --link="
     config+=" '--link-url '"
@@ -344,6 +345,7 @@ _rustty() {
       --wait-after-command) return ;;
       --abnormal-command-exit-runtime) return ;;
       --scrollback-limit) return ;;
+      --scrollback-compression) return ;;
       --scrollbar) _compreply compgen -W "system never" -- "$cur"; _add_spaces ;;
       --link) return ;;
       --link-url) return ;;

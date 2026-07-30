@@ -101,6 +101,7 @@ syn keyword rusttyConfigKeyword
 	\ wait-after-command
 	\ abnormal-command-exit-runtime
 	\ scrollback-limit
+	\ scrollback-compression
 	\ scrollbar
 	\ link
 	\ link-url
