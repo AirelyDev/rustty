@@ -270,6 +270,14 @@ impl CodepointResolver {
                     };
                     // defer disco_it.deinit();
 
+                    // PORT NOTE (WS20): the faithful shape of the reference's
+                    // `while (true) { const deferred_face = (disco_it.next() catch
+                    // ...) orelse break; ... }` — TWO distinct exits (the caught
+                    // error and the exhausted iterator) that a `while let` would
+                    // fold into one, losing the error arm. clippy's `while_let_loop`
+                    // only fires on the non-CoreText discovery backends (the macOS
+                    // build does not trip it), so the allow is scoped to this loop.
+                    #[allow(clippy::while_let_loop)]
                     loop {
                         let deferred_face = match disco_it.next() {
                             Ok(v) => v,

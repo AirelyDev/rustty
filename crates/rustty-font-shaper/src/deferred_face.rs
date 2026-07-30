@@ -19,14 +19,11 @@
 // PORT NOTE (imports + backend scope): the reference `DeferredFace` carries four
 // mutually-exclusive, comptime-conditional backend payloads — `fc` (Fontconfig),
 // `ct` (CoreText), `win` (Windows FreeType scan), `wc` (WebCanvas) — of which
-// exactly one is non-void per `options.backend`. rustty's parity targets are the
-// two defaults (macOS `coretext`, Linux `fontconfig_freetype`) plus the browser
-// `web_canvas` backend (`wasm32`, the `rustty-web-canvas` deliverable); all three
-// payloads are ported here, each behind the `cfg` that models its
-// `options.backend`: `coretext_payload` (macOS), `fontconfig_payload` (Linux),
-// `web_canvas_payload` (wasm32). Only the Windows payload (`freetype_windows`)
-// stays a verbatim reference comment — Windows is a target this port does not
-// build (`.port/phase-2/DEFERRALS.md`, "Justified R1 Divergences").
+// exactly one is non-void per `options.backend`. ALL FOUR are ported here, each
+// behind the `cfg` that models its `options.backend` (matching `Backend::default`):
+// `coretext_payload` (macOS `coretext`), `fontconfig_payload` (Linux
+// `fontconfig_freetype`), `windows_payload` (Windows `freetype_windows`, WS20), and
+// `web_canvas_payload` (wasm32 `web_canvas`).
 // `macos.text.*`/`macos.graphics.*`/`macos.foundation.*` map to the objc2
 // framework crates (as in the coretext face).
 
@@ -53,8 +50,21 @@ pub struct DeferredFace {
     // PORT NOTE: this is the freetype-active (`not(any(macos, wasm32))`) payload,
     // mirroring the macOS `ct` shape. `FontconfigData` is the port of the
     // reference `DeferredFace.Fontconfig` struct (`DeferredFace.zig:38-56`).
-    #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+    #[cfg(all(
+        not(target_os = "macos"),
+        not(target_os = "windows"),
+        not(target_arch = "wasm32")
+    ))]
     pub fc: Option<FontconfigData>,
+
+    /// Windows (FreeType directory scan).
+    // win: if (backend == .freetype_windows) ?Windows else void = ...,
+    //
+    // PORT NOTE: this is the `freetype_windows` payload, mirroring the macOS `ct` /
+    // Linux `fc` shape. `WindowsData` is the port of the reference
+    // `DeferredFace.Windows` struct (`DeferredFace.zig:58-90`).
+    #[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+    pub win: Option<WindowsData>,
 
     /// Canvas (wasm `web_canvas` backend).
     // wc: if (backend == .web_canvas) ?WebCanvas else void = ...,
@@ -68,11 +78,9 @@ pub struct DeferredFace {
 
 // ---------------------------------------------------------------------------
 // PORT NOTE (backend payloads): the Fontconfig / Windows / WebCanvas structs are
-// recorded verbatim as reference comments here. Fontconfig is ported in
-// `fontconfig_payload` (Linux), WebCanvas in `web_canvas_payload` (wasm32);
-// Windows is a target this port does not build (see `.port/phase-2/DEFERRALS.md`,
-// "Justified R1 Divergences" — the same scope boundary as the `cfg(windows)`
-// seams in `rustty-vaxis`/`rustty-termio`).
+// recorded verbatim as reference comments here, and each is ported in the module
+// named after it: `fontconfig_payload` (Linux), `windows_payload` (Windows, WS20),
+// `web_canvas_payload` (wasm32).
 //
 // /// Fontconfig specific data. This is only present if building with fontconfig.
 // pub const Fontconfig = struct {
@@ -496,10 +504,18 @@ mod coretext_payload {
 // (`loadFontconfig`) fontconfig arms are DEFERRED to L3 Task 7 and remain honest
 // `unimplemented!()` leaves (matching Task 1's convention); they are not reached
 // by any current caller (discovery does not name them).
-#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_arch = "wasm32")
+))]
 pub use fontconfig_payload::FontconfigData;
 
-#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_arch = "wasm32")
+))]
 mod fontconfig_payload {
     use super::DeferredFace;
     use crate::face::{Face, FaceError, Options, Variation};
@@ -734,6 +750,184 @@ mod fontconfig_payload {
 }
 
 // ---------------------------------------------------------------------------
+// The Windows payload (`options.backend == .freetype_windows`). This is the live
+// payload on `target_os = "windows"`, where `face::Face` IS
+// `face::freetype::Face` and `discovery::Discover` IS `discovery::Windows`.
+// Ported by WS20 (2026-07-30); it was previously the one payload left as a
+// verbatim reference comment.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+pub use windows_payload::WindowsData;
+
+#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+mod windows_payload {
+    use super::DeferredFace;
+    use crate::face::{Face, FaceError, Options, Variation};
+    use crate::library::Library;
+    use crate::Presentation;
+
+    /// Windows specific data. Only present with the freetype_windows backend.
+    ///
+    /// Unlike Fontconfig/CoreText which carry lightweight descriptor handles,
+    /// the Windows backend has no external descriptor service — the "deferred"
+    /// metadata is the FreeType face itself. We keep a pre-loaded face (loaded
+    /// at discovery time) to answer `hasCodepoint` cheaply without re-opening
+    /// the file on every query, and remember the path so `load()` can open a
+    /// fresh face at the caller's requested size/options.
+    // pub const Windows = struct { ... };  (`DeferredFace.zig:58-90`)
+    pub struct WindowsData {
+        /// Path to the font file. Owned here.
+        // path: [:0]const u8,
+        //
+        // PORT NOTE (byte-slice fidelity): a Windows font path is NOT guaranteed to
+        // be valid UTF-8 (`OsStr` on Windows is WTF-8), and FreeType takes a
+        // NUL-terminated byte path, so this is a `CString` — never a lossy `String`.
+        pub path: std::ffi::CString,
+
+        /// Face index within the file (for .ttc collections).
+        // face_index: i32,
+        pub face_index: i32,
+
+        /// Variations to apply on load.
+        // variations: []const font.face.Variation,
+        pub variations: Vec<Variation>,
+
+        /// Pre-loaded face used for cheap metadata queries (glyphIndex,
+        /// hasColor). The size it was opened at is irrelevant for these
+        /// queries since the CMap is size-independent. Deinit'd with us.
+        // peek: Face,
+        pub peek: Face,
+
+        /// Whether the face presents as emoji (has color glyphs) or text.
+        // presentation: Presentation,
+        pub presentation: Presentation,
+        // alloc: Allocator,
+        //
+        // PORT NOTE: the reference's `alloc` field exists only so `deinit` can free
+        // the `path` it allocated. `path` is an owning `CString` here, so it frees
+        // itself and the field has no counterpart (the same drop the CoreText
+        // payload's `CFRetained` makes redundant).
+    }
+
+    impl WindowsData {
+        // pub fn deinit(self: *Windows) void {
+        //     self.peek.deinit();
+        //     self.alloc.free(self.path);
+        //     self.* = undefined;
+        // }
+        pub fn deinit(&mut self) {
+            self.peek.deinit();
+            // self.alloc.free(self.path); — RAII (the `CString` drops).
+            // self.* = undefined; — RAII.
+        }
+    }
+
+    impl DeferredFace {
+        // pub fn deinit(self: *DeferredFace) void { ... if (self.win) |*w| w.deinit() ... }
+        pub fn deinit(&mut self) {
+            // .freetype_windows => if (self.win) |*w| w.deinit(),
+            if let Some(w) = self.win.as_mut() {
+                w.deinit();
+            }
+            // self.* = undefined; — RAII (the `Option<WindowsData>` drops).
+        }
+
+        /// A `DeferredFace` with no payload. Used only where the reference passes
+        /// `undefined` (the `add deferred without loading options` test), where the
+        /// payload is guaranteed never to be accessed.
+        pub fn undefined() -> DeferredFace {
+            DeferredFace { win: None }
+        }
+
+        /// Returns the family name of the font.
+        // pub fn familyName(self: DeferredFace, buf: []u8) ![]const u8 {
+        //   .freetype_windows => if (self.win) |w| return try w.peek.name(buf),
+        //   ...
+        //   return "";
+        // }
+        pub fn family_name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+            if let Some(w) = self.win.as_ref() {
+                return w.peek.name(buf);
+            }
+            // return "";
+            Ok(&[])
+        }
+
+        /// Returns the name of this face. The memory is always owned by the
+        /// face so it doesn't have to be freed.
+        // pub fn name(self: DeferredFace, buf: []u8) ![]const u8 {
+        //   .freetype_windows => if (self.win) |w| return try w.peek.name(buf),
+        //   ...
+        //   return "";
+        // }
+        //
+        // (The reference's Windows arm is the SAME `peek.name(buf)` call as
+        // `familyName`'s — FreeType exposes no separate "full name" here.)
+        pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+            if let Some(w) = self.win.as_ref() {
+                return w.peek.name(buf);
+            }
+            // return "";
+            Ok(&[])
+        }
+
+        /// Load the deferred font face. This does nothing if the face is loaded.
+        // fn loadWindows(self: *DeferredFace, lib: Library, opts: font.face.Options) !Face {
+        //     const w = self.win.?;
+        //     var face = try Face.initFile(lib, w.path, w.face_index, opts);
+        //     errdefer face.deinit();
+        //     try face.setVariations(w.variations, opts);
+        //     return face;
+        // }
+        pub fn load(&mut self, lib: Library, opts: Options) -> Result<Face, FaceError> {
+            // const w = self.win.?;
+            let w = self.win.as_ref().unwrap();
+
+            // var face = try Face.initFile(lib, w.path, w.face_index, opts);
+            let mut face = Face::init_file(lib, &w.path, w.face_index, opts)?;
+            // errdefer face.deinit();
+            // try face.setVariations(w.variations, opts);
+            match face.set_variations(&w.variations, opts) {
+                Ok(()) => Ok(face),
+                Err(e) => {
+                    face.deinit();
+                    Err(e)
+                }
+            }
+        }
+
+        /// Returns true if this face can satisfy the given codepoint and
+        /// presentation. If presentation is null, then it just checks if the
+        /// codepoint is present at all.
+        // pub fn hasCodepoint(self: DeferredFace, cp: u32, p: ?Presentation) bool {
+        //   .freetype_windows => {
+        //       // Use the pre-loaded peek face for a cheap CMap lookup.
+        //       if (self.win) |w| {
+        //           if (p) |desired| if (w.presentation != desired) return false;
+        //           return w.peek.glyphIndex(cp) != null;
+        //       }
+        //   },
+        pub fn has_codepoint(&self, cp: u32, p: Option<Presentation>) -> bool {
+            // Use the pre-loaded peek face for a cheap CMap lookup.
+            if let Some(w) = self.win.as_ref() {
+                if let Some(desired) = p {
+                    if w.presentation != desired {
+                        return false;
+                    }
+                }
+                return w.peek.glyph_index(cp).is_some();
+            }
+
+            // This is unreachable because discovery mechanisms terminate, and
+            // if we're not using a discovery mechanism, the face MUST be loaded.
+            // unreachable;
+            unreachable!()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The WebCanvas payload (`options.backend == .web_canvas`, wasm32). This is the
 // live payload for the browser-freestanding deliverable (`rustty-web-canvas`),
 // where `face::Face` IS `face::web_canvas::Face`.
@@ -940,7 +1134,11 @@ mod tests {
     // `#[cfg(target_os = "macos")]`), since the body names `discovery::Fontconfig`,
     // which only exists on that target. The runtime `!= fontconfig_freetype` skip is
     // additionally kept as an inverted `== fontconfig_freetype` guard for fidelity.
-    #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+    #[cfg(all(
+        not(target_os = "macos"),
+        not(target_os = "windows"),
+        not(target_arch = "wasm32")
+    ))]
     #[test]
     fn fontconfig() {
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;

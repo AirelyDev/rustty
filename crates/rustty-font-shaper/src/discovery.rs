@@ -2,10 +2,11 @@
 // PORTS: ghostty `src/font/discovery.zig` (1349 loc, 8 tests) — font discovery.
 // The active backend on macOS is the CoreText discoverer (`CTFontDescriptor` /
 // `CTFontCollection`), fully ported here. The Fontconfig discoverer (the Linux
-// default) is DEFERRED and recorded as verbatim reference comments; likewise the
-// Windows FreeType-scan discoverer (`freetype_windows` backend). `Descriptor`
-// (the search descriptor) and both conversions — `toCoreTextDescriptor` and
-// `toFcPattern` (Fontconfig, gated to the fontconfig backend class) — are ported.
+// default) is typed here with its reference body recorded verbatim; the Windows
+// FreeType-scan discoverer (`freetype_windows` backend) is LIVE as of WS20.
+// `Descriptor` (the search descriptor) and both conversions —
+// `toCoreTextDescriptor` and `toFcPattern` (Fontconfig, gated to the fontconfig
+// backend class) — are ported.
 //
 // PORT NOTE (imports): the reference imports are
 //   const std = @import("std");
@@ -57,10 +58,17 @@ use crate::face::Variation;
 #[cfg(target_os = "macos")]
 pub type Discover = CoreText;
 
-/// Deferred discoverer stub for non-macOS targets (the Fontconfig discoverer is
+/// Windows default `freetype_windows` → `Windows` (the FreeType directory scan).
+/// Mirrors `Backend::default`'s `.windows => .freetype_windows` arm, which exists
+/// precisely so Windows never pulls fontconfig (and its libxml2 dependency).
+#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+pub type Discover = Windows;
+
+/// Deferred discoverer stub for the remaining targets (the Fontconfig discoverer is
 /// DEFERRED). Present only so `CodepointResolver`/`Collection` type-check; the
-/// real Fontconfig discoverer lands with the full Fontconfig backend.
-#[cfg(not(target_os = "macos"))]
+/// real Fontconfig discoverer lands with the full Fontconfig backend. On wasm32
+/// this resolves to the `wasm_noop` `Fontconfig` (the `.web_canvas => void` arm).
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub type Discover = Fontconfig;
 
 // ---------------------------------------------------------------------------
@@ -81,10 +89,18 @@ pub type Discover = Fontconfig;
 // panic naming the deferral, matching the convention already used by the
 // non-macOS `DeferredFace` stubs (`deferred_face.rs`). The SIGNATURES are real
 // and mirror the reference exactly, so call sites bind against the final shape.
-#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_arch = "wasm32")
+))]
 pub use fontconfig_impl::{DiscoverIterator, Error, Fontconfig};
 
-#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_arch = "wasm32")
+))]
 mod fontconfig_impl {
     use super::Descriptor;
     use crate::collection::Collection;
@@ -574,7 +590,7 @@ impl Descriptor {
     // (`not(any(macos, wasm32))`) — the coretext path uses `to_coretext_descriptor`,
     // and wasm has no discovery.
     // pub fn toFcPattern(self: Descriptor) *fontconfig.Pattern {
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     pub fn to_fc_pattern(&self) -> *mut crate::fc::Pattern {
         use crate::fc;
         use rustty_util::quirks::inlineAssert as assert;
@@ -1908,168 +1924,478 @@ mod coretext_impl {
 }
 
 // ---------------------------------------------------------------------------
-// PORT NOTE (DEFERRED — Windows FreeType-scan backend `freetype_windows`): the
-// `Windows` discoverer walks the system + per-user font directories, opening
-// candidate files with FreeType only as needed and matching by `family_name`
-// (with an SFNT-name-table fallback). It lands with the Windows backend; recorded
-// here verbatim:
-//
-// /// Windows font discovery. Enumerates font files in the system and
-// /// per-user font directories and matches them to a descriptor via
-// /// FreeType's family_name field (with a fallback to the SFNT name
-// /// table when family_name is missing).
-// ///
-// /// No external service is used; each discover() call walks the
-// /// directories, opening candidate files with FreeType only as needed.
-// /// For typical Windows installations (~300 fonts) a name query is in
-// /// the tens of milliseconds. A codepoint fallback query may be
-// /// noticeably slower because every candidate has to be opened to
-// /// probe its CMap.
-// pub const Windows = struct {
-//     lib: Library,
-//
-//     pub fn init(lib: Library) Windows { return .{ .lib = lib }; }
-//     pub fn deinit(self: *Windows) void { _ = self; }
-//
-//     pub fn discover(self, alloc, desc) !DiscoverIterator {
-//         return .{
-//             .alloc = alloc, .lib = self.lib, .desc = desc,
-//             .variations = desc.variations, .state = .system,
-//             .dir = null, .iter = null, .system_path = null, .user_path = null,
-//         };
-//     }
-//
-//     pub fn discoverFallback(self, alloc, collection, desc) !DiscoverIterator {
-//         _ = collection;
-//         return self.discover(alloc, desc);
-//     }
-//
-//     pub const DiscoverIterator = struct {
-//         alloc: Allocator,
-//         lib: Library,
-//         desc: Descriptor,
-//         variations: []const Variation,
-//         state: State,
-//         dir: ?std.fs.Dir,
-//         iter: ?std.fs.Dir.Iterator,
-//         system_path: ?[:0]const u8,
-//         user_path: ?[:0]const u8,
-//
-//         const State = enum { system, user, done };
-//
-//         pub fn deinit(self: *DiscoverIterator) void {
-//             if (self.dir) |*d| d.close();
-//             if (self.system_path) |p| self.alloc.free(p);
-//             if (self.user_path) |p| self.alloc.free(p);
-//             self.* = undefined;
-//         }
-//
-//         pub fn next(self: *DiscoverIterator) !?DeferredFace {
-//             while (true) {
-//                 // Ensure we have a directory iterator for the current state.
-//                 if (self.iter == null) {
-//                     switch (self.state) {
-//                         .system => {
-//                             const path = self.systemFontsPath() orelse { self.state = .user; continue; };
-//                             self.system_path = path;
-//                             self.dir = std.fs.openDirAbsoluteZ(path, .{ .iterate = true }) catch { self.state = .user; continue; };
-//                             self.iter = self.dir.?.iterate();
-//                         },
-//                         .user => {
-//                             const path = self.userFontsPath() orelse { self.state = .done; continue; };
-//                             self.user_path = path;
-//                             self.dir = std.fs.openDirAbsoluteZ(path, .{ .iterate = true }) catch { self.state = .done; continue; };
-//                             self.iter = self.dir.?.iterate();
-//                         },
-//                         .done => return null,
-//                     }
-//                 }
-//                 const entry = (self.iter.?.next() catch null) orelse {
-//                     // Finished this directory; advance state.
-//                     if (self.dir) |*d| d.close();
-//                     self.dir = null;
-//                     self.iter = null;
-//                     self.state = switch (self.state) { .system => .user, .user => .done, .done => .done };
-//                     continue;
-//                 };
-//                 if (entry.kind != .file) continue;
-//                 if (!isFontFile(entry.name)) continue;
-//                 if (try self.tryMatch(entry.name)) |face| return face;
-//             }
-//         }
-//
-//         /// Build the system fonts directory from %SYSTEMROOT%. Returns null
-//         /// if SYSTEMROOT is unset, which shouldn't happen on a healthy
-//         /// Windows install but we just skip the directory rather than
-//         /// falling back to a hardcoded drive letter.
-//         fn systemFontsPath(self: *DiscoverIterator) ?[:0]const u8 {
-//             const systemroot = std.process.getEnvVarOwned(self.alloc, "SYSTEMROOT") catch return null;
-//             defer self.alloc.free(systemroot);
-//             return std.fmt.allocPrintSentinel(self.alloc, "{s}\\Fonts", .{systemroot}, 0) catch null;
-//         }
-//
-//         fn userFontsPath(self: *DiscoverIterator) ?[:0]const u8 {
-//             const local_appdata = std.process.getEnvVarOwned(self.alloc, "LOCALAPPDATA") catch return null;
-//             defer self.alloc.free(local_appdata);
-//             return std.fmt.allocPrintSentinel(self.alloc, "{s}\\Microsoft\\Windows\\Fonts", .{local_appdata}, 0) catch null;
-//         }
-//
-//         fn tryMatch(self: *DiscoverIterator, name: []const u8) !?DeferredFace {
-//             const dir_path = switch (self.state) {
-//                 .system => self.system_path.?,
-//                 .user => self.user_path.?,
-//                 .done => return null,
-//             };
-//             var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-//             const full_path = std.fmt.bufPrintZ(&path_buf, "{s}\\{s}", .{ dir_path, name }) catch return null;
-//             const is_ttc = std.ascii.endsWithIgnoreCase(name, ".ttc");
-//             const max_faces: i32 = if (is_ttc) 16 else 1;
-//             // Probe each face in the file.
-//             var face_index: i32 = 0;
-//             while (face_index < max_faces) : (face_index += 1) {
-//                 var face = Face.initFile(self.lib, full_path, face_index, .{ .size = .{ .points = 12 } }) catch break;
-//                 if (self.matches(&face)) return try self.makeDeferred(face, full_path, face_index);
-//                 face.deinit();
-//             }
-//             return null;
-//         }
-//
-//         /// Check whether the given face matches the descriptor.
-//         fn matches(self: *const DiscoverIterator, face: *Face) bool {
-//             if (self.desc.family) |family| { if (!familyMatches(face, family)) return false; }
-//             if (self.desc.codepoint != 0) { if (face.glyphIndex(self.desc.codepoint) == null) return false; }
-//             return true;
-//         }
-//
-//         fn makeDeferred(self: *DiscoverIterator, face: Face, full_path: []const u8, face_index: i32) !DeferredFace {
-//             const path_owned = try self.alloc.dupeZ(u8, full_path);
-//             errdefer self.alloc.free(path_owned);
-//             const presentation: Presentation = if (face.hasColor()) .emoji else .text;
-//             return DeferredFace{ .win = .{
-//                 .path = path_owned, .face_index = face_index, .variations = self.variations,
-//                 .peek = face, .presentation = presentation, .alloc = self.alloc,
-//             } };
-//         }
-//     };
-//
-//     fn isFontFile(name: []const u8) bool {
-//         return std.ascii.endsWithIgnoreCase(name, ".ttf") or
-//             std.ascii.endsWithIgnoreCase(name, ".ttc") or
-//             std.ascii.endsWithIgnoreCase(name, ".otf");
-//     }
-//
-//     /// Compare a face's family against a requested family name. Checks
-//     /// FreeType's family_name first, then falls back to the SFNT name
-//     /// table entry.
-//     fn familyMatches(face: *Face, family: [:0]const u8) bool {
-//         const ft_family: ?[*:0]const u8 = face.face.handle.*.family_name;
-//         if (ft_family) |f| { if (std.ascii.eqlIgnoreCase(std.mem.span(f), family)) return true; }
-//         var buf: [256]u8 = undefined;
-//         const sfnt = face.name(&buf) catch "";
-//         return sfnt.len > 0 and std.ascii.eqlIgnoreCase(sfnt, family);
-//     }
-// };
+// Windows (`freetype_windows`) FreeType directory-scan discoverer. LIVE on
+// `target_os = "windows"`, where `Discover` IS `Windows` and `Face` IS
+// `face::freetype::Face`. Ported by WS20 (2026-07-30) from
+// `discovery.zig:890-1147`; it was previously a verbatim reference comment.
 // ---------------------------------------------------------------------------
+
+/// Windows font discovery. Enumerates font files in the system and
+/// per-user font directories and matches them to a descriptor via
+/// FreeType's family_name field (with a fallback to the SFNT name
+/// table when family_name is missing).
+///
+/// No external service is used; each discover() call walks the
+/// directories, opening candidate files with FreeType only as needed.
+/// For typical Windows installations (~300 fonts) a name query is in
+/// the tens of milliseconds. A codepoint fallback query may be
+/// noticeably slower because every candidate has to be opened to
+/// probe its CMap.
+#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+pub use windows_impl::{DiscoverIterator, Error, Windows};
+
+#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+mod windows_impl {
+    use super::Descriptor;
+    use crate::collection::Collection;
+    use crate::deferred_face::{DeferredFace, WindowsData};
+    use crate::face::{DesiredSize, Face, FaceError, Options, Variation, DEFAULT_DPI};
+    use crate::library::Library;
+    use crate::Presentation;
+    use std::ffi::{CString, OsStr, OsString};
+
+    /// The error set for Windows discovery.
+    // PORT NOTE: the reference's inferred error union here is `Allocator.Error`
+    // (`alloc.dupeZ` in `makeDeferred`, `allocPrintSentinel` in the two path
+    // builders — the latter `catch null`s, so it does not escape) plus the backend
+    // `Face`/`Collection` errors threaded through `discoverFallback`. Modeled as one
+    // enum with `From` conversions so `?` composes them — the SAME shape as the
+    // macOS `coretext_impl::Error` and the Linux `fontconfig_impl::Error`, so
+    // `SharedGridSet`'s `Discovery(discovery::Error)` variant composes identically
+    // on all three targets.
+    #[derive(Debug)]
+    pub enum Error {
+        /// `Allocator.Error` — `makeDeferred`'s `alloc.dupeZ(u8, full_path)`.
+        OutOfMemory,
+        Face(FaceError),
+        Collection(crate::collection::Error),
+    }
+
+    impl From<FaceError> for Error {
+        fn from(e: FaceError) -> Self {
+            Error::Face(e)
+        }
+    }
+
+    impl From<crate::collection::Error> for Error {
+        fn from(e: crate::collection::Error) -> Self {
+            Error::Collection(e)
+        }
+    }
+
+    /// The Windows discoverer (the `freetype_windows` backend).
+    // pub const Windows = struct { lib: Library };
+    pub struct Windows {
+        // lib: Library,
+        lib: Library,
+    }
+
+    impl Windows {
+        // pub fn init(lib: Library) Windows { return .{ .lib = lib }; }
+        pub fn init(lib: Library) -> Windows {
+            Windows { lib }
+        }
+
+        // pub fn deinit(self: *Windows) void { _ = self; }
+        pub fn deinit(&mut self) {}
+
+        /// Discover fonts from a descriptor. This returns an iterator that can
+        /// be used to build up the deferred fonts.
+        // pub fn discover(self: *const Windows, alloc: Allocator, desc: Descriptor) !DiscoverIterator
+        //
+        // PORT NOTE: the reference threads `alloc`; rustty uses the global
+        // allocator, so `alloc` is omitted (matching `CoreText`/`Fontconfig`).
+        pub fn discover(&self, desc: Descriptor) -> Result<DiscoverIterator, Error> {
+            // return .{
+            //     .alloc = alloc, .lib = self.lib, .desc = desc,
+            //     .variations = desc.variations, .state = .system,
+            //     .dir = null, .iter = null, .system_path = null, .user_path = null,
+            // };
+            Ok(DiscoverIterator {
+                lib: self.lib,
+                variations: desc.variations.clone(),
+                desc,
+                state: State::System,
+                dir: None,
+                system_path: None,
+                user_path: None,
+            })
+        }
+
+        // pub fn discoverFallback(self, alloc, collection, desc) !DiscoverIterator {
+        //     _ = collection;
+        //     return self.discover(alloc, desc);
+        // }
+        pub fn discover_fallback(
+            &self,
+            _collection: *mut Collection,
+            desc: Descriptor,
+        ) -> Result<DiscoverIterator, Error> {
+            self.discover(desc)
+        }
+    }
+
+    // const State = enum { system, user, done };
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        System,
+        User,
+        Done,
+    }
+
+    /// The Windows discovery iterator.
+    pub struct DiscoverIterator {
+        // alloc: Allocator,  — the global allocator; no field.
+        // lib: Library,
+        lib: Library,
+        // desc: Descriptor,
+        desc: Descriptor,
+        // variations: []const Variation,
+        variations: Vec<Variation>,
+        // state: State,
+        state: State,
+        // dir: ?std.Io.Dir,
+        // iter: ?std.Io.Dir.Iterator,
+        //
+        // PORT NOTE: `std::fs::ReadDir` IS the open directory handle AND its lazy
+        // iterator, so the reference's two fields collapse into one. Closing is
+        // dropping it (the reference's `d.close(global.io())`).
+        dir: Option<std::fs::ReadDir>,
+        // system_path: ?[:0]const u8,
+        //
+        // PORT NOTE (byte fidelity): a Windows directory path is `OsString`
+        // (WTF-8), NOT necessarily valid UTF-8, so it is kept as `OsString` and
+        // concatenated at the byte level — never through a lossy `String`.
+        system_path: Option<OsString>,
+        // user_path: ?[:0]const u8,
+        user_path: Option<OsString>,
+    }
+
+    impl DiscoverIterator {
+        // pub fn deinit(self: *DiscoverIterator) void {
+        //     if (self.dir) |*d| d.close(global.io());
+        //     if (self.system_path) |p| self.alloc.free(p);
+        //     if (self.user_path) |p| self.alloc.free(p);
+        //     self.* = undefined;
+        // }
+        pub fn deinit(&mut self) {
+            // All three are owning Rust values: dropping them IS the close/free.
+            self.dir = None;
+            self.system_path = None;
+            self.user_path = None;
+        }
+
+        // pub fn next(self: *DiscoverIterator) !?DeferredFace {
+        // (Named `next` to match the reference iterator; not `Iterator::next`,
+        // whose signature — no `Result`, no external `deinit` — doesn't fit.)
+        #[allow(clippy::should_implement_trait)]
+        pub fn next(&mut self) -> Result<Option<DeferredFace>, Error> {
+            // while (true) {
+            loop {
+                // Ensure we have a directory iterator for the current state.
+                // if (self.iter == null) {
+                if self.dir.is_none() {
+                    match self.state {
+                        // .system => {
+                        State::System => {
+                            // const path = self.systemFontsPath() orelse {
+                            //     self.state = .user; continue;
+                            // };
+                            let Some(path) = system_fonts_path() else {
+                                self.state = State::User;
+                                continue;
+                            };
+                            // self.system_path = path;
+                            self.system_path = Some(path.clone());
+                            // self.dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true })
+                            //     catch { self.state = .user; continue; };
+                            // self.iter = self.dir.?.iterate();
+                            match std::fs::read_dir(&path) {
+                                Ok(d) => self.dir = Some(d),
+                                Err(_) => {
+                                    self.state = State::User;
+                                    continue;
+                                }
+                            }
+                        }
+                        // .user => {
+                        State::User => {
+                            // const path = self.userFontsPath() orelse {
+                            //     self.state = .done; continue;
+                            // };
+                            let Some(path) = user_fonts_path() else {
+                                self.state = State::Done;
+                                continue;
+                            };
+                            // self.user_path = path;
+                            self.user_path = Some(path.clone());
+                            match std::fs::read_dir(&path) {
+                                Ok(d) => self.dir = Some(d),
+                                Err(_) => {
+                                    self.state = State::Done;
+                                    continue;
+                                }
+                            }
+                        }
+                        // .done => return null,
+                        State::Done => return Ok(None),
+                    }
+                }
+
+                // const entry = (self.iter.?.next() catch null) orelse { ... };
+                //
+                // PORT NOTE: the reference's `catch null` folds a read error into
+                // end-of-directory. `ReadDir::next` yields `Option<io::Result<_>>`,
+                // so `None` (end) and `Some(Err)` (read error) fold the same way.
+                let entry = match self.dir.as_mut().unwrap().next() {
+                    Some(Ok(e)) => e,
+                    // Finished this directory; advance state.
+                    _ => {
+                        // if (self.dir) |*d| d.close(io); self.dir = null; self.iter = null;
+                        self.dir = None;
+                        // self.state = switch (self.state) {
+                        //     .system => .user, .user => .done, .done => .done };
+                        self.state = match self.state {
+                            State::System => State::User,
+                            State::User => State::Done,
+                            State::Done => State::Done,
+                        };
+                        continue;
+                    }
+                };
+
+                // if (entry.kind != .file) continue;
+                match entry.file_type() {
+                    Ok(t) if t.is_file() => {}
+                    _ => continue,
+                }
+                let name = entry.file_name();
+                // if (!isFontFile(entry.name)) continue;
+                if !is_font_file(&name) {
+                    continue;
+                }
+
+                // if (try self.tryMatch(entry.name)) |face| return face;
+                if let Some(face) = self.try_match(&name)? {
+                    return Ok(Some(face));
+                }
+            }
+        }
+
+        // fn tryMatch(self: *DiscoverIterator, name: []const u8) !?DeferredFace {
+        fn try_match(&mut self, name: &OsStr) -> Result<Option<DeferredFace>, Error> {
+            // const dir_path = switch (self.state) {
+            //     .system => self.system_path.?, .user => self.user_path.?,
+            //     .done => return null,
+            // };
+            let dir_path = match self.state {
+                State::System => self.system_path.as_ref().unwrap(),
+                State::User => self.user_path.as_ref().unwrap(),
+                State::Done => return Ok(None),
+            };
+
+            // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            // const full_path = std.fmt.bufPrintZ(&path_buf, "{s}\\{s}", .{ dir_path, name })
+            //     catch return null;
+            //
+            // PORT NOTE: the reference formats into a fixed `max_path_bytes` stack
+            // buffer and returns `null` on overflow. `CString` allocates, so the
+            // only failure mode left is an interior NUL in the path — which is
+            // exactly the same "unusable path, skip it" outcome, so it also
+            // returns `null`.
+            let mut full_path_bytes: Vec<u8> = dir_path.as_encoded_bytes().to_vec();
+            full_path_bytes.push(b'\\');
+            full_path_bytes.extend_from_slice(name.as_encoded_bytes());
+            let Ok(full_path) = CString::new(full_path_bytes) else {
+                return Ok(None);
+            };
+
+            // const is_ttc = std.ascii.endsWithIgnoreCase(name, ".ttc");
+            let is_ttc = ends_with_ignore_case(name.as_encoded_bytes(), b".ttc");
+            // const max_faces: i32 = if (is_ttc) 16 else 1;
+            let max_faces: i32 = if is_ttc { 16 } else { 1 };
+
+            // Probe each face in the file.
+            // var face_index: i32 = 0;
+            // while (face_index < max_faces) : (face_index += 1) {
+            let mut face_index: i32 = 0;
+            while face_index < max_faces {
+                // var face = Face.initFile(self.lib, full_path, face_index,
+                //     .{ .size = .{ .points = 12 } }) catch break;
+                let opts = Options {
+                    size: DesiredSize {
+                        points: 12.0,
+                        xdpi: DEFAULT_DPI,
+                        ydpi: DEFAULT_DPI,
+                    },
+                    freetype_load_flags: Default::default(),
+                };
+                let Ok(mut face) = Face::init_file(self.lib, &full_path, face_index, opts) else {
+                    break;
+                };
+
+                // if (self.matches(&face)) return try self.makeDeferred(face, full_path, face_index);
+                if self.matches(&face) {
+                    return self.make_deferred(face, full_path, face_index).map(Some);
+                }
+
+                // face.deinit();
+                face.deinit();
+                face_index += 1;
+            }
+
+            // return null;
+            Ok(None)
+        }
+
+        /// Check whether the given face matches the descriptor.
+        // fn matches(self: *const DiscoverIterator, face: *Face) bool {
+        fn matches(&self, face: &Face) -> bool {
+            // if (self.desc.family) |family| { if (!familyMatches(face, family)) return false; }
+            if let Some(family) = self.desc.family.as_ref() {
+                if !family_matches(face, family) {
+                    return false;
+                }
+            }
+            // if (self.desc.codepoint != 0) { if (face.glyphIndex(self.desc.codepoint) == null) return false; }
+            if self.desc.codepoint != 0 && face.glyph_index(self.desc.codepoint).is_none() {
+                return false;
+            }
+            // return true;
+            true
+        }
+
+        // fn makeDeferred(self, face: Face, full_path: []const u8, face_index: i32) !DeferredFace {
+        fn make_deferred(
+            &self,
+            face: Face,
+            full_path: CString,
+            face_index: i32,
+        ) -> Result<DeferredFace, Error> {
+            // const path_owned = try self.alloc.dupeZ(u8, full_path);
+            // errdefer self.alloc.free(path_owned);
+            //
+            // (`full_path` is already an owning `CString` here — the reference's
+            // `dupeZ` exists only because its `full_path` borrows a stack buffer.)
+            let path_owned = full_path;
+
+            // const presentation: Presentation = if (face.hasColor()) .emoji else .text;
+            let presentation = if face.has_color() {
+                Presentation::Emoji
+            } else {
+                Presentation::Text
+            };
+
+            // return DeferredFace{ .win = .{
+            //     .path = path_owned, .face_index = face_index, .variations = self.variations,
+            //     .peek = face, .presentation = presentation, .alloc = self.alloc,
+            // } };
+            Ok(DeferredFace {
+                win: Some(WindowsData {
+                    path: path_owned,
+                    face_index,
+                    variations: self.variations.clone(),
+                    peek: face,
+                    presentation,
+                }),
+            })
+        }
+    }
+
+    /// Build the system fonts directory from %SYSTEMROOT%. Returns null
+    /// if SYSTEMROOT is unset, which shouldn't happen on a healthy
+    /// Windows install but we just skip the directory rather than
+    /// falling back to a hardcoded drive letter.
+    // fn systemFontsPath(self: *DiscoverIterator) ?[:0]const u8 {
+    //     const systemroot = global.environ().getAlloc(self.alloc, "SYSTEMROOT") catch return null;
+    //     defer self.alloc.free(systemroot);
+    //     return std.fmt.allocPrintSentinel(self.alloc, "{s}\\Fonts", .{systemroot}, 0) catch null;
+    // }
+    //
+    // PORT NOTE: a free function rather than a method — it reads nothing from
+    // `self` but the (now-absent) allocator field.
+    fn system_fonts_path() -> Option<OsString> {
+        let systemroot = std::env::var_os("SYSTEMROOT")?;
+        Some(join_ascii(&systemroot, b"\\Fonts"))
+    }
+
+    // fn userFontsPath(self: *DiscoverIterator) ?[:0]const u8 {
+    //     const local_appdata = global.environ().getAlloc(self.alloc, "LOCALAPPDATA") catch return null;
+    //     defer self.alloc.free(local_appdata);
+    //     return std.fmt.allocPrintSentinel(self.alloc, "{s}\\Microsoft\\Windows\\Fonts",
+    //         .{local_appdata}, 0) catch null;
+    // }
+    fn user_fonts_path() -> Option<OsString> {
+        let local_appdata = std::env::var_os("LOCALAPPDATA")?;
+        Some(join_ascii(&local_appdata, b"\\Microsoft\\Windows\\Fonts"))
+    }
+
+    /// Append an ASCII suffix to an `OsStr` without going through a lossy
+    /// `String`. Sound: `OsStr::from_encoded_bytes_unchecked` accepts a valid
+    /// encoding concatenated with ASCII (the documented safety contract).
+    fn join_ascii(base: &OsStr, suffix: &[u8]) -> OsString {
+        debug_assert!(suffix.is_ascii());
+        let mut bytes = base.as_encoded_bytes().to_vec();
+        bytes.extend_from_slice(suffix);
+        // SAFETY: `bytes` is `base`'s own encoded form with an ASCII suffix
+        // appended, which `OsStr`'s encoding explicitly permits.
+        unsafe { OsStr::from_encoded_bytes_unchecked(&bytes) }.to_os_string()
+    }
+
+    /// `std.ascii.endsWithIgnoreCase`
+    fn ends_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.len() >= needle.len()
+            && haystack[haystack.len() - needle.len()..].eq_ignore_ascii_case(needle)
+    }
+
+    /// `std.ascii.eqlIgnoreCase`
+    fn eql_ignore_case(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len() && a.eq_ignore_ascii_case(b)
+    }
+
+    // fn isFontFile(name: []const u8) bool {
+    //     return std.ascii.endsWithIgnoreCase(name, ".ttf") or
+    //         std.ascii.endsWithIgnoreCase(name, ".ttc") or
+    //         std.ascii.endsWithIgnoreCase(name, ".otf");
+    // }
+    fn is_font_file(name: &OsStr) -> bool {
+        let b = name.as_encoded_bytes();
+        ends_with_ignore_case(b, b".ttf")
+            || ends_with_ignore_case(b, b".ttc")
+            || ends_with_ignore_case(b, b".otf")
+    }
+
+    /// Compare a face's family against a requested family name. Checks
+    /// FreeType's family_name first, then falls back to the SFNT name
+    /// table entry.
+    // fn familyMatches(face: *Face, family: [:0]const u8) bool {
+    //     const ft_family: ?[*:0]const u8 = face.face.handle.*.family_name;
+    //     if (ft_family) |f| { if (std.ascii.eqlIgnoreCase(std.mem.span(f), family)) return true; }
+    //     var buf: [256]u8 = undefined;
+    //     const sfnt = face.name(&buf) catch "";
+    //     return sfnt.len > 0 and std.ascii.eqlIgnoreCase(sfnt, family);
+    // }
+    fn family_matches(face: &Face, family: &[u8]) -> bool {
+        // const ft_family: ?[*:0]const u8 = face.face.handle.*.family_name;
+        //
+        // SAFETY: `face.face.handle` is the live `FT_Face` this `Face` owns;
+        // `family_name` is either NULL or a NUL-terminated FreeType-owned string.
+        let ft_family = unsafe { (*face.face.handle).family_name };
+        if !ft_family.is_null() {
+            let f = unsafe { std::ffi::CStr::from_ptr(ft_family) };
+            if eql_ignore_case(f.to_bytes(), family) {
+                return true;
+            }
+        }
+
+        // var buf: [256]u8 = undefined;
+        let mut buf = [0u8; 256];
+        // const sfnt = face.name(&buf) catch "";
+        let sfnt = face.name(&mut buf).unwrap_or(&[]);
+        // return sfnt.len > 0 and std.ascii.eqlIgnoreCase(sfnt, family);
+        !sfnt.is_empty() && eql_ignore_case(sfnt, family)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2114,7 +2440,7 @@ mod tests {
     /// their bodies are honest `unimplemented!()` leaves until the real Fontconfig
     /// discoverer lands (L3 Task 6/7). Coercion still fails to compile if a
     /// signature drifts, which is exactly the guarantee this test exists to hold.
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn discover_impl_typechecks() {
         use crate::collection::Collection;
@@ -2143,7 +2469,7 @@ mod tests {
     }
 
     // test "fontconfig" {
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn fontconfig() {
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
@@ -2180,7 +2506,7 @@ mod tests {
     }
 
     // test "fontconfig codepoint" {
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn fontconfig_codepoint() {
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
@@ -2231,7 +2557,7 @@ mod tests {
     // codepoint` tests, whose bodies discover real fonts); these directly assert
     // the built pattern's contents, and are gated to the fontconfig backend class
     // (the only class where `to_fc_pattern` is compiled).
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn descriptor_to_fc_pattern_family_size_mono() {
         use crate::fc::{Property, Spacing, Value};
@@ -2265,7 +2591,7 @@ mod tests {
         pat.destroy();
     }
 
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn descriptor_to_fc_pattern_codepoint() {
         use crate::fc::{Property, Value};
@@ -2452,23 +2778,54 @@ mod tests {
     }
 
     // test "windows" {
+    //
+    // SKIP-STUB (the crate's established `fontconfig`/`web_canvas` precedent, and
+    // VERIFICATION_DEBT V11): the body is LIVE as of WS20 and compiles only on
+    // `target_os = "windows"`, where `Windows`/`DeferredFace.win` exist. On every
+    // other host the backend guard is false and this returns immediately — which IS
+    // the reference's own `if (options.backend != .freetype_windows) return
+    // error.SkipZigTest;`. It still needs a stock Windows install to pass: it
+    // asserts `Arial` is discoverable and has a glyph for 'A'.
     #[test]
     fn windows() {
-        // if (options.backend != .freetype_windows) return error.SkipZigTest;
-        //
-        // PORT NOTE: DEFERRED with the Windows backend (always skips on the coretext
-        // gate). Full body recorded below:
-        //
-        // var lib = try Library.init(alloc); defer lib.deinit();
-        // var win = Windows.init(lib); defer win.deinit();
-        // // Arial ships on every stock Windows install.
-        // var it = try win.discover(alloc, .{ .family = "Arial", .size = 12 });
-        // defer it.deinit();
-        // var face = (try it.next()) orelse return error.TestFontNotFound;
-        // defer face.deinit();
-        // try testing.expect(face.hasCodepoint('A', null));
-        if crate::options::BACKEND == crate::Backend::FreetypeWindows {
-            // (body DEFERRED with the Windows backend)
+        #[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+        {
+            // if (options.backend != .freetype_windows) return error.SkipZigTest;
+            if crate::options::BACKEND != crate::Backend::FreetypeWindows {
+                return;
+            }
+
+            use crate::library::Library;
+
+            // var lib = try Library.init(alloc); defer lib.deinit();
+            let mut lib = Library::init().unwrap();
+
+            // var win = Windows.init(lib); defer win.deinit();
+            let mut win = Windows::init(lib);
+
+            // Arial ships on every stock Windows install.
+            // var it = try win.discover(alloc, .{ .family = "Arial", .size = 12 });
+            // defer it.deinit();
+            let mut it = win
+                .discover(Descriptor {
+                    family: Some(b"Arial".to_vec()),
+                    size: 12.0,
+                    ..Descriptor::default()
+                })
+                .unwrap();
+
+            // var face = (try it.next()) orelse return error.TestFontNotFound;
+            // defer face.deinit();
+            let mut face = it.next().unwrap().expect("TestFontNotFound");
+
+            // try testing.expect(face.hasCodepoint('A', null));
+            assert!(face.has_codepoint(u32::from('A'), None));
+
+            // defers run in reverse: face.deinit, it.deinit, win.deinit, lib.deinit.
+            face.deinit();
+            it.deinit();
+            win.deinit();
+            lib.deinit();
         }
     }
 }

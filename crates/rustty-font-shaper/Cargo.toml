@@ -71,10 +71,18 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
 # Fontconfig 2.14.2 (font discovery/matching) for the FreeType/Fontconfig
 # discovery backend — the SAME C library the reference links (R3), consumed by
 # the `fc` module (the port of `pkg/fontconfig/*.zig`). Gated to match `fc`'s
-# `cfg(not(any(target_os = "macos", target_arch = "wasm32")))`: macOS discovers
-# fonts via CoreText and never links fontconfig, and freestanding wasm has no C
-# deps. Referenced by path (the `-sys` crates are not in `[workspace.dependencies]`).
-[target.'cfg(not(any(target_os = "macos", target_arch = "wasm32")))'.dependencies]
+# `cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))`:
+# macOS discovers fonts via CoreText and never links fontconfig, and freestanding
+# wasm has no C deps. Referenced by path (the `-sys` crates are not in
+# `[workspace.dependencies]`).
+#
+# LATENT GAP FIXED [WS20, 2026-07-30]: this table used to include Windows, so a
+# Windows build would have tried to link fontconfig — the exact thing
+# `backend.zig`'s `.windows => .freetype_windows` arm exists to avoid ("Avoid
+# fontconfig on Windows because its libxml2 dependency isn't available"). With the
+# `freetype_windows` discoverer now live, Windows uses the FreeType directory scan
+# and links no fontconfig.
+[target.'cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))'.dependencies]
 fontconfig-sys = { path = "../../crates-sys/fontconfig-sys" }
 
 # macOS: the CoreText backend (font discovery + rendering + shaping) and its
