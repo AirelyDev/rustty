@@ -88,6 +88,7 @@ complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l input -r -f
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l wait-after-command  -f -d "If true, keep the terminal open after the command exits."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l abnormal-command-exit-runtime -r -f -d "The number of milliseconds of runtime below which we consider a process exit to be abnormal."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l scrollback-limit -r -f -d "The size of the scrollback buffer in bytes."
+complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l scrollback-compression  -f -d "Whether to compress scrollback pages while the terminal is idle."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l scrollbar -r -f -a "system never" -d "Control when the scrollbar is shown to scroll the scrollback buffer."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l link -r -f -d "Match a regular expression against the terminal text and associate clicking it with an action."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l link-url  -f -d "Enable URL matching."

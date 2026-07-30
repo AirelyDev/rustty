@@ -415,6 +415,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::RightClickAction => g_enum!(right_click_action),
         Key::ScrollToBottom => g_packed!(scroll_to_bottom),
         Key::ScrollbackLimit => false,
+        Key::ScrollbackCompression => g_bool!(scrollback_compression),
         Key::Scrollbar => g_enum!(scrollbar),
         Key::SearchBackground => false,
         Key::SearchForeground => false,
