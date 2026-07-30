@@ -1,0 +1,50 @@
+REAL CAPTURE from the development VM (Fedora 44 aarch64, UTM Apple-Virtualization backend,
+virtio-gpu with 3D DISABLED: "[drm] features: -virgl -edid -resource_blob -host_visible"),
+captured 2026-07-29 on the live GNOME session via rootless Xwayland :0.
+
+This is the NEGATIVE-control fixture for hw_gl_probe.sh: `Accelerated: no` AND an llvmpipe
+renderer. It also encodes the trap that makes the probe's three-way check necessary --
+`Max core profile version: 4.6` PASSES the version check on its own, so a probe that only
+looked at the GL version would report this box as adequate for the V2 GPU sign-off. It is
+not: there is no GPU behind it at all.
+
+name of display: :0
+display: :0  screen: 0
+direct rendering: Yes
+Extended renderer info (GLX_MESA_query_renderer):
+    Vendor: Mesa (0xffffffff)
+    Device: llvmpipe (LLVM 22.1.8, 128 bits) (0xffffffff)
+    Version: 26.1.4
+    Accelerated: no
+    Video memory: 9906MB
+    Unified memory: yes
+    Preferred profile: core (0x1)
+    Max core profile version: 4.6
+    Max compat profile version: 4.6
+    Max GLES1 profile version: 1.1
+    Max GLES[23] profile version: 3.2
+Memory info (GL_ATI_meminfo):
+    VBO free memory - total: 63 MB, largest block: 63 MB
+    VBO free aux. memory - total: 7324 MB, largest block: 7324 MB
+    Texture free memory - total: 63 MB, largest block: 63 MB
+    Texture free aux. memory - total: 7324 MB, largest block: 7324 MB
+    Renderbuffer free memory - total: 63 MB, largest block: 63 MB
+    Renderbuffer free aux. memory - total: 7324 MB, largest block: 7324 MB
+Memory info (GL_NVX_gpu_memory_info):
+    Dedicated video memory: 4294842428 MB
+    Total available memory: 4294852335 MB
+    Currently available dedicated video memory: 63 MB
+OpenGL vendor string: Mesa
+OpenGL renderer string: llvmpipe (LLVM 22.1.8, 128 bits)
+OpenGL core profile version string: 4.6 (Core Profile) Mesa 26.1.4
+OpenGL core profile shading language version string: 4.60
+OpenGL core profile context flags: (none)
+OpenGL core profile profile mask: core profile
+
+OpenGL version string: 4.6 (Compatibility Profile) Mesa 26.1.4
+OpenGL shading language version string: 4.60
+OpenGL context flags: (none)
+OpenGL profile mask: compatibility profile
+
+OpenGL ES profile version string: OpenGL ES 3.2 Mesa 26.1.4
+OpenGL ES profile shading language version string: OpenGL ES GLSL ES 3.20

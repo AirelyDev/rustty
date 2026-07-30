@@ -47,14 +47,17 @@
 //!   implements) by the `wayland_set_urgent_dispatches_activation_token` KAT
 //!   (`tests/gtk_wayland_winproto.rs`): set_urgent → real token `done` → `activate`.
 //!   Requests we SEND still go out on the shared display fd via
-//!   [`Connection::flush`]. (A live compositor decoration-mode change would ALSO
-//!   crank now, but [`Window`] still snapshots the decoration mode at init — making
-//!   that read live is a separate, tracked deferral.)
+//!   [`Connection::flush`]. A live compositor decoration-mode change ALSO cranks, and
+//!   since **WS19 T9** it is also HONOURED: [`Window`] shares the app's
+//!   `Rc<RefCell<Pump>>` and re-reads `Globals` at each
+//!   `decoration_mode`/`client_side_decoration_enabled`/`sync_blur` call — the
+//!   reference's live `globals: *Globals` dereference (`wayland.zig:222`/`:252`/`:303`)
+//!   — instead of the init snapshot it used to keep.
 
 mod globals;
 mod queue_source;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gdk4::prelude::*;
@@ -289,6 +292,55 @@ impl App {
     /// compositor's token `done` must have run [`globals`]' handler, bumping this. It
     /// exists ONLY to give that round-trip an assertion point (the reference relies on
     /// GDK's default-queue dispatch and needs no such proof, `Globals.zig:82`).
+    /// OBSERVABILITY (not in the reference): which of the compositor-dependent globals
+    /// actually bound, for the WS17 V3 KDE/KWin verification KAT. The reference reaches
+    /// `app.globals.get(.tag)` at each use site and needs no such summary; the port
+    /// exposes one so a KAT can assert the KDE globals really do bind under a live KWin
+    /// (and, as the negative control, really do NOT under mutter).
+    ///
+    /// Returned in a fixed order: `(kde_decoration_manager, kde_slide_manager,
+    /// ext_background_effect, blur_capability, xdg_activation, default_deco_mode_raw)`,
+    /// where `blur_capability` is `Globals.state.bg_effect_capabilities.blur` and the
+    /// last is the raw `server-decoration.xml` uint (`None` when unset).
+    #[must_use]
+    pub fn bound_globals_summary(&self) -> (bool, bool, bool, bool, bool, Option<u32>) {
+        let pump = self.pump.borrow();
+        let g = &pump.globals;
+        (
+            g.kde_decoration_manager().is_some(),
+            g.kde_slide_manager().is_some(),
+            g.ext_background_effect().is_some(),
+            g.bg_blur_supported(),
+            g.xdg_activation().is_some(),
+            g.default_deco_mode().map(|m| m as u32),
+        )
+    }
+
+    /// TEST HOOK (not in the reference, same class as [`App::activation_done_count`]):
+    /// write `Globals.state.default_deco_mode` exactly as the
+    /// `org_kde_kwin_server_decoration_manager.default_mode` dispatch handler does
+    /// (`wayland/globals.rs`, `Globals.zig:211`).
+    ///
+    /// It exists because **no compositor available on the verification host can
+    /// re-advertise `default_mode` after bind** — measured, not assumed: KWin 6.7.3
+    /// sends it exactly once per bound resource and does NOT re-broadcast on
+    /// `org.kde.KWin.reconfigure` (`WAYLAND_DEBUG=1` shows two `default_mode(2)`, both
+    /// at bind); sway/wlroots calls `set_default_mode` once at startup; mutter
+    /// advertises no KDE decoration manager at all. So the only way to exercise the
+    /// post-init RE-READ that audit row O7 is about is to write the field the protocol
+    /// handler writes. See `.port/phase-2/VERIFICATION_DEBT.md` for the residual (the
+    /// transport half) and its recipe.
+    ///
+    /// Not `#[cfg(test)]`: integration tests do not see the lib's test cfg.
+    /// `mode` is the RAW protocol uint (`server-decoration.xml` `default_mode`: 0 =
+    /// None, 1 = Client, 2 = Server), converted by the same `Mode::try_from(mode).ok()`
+    /// the handler uses — so an out-of-range value lands as `None` here too, and the
+    /// hook cannot express a state the wire could not.
+    #[doc(hidden)]
+    pub fn test_inject_default_deco_mode(&self, mode: u32) {
+        self.pump.borrow_mut().globals.state.default_deco_mode = Mode::try_from(mode).ok();
+    }
+
     #[must_use]
     pub fn activation_done_count(&self) -> u32 {
         self.pump.borrow().globals.activation_done_count
@@ -393,13 +445,29 @@ pub struct Window {
     /// The KDE `org_kde_kwin_slide_manager`, used by `sync_quick_terminal` to
     /// create the quick-terminal slide animation (absent on GNOME/sway/wlroots).
     slide_manager: Option<OrgKdeKwinSlideManager>,
+    /// PORTS: `wayland.zig:99` `globals: *Globals` — the reference holds a LIVE pointer
+    /// to the app's `Globals` and re-reads it at every `getDecorationMode`
+    /// (`:303`), `clientSideDecorationEnabled` (`:222`) and `syncBlur` (`:252`) call.
+    /// The port shares the same `Rc<RefCell<Pump>>` the [`App`] holds (the `Globals`
+    /// live inside it), so those reads see compositor state that arrived AFTER this
+    /// window was created — e.g. a live `org_kde_kwin_server_decoration_manager`
+    /// `default_mode` change, which `WlQueueSource` cranks into `Globals`.
+    ///
+    /// This replaced three init-time SNAPSHOT fields. Snapshotting was the whole of
+    /// audit row O7: the value was captured once in `init` and never refreshed, so a
+    /// live decoration-mode change was dispatched but never honoured.
+    pump: Rc<RefCell<queue_source::Pump>>,
+
+    // Last successfully-read values, kept ONLY as a fallback for the case where the
+    // `Pump` is already borrowed on this thread (see `globals_read`). They are a
+    // cache, never the primary source.
     /// Whether the KDE decoration manager exists — drives the CSD/SSD decision
     /// (`wayland.zig:222`).
-    kde_deco_present: bool,
-    /// Snapshot of `Globals.state.default_deco_mode` (`wayland.zig:303`).
-    default_deco_mode: Option<Mode>,
-    /// Snapshot of `Globals.state.bg_effect_capabilities.blur` (`wayland.zig:252`).
-    bg_blur_supported: bool,
+    kde_deco_present: Cell<bool>,
+    /// Cached `Globals.state.default_deco_mode` (`wayland.zig:303`).
+    default_deco_mode: Cell<Option<Mode>>,
+    /// Cached `Globals.state.bg_effect_capabilities.blur` (`wayland.zig:252`).
+    bg_blur_supported: Cell<bool>,
 
     // The four owned proxies (`wayland.zig:102-114`), destroyed in `deinit`.
     /// PORTS: `wayland.zig:102-103` `bg_effect`.
@@ -423,8 +491,8 @@ impl std::fmt::Debug for Window {
         f.debug_struct("wayland::Window")
             .field("has_decoration", &self.decoration.is_some())
             .field("has_bg_effect", &self.bg_effect.is_some())
-            .field("kde_deco_present", &self.kde_deco_present)
-            .field("default_deco_mode", &self.default_deco_mode)
+            .field("kde_deco_present", &self.kde_deco_present.get())
+            .field("default_deco_mode", &self.default_deco_mode.get())
             .finish()
     }
 }
@@ -503,9 +571,14 @@ impl Window {
             compositor: g.compositor().cloned(),
             activation: g.xdg_activation().cloned(),
             slide_manager: g.kde_slide_manager().cloned(),
-            kde_deco_present: g.kde_decoration_manager().is_some(),
-            default_deco_mode: g.default_deco_mode(),
-            bg_blur_supported: g.bg_blur_supported(),
+            // The LIVE handle (`wayland.zig:99` `globals: *Globals`) — cloning the `Rc`
+            // does not extend the `borrow` taken above, which ends with this function.
+            pump: app.pump.clone(),
+            // Primed from the same read, so the caches are never stale-on-arrival; from
+            // here on they are refreshed by every live read (see `globals_read`).
+            kde_deco_present: Cell::new(g.kde_decoration_manager().is_some()),
+            default_deco_mode: Cell::new(g.default_deco_mode()),
+            bg_blur_supported: Cell::new(g.bg_blur_supported()),
             bg_effect,
             decoration,
             slide: None,
@@ -568,12 +641,16 @@ impl Window {
     /// the ACTUAL present decoration state (the noop contract).
     #[must_use]
     pub fn client_side_decoration_enabled(&self) -> bool {
+        // `decoration_mode` has just refreshed the caches from the live `Globals`, so
+        // the `kde_deco_present` read below is live too — matching the reference, which
+        // reaches `self.globals.get(.kde_decoration_manager)` right here
+        // (`wayland.zig:222`).
         match self.decoration_mode() {
             Mode::Client => true,
             // If we support SSDs (KDE deco manager present) do NOT enable CSDs when
             // SSD is preferred; if we do NOT (GNOME) enable CSDs even then
             // (`wayland.zig:219-223`).
-            Mode::Server => !self.kde_deco_present,
+            Mode::Server => !self.kde_deco_present.get(),
             Mode::None => false,
             // `Mode` is `#[non_exhaustive]`; the reference's `else => unreachable`.
             _ => false,
@@ -631,7 +708,11 @@ impl Window {
         let Some(bg) = self.bg_effect.clone() else {
             return;
         };
-        if !self.bg_blur_supported {
+        // `self.globals.state.bg_effect_capabilities.blur` is likewise read HERE by the
+        // reference (`wayland.zig:252`), not snapshotted: a compositor that advertises
+        // its blur capability after this window was created must be honoured.
+        self.globals_read();
+        if !self.bg_blur_supported.get() {
             return;
         }
         let Some(apprt) = self.apprt_window.upgrade() else {
@@ -679,15 +760,42 @@ impl Window {
         deco.request_mode(self.decoration_mode() as u32);
     }
 
+    /// Re-read the three `Globals` values this window's appearance depends on, and
+    /// refresh the caches. This is the port's spelling of the reference dereferencing
+    /// its live `globals: *Globals` pointer (`wayland.zig:222`/`:252`/`:303`).
+    ///
+    /// The `try_borrow` fallback: the queue `GSource` takes `borrow_mut` while it
+    /// dispatches, and a dispatch could in principle re-enter a window sync. Rather
+    /// than panic, that path uses the last successfully-read values — the pre-fix
+    /// behavior, but only for the duration of one dispatch, and never as the steady
+    /// state. It is deliberately NOT silent about which arm ran: the cache is only
+    /// ever written from the live arm, so a permanently-borrowed `Pump` would show up
+    /// as values frozen at init rather than as a wrong-but-fresh answer.
+    fn globals_read(&self) {
+        if let Ok(pump) = self.pump.try_borrow() {
+            let g = &pump.globals;
+            self.kde_deco_present
+                .set(g.kde_decoration_manager().is_some());
+            self.default_deco_mode.set(g.default_deco_mode());
+            self.bg_blur_supported.set(g.bg_blur_supported());
+        }
+    }
+
     /// PORTS: `wayland.zig:301-308` `Window.getDecorationMode`.
     fn decoration_mode(&self) -> Mode {
+        // `self.globals.state.default_deco_mode` is read HERE in the reference, at
+        // every call — not captured at init (audit row O7).
+        self.globals_read();
+
         let decoration = self
             .apprt_window
             .upgrade()
             .map(|w| w.get_window_decoration());
         match decoration {
             // `.auto => default_deco_mode orelse .Client` (`wayland.zig:303`).
-            Some(WindowDecoration::Auto) | None => self.default_deco_mode.unwrap_or(Mode::Client),
+            Some(WindowDecoration::Auto) | None => {
+                self.default_deco_mode.get().unwrap_or(Mode::Client)
+            }
             Some(WindowDecoration::Client) => Mode::Client,
             Some(WindowDecoration::Server) => Mode::Server,
             Some(WindowDecoration::None) => Mode::None,

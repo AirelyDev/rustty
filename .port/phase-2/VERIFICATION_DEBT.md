@@ -95,8 +95,62 @@ legitimate correctness-validation environment (upstream Ghostty 1.3.1 runs here 
 rustty's glyph output was validated against it — see `docs/manual-test-plan-gtk.md`
 and the `gtk_glyph_dump` harness), so ONLY perf/behavior-under-real-GL remains open.
 
-**Recipe (any Linux box with a real GPU — amdgpu/intel/nvidia):**
+**STATUS [WS17, 2026-07-29]: STILL OPEN, and NOT dischargeable on this hardware — with a
+turnkey one-command check now shipped so it costs nothing to answer on a real box.**
+
+**Why it cannot be discharged here (established, not assumed).**
+* The VM's hypervisor is UTM's **Apple Virtualization** backend, which gives Linux guests
+  no 3D at all: `journalctl -k` reports
+  `virtio_gpu … features: -virgl -edid -resource_blob -host_visible`.
+* Converting the VM to the QEMU/virgl backend needs roughly 40 GB of host free space for
+  the disk conversion. The host does not have it — and during this very workstream the
+  macOS host hit **0 bytes free** twice, which is the same constraint from the other side.
+* Even when this host DID run virgl (2026-07-17, recorded in
+  `crates/rustty-renderer/src/opengl/gl/sys.rs`) it exposed
+  **`Max core profile version: 0.0`** against rustty's **4.3-core floor** — every
+  core-profile request from 3.2 to 4.6 failed `EGL_BAD_MATCH`. So virgl would not have
+  discharged V2 even if it were free to enable.
+
+**What WS17 shipped instead.** `.port/tools/gates/hw_gl_probe.sh` — a turnkey,
+**non-vacuous** check that exits 0 only on a genuinely accelerated GL ≥ 4.3-core stack.
+It fails on llvmpipe / `Accelerated: no` / a core profile below 4.3, and it is
+self-testing:
+
 ```
+# Both arms, on any box, no GPU required — proves the PASS arm is reachable:
+.port/tools/gates/hw_gl_probe.sh --self-test
+# On the box you actually want to sign off:
+.port/tools/gates/hw_gl_probe.sh          # exit 0 => V2 can be executed here
+```
+
+Measured 2026-07-29:
+* `--self-test` → GREEN. `fixtures/glxinfo-hw-radeonsi.txt` (**synthetic**, labelled as
+  such in the file) exits **0**; `fixtures/glxinfo-llvmpipe.txt` (a **real** capture from
+  this VM) exits **1**. A gate whose PASS arm has never been observed is
+  indistinguishable from one that always fails; this is why the synthetic fixture exists,
+  and it proves the script's logic only — never that any hardware was tested.
+* Live on the VM → **FAIL**, for the right two reasons: `Accelerated: no` and
+  `renderer is a software rasterizer: llvmpipe`. Note the third check *passed*
+  (`core profile 4.6 >= 4.3`), which is exactly the trap: a probe that only looked at the
+  GL version would have called this box adequate.
+* The self-test earned its keep immediately — it caught two real parse bugs in the first
+  cut of the script (an unanchored `Accelerated:` match that read the fixture's own
+  explanatory header, and a `^Max core profile version:` anchor that missed glxinfo's
+  indentation). Both arms reported INCONCLUSIVE rather than passing, which is the
+  designed behavior for an unparseable input.
+
+**Same-box narrowing run (NOT a sign-off).** `evidence/ws17/v2-llvmpipe-vs-ghostty.txt`:
+rustty RELEASE vs `ghostty-1.3.1-2.fc44` on the SAME llvmpipe stack, wall clock for
+`-e /bin/sh -c "cat <4.9 MB file>"`, 3 reps each — rustty **0.45 / 0.40 / 0.40 s**,
+ghostty **0.38 / 0.41 / 0.39 s**: parity within noise, no same-environment regression. This
+narrows V2 (it rules out a gross regression against the oracle build) and does not discharge
+it, because both sides are software-rendered. **A trap worth knowing:** the first pass
+compared rustty's DEBUG build against the packaged ghostty and produced 54 s vs 0.4 s — a
+~135x gap that looks like a catastrophic regression and is purely the build profile.
+
+**Recipe to actually discharge V2 (any Linux box with a real GPU — amdgpu/intel/nvidia):**
+```
+.port/tools/gates/hw_gl_probe.sh            # must exit 0 FIRST; if it does not, stop
 cargo build --release --features gtk
 RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/release/rustty
 ```
@@ -107,29 +161,91 @@ RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/release/rustty
 3. Inspector (`Ctrl+Shift+I`, build with `--features gtk,imgui`): frame-time plot
    sane under load, comparable to ghostty's inspector on the same hardware.
 4. Confirm the GL context is the hardware driver (`GDK_DEBUG=opengl` startup lines),
-   not llvmpipe.
+   not llvmpipe — and re-run `hw_gl_probe.sh` to record it.
 
-## V3. KDE Plasma (KWin) quick-terminal + decorations polish (blocked: no KDE here)
+**Honest residual wording (do not upgrade this).** V2 is **verification debt with a
+runnable recipe**, never a deferral: the renderer code is implemented and its correctness
+was validated on llvmpipe against upstream ghostty 1.3.1 on the same box. What is
+unmeasured is **behaviour and performance under a real GL driver**. No claim of GPU
+sign-off may be made until `hw_gl_probe.sh` exits 0 somewhere and steps 1–4 are captured.
 
-**Context.** The wayland winproto arm is implemented + reviewed FAITHFUL, and the
-wlr-layer-shell quick terminal is verified end-to-end on real sway (keybind + D-Bus
-IPC both render). The three KDE-only globals are wired but no KWin was available:
-`org_kde_kwin_slide` (compositor-side QT slide animation), `org_kde_kwin_blur`, and
-`org_kde_kwin_server_decoration`. On sway these are gracefully absent (verified); on
-GNOME the whole arm is a verified non-gap.
+## V3. KDE Plasma (KWin) — decoration globals DISCHARGED under a live KWin [WS17, 2026-07-29]; slide + visual blur remain
 
-**Recipe (KDE Plasma Wayland session):**
+**LEDGER CORRECTION FIRST (this entry was factually wrong).** V3's original text listed
+the KDE-only globals as `org_kde_kwin_slide`, **`org_kde_kwin_blur`** and
+`org_kde_kwin_server_decoration`. **`org_kde_kwin_blur` is not used by either tree.** Blur
+rides **`ext_background_effect_v1`**: the oracle at
+`ghostty/src/apprt/gtk/winproto/wayland.zig:156`, and rustty via
+`Tag::ExtBackgroundEffect` in `winproto/wayland/globals.rs`. A code-level grep for
+`org_kde_kwin_blur` under `crates/*/src/` returns **0** sites, and
+`.port/tools/gates/ws17_kde_globals_gate.sh` now asserts that statically so the claim
+cannot silently rot back.
+
+**DISCHARGED: the KDE decoration globals really do bind under a real KWin.**
+`.port/tools/gates/ws17_kde_globals_gate.sh` +
+`crates/rustty-apprt/tests/gtk_wayland_kde_globals.rs`, GREEN 2026-07-29, evidence in
+`.port/phase-2/evidence/ws17/v3-kde-globals-under-kwin.txt`. KWin **6.7.3** runs NESTED on
+its own socket with a throwaway `XDG_CONFIG_HOME`, so GDM, the default systemd target and
+the primary tty2 GNOME session are untouched (uptime unchanged across the run; no
+leftover compositor or socket). Measured bind set:
+
+| | nested KWin 6.7.3 | GNOME/mutter 50 (negative control) |
+|---|---|---|
+| `org_kde_kwin_server_decoration_manager` | **true** | false |
+| `default_deco_mode` (raw) | **Some(2)** = Server | None |
+| `org_kde_kwin_slide_manager` | false | false |
+| `ext_background_effect` | **true** | false |
+| blur capability advertised | false | false |
+| `xdg_activation_v1` | true | true |
+
+**NEGATIVE CONTROL, run by the gate and required to fail:** the SAME KAT on GNOME/mutter
+FAILS at `org_kde_kwin_server_decoration_manager did not bind`. If it passed there the
+positive arm would prove nothing. The KAT additionally asserts `xdg_activation_v1` bound
+(so a KDE-global failure cannot be blamed on a wholly broken registry walk) and that
+`default_mode` actually arrived (so a bound manager whose event never dispatched is
+caught).
+
+**Two residuals, both narrowed by measurement rather than assumed:**
+1. **`org_kde_kwin_slide_manager` (quick-terminal slide animation) is NOT advertised by a
+   bare nested `kwin_wayland`.** The global is registered by KWin's `slidingpopups`
+   builtin effect, which this configuration cannot load —
+   `org.kde.kwin.Effects.loadEffect("slidingpopups")` returns **`false`** (measured).
+   `org_kde_kwin_slide` IS present in `libkwin.so.6.7.3`, so this is a compositor
+   *configuration* limit, not an absence of support. Needs a full Plasma session.
+2. **Visible blur is still unverified, and now for a sharper reason than "no KDE":** KWin
+   6.7.3 DOES advertise `ext_background_effect`, but with the blur capability **absent**
+   (`blur_capability=false`), so `Window::sync_blur` correctly early-returns. A compositor
+   that advertises the blur capability is required — not merely any KDE.
+
+**Recipe for the remainder (a full KDE Plasma Wayland session):**
 ```
+.port/tools/gates/ws17_kde_globals_gate.sh   # re-run: kde_slide_manager should now be true
 cargo build --features gtk,wayland
 RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/debug/rustty
 ```
 1. Quick terminal (`toggle_quick_terminal` keybind + `rustty +toggle-quick-terminal`):
    drops with KWin's slide animation (the slide is compositor-side — its *presence*
-   is the KDE-only assertion; position/size were already validated on sway).
-2. `background-opacity < 1.0` → KWin blur behind the window (`org_kde_kwin_blur`).
-3. `window-decoration = server` → KWin server-side decorations
-   (`org_kde_kwin_server_decoration`), and CSD fallback when set to `client`.
+   is the KDE-only assertion; position/size were already validated on sway). The KAT's
+   `kde_slide_manager=true` line is the machine-checkable half.
+2. `background-opacity < 1.0` → blur behind the window, on a compositor whose
+   `ext_background_effect` advertises the blur capability (KWin 6.7.3 does not).
+3. `window-decoration = server` → KWin server-side decorations, and CSD fallback when set
+   to `client`. The globals half of this is already DISCHARGED above; what remains is the
+   visual confirmation.
 4. Repeat `docs/manual-test-plan-gtk.md` §W (the KDE/wlr-flagged rows).
+
+**Rootless KWin (no `sudo` password available on this VM — a blocker the WS17 plan did not
+anticipate; `sudo -n` fails and the user is not in a passwordless sudoers rule):**
+```
+mkdir -p /tmp/kwinrpm && cd /tmp/kwinrpm
+dnf download --disablerepo=cursor --resolve kwin        # 99 packages, ~94 MB, NO root
+mkdir root && cd root && for f in ../*.rpm; do rpm2cpio "$f" | cpio -idmu --quiet; done
+# kwin_wayland then runs from the prefix; see the gate for the env it needs.
+```
+Two traps the gate encodes: `kwin_wayland` needs the **parent** `WAYLAND_DISPLAY` or it
+falls through to the DRM backend and exits 1 with an EMPTY log; and its socket file appears
+BEFORE it accepts clients, so a client that connects too early fails with a bare
+`Failed to initialize GTK`. The gate waits for `org.kde.KWin` on the session bus instead.
 
 ---
 
@@ -160,8 +276,51 @@ journal end, no guest OOM/panic — hypervisor-style death; root cause not attri
 so the mutter-session run was deliberately not repeated. mutter implements the same
 `xdg_activation_v1` protocol; this is belt-and-suspenders, not a correctness gap.
 
-**Recipe (any stable GNOME Wayland session):**
+**DISCHARGED against REAL mutter [WS17, 2026-07-29] — without going near the primary
+session.** `.port/tools/gates/ws17_set_urgent_mutter_gate.sh`, GREEN; evidence in
+`.port/phase-2/evidence/ws17/v4-set-urgent-real-mutter.txt`.
+
+The crash risk is removed by running a **SECOND, HEADLESS instance of real mutter** —
+`mutter 50.0 --headless --virtual-monitor 1280x720 --wayland-display wayland-mutterkat` —
+on its own socket. `--headless` needs no DRM device and no seat, so it cannot contend with
+the primary tty2 GNOME session, and GDM and the default systemd target are untouched. This
+is mutter itself, not a stand-in for it, so the "never verified on mutter" gap is closed.
+`wayland_set_urgent_dispatches_activation_token` PASSES there: mutter's real
+`xdg_activation_token_v1.done` dispatched through `WlQueueSource` and bumped
+`App::activation_done_count`. **VM uptime 14:43 before and 14:43 after — no crash, and the
+gate records uptime on both sides of every run.**
+
+**NEGATIVE CONTROL, run by the gate and required to fail:** the same KAT pointed at a
+socket no compositor serves. It fails. **Be precise about what that control proves** — it
+fails at `gtk4::init()` ("Failed to initialize GTK", i.e. no display), so it proves the KAT
+genuinely requires a live compositor; it does NOT independently prove the counter is driven
+by a *token* rather than by connecting. The stronger control — a compositor that serves
+clients but does not implement `xdg_activation_v1` — is not available here (mutter, KWin and
+sway all implement it). The counter's provenance is instead pinned by construction: nothing
+but the `Globals` token handler writes it.
+
+**EXPLICIT REASONED RESIDUAL (not an oversight):** re-running this KAT on the **primary**
+GNOME session is deliberately NOT done. Two hard host crashes correlated with
+primary-session live-compositor KAT activity (abrupt journal end, no guest OOM/panic —
+hypervisor-style death; root cause never attributed). This run exercises the same mutter
+codebase and the same `xdg_activation_v1` implementation, so the marginal information from
+repeating it on the crash-correlated session does not justify the risk to a shared
+development host. If someone does want it, the recipe below is the one to use, on a machine
+that is not shared.
+
+**Recovery procedure, if a host ever does wedge** (from the macOS host, over SSH or
+Terminal — UTM's AppleScript interface survives an unresponsive guest):
 ```
+osascript -e 'tell application "UTM" to stop virtual machine "Fedora Linux"'
+osascript -e 'tell application "UTM" to start virtual machine "Fedora Linux"'
+```
+
+**Recipe (re-run the discharge, or run it on any stable GNOME Wayland session):**
+```
+# Preferred — headless mutter on its own socket, primary session untouched:
+.port/tools/gates/ws17_set_urgent_mutter_gate.sh
+
+# Or directly, against whatever compositor WAYLAND_DISPLAY names:
 cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_set_urgent \
   -- --ignored --exact wayland_set_urgent_dispatches_activation_token
 ```
@@ -175,6 +334,64 @@ cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_set_urgent 
 > second `gtk4::init()`.
 **Expected:** `ok` in ~1 s (bounded at ~10 s — a broken seam fails, never hangs).
 
+## V6. Wayland `default_mode` post-bind TRANSPORT — no compositor on this host re-advertises it [WS19 T9, 2026-07-29]
+
+**What IS verified, and by what.** WS19 T9 made `winproto::wayland::Window` re-read
+`Globals` at every `decoration_mode`/`client_side_decoration_enabled`/`sync_blur` call
+instead of snapshotting at init (the reference's live `globals: *Globals` dereference,
+`wayland.zig:222`/`:252`/`:303`; audit row O7). The RE-READ is proven end-to-end on a real
+compositor by `.port/tools/gates/ws19_wayland_deco_live_gate.sh` +
+`crates/rustty-apprt/tests/gtk_wayland_deco_live.rs`: nested KWin 6.7.3 on its own socket,
+a real realized GTK window and a real `winproto` `Window`; the INITIAL mode comes off the
+wire (KWin advertises `org_kde_kwin_server_decoration_manager` `default_mode = Server`, and
+the port reports server-side decorations as a result — an assertion that FAILS on mutter,
+which has no such manager, so it cannot pass vacuously); the pre-fix snapshot code FAILS
+the post-change assertion; and a latch check (mode back to `Server` → `csd` back to
+`false`) rules out a stuck value.
+
+**What is NOT verified: the transport.** The mode CHANGE in that KAT is injected by writing
+the exact field the `default_mode` dispatch handler writes
+(`App::test_inject_default_deco_mode`, taking the raw protocol uint and running it through
+the same `Mode::try_from(mode).ok()`), because **no compositor available on this host can
+re-advertise `default_mode` after bind.** MEASURED, not assumed:
+
+* **KWin 6.7.3** sends it exactly once per bound resource. The KAT still performs the real
+  provocation — rewrite `kwinrc` to name a missing decoration plugin, then
+  `org.kde.KWin.reconfigure` over D-Bus — and reports the outcome. Under
+  `WAYLAND_DEBUG=1` the client trace shows exactly two
+  `org_kde_kwin_server_decoration_manager…default_mode(2)` events (one on GDK's default
+  queue, one on rustty's private queue), BOTH at bind time, and none after the reconfigure.
+* **sway 1.11 / wlroots** calls `wlr_server_decoration_manager_set_default_mode` once at
+  startup; there is no runtime lever.
+* **mutter 50** advertises no KDE decoration manager at all, so the value is permanently
+  `None` there.
+
+So the residual is narrow and precisely: *a compositor-originated post-bind `default_mode`
+event travelling over the wire, through `WlQueueSource`, into `Globals`.* The two halves on
+either side of it ARE covered — `WlQueueSource`'s post-init dispatch is proven independently
+by `gtk_wayland_set_urgent.rs` (a real `xdg_activation_token_v1.done` cranked through the
+same GSource), and the `Globals`→`Window` re-read is proven by the KAT above. This item
+exists so nobody later reads the KAT as wire-level proof.
+
+**A finding worth keeping:** the WS19 plan (and the WS17 plan's V3 assumptions) treated a
+live KWin decoration-mode change as available. It is not, for the reason measured above.
+
+**Recipe (any of these discharges it):**
+1. A compositor that calls `set_default_mode` after startup — e.g. a wlroots build patched
+   to re-call `wlr_server_decoration_manager_set_default_mode` on a signal, or a future KWin
+   that re-broadcasts on `reconfigure`. Then delete the injection from
+   `gtk_wayland_deco_live.rs` and assert on the provocation directly:
+   ```
+   .port/tools/gates/ws19_wayland_deco_live_gate.sh     # already performs and reports it
+   ```
+   The gate prints `compositor provocation: … csd=<v>`; when `csd=true` appears there, the
+   wire half is covered and this row can be deleted.
+2. A wire-level injector (a `wl_display` proxy that relays the real compositor and emits an
+   extra `default_mode` on the manager object id it sees pass through). Confirm with
+   `WAYLAND_DEBUG=1` that a THIRD `default_mode(N)` reaches the client after bind.
+
+---
+
 ## V5. X11 winproto residuals: no native X11 session, no KWin, and NO synthetic keyboard input on this VM [WS16, 2026-07-29]
 
 > **OWNER [WS19 audit, 2026-07-29]: WS17.** V5 was filed by WS16 on 2026-07-29, six
@@ -186,6 +403,21 @@ cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_set_urgent 
 > requires** (a native X11 session *and* KWin), and item 1 (a physical keypress) is the
 > one part that needs real hardware input. WS19 T14 adds V5 to WS17's scope table; WS17
 > must either discharge it on that box or restate it as a precisely-worded residual.
+>
+> **WS17 OUTCOME [2026-07-29]: all three items REMAIN OPEN. The "items 2–3 come free with
+> V3's box" premise did not hold, because V3 itself was discharged WITHOUT a KDE box.**
+> WS17 got a real KWin only by running `kwin_wayland` NESTED from a rootless
+> RPM-extracted prefix (`sudo` on this VM requires a password, so no KDE could be
+> *installed*). That yields KWin on **Wayland**, not a KDE-Plasma-**on-X11** session, so:
+> * **item 2** (a native X11 login session) is untouched — still needs
+>   `/usr/share/xsessions` to offer a GNOME/Plasma X11 session and a human at the GDM
+>   greeter, or a box that already has one;
+> * **item 3** (KWin blur) is *worse* than "no KWin available": WS17 measured that KWin
+>   6.7.3 advertises `ext_background_effect` with the blur capability **absent**
+>   (`blur_capability=false`), so the `_KDE_NET_WM_BLUR_BEHIND_REGION` X11 write and its
+>   Wayland sibling still cannot be visually confirmed even with KWin present. See V3.
+> * **item 1** stays exactly as written below — proven unverifiable on this VM, physical
+>   keyboard required. WS17 did not re-litigate it and neither should anyone else.
 
 **Context.** The x11 winproto arm is complete and verified live (WS16) but ONLY under
 `GDK_BACKEND=x11` against the VM's rootless `Xwayland :0` inside a GNOME/mutter

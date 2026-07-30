@@ -1,0 +1,29 @@
+WS17 V2 - hw_gl_probe.sh controls; captured 2026-07-29T23:08:58-07:00
+host: Linux 6.19.10-300.fc44.aarch64 aarch64 / Fedora VM under UTM Apple-Virtualization
+
+=== .port/tools/gates/hw_gl_probe.sh --self-test ===
+== hw_gl_probe.sh self-test (proves BOTH arms are reachable) ==
+  OK   glxinfo-hw-radeonsi.txt -> exit 0 (expected PASS)
+  OK   glxinfo-llvmpipe.txt -> exit 1 (expected FAIL)
+SELF-TEST GREEN: the PASS arm is reachable and the FAIL arm fires.
+NOTE: the passing fixture is SYNTHETIC. It proves this script's logic, NOT that
+      any accelerated hardware was tested. V2 stays open until a real box exits 0.
+self-test exit: 0
+
+=== live run on this VM (MUST fail: no GPU) ===
+source            : live glxinfo -B
+OpenGL renderer   : llvmpipe (LLVM 22.1.8, 128 bits)
+Device            : llvmpipe (LLVM 22.1.8, 128 bits) (0xffffffff)
+Accelerated       : no
+Max core profile  : 4.6 (rustty floor 4.3)
+
+  FAIL Accelerated: no — this is not a hardware-accelerated stack
+  FAIL renderer is a software rasterizer: llvmpipe (LLVM 22.1.8, 128 bits)
+  ok   core profile 4.6 >= 4.3
+
+HW GL PROBE: FAIL — this box cannot host the V2 bare-metal GPU sign-off.
+live exit: 1
+
+=== kernel virtio_gpu features (why there is no 3D) ===
+Jul 29 08:27:27 fedora kernel: [drm] Initialized virtio_gpu 0.1.0 for 0000:00:06.0 on minor 0
+Jul 29 08:27:27 fedora kernel: virtio-pci 0000:00:06.0: [drm] fb0: virtio_gpudrmfb frame buffer device

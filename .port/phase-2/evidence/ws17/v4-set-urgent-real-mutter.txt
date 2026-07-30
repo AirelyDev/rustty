@@ -1,0 +1,24 @@
+WS17 V4 — set_urgent activation-token dispatch against REAL mutter
+captured: 2026-07-29T23:10:48-07:00
+mutter:   mutter 50.0
+compositor: a SECOND, HEADLESS mutter on socket wayland-mutterkat
+            (--headless --virtual-monitor 1280x720). The primary tty2 GNOME
+            session, GDM and the default systemd target were NOT touched.
+uptime before:  23:10:40 up 14:43,  2 users,  load average: 1.03, 2.47, 1.63
+uptime after :  23:10:48 up 14:43,  2 users,  load average: 0.95, 2.41, 1.62
+
+--- arm 1: real headless mutter (must pass) ---
+test wayland_set_urgent_dispatches_activation_token ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+--- arm 2: no compositor, NEGATIVE CONTROL (must fail) ---
+thread 'wayland_set_urgent_dispatches_activation_token' (128529) panicked at crates/rustty-apprt/tests/gtk_wayland_set_urgent.rs:68:18:
+gtk init: BoolError { message: "Failed to initialize GTK", filename: "/home/gael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-0.11.4/src/rt.rs", function: "gtk4::rt::init", line: 161 }
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+RESIDUAL, deliberately not attempted: re-running this KAT on the PRIMARY GNOME
+session. Two hard host crashes correlated with primary-session live-compositor KAT
+activity (abrupt journal end, no guest OOM/panic — hypervisor-style death, root
+cause never attributed). Since this run exercises the SAME mutter codebase and the
+SAME xdg_activation_v1 implementation, the marginal information from repeating it on
+the crash-correlated session does not justify the risk to a shared dev host.

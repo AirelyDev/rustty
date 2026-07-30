@@ -4339,20 +4339,70 @@ the way to its side effect — the gate asserts the map lookup HIT, that
 `performAllAction` returned `Ok`, and that a new toplevel window appeared. Only
 mutter's key-event → `Activated` step is unexercised.
 
-**Sibling deferral, split out:** the portal `OpenURI` call site is NOT covered by
-WS15 and now has its own top-level entry below ("GTK portal OpenURI (L6)"), so it
-stays discoverable by a ledger grep instead of being buried under this resolved
-heading.
+**Sibling deferral, split out:** the portal `OpenURI` call site was NOT covered by
+WS15 and got its own top-level entry below ("GTK portal OpenURI (L6)"), so it
+stayed discoverable by a ledger grep instead of being buried under this resolved
+heading. **That entry is now RESOLVED (WS19 T8, 2026-07-29).**
 
 
-## GTK portal OpenURI (L6) — call site INHABITED, body unported [split out of the WS15 GlobalShortcuts entry, 2026-07-29]
+## ~~GTK portal OpenURI (L6)~~ **RESOLVED — WS19 T8, 2026-07-29 (audit row O6)**
 
-**OPEN. OWNER [WS19 T19, 2026-07-29]: WS19 T8** — WS15 split this out and did not take
-it, and WS15 has since MERGED, so the row was ORPHANED (audit row O6). WS19 T8 owns it;
-it is **NOT yet executed** (it needs the `portal.zig` + `portal/OpenURI.zig` port onto the
-WS15 `gio::DBusConnection` + self-computed-request-path pattern, plus live `dbus-monitor`
-verification on the VM against the installed `ghostty 1.3.1-2.fc44` handshake). Gate G-P2
-reports it RED until then.
+**RESOLVED.** `portal.zig` + `portal/OpenURI.zig` are ported as
+`crates/rustty-apprt/src/gtk/portal.rs` + `portal/open_uri.rs`, onto the same
+`gio::DBusConnection` + self-computed-request-path pattern `global_shortcuts.rs`
+established. The call site is no longer a placeholder: `startup` hands the connection to
+the `OpenUri` object (`application.zig:1305-1308`), `open_url` dispatches to
+`open_uri().start(value)` with the reference's `catch → openUrlFallback` arm
+(`:2358-2363`), `openUri()` is exposed (`:817-820`), and `deinit_private` calls its
+`deinit` (`:440`). The prior stand-in (`gio::AppInfo::launch_default_for_uri`) is gone.
+
+Three DELIBERATE, DOCUMENTED divergences, all carried in the module docs: (1) no `app`
+backref — the reference holds one only for the allocator and `openUrlFallback`, and the
+port's fallback is app-independent; (2) `RefCell` rather than a mutex, with the borrow
+released before the outbound fallback call (the reference holds its mutex across it;
+every caller here is the GTK main loop); (3) a non-UTF-8 URI is reported as an error —
+D-Bus strings must be UTF-8, so the reference's raw `dupeZ` bytes would build an invalid
+message, and the error routes the byte string to the OS opener via the caller's existing
+`catch` arm.
+
+**Verification** — `.port/tools/gates/ws19_portal_openuri_gate.sh`, GREEN on the VM
+(3 layers, both negative controls exercised; host uptime 14:02 unchanged across the run):
+1. **Ordering, against a stub portal on a private activation-free bus**
+   (`tests/gtk_portal_openuri.rs`): the stub emits `Response` BEFORE returning the method
+   reply, so only a client that pre-subscribed can observe it. Also asserts the
+   on-the-wire payload field by field against `OpenURI.zig:266-330` (parent window `""`,
+   the uri verbatim, `handle_token`/`writable`/`ask`) and that the payload's
+   `handle_token` is the token in the path subscribed to.
+   **DEMONSTRATED FAIL ARM:** subscribing from the reply callback instead (the literal
+   documented flow) gives `responses: 0` while the stub confirms it emitted on the right
+   path. Recorded finding: merely moving the subscribe to the line AFTER the send does
+   NOT reproduce it — `gio`'s `call` is async and the portal's `Response` is unicast, so
+   what matters is "before any main-loop iteration", not "before the send".
+   **NEGATIVE CONTROL:** the stub then releases the portal bus name and the OS-opener
+   fallback must fire exactly once, with no hang.
+2. **Live round-trip against the session's real `xdg-desktop-portal`**
+   (`tests/gtk_portal_openuri_live.rs`): `Response` code 0 on the self-computed request
+   path, fallback NOT used. **NEGATIVE CONTROL:** with the probe scheme handler removed
+   the portal cannot resolve the URI and the same test FAILS — the gate runs that arm.
+3. **Wire shape** from a `dbus-monitor` capture, anti-vacuity-checked by grepping for the
+   token the app itself logged.
+
+**PLAN CORRECTION (what the WS19 plan got wrong).** Task 8 Step 4 asked for the capture to
+be diffed against "the installed `ghostty 1.3.1-2.fc44` doing the same handshake". That is
+impossible: `strings /usr/bin/ghostty | grep -c org.freedesktop.portal.OpenURI` → **0**.
+That build carries only `org.freedesktop.portal.GlobalShortcuts` + `.Request`; the portal
+`OpenURI` call site landed upstream AFTER the 1.3.1 tag, so there is no installed oracle to
+diff against. The substitute — layer 1's field-by-field payload assertions against the
+oracle SOURCE at the pin — is stronger than an eyeballed transcript comparison.
+
+**A TOOLING HAZARD worth recording for every VM lane:** `rsync -a` preserves mtimes, so
+syncing a macOS-edited file onto the VM can leave it OLDER than the existing build
+artifacts and `cargo` will NOT rebuild. This produced a fully convincing false result —
+a KAT "failing" against correct source because the binary still held a previous
+experiment. Always `touch` synced files (or use `rsync --checksum` plus `touch`) before
+building, and distrust any VM result whose build log shows no compile step.
+
+The original analysis follows, for the record.
 
 The sibling XDG portal call site to GlobalShortcuts: the reference's
 `portal.zig` / `portal/OpenURI.zig`, reached from `application.zig`'s `startup`.
@@ -5119,9 +5169,11 @@ Recorded after the **final parity audit** (25 adversarially-verified agents over
 features vs ghostty) confirmed these are the ONLY remaining Linux/GTK divergences and that they
 are **not daily-use parity gaps on the common (GNOME/mutter) target**.
 
-> **CORRECTION (2026-07-29, WS15 review):** "ONLY remaining" is no longer accurate — the portal
-> `OpenURI` call site is also open; see "GTK portal OpenURI (L6)" above. Read this entry as
+> **CORRECTION (2026-07-29, WS15 review):** "ONLY remaining" was not accurate — the portal
+> `OpenURI` call site was also open; see "GTK portal OpenURI (L6)" above. Read this entry as
 > covering the winproto-x11 and dcimgui divergences only.
+> **UPDATE (2026-07-29, WS19 T8):** that portal gap is now CLOSED, so the correction is
+> historical; the two divergences named below are once again the full set.
 
 - ~~**`gtk/winproto/x11.rs` — the x11 window-protocol arm (L6).**~~ **RESOLVED.** The
   arm landed 2026-07-19 (`aae9536`) behind the `x11` cargo feature (`gdk4-x11` with
@@ -5204,8 +5256,11 @@ are **not daily-use parity gaps on the common (GNOME/mutter) target**.
     caught the token `done` demarshalled-but-undispatched, plus a latent trampoline cast bug
     (callback data is `*mut Rc<RefCell<Pump>>`, was deref'd as `*const RefCell<Pump>` — every
     `try_borrow_mut` failed). Both fixed by the queue-pending prepare/check rewrite. Still-open
-    coupled sub-item: `Window` snapshots the decoration mode at init, so a LIVE compositor
-    decoration-mode change (now cranked) is not re-read — a separate tracked deferral.
+    coupled sub-item — **RESOLVED, WS19 T9, 2026-07-29 (audit row O7)**: `Window` no longer
+    snapshots the decoration mode. It shares the app's `Rc<RefCell<Pump>>` and re-reads
+    `Globals` at each `decoration_mode`/`client_side_decoration_enabled`/`sync_blur` call,
+    which is the reference's live `globals: *Globals` dereference
+    (`wayland.zig:222`/`:252`/`:303`).
 - **`gtk/class/inspector_*` + `imgui_widget` — the dcimgui terminal inspector (L6)
   — RESOLVED [2026-07-19].** The GTK/OpenGL3 inspector landed (commits `657f223`,
   `f780650`): the `.inspector` performAction arm and `Surface::control_inspector`
@@ -5250,12 +5305,19 @@ Two known residuals (grounding-review):
   window and asserts mutter's real token `done` dispatched through the GSource (via the test-only
   `App::activation_done_count` counter) — passes in <1s. CSD + blur were never affected (their
   inputs are captured at the init two-phase roundtrip; their requests are outgoing). Remaining
-  coupled follow-up: `Window` still snapshots the decoration mode at init rather than re-reading
-  `Globals` live (a compositor decoration-mode change now cranks but is not re-read).
-- **LOW (pathological): duplicate global re-advertisement.** If a compositor re-advertises a singleton
-  interface with a new `name`, `Globals::bind_global` overwrites the typed proxy but leaves the stale
-  `name→tag` map entry, so a later `global_remove(old_name)` would unbind the live proxy. Compositors
-  don't re-advertise these singletons in practice. (globals.rs bind_global/remove_global.)
+  coupled follow-up — **RESOLVED, WS19 T9, 2026-07-29 (audit row O7).** `Window` re-reads
+  `Globals` live (the reference's `globals: *Globals` dereference at
+  `wayland.zig:222`/`:252`/`:303`) instead of snapshotting at init; the same change made the
+  KDE-decoration-manager presence and the blur capability live too, since the reference reads
+  all three at the same points. Gated by
+  `.port/tools/gates/ws19_wayland_deco_live_gate.sh` (nested KWin 6.7.3, GREEN, with the
+  pre-fix snapshot FAIL arm demonstrated). Residual — the compositor-originated *transport*
+  of a post-bind `default_mode` change — is recorded in `VERIFICATION_DEBT.md` (V6) with the
+  measurement that established it.
+- ~~**LOW (pathological): duplicate global re-advertisement.**~~ **RECLASSIFIED — WS19 T9,
+  2026-07-29 (audit row O8): moved to `# Justified R1 Divergences` with a 4-criterion basis
+  (input no compositor produces; the oracle has the same shape; the failure mode degrades to
+  the graceful-`None` arm; the fix costs state the reference does not have). Not open work.**
 
 ### `share/{APP}` resource root — shell-integration + themes SHIPPED ✅ RESOLVED [2026-07-23, WS1]
 The R5 placeholder (`share/{APP}/DEFERRALS.md`, written by
@@ -5712,6 +5774,33 @@ Divergences from the oracle that are intentional and will NOT be "completed"
 later. Each records what diverges, why fidelity was overruled, and how the
 divergence is bounded. Anything here must be a conscious decision with a
 rationale — never an accident.
+
+## wayland `Globals::bind_global` — duplicate re-advertisement of a SINGLETON global leaves a stale `name→tag` entry
+
+**[RECLASSIFIED — WS19 T9, 2026-07-29, audit row O8.]** Previously filed as an open
+LOW deferral with no owner (`D:4905`). It is a permanent Justified R1 Divergence.
+
+**What diverges.** If a compositor re-advertises a singleton interface under a NEW
+`name`, `Globals::bind_global` overwrites the typed proxy but leaves the old
+`name→tag` map entry in place, so a later `global_remove(old_name)` would unbind the
+live proxy (`winproto/wayland/globals.rs` `bind_global`/`remove_global`).
+
+**4-criterion basis:**
+1. **Bounded input that no implementation produces.** It requires a compositor to
+   re-advertise a *singleton* interface under a second `name` while the first is still
+   advertised. Nothing does this; the singletons involved
+   (`wl_compositor`, `xdg_activation_v1`, the KDE managers, `ext_background_effect`) are
+   advertised exactly once per registry.
+2. **The oracle has the same shape.** `Globals.zig`'s bind path likewise overwrites the
+   typed proxy and keeps no bidirectional `tag↔name` bookkeeping, so "fixing" it here
+   would be a divergence FROM the reference, which is the opposite of R1.
+3. **The failure mode is safe.** A `global_remove(old_name)` would clear a live proxy,
+   degrading to the graceful-`None` arm the code already handles for absent globals
+   (blur/CSD/slide/urgency each early-return when their global is `None`). No UB, no
+   panic, no hang.
+4. **Cost exceeds benefit.** Tracking `tag→name` bidirectionally to defend against an
+   input no implementation produces adds state the reference does not have, on the
+   registry path, for no observable gain.
 
 ## rustty-termio ReadThread — PRESERVED REFERENCE QUIRK: trailing pty output dropped on Linux POLLHUP (L1 LT9)
 
@@ -6230,8 +6319,8 @@ Owner of this audit and of every ORPHANED row below: **WS19**
 | O3 | `D:4981`/`:5011` WS7 Phase C divergence #11 — `Screen::cursor_scroll_region_up` unported; "belongs to the WS8 upstream-sweep backlog (BL-4)" | **OPEN, real, and DOUBLY mis-filed.** `grep -rn 'cursor_scroll_region_up\|cursorScrollRegionUp' crates/` → **zero hits**. But BL-4 is the **perf series**, which is **WS10**'s scope, not WS8's — so the row names a closed WS *and* the wrong backlog. The blocking commit `77190bd02` is beyond the pin. | **route to WS10** (BL-4). Because `77190bd02` is beyond-pin, the port is **cheaper AFTER Phase 3 advances the pin** — WS19 T2 rewrites the row to say exactly that instead of leaving it in a closed WS. | **S** (row) / **M** (port, in WS10) | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** Owner is now **WS10** (BL-4), pin-sequenced; `77190bd02` is beyond-pin. |
 | O4 | `D:4960` inspector `pagelist.rs` CELL-detail path still restores compressed pages; "D6 must port that end state" | **OPEN — and WS7 D6 MERGED (`b8c40f9`) without closing it.** `crates/rustty-inspector/src/widgets/pagelist.rs` still calls `Node::page(cell.node)` at **6** sites (`:1701,:1703,:1759,:1889,:2163,:2379`). The guard at `:2414` asserts `!loop_src.contains("Node::page(")` over the **page-tree loop source only** — exactly the weaker form the deferral predicted — so the file-wide property is still unproven. | **fix in WS19 T7** (port the oracle `pages.pin` + `InspectedCell` restructure; tighten the guard to whole-file) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T7.** Ported the oracle `pin` + `InspectedCell` restructure; whole-file guard in a SIBLING file; FAIL arm mutation-proven. |
 | O5 | `D:4973` `PageList::Limits`/`Limits::enforce` has no rustty counterpart, so the oracle's 11th `mark_activity` site has nothing to port onto | **OPEN, correctly described.** Depends on a struct beyond the pin. | **route to Phase 3 as a re-vet row**, not a Phase-2 deferral: WS19 T2 restates it as pin-conditional with the exact assertion Phase 3 must make (`Limits::enforce` must `mark_activity` on entry) | **S** | **WS19 EXECUTION STATUS:** **DONE (row rewritten) — WS19 T2.** Phase 3 re-vet assertion **P3-RV1**. |
-| O6 | `D:4046` GTK portal `OpenURI` — call site INHABITED, body unported; marked **OPEN**, no owner | **OPEN, real.** No `portal` module under `crates/rustty-apprt/src/gtk/`; `startup` fetches the `gio::DBusConnection` for GlobalShortcuts only. WS15 explicitly split this out and did not take it. | **fix in WS19 T8** (reuses the WS15 request-path pattern + its live gate harness) | **M** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T8** (GTK portal `OpenURI`). Needs the port plus live D-Bus verification on the VM. |
-| O7 | `D:4858`/`:4904` wayland `Window` snapshots the decoration mode at init; a live decoration-mode change is now *cranked* but never *re-read* | **OPEN, real, no owner** — recorded twice, both as a "coupled follow-up" with no WS. | **fix in WS19 T9** | **S** | **WS19 EXECUTION STATUS:** **NOT DONE — WS19 T9** (wayland decoration-mode re-read). Needs a real compositor. |
+| O6 | `D:4046` GTK portal `OpenURI` — call site INHABITED, body unported; marked **OPEN**, no owner | **OPEN, real.** No `portal` module under `crates/rustty-apprt/src/gtk/`; `startup` fetches the `gio::DBusConnection` for GlobalShortcuts only. WS15 explicitly split this out and did not take it. | **fix in WS19 T8** (reuses the WS15 request-path pattern + its live gate harness) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T8, 2026-07-29.** Ported (`gtk/portal.rs` + `gtk/portal/open_uri.rs`), call site live in `application.rs`, and verified on the VM by `.port/tools/gates/ws19_portal_openuri_gate.sh` (stub-portal ordering with a demonstrated FAIL arm, live round-trip against the real `xdg-desktop-portal`, `dbus-monitor` wire shape; both negative controls exercised). The plan's "diff against installed ghostty 1.3.1" step was impossible — that build has no OpenURI portal path (`strings … | grep -c` → 0); see the resolved entry. |
+| O7 | `D:4858`/`:4904` wayland `Window` snapshots the decoration mode at init; a live decoration-mode change is now *cranked* but never *re-read* | **OPEN, real, no owner** — recorded twice, both as a "coupled follow-up" with no WS. | **fix in WS19 T9** | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T9, 2026-07-29.** `Window` shares the app's `Rc<RefCell<Pump>>` and re-reads `Globals` at each `decoration_mode`/`client_side_decoration_enabled`/`sync_blur` call (the reference's `globals: *Globals` dereference at `wayland.zig:222`/`:252`/`:303`); the three snapshot fields are now caches refreshed by every live read. Gated by `.port/tools/gates/ws19_wayland_deco_live_gate.sh` — nested KWin 6.7.3 on its own socket, GREEN, with the pre-fix snapshot FAIL arm demonstrated (`csd` stays `false`) and a latch check (mode back to Server → `csd` back to `false`). Residual, recorded as `VERIFICATION_DEBT.md` V6: no compositor on this host re-advertises `default_mode` post-bind — MEASURED (`WAYLAND_DEBUG=1`: KWin 6.7.3 emits exactly two `default_mode(2)`, both at bind, none after `org.kde.KWin.reconfigure`; sway sets it once at startup; mutter has no KDE decoration manager), so the wire *transport* of a post-bind change is unexercised while the re-read itself is proven. |
 | O8 | `D:4905` wayland duplicate-global re-advertisement leaves a stale `name→tag` entry | **OPEN, LOW, no owner.** | **permanent divergence** — pathological input no compositor produces; 4-criterion basis written in WS19 T9 | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T9 (ledger half).** Duplicate-global nit is a **Justified R1 Divergence** with a 4-criterion basis. |
 | O9 | `D:4565` kqueue `thread_perform` still forms `&mut Loop` on a pool worker (the `epoll.rs` twin is already fixed); `task_loop` lineage unaudited | **OPEN, real, no owner.** Filed as "Follow-up (open, low)" *inside a RESOLVED entry* — invisible to any grep for open items. Now reachable: the ThreadPool body has landed (see W5). | **fix in WS19 T10** (mirror epoll's copied-fd notify; audit the lineage on `mirihar-xev-mpsc`) | **M** | **WS19 EXECUTION STATUS:** **DONE — WS19 T10.** And the prescription it carried was WRONG: the harness proved "mirror epoll's copied-fd notify" INSUFFICIENT (`wakeup_copied`: still SB-UB — a by-value read is a foreign *access* against the loop thread's *protected* `&mut Loop`, and forming no reference is not enough). Cure applied to BOTH backends: the queue handle + the wakeup handle are copied into the caller-owned `Completion` at schedule time (`task_completions`, the reference's OWN field restored, + port-added `task_wakeup`), so `thread_perform` never accesses the `Loop` allocation and never derefs `task_loop` — which also discharges the lineage audit. 14-candidate SB/TB matrix in `.port/phase-2/mirihar-xev-mpsc/README.md`. |
 | O10 | `D:3273` macOS `xev.File`/`TCP`/`UDP` watcher instantiations still deferred (Linux ported them, Tasks 3–5); plus the macOS `kqueue: file IO on thread pool` skip-stub | **OPEN, real, no owner.** The two targets deliberately diverge, gate-pinned by `crates/rustty-xev/tests/surface_parity.rs`. | **permanent divergence** — already deliberate and gate-pinned; WS19 T11 moves it into the divergence section with its 4-criterion basis rather than leaving it in a "DEFERRED" list | **S** | **WS19 EXECUTION STATUS:** **DONE — WS19 T11.** Permanent **Justified R1 Divergence**, 4-criterion basis. |
@@ -6352,9 +6441,9 @@ opposite direction** — claiming open work that has shipped.
 | **O15** `App.zig` Wasm block | `grep -rn 'Wasm' crates/rustty-core/src/app.rs` → `:998`–`:1007`, preserved as comments | confirmed **OPEN** → WS14 |
 | **O16** WebGL backend | repo-wide `grep -rni 'webgl'` → only `build_config::renderer::Backend::Webgl` (an enum variant) + prose "WebGL wasm-deferred"; no backend implementation | confirmed **OPEN** → WS14 |
 | **O5** `PageList::Limits` | repo-wide `grep -rn 'struct Limits'` → only `kitty/graphics_image.rs:126` (an unrelated struct); no `PageList::Limits` | confirmed **OPEN** → Phase 3 re-vet P3-RV1 |
-| **O6** GTK portal `OpenURI` | repo-wide `grep -rni 'openuri\|open_uri'` across `crates/` → **0 hits**; the only portal code is `gtk/class/global_shortcuts.rs` (GlobalShortcuts iface) | confirmed **OPEN** → WS19 T8 |
-| **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ended in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | **CLOSED** by WS19 T10 (both backends; `thread_perform` no longer derefs `task_loop` at all) |
-| **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returned `None` unconditionally; `:103` was the unreachable emit (and wrote the bare hash, not a URL) | **CLOSED** by WS19 T12 (implemented) |
+| **O6** GTK portal `OpenURI` | repo-wide `grep -rni 'openuri\|open_uri'` across `crates/` → **0 hits** at audit time; the only portal code was `gtk/class/global_shortcuts.rs` (GlobalShortcuts iface) | was **OPEN** → **CLOSED by WS19 T8, 2026-07-29** (`gtk/portal.rs` + `gtk/portal/open_uri.rs`, live-gated against a real `xdg-desktop-portal` `Response` code 0) |
+| **O9** kqueue `thread_perform` | `crates/rustty-xev/src/kqueue.rs:1446` `thread_perform` ended in `(*(*c).task_loop).wakeup()`, and `wakeup(&mut self)` at `:1475` — the autoref forms `&mut Loop` on a pool worker | **CLOSED** by WS19 T10 (both backends; `thread_perform` no longer derefs `task_loop` at all). NOTE: the Miri harness proved the *prescribed* epoll-style fix (copy the field, form no reference) is ITSELF UB under Stacked Borrows — a by-value read of a `Copy` field is still a foreign ACCESS on the `Loop` allocation. This also retroactively invalidates the previously-"RESOLVED" M1 verdict. |
+| **O12** `+version` OSC-8 hyperlink | `crates/rustty-cli/src/version.rs:66` `commit_hash()` returned `None` unconditionally; `:103` was the unreachable emit (and wrote the bare hash as the URI, with no URL prefix at all) | **CLOSED** by WS19 T12 (implemented, not diverged — the repo URL already exists as the workspace `Cargo.toml` `repository` key, so there was no honest 4-criterion basis for permanence) |
 | **O21** `shell_integration.rs` lossy path | `crates/rustty-termio/src/shell_integration.rs:1708` and `:1760` both `to_string_lossy()` | confirmed **OPEN** → WS19 T15 |
 | **O1** `style::Color` | `crates/rustty-vt/src/style.rs:143` is a plain `enum Color { None, Palette(u8), Rgb(RGB) }`, no `#[repr]` | confirmed **OPEN** → WS19 T5 |
 | **O3** `cursor_scroll_region_up` | already repo-wide in the original audit (`grep -rn … crates/` → 0 hits) | confirmed **OPEN** → WS10, pin-sequenced |
