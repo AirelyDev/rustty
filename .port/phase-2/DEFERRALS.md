@@ -4748,15 +4748,35 @@ KATs: sys.rs `default_decoder_*` + stream_terminal.rs
 `--features wuffs`); graphics_image.rs `image_load_png_not_compressed_regular_file`
 no longer skips under the feature.
 
-### 3. rustty-termio `shell_integration.rs` — lossy path byte source (LOW, cleanup)
+### 3. ~~rustty-termio `shell_integration.rs` — lossy path byte source (LOW, cleanup)~~ **RESOLVED — WS19 T15, 2026-07-29 (audit row O21)**
 
-`TmpResourcesDir` (test-only helper) builds its owned `Vec<u8>` paths via
+~~`TmpResourcesDir` (test-only helper) builds its owned `Vec<u8>` paths via
 `to_string_lossy().into_owned().into_bytes()` (shell_integration.rs:1708, and
 the `realpath_bytes` helper :1753-1763), deviating from the
 zig-byteslice-to-rust-rawbytes rule (raw `OsStr` bytes, never lossy String).
 Behaviorally benign (macOS tmp paths are UTF-8 in practice); ownership/free
 discipline is faithful. **Fix:** `std::os::unix::ffi::OsStrExt::as_bytes` in a
-later cleanup pass.
+later cleanup pass.~~
+
+**RESOLVED.** Both sites now use `std::os::unix::ffi::OsStrExt::as_bytes` — the raw
+platform bytes, which is the exact analogue of the reference's `realpathAlloc`
+returning `[]u8` (POSIX paths are byte strings, not UTF-8). Owner was "a later cleanup
+pass", i.e. nobody.
+
+Landed with a **RED/GREEN discriminator, not a smoke test**:
+`non_utf8_path_bytes_survive_the_conversion_but_not_the_lossy_one` asserts BOTH that
+`OsStrExt::as_bytes` round-trips a `0xFF` byte exactly AND that
+`to_string_lossy().into_owned().into_bytes()` mangles it into U+FFFD (`EF BF BD`) — so
+the test fails if the fix is reverted, and also fails if the fixture ever stops being
+non-UTF-8 (which would make it vacuous).
+
+**Platform finding worth recording:** a filesystem-based fixture is IMPOSSIBLE on the
+primary host — APFS rejects non-UTF-8 filenames outright (`create_dir_all` on
+`b"ws19_\xffdir"` → `Os { code: 92, … "Illegal byte sequence" }`, observed). The
+property under test is the CONVERSION, which is host-independent, so the main test does
+not touch the filesystem; a sibling `#[cfg(target_os = "linux")]` test
+(`realpath_bytes_round_trips_a_non_utf8_directory_name`) exercises the real
+`realpath` round-trip on ext4/tmpfs, where such names are legal.
 
 ## rustty-apprt-c `rustty_cli_try_action` — CLI action from C (non-null path) [added 2026-07-12, Phase-A ghostty_* symbol closure]
 
