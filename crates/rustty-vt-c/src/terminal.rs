@@ -4551,6 +4551,40 @@ mod tests {
         });
     }
 
+    // test "write_pty receives DECRQSS response" (oracle 39ae85f04)
+    //
+    // Area C §6.5 recorded a BOUNDED UNCERTAINTY: nobody had traced whether the
+    // C `vt_write` path delivers a DECRQSS reply through the `write_pty`
+    // trampoline. This test answers it definitively — and it does, so no
+    // additional C-side plumbing was needed beyond the `dcs_handler` field.
+    #[test]
+    fn write_pty_receives_decrqss_response() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            vtw(t, b"\x1B[1m\x1BP$qm\x1B\\");
+            assert_eq!(
+                b"\x1BP1$r0;1m\x1B\\".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
     // test "write_pty receives OSC color query response" (oracle 14c829883)
     #[test]
     fn write_pty_receives_osc_color_query_response() {

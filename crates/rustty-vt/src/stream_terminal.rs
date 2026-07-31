@@ -124,6 +124,10 @@ pub struct Handler<'a> {
     /// the kitty graphics protocol.
     pub apc_handler: ApcHandler,
 
+    /// The DCS command handler maintains state for DCS queries.
+    // dcs_handler: dcs.Handler = .{},
+    pub dcs_handler: crate::dcs::Handler,
+
     // PORT NOTE: ties the `'a` effect-callback lifetime to the handler without a
     // stored borrow; the actual aliased `Terminal` is held as a raw pointer.
     _phantom: PhantomData<&'a ()>,
@@ -278,6 +282,8 @@ impl<'a> Handler<'a> {
             effects: Effects::READONLY,
             // apc_handler: .{} (the reference field default)
             apc_handler: ApcHandler::default(),
+            // dcs_handler: .{} (the reference field default)
+            dcs_handler: crate::dcs::Handler::default(),
             _phantom: PhantomData,
         }
     }
@@ -428,6 +434,97 @@ impl<'a> Handler<'a> {
             return;
         };
         func(self, data);
+    }
+
+    // fn dcsHook(self: *Handler, value: Action.Value(.dcs_hook)) !void {
+    //     var cmd = self.dcs_handler.hook(self.terminal.gpa(), value) orelse return;
+    //     defer cmd.deinit();
+    //     try self.dcsCommand(&cmd);
+    // }
+    fn do_dcs_hook(&mut self, dcs: crate::parser::DCS) -> Result<(), crate::pagelist::OutOfMemory> {
+        let gpa = self.term().gpa();
+        // (PORT NOTE: the trait hands the parser's owned DCS; the dcs Handler
+        // takes the borrowed view — the same coercion Zig's `terminal.DCS` does.)
+        let mut cmd = match self.dcs_handler.hook(
+            gpa,
+            crate::dcs::DCS {
+                intermediates: &dcs.intermediates,
+                params: &dcs.params,
+                final_: dcs.final_,
+            },
+        ) {
+            Some(cmd) => cmd,
+            None => return Ok(()),
+        };
+        // defer cmd.deinit();
+        let result = self.do_dcs_command(&mut cmd);
+        cmd.deinit();
+        result
+    }
+
+    // fn dcsPut(self: *Handler, value: u8) !void { ... }
+    fn do_dcs_put(&mut self, value: u8) -> Result<(), crate::pagelist::OutOfMemory> {
+        let mut cmd = match self.dcs_handler.put(value) {
+            Some(cmd) => cmd,
+            None => return Ok(()),
+        };
+        let result = self.do_dcs_command(&mut cmd);
+        cmd.deinit();
+        result
+    }
+
+    // fn dcsUnhook(self: *Handler) !void { ... }
+    fn do_dcs_unhook(&mut self) -> Result<(), crate::pagelist::OutOfMemory> {
+        let mut cmd = match self.dcs_handler.unhook() {
+            Some(cmd) => cmd,
+            None => return Ok(()),
+        };
+        let result = self.do_dcs_command(&mut cmd);
+        cmd.deinit();
+        result
+    }
+
+    // fn dcsCommand(self: *Handler, cmd: *dcs.Command) !void {
+    fn do_dcs_command(
+        &mut self,
+        cmd: &mut crate::dcs::Command,
+    ) -> Result<(), crate::pagelist::OutOfMemory> {
+        match cmd {
+            // .decrqss => |request| { ... }
+            crate::dcs::Command::Decrqss(request) => {
+                // var response: [max_response_bytes + 1]u8 = undefined;
+                // const encoded = try request.encode(self.terminal, response[0 .. response.len - 1]);
+                // response[encoded.len] = 0;
+                // self.writePty(response[0..encoded.len :0]);
+                //
+                // PORT NOTE: the reference reserves the final byte for the Zig
+                // `[:0]const u8` sentinel the callback takes. rustty's
+                // `write_pty` callback takes a plain `&[u8]`, so the reserved
+                // byte is kept (identical capacity budget) but no NUL is
+                // appended.
+                let request = *request;
+                let mut response = [0u8; crate::dcs::Decrqss::MAX_RESPONSE_BYTES + 1];
+                let last = response.len() - 1;
+                let encoded_len = {
+                    let t: *mut Terminal = self.terminal;
+                    // SAFETY: `self.terminal` aliases the Terminal that created
+                    // this Handler (see `term()`); the deref is short-lived and
+                    // does not overlap another live `&mut Terminal`.
+                    // (PORT NOTE: `dcs::OutOfMemory` and `pagelist::OutOfMemory`
+                    // are both the reference's single `Allocator.Error`; the
+                    // crate has no `From` between them, so map explicitly.)
+                    let encoded = request
+                        .encode(unsafe { &mut *t }, &mut response[..last])
+                        .map_err(|_| crate::pagelist::OutOfMemory)?;
+                    encoded.len()
+                };
+                self.write_pty(&response[..encoded_len]);
+                Ok(())
+            }
+
+            // .tmux, .xtgettcap => {},
+            crate::dcs::Command::Tmux(_) | crate::dcs::Command::Xtgettcap(_) => Ok(()),
+        }
     }
 
     // fn bell(self: *Handler) void {
@@ -1526,9 +1623,13 @@ impl<'a> Handler<'a> {
 // vt-12b-7b. The APC end + kitty/glyph arms remain stubbed (font-blocked,
 // deferred past vt-12; see DEFERRALS.md).
 impl<'a> stream::Handler for Handler<'a> {
-    // pub fn deinit(self: *Handler) void { self.apc_handler.deinit(); }
+    // pub fn deinit(self: *Handler) void {
+    //     self.apc_handler.deinit();
+    //     self.dcs_handler.deinit();
+    // }
     fn deinit(&mut self) {
         self.apc_handler.deinit();
+        self.dcs_handler.deinit();
     }
 
     // PORT NOTE: the reference has no `vtRaw` declared on this handler, so the
@@ -1978,14 +2079,23 @@ impl<'a> stream::Handler for Handler<'a> {
             .set(kitty::key::SetMode::Not, v.flags);
     }
 
-    // .dcs_hook, .dcs_put, .dcs_unhook => {},
-    // No supported DCS commands have any terminal-modifying effects, but they
-    // may in the future. For now we just ignore it.
-    fn dcs_hook(&mut self, dcs: crate::parser::DCS) {}
+    // .dcs_hook => try self.dcsHook(value),
+    fn dcs_hook(&mut self, dcs: crate::parser::DCS) {
+        let r = self.do_dcs_hook(dcs);
+        self.vt_catch(r);
+    }
 
-    fn dcs_put(&mut self, code: u8) {}
+    // .dcs_put => try self.dcsPut(value),
+    fn dcs_put(&mut self, code: u8) {
+        let r = self.do_dcs_put(code);
+        self.vt_catch(r);
+    }
 
-    fn dcs_unhook(&mut self) {}
+    // .dcs_unhook => try self.dcsUnhook(),
+    fn dcs_unhook(&mut self) {
+        let r = self.do_dcs_unhook();
+        self.vt_catch(r);
+    }
 
     // .apc_start => self.apc_handler.start(),
     fn apc_start(&mut self) {
@@ -2573,6 +2683,79 @@ mod tests {
                 !s.handler.semantic_failure,
                 "a color-operation failure is GRACEFUL and must not set semantic_failure"
             );
+        }
+        t.deinit(Global);
+    }
+
+    // test "DECRQSS responses"
+    #[test]
+    fn decrqss_responses() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        calls_reset();
+
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+
+            // SGR
+            s.next_slice(b"\x1B[1m\x1BP$qm\x1B\\");
+            assert_eq!(1_usize, calls_get());
+            assert_eq!(
+                b"\x1BP1$r0;1m\x1B\\".as_slice(),
+                cap_take().unwrap().as_slice()
+            );
+            calls_reset();
+
+            // Requests larger than the parser's fixed request buffer are
+            // ignored, and the next DCS command must still be processed
+            // normally.
+            s.next_slice(b"\x1BP$qfoo\x1B\\");
+            assert_eq!(0_usize, calls_get());
+            assert!(!s.handler.semantic_failure);
+            s.next_slice(b"\x1BP$qm\x1B\\");
+            assert_eq!(1_usize, calls_get());
+            assert_eq!(
+                b"\x1BP1$r0;1m\x1B\\".as_slice(),
+                cap_take().unwrap().as_slice()
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "DECRQSS without write effect is ignored"
+    #[test]
+    fn decrqss_without_write_effect_is_ignored() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1BP$qm\x1B\\");
+            assert!(!s.handler.semantic_failure);
+        }
+        t.deinit(Global);
+    }
+
+    // test "DCS command memory is released"
+    //
+    // PORT NOTE: the reference relies on `testing.allocator` to detect a leak.
+    // rustty has no leak-detecting test allocator here; the value of the test in
+    // this port is that `dcsCommand` releases a COMPLETED unsupported command
+    // and `Handler::deinit` releases an INCOMPLETE one — both exercised below
+    // and both observable under Miri / a leak checker.
+    #[test]
+    fn dcs_command_memory_is_released() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+
+            // A completed, unsupported command transfers its allocation to
+            // Command; dcsCommand must release it even though stream_terminal
+            // ignores it.
+            s.next_slice(b"\x1BP+q536D756C78\x1B\\");
+
+            // An incomplete command remains owned by the handler and must be
+            // released when the stream is deinitialized.
+            s.next_slice(b"\x1BP+q536D756C78");
         }
         t.deinit(Global);
     }

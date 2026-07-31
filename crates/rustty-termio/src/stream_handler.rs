@@ -45,7 +45,6 @@ use rustty_datastruct::blocking_queue::Timeout;
 use rustty_renderer::size::Size;
 use rustty_renderer::state::State;
 use rustty_renderer::thread as renderer_thread;
-use rustty_vt::screen::CursorStyle as ScreenCursorStyle;
 use rustty_vt::stream;
 use rustty_vt::terminal::Terminal;
 use rustty_vt::{ansi, color, csi, device_attributes, device_status, kitty, modes, osc};
@@ -525,138 +524,30 @@ impl<M: AppMailbox> StreamHandler<M> {
             }
 
             // .decrqss => |decrqss| {
+            //     var response: [terminal.dcs.Command.DECRQSS.max_response_bytes]u8 = undefined;
+            //     const encoded = try decrqss.encode(self.terminal, &response);
+            //     const msg = try termio.Message.writeReq(self.alloc, encoded);
+            //     self.messageWriter(msg);
+            // },
+            //
+            // PORT NOTE (oracle 39ae85f04, area E11): the 60-line inline
+            // DECRQSS builder that used to live here — the Sgr/Decscusr/
+            // Decstbm/Decslrm arms with hand-rolled prefix-offset arithmetic —
+            // is DELETED. `dcs::Decrqss::encode` is now the single owner so the
+            // full termio path and the libghostty-vt terminal stream emit
+            // byte-identical replies.
             rustty_vt::dcs::Command::Decrqss(decrqss) => {
-                // var response: [128]u8 = undefined;
-                // var stream = std.io.fixedBufferStream(&response);
-                // const writer = stream.writer();
-                let mut response = [0u8; 128];
-
-                // Offset the stream position to just past the response prefix.
-                // We will write the "payload" (if any) below. If no payload is
-                // written then we send an invalid DECRPSS response.
-                // const prefix_fmt = "\x1bP{d}$r";
-                // const prefix_len = std.fmt.comptimePrint(prefix_fmt, .{0}).len;
-                // stream.pos = prefix_len;
-                let prefix_len = "\x1bP0$r".len();
-                let mut pos = prefix_len;
-
-                // switch (decrqss) {
-                match decrqss {
-                    // Invalid or unhandled request
-                    // .none => {},
-                    rustty_vt::dcs::Decrqss::None => {}
-
-                    // .sgr => {
-                    rustty_vt::dcs::Decrqss::Sgr => {
-                        // const buf = try self.terminal.printAttributes(stream.buffer[stream.pos..]);
-                        let buf_len = self
-                            .term()
-                            .print_attributes(&mut response[pos..])
-                            .map_err(|_| crate::Error)?
-                            .len();
-
-                        // printAttributes wrote into our buffer, so adjust the stream
-                        // position
-                        // stream.pos += buf.len;
-                        pos += buf_len;
-
-                        // try writer.writeByte('m');
-                        response[pos] = b'm';
-                        pos += 1;
-                    }
-
-                    // .decscusr => {
-                    rustty_vt::dcs::Decrqss::Decscusr => {
-                        // const blink = self.terminal.modes.get(.cursor_blinking);
-                        let blink = self.term().modes.get(modes::Mode::CursorBlinking);
-                        // const style: u8 = switch (self.terminal.screens.active.cursor.cursor_style) {
-                        let style: u8 = match self.term().active_mut().cursor.cursor_style {
-                            // .block => if (blink) 1 else 2,
-                            ScreenCursorStyle::Block => {
-                                if blink {
-                                    1
-                                } else {
-                                    2
-                                }
-                            }
-                            // .underline => if (blink) 3 else 4,
-                            ScreenCursorStyle::Underline => {
-                                if blink {
-                                    3
-                                } else {
-                                    4
-                                }
-                            }
-                            // .bar => if (blink) 5 else 6,
-                            ScreenCursorStyle::Bar => {
-                                if blink {
-                                    5
-                                } else {
-                                    6
-                                }
-                            }
-
-                            // Below here, the cursor styles aren't represented by
-                            // DECSCUSR so we map it to some other style.
-                            // .block_hollow => if (blink) 1 else 2,
-                            ScreenCursorStyle::BlockHollow => {
-                                if blink {
-                                    1
-                                } else {
-                                    2
-                                }
-                            }
-                        };
-                        // try writer.print("{d} q", .{style});
-                        pos += write_fixed(&mut response[pos..], format_args!("{style} q"))?;
-                    }
-
-                    // .decstbm => {
-                    rustty_vt::dcs::Decrqss::Decstbm => {
-                        // try writer.print("{d};{d}r", .{
-                        //     self.terminal.scrolling_region.top + 1,
-                        //     self.terminal.scrolling_region.bottom + 1,
-                        // });
-                        let top = self.term().scrolling_region.top + 1;
-                        let bottom = self.term().scrolling_region.bottom + 1;
-                        pos += write_fixed(&mut response[pos..], format_args!("{top};{bottom}r"))?;
-                    }
-
-                    // .decslrm => {
-                    rustty_vt::dcs::Decrqss::Decslrm => {
-                        // We only send a valid response when left and right
-                        // margin mode (DECLRMM) is enabled.
-                        // if (self.terminal.modes.get(.enable_left_and_right_margin)) {
-                        if self.term().modes.get(modes::Mode::EnableLeftAndRightMargin) {
-                            // try writer.print("{d};{d}s", .{
-                            //     self.terminal.scrolling_region.left + 1,
-                            //     self.terminal.scrolling_region.right + 1,
-                            // });
-                            let left = self.term().scrolling_region.left + 1;
-                            let right = self.term().scrolling_region.right + 1;
-                            pos +=
-                                write_fixed(&mut response[pos..], format_args!("{left};{right}s"))?;
-                        }
-                    }
-                }
-
-                // Our response is valid if we have a response payload
-                // const valid = stream.pos > prefix_len;
-                let valid = pos > prefix_len;
-
-                // Write the terminator
-                // try writer.writeAll("\x1b\\");
-                pos += write_fixed(&mut response[pos..], format_args!("\x1b\\"))?;
-
-                // Write the response prefix into the buffer
-                // _ = try std.fmt.bufPrint(response[0..prefix_len], prefix_fmt, .{@intFromBool(valid)});
-                let _ = write_fixed(
-                    &mut response[0..prefix_len],
-                    format_args!("\x1bP{}$r", u8::from(valid)),
-                )?;
-                // const msg = try termio.Message.writeReq(self.alloc, response[0..stream.pos]);
-                let msg = Message::writeReq(&response[0..pos]);
-                // self.messageWriter(msg);
+                let mut response = [0u8; rustty_vt::dcs::Decrqss::MAX_RESPONSE_BYTES];
+                let encoded_len = {
+                    let t: *mut Terminal = self.terminal;
+                    // SAFETY: `self.terminal` is the live Termio-owned terminal
+                    // (see `term()`); the deref is short-lived.
+                    let encoded = decrqss
+                        .encode(unsafe { &mut *t }, &mut response)
+                        .map_err(|_| crate::Error)?;
+                    encoded.len()
+                };
+                let msg = Message::writeReq(&response[0..encoded_len]);
                 self.messageWriter(msg);
             }
         }
