@@ -163,12 +163,26 @@ unsafe extern "C" fn trampoline(user_data: glib::ffi::gpointer) -> glib::ffi::gb
     // pointer as the RefCell borrow flag and fail every borrow.
     let pump: &Rc<RefCell<Pump>> = unsafe { &*(user_data as *const Rc<RefCell<Pump>>) };
     // Not nested with Window::init's shared borrow (both main-thread, non-reentrant).
-    if let Ok(mut p) = pump.try_borrow_mut() {
+    let emissions = if let Ok(mut p) = pump.try_borrow_mut() {
         let p = &mut *p;
         // dispatch_pending processes events GDK already demarshalled onto our queue.
         let _ = p.event_queue.dispatch_pending(p.globals.as_mut());
         // Push out anything the handlers queued (activation token activate, etc.).
         let _ = p.event_queue.flush();
+        // Collect (do NOT run) the global-shortcut signal emissions the
+        // `vicinae_hotkey_v1` handlers produced.
+        p.globals.hotkeys_mut().take_pending()
+    } else {
+        Vec::new()
+    };
+
+    // Run them with the pump borrow RELEASED. A `trigger` emission performs an
+    // arbitrary keybind action, and some of those (`toggle_quick_terminal` →
+    // `winproto::Window::init`) re-enter this very `RefCell`; emitting inside the
+    // borrow above would turn a bound global hotkey into a panic. See
+    // `hotkeys.rs`'s "emissions are DEFERRED out of the dispatch borrow".
+    for e in emissions {
+        e.emit();
     }
     glib::ffi::G_SOURCE_CONTINUE
 }

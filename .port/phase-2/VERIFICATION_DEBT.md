@@ -2009,3 +2009,55 @@ produces). **Remaining recipe:** extend the fixture with a
 `rustty_os::pty::Pty` pair, drive one `drainMailbox` tick, and assert the
 subprocess-side read end receives `\x1b[?999;2n`. That is a pty-owning fixture,
 i.e. its own task, and it is the only part of V21 that remains.
+
+---
+
+## V22. `P3-W11 T4` — the `vicinae_hotkey_v1` WIRE path (F-W4) — **OPEN, OWNER: its own task (fake-compositor harness)** [2026-07-31]
+
+**What IS verified.** F-W1/F-W2 are verified headlessly and headed on the Linux
+VM (`--features gtk,wayland,x11`): `key::keysym_from_trigger` (the oracle's own
+test, ported verbatim), the entry-SELECTION logic (`select_entries`: global-only,
+`catch_all` skipped, multi-action skipped, order preserved), the `bind-failed`
+signal emission, the desktop-notification body assembly (all four arms), the
+`bind-failed` -> `Application::global_shortcut_bind_failed` connection under a
+real `GApplication`, the generated interfaces' wire names/version/modifier bits,
+and — on a live GNOME/mutter session — the graceful-ABSENCE path
+(`tests/gtk_wayland_vicinae_hotkeys.rs`) plus the full 6-step XDG-portal chain
+with the new "winproto arm must decline" assertion
+(`.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`).
+
+**What is NOT verified.** The wire half of F-W4: `manager.bind` actually
+producing `bound`, `pressed` reaching the `trigger` signal, and
+`denied`/`revoked` reaching `Entry::fail` -> `emit_bind_failed`. `vicinae_hotkey_v1`
+is an unratified, testing-phase protocol and **no mainstream compositor (mutter,
+KWin, wlroots) implements it**, so no host available to this project can exercise
+it. This is recorded as debt rather than papered over: the code is ported in full
+and is inert (not dead) on every compositor that does not advertise the global.
+
+**Runnable recipe** (`P3-W8 T7 Step 4`, ~a day of scaffolding, scheduled as its
+own task): stand up a minimal fake compositor in a `#[test]`-local
+`wayland-server` 0.31 (the sibling of the vendored `wayland-client`) that
+advertises `vicinae_hotkey_manager_v1` on its own socket; point the client at it
+with `WAYLAND_DISPLAY`; then assert
+* `Hotkeys::bind` issues one `bind` request per selected entry, with the keysym
+  and modifier bits `key::keysym_from_trigger` produced;
+* a server-sent `bound` leaves `bound_count() == entries`;
+* a server-sent `pressed` makes the `trigger` signal carry the bound action
+  (drained by `queue_source`'s trampoline, so run a main-loop turn);
+* a server-sent `denied(reason, message)` / `revoked(reason, message)` makes the
+  `bind-failed` signal carry those exact message BYTES and the right `revoked`
+  flag, and drops `bound_count()` by one.
+
+**Interim marker, visible in the test list, not only here:**
+`crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs`
+`#[test] #[ignore = "needs fake vicinae compositor"]
+hotkeys_wire_path_bound_pressed_denied_revoked`.
+
+**Protocol-churn note.** The XML's own description says the protocol *"is
+currently in the testing phase. Backward incompatible changes may be added
+together with the corresponding interface version bump."* A future incompatible
+bump is EXPECTED, not a surprise: re-vendor
+`crates/rustty-apprt/protocols/vicinae-hotkey-v1.xml` verbatim from the oracle
+and re-run the gates. The generated event `match` in `Hotkeys::on_event` is
+exhaustive on purpose so an added event fails the build rather than being
+silently dropped.

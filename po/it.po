@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
-"POT-Creation-Date: 2026-07-29 22:04-0700\n"
+"POT-Creation-Date: 2026-07-31 03:57-0700\n"
 "PO-Revision-Date: 2025-09-06 19:40+0200\n"
 "Last-Translator: Giacomo Bettini <giaco.bettini@gmail.com>\n"
 "Language-Team: Italian <tp@lists.linux.it>\n"
@@ -271,6 +271,18 @@ msgstr "Informazioni su Rustty"
 msgid "Quit"
 msgstr "Chiudi"
 
+#: crates/rustty-apprt/src/gtk/class/application.rs:1596
+msgid "The keybind was revoked by the system."
+msgstr ""
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1598
+msgid "The keybind was denied by the system."
+msgstr ""
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1605
+msgid "Global keybind unavailable"
+msgstr ""
+
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:270
 msgid ""
 "An application is attempting to write to the clipboard. The current "
@@ -332,15 +344,15 @@ msgid "The currently running process in this split will be terminated."
 msgstr ""
 "Il processo attualmente in esecuzione in questa divisione sarà terminato."
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1933
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
 msgid "Command Finished"
 msgstr "Comando terminato"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
 msgid "Command Succeeded"
 msgstr "Comando riuscito"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1936
 msgid "Command Failed"
 msgstr "Comando fallito"
 
@@ -360,18 +372,18 @@ msgstr "Cambia il titolo del terminale"
 msgid "Change Tab Title"
 msgstr "Cambia il titolo della scheda"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1019
+#: crates/rustty-apprt/src/gtk/class/window.rs:1137
 msgid "Cleared clipboard"
 msgstr "Appunti svuotati"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1021
+#: crates/rustty-apprt/src/gtk/class/window.rs:1139
 msgid "Copied to clipboard"
 msgstr "Copiato negli Appunti"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1744
+#: crates/rustty-apprt/src/gtk/class/window.rs:1931
 msgid "Reloaded the configuration"
 msgstr "Configurazione ricaricata"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1901
+#: crates/rustty-apprt/src/gtk/class/window.rs:2088
 msgid "Rustty Developers"
 msgstr "Sviluppatori di Rustty"

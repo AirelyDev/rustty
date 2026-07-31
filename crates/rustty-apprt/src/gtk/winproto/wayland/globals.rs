@@ -53,6 +53,9 @@ use wayland_protocols_plasma::server_decoration::client::org_kde_kwin_server_dec
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide::OrgKdeKwinSlide;
 use wayland_protocols_plasma::slide::client::org_kde_kwin_slide_manager::OrgKdeKwinSlideManager;
 
+use super::hotkeys::Hotkeys;
+use super::vicinae::vicinae_hotkey_manager_v1::VicinaeHotkeyManagerV1;
+
 /// PORTS: `Globals.zig:29-47` `Tag`. Which advertised global a binding
 /// corresponds to. Kept only to route the `global_remove` event
 /// (`Globals.zig:180-188`) back to the matching typed field below.
@@ -64,6 +67,8 @@ enum Tag {
     KdeSlideManager,
     KdeOutputOrder,
     ExtBackgroundEffect,
+    /// PORTS: `Globals.zig:36` `vicinae_hotkey_manager`.
+    VicinaeHotkeyManager,
 }
 
 /// PORTS: `Globals.zig:49-70` `State`. The scalar state derived from the bound
@@ -129,6 +134,16 @@ pub struct Globals {
     kde_slide_manager: Option<OrgKdeKwinSlideManager>,
     kde_output_order: Option<KdeOutputOrderV1>,
     ext_background_effect: Option<ExtBackgroundEffectManagerV1>,
+    /// PORTS: `Globals.zig:36,46` the `vicinae_hotkey_manager` entry — the
+    /// `vicinae_hotkey_v1` global-hotkey factory. Absent on every mainstream
+    /// compositor today (mutter/KWin/wlroots do not implement the protocol), which
+    /// is exactly the graceful-absence case the `Option` already models.
+    vicinae_hotkey_manager: Option<VicinaeHotkeyManagerV1>,
+
+    /// PORTS: `wayland.zig:31` `hotkeys: Hotkeys` — stored HERE rather than in
+    /// [`super::App`] because wayland-rs dispatches every event of the queue
+    /// against this one state type. See `hotkeys.rs`'s module docs.
+    hotkeys: Hotkeys,
 
     /// Routes `global_remove(name)` back to the field it bound (`Globals.zig:180-188`).
     names: HashMap<u32, Tag>,
@@ -168,7 +183,12 @@ impl Globals {
     /// Construct the empty binder. Binding happens as the `wl_registry.global`
     /// events are dispatched during [`super::App::init`]'s roundtrip
     /// (`Globals.zig:82-83`: set the listener, then roundtrip).
-    pub fn new(conn: Connection, qh: QueueHandle<Globals>, registry: WlRegistry) -> Self {
+    pub fn new(
+        conn: Connection,
+        qh: QueueHandle<Globals>,
+        registry: WlRegistry,
+        app_id: &str,
+    ) -> Self {
         Self {
             conn,
             qh,
@@ -184,6 +204,9 @@ impl Globals {
             kde_slide_manager: None,
             kde_output_order: None,
             ext_background_effect: None,
+            vicinae_hotkey_manager: None,
+            // `hotkeys: try .init(alloc, app_id)` (`wayland.zig:54`).
+            hotkeys: Hotkeys::new(app_id),
             names: HashMap::new(),
             activation_done_count: 0,
         }
@@ -216,6 +239,21 @@ impl Globals {
     }
     pub fn ext_background_effect(&self) -> Option<&ExtBackgroundEffectManagerV1> {
         self.ext_background_effect.as_ref()
+    }
+
+    /// PORTS: `wayland.zig:73` `self.globals.get(.vicinae_hotkey_manager)`.
+    pub fn vicinae_hotkey_manager(&self) -> Option<&VicinaeHotkeyManagerV1> {
+        self.vicinae_hotkey_manager.as_ref()
+    }
+
+    /// The hotkey entry table (see `hotkeys.rs`'s module docs for why it lives here
+    /// and not in [`super::App`]).
+    pub fn hotkeys(&self) -> &Hotkeys {
+        &self.hotkeys
+    }
+
+    pub fn hotkeys_mut(&mut self) -> &mut Hotkeys {
+        &mut self.hotkeys
     }
 
     pub fn default_deco_mode(&self) -> Option<Mode> {
@@ -275,6 +313,13 @@ impl Globals {
             self.names.insert(name, Tag::ExtBackgroundEffect);
             // Emits `capabilities` at bind time (`Globals.zig:110-113`).
             self.needs_roundtrip = true;
+        } else if interface == VicinaeHotkeyManagerV1::interface().name {
+            // PORTS: `Globals.zig:46` — the `vicinae_hotkey_manager` arm of the
+            // registry bind. The manager emits no events, so no extra roundtrip.
+            let v = version.min(VicinaeHotkeyManagerV1::interface().version);
+            self.vicinae_hotkey_manager =
+                Some(registry.bind::<VicinaeHotkeyManagerV1, (), Globals>(name, v, qh, ()));
+            self.names.insert(name, Tag::VicinaeHotkeyManager);
         }
     }
 
@@ -302,6 +347,13 @@ impl Globals {
             Tag::ExtBackgroundEffect => {
                 self.ext_background_effect = None;
                 self.state.bg_blur_supported = false;
+            }
+            Tag::VicinaeHotkeyManager => {
+                self.vicinae_hotkey_manager = None;
+                // The manager going away does NOT invalidate the hotkey objects it
+                // created ("Hotkey objects created through this manager are
+                // unaffected and remain valid", `vicinae-hotkey-v1.xml`), so the
+                // entries are left alone.
             }
         }
     }

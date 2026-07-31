@@ -225,6 +225,20 @@ for _ in $(seq 1 40); do
   handle="$(sed -n 's/.*global shortcuts session_handle=\(.*\)$/\1/p' "$APP_LOG" | head -1)"
   [ -n "$handle" ] && break
 done
+# --- P3-W11 T4 (the Wayland hotkeys series): the winproto arm must DECLINE ----
+# `88bd4fdce` makes `refresh()` try the windowing-protocol native mechanism
+# (`vicinae_hotkey_v1`) FIRST and return early — never touching the portal — when
+# it succeeds. mutter does not advertise `vicinae_hotkey_manager_v1`, so on this
+# host the arm must decline and the whole portal chain below must still run. This
+# is the real-world regression gate for F-W1..F-W4: if the arm ever wrongly claims
+# to have bound, every global keybind on GNOME silently stops working, and the only
+# other symptom is the absent session handle diagnosed below.
+if grep -q "global shortcuts bound via winproto" "$APP_LOG"; then
+  echo "--- app log ---"; cat "$APP_LOG"
+  fail "the winproto (vicinae-hotkey) arm claimed to bind on mutter, which advertises no vicinae_hotkey_manager_v1; the XDG portal path was skipped and global keybinds are now dead"
+fi
+echo "winproto arm declined (as it must on mutter); portal path taken"
+
 [ -n "$handle" ] || {
   echo "--- app log ---"; cat "$APP_LOG"
   echo "--- bus log (portal) ---"; grep -E "member=(CreateSession|BindShortcuts|Response)|NotAllowed" "$BUS_LOG" | head -20

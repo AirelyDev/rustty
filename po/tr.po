@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
-"POT-Creation-Date: 2026-07-29 22:04-0700\n"
+"POT-Creation-Date: 2026-07-31 03:57-0700\n"
 "PO-Revision-Date: 2026-02-09 22:18+0300\n"
 "Last-Translator: Emir SARI <emir_sari@icloud.com>\n"
 "Language-Team: Turkish\n"
@@ -271,6 +271,18 @@ msgstr "Rustty Hakkında"
 msgid "Quit"
 msgstr "Çık"
 
+#: crates/rustty-apprt/src/gtk/class/application.rs:1596
+msgid "The keybind was revoked by the system."
+msgstr ""
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1598
+msgid "The keybind was denied by the system."
+msgstr ""
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1605
+msgid "Global keybind unavailable"
+msgstr ""
+
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:270
 msgid ""
 "An application is attempting to write to the clipboard. The current "
@@ -331,15 +343,15 @@ msgstr "Bu penceredeki tüm uçbirim oturumları sonlandırılacaktır."
 msgid "The currently running process in this split will be terminated."
 msgstr "Bu bölmedeki şu anda çalışan süreç sonlandırılacaktır."
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1933
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
 msgid "Command Finished"
 msgstr "Komut Bitti"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
 msgid "Command Succeeded"
 msgstr "Komut Başarılı"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1936
 msgid "Command Failed"
 msgstr "Komut Başarısız"
 
@@ -359,18 +371,18 @@ msgstr "Uçbirim Başlığını Değiştir"
 msgid "Change Tab Title"
 msgstr "Sekme Başlığını Değiştir"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1019
+#: crates/rustty-apprt/src/gtk/class/window.rs:1137
 msgid "Cleared clipboard"
 msgstr "Pano temizlendi"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1021
+#: crates/rustty-apprt/src/gtk/class/window.rs:1139
 msgid "Copied to clipboard"
 msgstr "Panoya kopyalandı"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1744
+#: crates/rustty-apprt/src/gtk/class/window.rs:1931
 msgid "Reloaded the configuration"
 msgstr "Yapılandırma yeniden yüklendi"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1901
+#: crates/rustty-apprt/src/gtk/class/window.rs:2088
 msgid "Rustty Developers"
 msgstr "Rustty Geliştiricileri"

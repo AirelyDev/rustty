@@ -391,6 +391,25 @@ impl App {
         Some(mods)
     }
 
+    /// PORTS: `x11.zig:162-169` `App.bindGlobalShortcuts`. X11 has no native
+    /// global-hotkey mechanism rustty drives (the reference's X11 arm returns
+    /// `false` unconditionally), so global keybinds keep taking the XDG desktop
+    /// portal path verbatim.
+    #[allow(clippy::unused_self)]
+    #[must_use]
+    pub fn bind_global_shortcuts(
+        &mut self,
+        _shortcuts: &crate::gtk::class::global_shortcuts::GlobalShortcuts,
+        _config: &CoreConfig,
+    ) -> bool {
+        false
+    }
+
+    /// PORTS: `x11.zig:171` `App.clearGlobalShortcuts`. Nothing was bound
+    /// (the reference's empty body).
+    #[allow(clippy::unused_self)]
+    pub fn clear_global_shortcuts(&mut self) {}
+
     /// PORTS: `x11.zig:161-164` `App.supportsQuickTerminal`. The quick terminal is
     /// a Wayland layer-shell feature; the reference's X11 arm returns `false`.
     #[allow(clippy::unused_self)]

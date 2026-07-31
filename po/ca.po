@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
-"POT-Creation-Date: 2026-07-29 22:04-0700\n"
+"POT-Creation-Date: 2026-07-31 03:57-0700\n"
 "PO-Revision-Date: 2025-08-24 19:22+0200\n"
 "Last-Translator: Kristofer Soler "
 "<31729650+KristoferSoler@users.noreply.github.com>\n"
@@ -272,6 +272,18 @@ msgstr "Sobre Rustty"
 msgid "Quit"
 msgstr "Surt"
 
+#: crates/rustty-apprt/src/gtk/class/application.rs:1596
+msgid "The keybind was revoked by the system."
+msgstr ""
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1598
+msgid "The keybind was denied by the system."
+msgstr ""
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1605
+msgid "Global keybind unavailable"
+msgstr ""
+
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:270
 msgid ""
 "An application is attempting to write to the clipboard. The current "
@@ -332,15 +344,15 @@ msgstr "Totes les sessions del terminal en aquesta finestra es tancaran."
 msgid "The currently running process in this split will be terminated."
 msgstr "El procés actualment en execució en aquesta divisió es tancarà."
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1933
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
 msgid "Command Finished"
 msgstr "Comanda finalitzada"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
 msgid "Command Succeeded"
 msgstr "Comanda completada amb èxit"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1936
 msgid "Command Failed"
 msgstr "Comanda fallida"
 
@@ -360,18 +372,18 @@ msgstr "Canvia el títol del terminal"
 msgid "Change Tab Title"
 msgstr "Canvia el títol de la pestanya"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1019
+#: crates/rustty-apprt/src/gtk/class/window.rs:1137
 msgid "Cleared clipboard"
 msgstr "Porta-retalls netejat"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1021
+#: crates/rustty-apprt/src/gtk/class/window.rs:1139
 msgid "Copied to clipboard"
 msgstr "Copiat al porta-retalls"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1744
+#: crates/rustty-apprt/src/gtk/class/window.rs:1931
 msgid "Reloaded the configuration"
 msgstr "S'ha tornat a carregar la configuració"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1901
+#: crates/rustty-apprt/src/gtk/class/window.rs:2088
 msgid "Rustty Developers"
 msgstr "Desenvolupadors de Rustty"

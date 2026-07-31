@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
-"POT-Creation-Date: 2026-07-29 22:04-0700\n"
+"POT-Creation-Date: 2026-07-31 03:57-0700\n"
 "PO-Revision-Date: 2026-03-04 09:32+0700\n"
 "Last-Translator: Anh Thang <buianhthang89@gmail.com>\n"
 "Language-Team: Vietnamese <translation-team-vi@lists.sourceforge.net>\n"
@@ -269,6 +269,18 @@ msgstr "Về Rustty"
 msgid "Quit"
 msgstr "Thoát"
 
+#: crates/rustty-apprt/src/gtk/class/application.rs:1596
+msgid "The keybind was revoked by the system."
+msgstr ""
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1598
+msgid "The keybind was denied by the system."
+msgstr ""
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1605
+msgid "Global keybind unavailable"
+msgstr ""
+
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:270
 msgid ""
 "An application is attempting to write to the clipboard. The current "
@@ -329,15 +341,15 @@ msgstr "Tất cả các phiên làm việc terminal trong cửa sổ này sẽ b
 msgid "The currently running process in this split will be terminated."
 msgstr "Tiến trình đang chạy trong phần chia này sẽ bị chấm dứt."
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1933
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
 msgid "Command Finished"
 msgstr "Lệnh đã kết thúc"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
 msgid "Command Succeeded"
 msgstr "Lệnh thành công"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1936
 msgid "Command Failed"
 msgstr "Lệnh thất bại"
 
@@ -357,18 +369,18 @@ msgstr "Đổi tiêu đề Terminal"
 msgid "Change Tab Title"
 msgstr "Đổi tiêu đề Tab"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1019
+#: crates/rustty-apprt/src/gtk/class/window.rs:1137
 msgid "Cleared clipboard"
 msgstr "Đã xóa sạch bảng tạm"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1021
+#: crates/rustty-apprt/src/gtk/class/window.rs:1139
 msgid "Copied to clipboard"
 msgstr "Đã sao chép vào bảng tạm"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1744
+#: crates/rustty-apprt/src/gtk/class/window.rs:1931
 msgid "Reloaded the configuration"
 msgstr "Đã tải lại cấu hình"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1901
+#: crates/rustty-apprt/src/gtk/class/window.rs:2088
 msgid "Rustty Developers"
 msgstr "Các nhà phát triển Rustty"

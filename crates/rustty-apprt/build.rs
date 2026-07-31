@@ -183,6 +183,22 @@ it, ensure that it is available on your PATH, and then retry building rustty.";
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    // PORTS: `build.zig`'s `wayland_scanner.addCustomProtocol(b.path(
+    // "src/apprt/gtk/winproto/wayland/protocols/vicinae-hotkey-v1.xml"))` — the
+    // custom-protocol codegen input for `vicinae_hotkey_v1`, which has no
+    // crates.io binding.
+    //
+    // wayland-rs 0.31 does the scanning in the `wayland_scanner::generate_*!`
+    // PROC MACROS (`src/gtk/winproto/wayland/vicinae.rs`), not in a build script,
+    // so all this script owes the codegen is the staleness edge: a proc macro that
+    // reads a file gets no automatic `rerun-if-changed`, and without this line an
+    // edit to the vendored XML would NOT rebuild the crate. Emitted before the
+    // Linux+gtk guard below because the `wayland` feature is what selects the
+    // codegen, and unconditional emission is harmless (the file always exists).
+    if env::var_os("CARGO_FEATURE_WAYLAND").is_some() {
+        println!("cargo:rerun-if-changed=protocols/vicinae-hotkey-v1.xml");
+    }
+
     // R5 guard: only the native Linux+gtk build runs the asset pipeline.
     let gtk = env::var_os("CARGO_FEATURE_GTK").is_some();
     let linux = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
