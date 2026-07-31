@@ -227,15 +227,18 @@ impl ScrollbackCompression {
     //     const ptr = try alloc.create(ScrollbackCompression);
     //     errdefer alloc.destroy(ptr);
     //     ptr.* = .{ .opts = opts, .terminal = try .init(global.io(), alloc, .{
-    //         .rows = ..., .cols = ..., .max_scrollback_bytes = ... }) };
+    //         .rows = opts.@"terminal-rows",
+    //         .cols = opts.@"terminal-cols",
+    //         .max_scrollback_bytes = opts.@"max-scrollback",
+    //     }) };
     //     return ptr;
     // }
     //
-    // PORT NOTE (WS7 D8): the oracle option is `max_scrollback_bytes: ?usize`
-    // (oracle@main renamed and split the field into a bytes/lines pair). rustty's
-    // `terminal::Options` is still at the pinned oracle's shape — a single
-    // `max_scrollback_bytes: usize` in BYTES — so `--max-scrollback` maps onto it
-    // directly. Recorded as a plan/reality divergence.
+    // PORT NOTE: the CLI option stays `--max-scrollback` (`usize`, bytes) — the
+    // oracle did NOT rename the benchmark's own flag in `86f81fb5b`; only the
+    // `terminal.Options` FIELD it feeds became `max_scrollback_bytes: ?usize`.
+    // The `Some(..)` below is the Zig `usize -> ?usize` coercion. (The WS7 D8
+    // divergence note that used to sit here is resolved by `P3-W3` T2.)
     pub fn create(
         alloc: Allocator,
         opts: Options,

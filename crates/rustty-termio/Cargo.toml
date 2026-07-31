@@ -85,3 +85,11 @@ rustty-lib = { workspace = true }
 # #13b). R3: `libc` binds the SAME system library the reference's Zig
 # `std.posix`/`std.c` calls into (rustty-os precedent) — not a reimplementation.
 libc = "0.2"
+
+[dev-dependencies]
+# `P3-W3` T6 Step 4: the config -> PageList scrollback-limit handoff KAT drives
+# `Config::parse_into_field`, which is the `rustty_args::args::Target` trait
+# method, so the trait must be in scope for the test. TEST-ONLY; rustty-config
+# (a real dependency above) already depends on rustty-args, so this adds no new
+# edge to the production graph.
+rustty-args = { workspace = true }

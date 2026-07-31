@@ -531,8 +531,8 @@ impl<M: AppMailbox> Termio<M> {
             rustty_vt::terminal::Options {
                 cols: grid_size.columns,
                 rows: grid_size.rows,
-                max_scrollback_bytes: opts.full_config.scrollback_limit_bytes.optional(),
-                max_scrollback_lines: opts.full_config.scrollback_limit_lines.optional(),
+                max_scrollback_bytes: scrollback_limits(opts.full_config).0,
+                max_scrollback_lines: scrollback_limits(opts.full_config).1,
                 default_modes,
                 colors: rustty_vt::terminal::Colors {
                     // .background = .init(opts.config.background.toTerminalRGB()),
@@ -1812,4 +1812,145 @@ fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
 #[cfg(not(unix))]
 fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
     std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
+}
+
+/// The `(bytes, lines)` scrollback limits `Termio::init` hands to
+/// `terminal.Options`. `None` is unlimited on both axes.
+//
+// PORT NOTE: the reference writes these two expressions inline in
+// `Termio.init`'s `opts:` block:
+//
+//     .max_scrollback_bytes = opts.full_config.@"scrollback-limit-bytes".optional(),
+//     .max_scrollback_lines = opts.full_config.@"scrollback-limit-lines".optional(),
+//
+// They are hoisted into this helper ONLY so the config -> PageList handoff has
+// a seam a test can drive without a pty (`P3-W3` T6 Step 4). `init` is the sole
+// production caller, so the mapping still exists in exactly one place — a test
+// that re-spelled `.optional()` itself would be vacuous.
+pub(crate) fn scrollback_limits(full_config: &Config) -> (Option<usize>, Option<usize>) {
+    (
+        full_config.scrollback_limit_bytes.optional(),
+        full_config.scrollback_limit_lines.optional(),
+    )
+}
+
+// ===========================================================================
+// `P3-W3` T6 Step 4 — the config -> PageList scrollback-limit handoff KAT.
+// ===========================================================================
+#[cfg(test)]
+mod scrollback_limit_handoff_tests {
+    use super::scrollback_limits;
+    use allocator_api2::alloc::Global;
+    use rustty_args::args::Target as _;
+    use rustty_config::Config;
+    use rustty_vt::terminal::Terminal;
+
+    fn term_from_config(cfg: &Config, cols: u16, rows: u16) -> Terminal {
+        let (bytes, lines) = scrollback_limits(cfg);
+        Terminal::init(
+            Global,
+            rustty_vt::terminal::Options {
+                cols,
+                rows,
+                max_scrollback_bytes: bytes,
+                max_scrollback_lines: lines,
+                colors: rustty_vt::terminal::Colors {
+                    background: rustty_vt::color::DynamicRGB::UNSET,
+                    foreground: rustty_vt::color::DynamicRGB::UNSET,
+                    cursor: rustty_vt::color::DynamicRGB::UNSET,
+                    palette: rustty_vt::color::DynamicPalette::default_palette(),
+                },
+                default_modes: rustty_vt::modes::ModePacked::default(),
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap()
+    }
+
+    fn history_rows(t: &Terminal) -> usize {
+        // SAFETY: `screens.active` is a live heap Screen owned by the terminal.
+        let pages = unsafe { &(*t.screens.active).pages };
+        pages.total_rows - pages.rows as usize
+    }
+
+    /// `scrollback-limit-lines = n` must actually PRUNE at `n` after the
+    /// terminal has been fed far more than `n` lines.
+    ///
+    /// This is deliberately a behaviour assertion, not a field-storage
+    /// assertion: a test that only checks the option reached `Terminal::Options`
+    /// would still pass with `Limits::enforce` never called, which is the exact
+    /// failure mode this whole workstream exists to prevent.
+    #[test]
+    fn config_scrollback_limit_lines_prunes_the_pagelist() {
+        let rows: u16 = 3;
+        let mut cfg = Config::default();
+        cfg.parse_into_field(b"scrollback-limit-lines", Some(b"64"))
+            .unwrap();
+        assert_eq!(Some(64usize), cfg.scrollback_limit_lines.optional());
+
+        let mut t = term_from_config(&cfg, 80, rows);
+
+        // The effective limit is raised to one standard page of rows, so
+        // capture it rather than asserting the literal 64.
+        let effective = {
+            let pages = unsafe { &(*t.screens.active).pages };
+            pages.limits.max(rustty_vt::pagelist::Key::Lines)
+        };
+        assert!(
+            (64..usize::MAX).contains(&effective),
+            "the configured line limit did not reach the PageList (effective={effective})"
+        );
+
+        // Feed FAR more lines than the limit.
+        for _ in 0..(8 * effective) {
+            t.linefeed().unwrap();
+        }
+        assert!(
+            history_rows(&t) <= effective,
+            "history {} > effective limit {}",
+            history_rows(&t),
+            effective
+        );
+
+        t.deinit(Global);
+    }
+
+    /// The default config leaves the line limit unlimited, so the same feed
+    /// retains everything. Without this arm the test above could pass on a
+    /// build where the line limit is hard-wired on.
+    #[test]
+    fn config_default_scrollback_limit_lines_is_unlimited() {
+        let cfg = Config::default();
+        assert_eq!(None, cfg.scrollback_limit_lines.optional());
+        assert_eq!(Some(50_000_000usize), cfg.scrollback_limit_bytes.optional());
+
+        let rows: u16 = 3;
+        let mut t = term_from_config(&cfg, 80, rows);
+        let feed = 8 * 595usize;
+        for _ in 0..feed {
+            t.linefeed().unwrap();
+        }
+        // The first `rows - 1` linefeeds only move the cursor down inside the
+        // initial screen; everything after that becomes history.
+        assert_eq!(feed - (rows as usize - 1), history_rows(&t));
+
+        t.deinit(Global);
+    }
+
+    /// `unlimited` on the byte axis is distinct from the 50 MB default and
+    /// reaches the PageList as "no explicit byte limit".
+    #[test]
+    fn config_scrollback_limit_bytes_unlimited_reaches_the_pagelist() {
+        let mut cfg = Config::default();
+        cfg.parse_into_field(b"scrollback-limit-bytes", Some(b"unlimited"))
+            .unwrap();
+        assert_eq!(None, cfg.scrollback_limit_bytes.optional());
+
+        let mut t = term_from_config(&cfg, 80, 3);
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert_eq!(usize::MAX, pages.limits.bytes.explicit);
+
+        t.deinit(Global);
+    }
 }
