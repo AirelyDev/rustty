@@ -819,12 +819,7 @@ impl Renderer {
         // Create the font shaper.
         // Zig: var font_shaper = try font.Shaper.init(alloc, .{ .features = ... });
         let font_shaper = Shaper::init(shape::Options {
-            features: options
-                .config
-                .font_features
-                .iter()
-                .map(|c| c.as_bytes().to_vec())
-                .collect(),
+            features: options.config.font_features.clone(),
         })?;
 
         // Initialize all the data that requires a critical font section. The
@@ -1224,11 +1219,7 @@ impl Renderer {
         // rare enough to not cause performance issues. unlock-before-`?`.
         {
             let font_shaper = match Shaper::init(shape::Options {
-                features: config
-                    .font_features
-                    .iter()
-                    .map(|c| c.as_bytes().to_vec())
-                    .collect(),
+                features: config.font_features.clone(),
             }) {
                 Ok(s) => s,
                 Err(e) => {
