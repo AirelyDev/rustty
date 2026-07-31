@@ -11,7 +11,8 @@
 //!   2. It is compiled with the `cc` crate as ONE C translation unit, mirroring
 //!      the reference's pkg/wuffs/build.zig exactly: `-DWUFFS_IMPLEMENTATION`
 //!      (turns the stb-style header into its implementation) plus the precise
-//!      `WUFFS_CONFIG__MODULE__*` define list from pkg/wuffs/src/c.zig — only
+//!      `WUFFS_CONFIG__MODULE__*` define list from pkg/wuffs/build.zig:4-15 —
+//!      only
 //!      the modules ghostty actually uses (MODULES gate + AUX__BASE/AUX__IMAGE +
 //!      BASE + the ADLER32/CRC32/DEFLATE/JPEG/PNG/ZLIB codecs). The include dir
 //!      is `release/c` (reference: `module.addIncludePath(release/c)`). The AUX
@@ -20,7 +21,8 @@
 //!      inert but kept for a faithful 1:1 mirror. Vendored upstream warnings are
 //!      silenced.
 //!   3. `bindgen` auto-generates the FFI from `wrapper.h`, which `#include`s the
-//!      same `wuffs-v0.4.c` the reference's `c.zig` @cIncludes — WITHOUT
+//!      same `wuffs-v0.4.c` the reference's generated `wuffs_c_source` module
+//!      includes (`pkg/wuffs/build.zig:19`) — WITHOUT
 //!      `WUFFS_IMPLEMENTATION` (declarations only, matching the `@cImport`), but
 //!      WITH the identical module defines so the declared surface matches the
 //!      compiled object.
@@ -33,7 +35,18 @@ use std::env;
 use std::path::PathBuf;
 
 /// The `WUFFS_CONFIG__MODULE__*` gate list — the verbatim `defines` array from
-/// the reference's pkg/wuffs/src/c.zig. Enabling `WUFFS_CONFIG__MODULES` turns
+/// the reference's `pkg/wuffs/build.zig:4-15`.
+///
+/// CITATION CORRECTED by `P3-W9 T7` step 1: both this comment and the module
+/// header above cited `pkg/wuffs/src/c.zig`, a file upstream **DELETED** in
+/// `e8525c0fd` (Zig 0.16 removed `@cImport`); the array moved verbatim into
+/// `build.zig`. The list itself was and is correct — re-verified byte-for-byte
+/// against `origin/main:pkg/wuffs/build.zig:4-15`, same ten entries in the same
+/// order — so only the provenance rotted. An oracle path that no longer
+/// resolves makes fidelity auditing unreliable, which is why a comment-only
+/// change is worth a commit (same defect class as the `.pot` `#:` references).
+///
+/// Enabling `WUFFS_CONFIG__MODULES` turns
 /// on selective compilation; each `MODULE__*` then opts a single module in.
 /// AUX__BASE/AUX__IMAGE are the C++ auxiliary helpers (inert under a C compile);
 /// BASE is the shared runtime; the rest are the exact codecs ghostty decodes.

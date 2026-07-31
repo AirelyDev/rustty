@@ -434,3 +434,220 @@ there: `2035be3` "z2d/font: native `Path::offset` replaces the two-surface
 inner-stroke mask; drawE0B5 forces perpendicular butt caps; 6 goldens regolded
 (oracle d0e72a3ab)". Recorded here only so a sweep of `build.zig.zon` does not
 re-open it.
+
+## G5 — `f2a7652ab` `Config.omitFramePointer()` — PROVEN N/A
+
+1. **Upstream.** A new `src/build/Config.zig` helper that forces frame pointers
+   on Darwin, because the Apple arm64 ABI requires `x29` to be a valid frame
+   pointer and Zig would otherwise omit it in release modes.
+2. **Why not — executed, not assumed.**
+   `rustc +nightly -Z unstable-options --print target-spec-json --target
+   aarch64-apple-darwin` -> `"frame-pointer": "non-leaf"`. rustc keeps frame
+   pointers on Apple ARM **unconditionally**, independent of opt-level or
+   strip. The requirement is already satisfied by the toolchain; there is
+   nothing for a port to add.
+3. **What would break if we ported it.** Nothing would break, but a
+   `-Cforce-frame-pointers` flag in a build script would imply rustty is
+   working around a hazard it does not have, and would have to be maintained
+   against a target spec that already guarantees the property.
+4. **What holds the line.** The target spec itself. If a future Rust release
+   changed `frame-pointer` for Apple ARM it would be a rustc-wide breaking
+   change, not a rustty regression.
+
+## G6 — `f2a7652ab` `libsystem_override.sh` + `LibsystemOverrideStep.zig` — PROVEN N/A
+
+1. **Upstream.** A Darwin-only build step (+123/+51) that runs `nmedit` over the
+   static archive to LOCALIZE `_memcpy`/`_memmove`/`_memset`/`_strlen` and the
+   libm symbols, so an app linking `libghostty` binds libSystem's
+   implementations instead of Zig's compiler-rt copies.
+2. **Why not — executed, not assumed.** The premise is Zig-specific: Zig's
+   compiler-rt exports these as **C** symbols, so they participate in final
+   link resolution. Rust's does not. Measured on this host
+   (rustc 1.93.1, `aarch64-apple-darwin`):
+   ```
+   nm -g "$(rustc --print sysroot)"/lib/rustlib/aarch64-apple-darwin/lib/libcompiler_builtins-*.rlib
+   ```
+   -> **144** `T` (external text) symbols, of which the count matching
+   `^[0-9a-f]* T _(memcpy|memmove|memset|memcmp|bcmp|strlen|cos|sin|exp|pow|ceil)$`
+   is **0**. The mem functions exist only Rust-mangled
+   (`__ZN17compiler_builtins3mem6memcpy…`), so they cannot shadow libSystem.
+   (The area-G assessment reported 422 `T` symbols; that was a different
+   toolchain build. The count that matters — C-symbol hits — is 0 in both.)
+3. **Why this is not a theoretical concern.** `crates/rustty-vt-c` and
+   `crates/rustty-apprt-c` both emit `staticlib`, i.e. rustty **is** in exactly
+   the archive-consumer position the upstream step exists to protect, and is
+   still safe. Recording the measurement rather than the intuition is the point.
+4. **What holds the line.** Nothing automated, and that is acceptable: the
+   property is a rustc/`compiler_builtins` invariant, not rustty code. The
+   reproduction command above is one line if it ever needs re-checking.
+
+## G7 — `d65cb5128` native-linker link for lib-vt on Apple + `pkg/apple-sdk/native_link.zig` — N/A, WITH A PRECONDITION
+
+1. **Upstream.** Link `libghostty-vt` on Apple hosts with the **native** linker
+   (`native_link.zig` +85, `GhosttyLibVt.zig` +131) because Zig's self-hosted
+   Mach-O linker omits `LC_ENCRYPTION_INFO_64` on physical-iOS dylibs, which
+   fails App Store validation. `.github/scripts/check-apple-libghostty-vt.nu`
+   (+131) asserts it, plus single-architecture, install name, and exactly one
+   `LC_BUILD_VERSION`.
+2. **Why not.** The defect is in Zig's linker; rustc invokes `cc` -> `ld64`,
+   which emits the load command. And rustty ships **no iOS dylib**:
+   `xtask xcframework` packages a **static** library (`xtask/src/main.rs:395`,
+   `:442` — `-create-xcframework -library` over `libRusttyKit.a`), macOS only.
+   None of the four nushell assertions has a subject.
+3. **What would break if we ported it.** A nushell validation script with no
+   artifact to validate is a gate that passes vacuously — the exact shape this
+   program treats as worse than absent.
+4. **PRECONDITION TO CARRY FORWARD (this is why the row exists).** If rustty
+   ever ships an iOS framework containing `rustty-vt-c`'s `cdylib`, those four
+   assertions become **mandatory** — and they will pass, because rustc links
+   Apple targets through `ld64`. Record it as a precondition on the
+   (unscheduled) iOS tier, not as a dismissal.
+
+## G8 — `1c861e3c4` `pkg/apple-sdk/include/math.h` and `dac134d25` libc++ availability — N/A
+
+1. **Upstream.** `1c861e3c4` adds a `#include_next <math.h>` shim defining
+   `INFINITY`/`NAN` because Xcode 27's `math.h` uses the `__need_infinity_nan`
+   protocol that **Zig 0.16's bundled `float.h`** predates. `dac134d25` enables
+   the Apple vendor availability table for libc++ because Zig's **bundled**
+   libc++ headers assume every LLVM-21 ABI symbol is present in the system
+   dylib (crashing on macOS without `std::__hash_memory`).
+2. **Why not.** Both premises are Zig **bundling** its own Clang resource
+   headers / libc++. rustty compiles C and C++ through the `cc` crate ->
+   Apple `clang` with its own matching resource headers, and `bindgen`/libclang
+   likewise; there is no bundled `float.h` or bundled libc++ anywhere in the
+   rustty toolchain.
+3. **What would break if we ported it.** Injecting a `math.h` shim ahead of the
+   real SDK header would shadow a correct header with a workaround for a
+   compiler rustty does not use.
+4. **What holds the line.** The `-sys` crates' own builds: if the SDK/compiler
+   pairing were broken, `simdutf-sys`, `highway-sys` and `harfbuzz-sys` would
+   fail to compile, which the workspace build already exercises every run.
+
+## G9 — `84254a9d8` no-libcxx MSVC runtime — N/A, and the portable half ALREADY EXISTS
+
+1. **Upstream.** Avoid dragging in the MSVC C++ runtime in no-libcxx builds
+   (`pkg/highway`, `pkg/simdutf`, `GhosttyLibVt`, `SharedDeps`, `src/lib_vt.zig`).
+2. **Why not.** The Windows/MSVC half is macOS-first N/A (locked fork decision,
+   memory `rustty-completion-plan`). The portable half — "do not drag in a C++
+   runtime" — is **already implemented**: `crates-sys/simdutf-sys/build.rs:50`
+   and `crates-sys/highway-sys/build.rs:68` both call `cpp_link_stdlib(None)`,
+   with the reasoning spelled out at `highway-sys/build.rs:39,64`.
+3. **What would break.** Nothing; there is simply nothing left to port.
+4. **What holds the line.** Those two `-sys` crate builds, which are part of
+   every workspace build.
+
+## G10 — `1fe1b2d23`, `patch_rpath` -> `patchelf`, `terminalOptions(.., optimize)`, `10e6ace6b` — N/A (with two things recorded, not dismissed)
+
+1. **Upstream.** `1fe1b2d23` fixes static `libghostty-vt` linking on Windows.
+   `f2a7652ab` turns `patch_rpath` into `patchelf { interp, rpath }` (on NixOS
+   also `--set-interpreter` from `ld.so`, not just `--set-rpath`), and makes
+   `terminalOptions(artifact, optimize)` derive `slow_runtime_safety` from the
+   artifact's optimize mode. `10e6ace6b` changes `GhosttyI18n.zig`'s
+   `trimRight(locale, ".UTF-8")` to `trimEnd(...)` for the FreeBSD locale dir.
+2. **Why not, item by item.**
+   * Windows static lib-vt: macOS-first locked fork; rustty's Windows path is
+     not stood up.
+   * `patchelf`: `grep -rn 'patchelf\|IN_NIX_SHELL' . --exclude-dir=.git
+     --exclude-dir=target` -> 0 hits. rustty has no Nix packaging at all
+     (`PACKAGING.md:143` defers a reproducible Nix/crane build to release-infra
+     Batch 4). **RECORDED AS A REAL REQUIREMENT, NOT DISMISSED:** if a Nix lane
+     is ever stood up, the `--set-interpreter` half is load-bearing and a naive
+     `--set-rpath`-only port would silently miss it.
+   * `slow_runtime_safety`: `grep -rn 'slow_runtime_safety' crates/ xtask/
+     Cargo.toml` -> 0 hits. rustty has no such build option; safety checks are
+     Cargo profiles, which are per-profile by construction — the bug upstream
+     fixed (global rather than per-artifact optimize mode) cannot occur.
+   * FreeBSD `trimEnd`: a semantically identical Zig 0.16 rename.
+3. **D-1 — rustty's `gen_locale` is deliberately MORE robust; do NOT "fix" it
+   back.** The oracle derives the locale directory from a hardcoded list in
+   `src/os/i18n_locales.zig` plus a `.UTF-8` trim (`GhosttyI18n.zig:26-31`).
+   rustty derives it from the `po/*.po` **basename**
+   (`xtask/src/res_misc.rs:375` `po.file_stem()`), so it cannot drift out of
+   sync with `po/` and there is no `.UTF-8` suffix to trim. That is what makes
+   `10e6ace6b` N/A. A future reviewer diffing against the oracle will see a
+   "missing" hardcoded list; this row is why it is missing.
+4. **What holds the line.** For D-1: `gen_locale`'s per-catalog `msgfmt`
+   exit-status check (`res_misc.rs:398`) — a catalog that stopped being
+   discovered would stop being compiled, and the check is per-catalog.
+
+## G11 — `pkg/harfbuzz/c.zig` and `pkg/wuffs/src/c.zig` DELETIONS — N/A; upstream converged on rustty's design
+
+1. **Upstream.** Zig 0.16 removed `@cImport`. `pkg/harfbuzz/c.zig` (−8) was
+   replaced by a lazy `translate_c`-backport dependency whose `Translator`
+   emits an `hb_c` module, imported at `pkg/harfbuzz/main.zig:11` as
+   `pub const c = @import("hb_c")`. `pkg/wuffs/src/c.zig` (−18) was deleted and
+   its `defines` array moved into `pkg/wuffs/build.zig:4-15`.
+2. **Why nothing to follow.** rustty never had a `c.zig`:
+   `crates-sys/harfbuzz-sys/build.rs:116` runs `bindgen` over
+   `crates-sys/harfbuzz-sys/wrapper.h`, which **is** the structural equivalent
+   of upstream's new `hb_c` module. Upstream arrived at rustty's design.
+3. **The one real action, and it is done.** `crates-sys/wuffs-sys/build.rs`
+   cited the deleted `pkg/wuffs/src/c.zig` at two places as the provenance of
+   `MODULE_DEFINES`. `P3-W9 T7` step 1 retargeted both to
+   `pkg/wuffs/build.zig:4-15` after re-verifying the ten-entry list is
+   byte-identical there. The list was never wrong; only the citation rotted.
+4. **What holds the line.** Nothing diffs the define list against the oracle
+   automatically — stated plainly. The `wuffs-sys` build would fail loudly if a
+   module gate were dropped (the decoder symbols would vanish), which covers
+   removals but not additions.
+
+## G12 — `po/` reference renumbering, and the 3 vicinae msgids — deliberate NON-ports
+
+1. **Upstream.** `9c6f287aa` renumbers `#:` source references across all 32
+   catalogs (**2,142 of the 2,516 changed `po/` lines**) and adds 3 msgids —
+   `"The keybind was revoked by the system."`,
+   `"The keybind was denied by the system."`, `"Global keybind unavailable"` —
+   whose `msgstr` is empty in **all 32** upstream files.
+2. **Why not.**
+   * The `#:` renumbering cites `src/apprt/gtk/**` at **upstream's** line
+     numbers. rustty's catalogs already carry **rustty's own** paths
+     (`crates/rustty-apprt/assets/ui/1.2/surface.blp:323`), regenerated by
+     WS13 T4 (`485d65b`). Copying upstream's renumbering would replace correct
+     rustty references with references to files that exist in no rustty tree —
+     making the metadata *differently* stale, not less stale. gettext ignores
+     `#:` at lookup time, so the functional impact is zero either way.
+   * The 3 vicinae msgids' only call sites are
+     `src/apprt/gtk/class/application.zig:1708,1710,1721`, which is the
+     `vicinae-hotkey-v1` work and is **`P3-W8 T7 step 3`**'s. Landing catalog
+     entries before their call sites exist creates 96 lines that translate
+     nothing and are reachable from nothing — and WS13 T1's
+     `code_msgids_all_wrapped_and_in_pot` gate is written to FAIL on exactly
+     that shape.
+3. **What would break.** See above: a redder gate and worse metadata,
+   respectively.
+4. **What holds the line.** WS13 T1's msgid-coverage gate (it fails on a `.pot`
+   msgid with no wrapped call site) and WS13 T4's `xtask update-translations`,
+   which owns regeneration against rustty paths.
+
+**STALE PREMISE FOUND (`P3-W9 T7` step 3).** The plan and the area-G assessment
+both state that the bare `"Close Split"` msgid is missing from catalogs that
+lack it, naming `po/be.po` as having only `"Close Split?"`. **That is no longer
+true:** all **31** rustty catalogs already carry the bare msgid — verified with
+`python3 .port/phase-3/w9-close-split-msgid.py` -> `LACK (0): []`, and by
+reading `po/be.po:150-152` directly. WS13 T4 (`485d65b`, "extract gettext_/tr
+msgids + scope the walk; regenerate the pot/catalog refs") added them when it
+regenerated the catalogs. Only the zh_CN **translation** was outstanding, and
+that is ported.
+
+## G13 — `.github` (13 files), `nix/` (4), `flatpak/` (1), `build.zig.zon*` (4) — N/A wholesale
+
+1. **Upstream.** `VOUCHED.td` + 6 `vouch-*.yml` workflows (contributor-vouching
+   governance for the upstream GitHub org); ~11 dependabot action-SHA bumps;
+   `release-tip.yml` (+156), `release-tag.yml` (+16), `snap.yml`, `nix.yml`;
+   `test.yml`'s Xcode 26.3 -> 26.6 plus a new `build-macos-xcode-27` job;
+   `update-colorschemes.yml` (+6); all of `nix/`; `flatpak/zig-packages.json`;
+   `build.zig`, `build.zig.zon` and its `.json`/`.nix`/`.txt` lock renderings.
+2. **Why not.** None of these files exists in rustty, and each encodes
+   infrastructure with no Cargo analogue: `ls .github/workflows` is `ci.yml`,
+   `clean-artifacts.yml`, `milestone.yml`; there is no `nix/` and no
+   `flatpak/`; rustty pins its toolchain in `rust-toolchain.toml`, not an Xcode
+   matrix; `Cargo.lock` is the committed dependency lock.
+3. **What would break if we ported them.** Workflows referencing jobs, secrets
+   and artifacts that do not exist — CI noise that teaches reviewers to ignore
+   red.
+4. **What holds the line, and the two carve-outs.**
+   * `update-colorschemes.yml`'s **payload** (the theme corpus) IS real work and
+     is NOT dismissed: it is `P3-W9 T5`, landed, with the new `G-THEMES` digest
+     gate.
+   * `check-apple-libghostty-vt.nu` is N/A **with a precondition**, recorded in
+     G7 above rather than here.

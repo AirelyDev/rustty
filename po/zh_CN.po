@@ -147,7 +147,7 @@ msgstr "向右分屏"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:323
 msgid "Close Split"
-msgstr ""
+msgstr "关闭分屏"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:329
 msgid "Tab"
