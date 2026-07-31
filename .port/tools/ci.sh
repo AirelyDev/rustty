@@ -384,6 +384,18 @@ GATE_REGISTRY=(
   # main one.
   "G-TESTS-SELF|HARD|$PY $ROOT/.port/tools/audit_test_coverage.py --self-test"
   "G-TESTS|HARD|$PY $ROOT/.port/tools/audit_test_coverage.py"
+  # G-CENSUS (2026-07-31) — the same blind spot as G-FILES/G-SYMS/G-TESTS, but
+  # for the NUMBERS. G1/G1b/G2 measure against the phase-0 inventory frozen at
+  # 4749c4e93; re-running that same tokenizer against the live tree at 6ad1fe7d8
+  # gives 3550 blocks / 13533 assertions vs the contract's 3234 / 11975, i.e.
+  # G2's floor is 88% of the real figure and 316 test blocks sit outside all
+  # three gates entirely. The inventory stays FROZEN on purpose — it is the
+  # contract the port was planned against, and regenerating it would restate the
+  # denominator of every historical completion claim. This gate does not demand
+  # a zero delta; it demands the delta be written down, so it cannot widen
+  # unnoticed the next time the pin moves.
+  "G-CENSUS-SELF|HARD|$PY $GATES/check_census_staleness.py --self-test"
+  "G-CENSUS|HARD|$PY $GATES/check_census_staleness.py"
   "G-ONIG|HARD|bash $GATES/check_oniguruma_lane.sh"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
