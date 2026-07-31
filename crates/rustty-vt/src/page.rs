@@ -1129,6 +1129,26 @@ impl Default for Row {
     }
 }
 
+// The PageList memory pool requires that `Page::init_buf` overwrites at
+// least the first pointer-size bytes of the backing buffer:
+// `MemoryPool` stores its free list node there when a page buffer is
+// returned to it, and pool reuse skips zeroing in release builds. This
+// holds because the rows array is at offset 0 (see `Page::layout`), a
+// page always has at least one row (asserted in `Page::init_buf`), and
+// `init_buf` fully rewrites every row.
+//
+// PORT NOTE (oracle c442eb4b3, `P3-W1 T4`): the reference puts this in the
+// `comptime { ... }` block at the top of `Page`; rustty's `Page` lives in
+// `page_impl.rs` while `Row` is defined here, so the `const _` assert is
+// anchored to `Row` and cross-referenced from both `init_buf` and `layout`.
+// This is NOT decorative in rustty: `decommit_pool_item`
+// (`pagelist/mod.rs`) is live, so rustty already depends on this invariant,
+// and rustty skips the zeroing memset in release exactly as Zig does. A
+// layout reorder that moved `rows` off offset 0, or a zero-row page, would
+// corrupt pages in RELEASE BUILDS ONLY and non-deterministically, depending
+// on pool reuse.
+const _: () = assert!(core::mem::size_of::<Row>() >= core::mem::size_of::<usize>());
+
 /// The size of this page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageSize {

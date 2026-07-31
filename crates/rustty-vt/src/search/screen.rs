@@ -383,6 +383,46 @@ impl ScreenSearch {
         self.active_results.len() + self.history_results.len()
     }
 
+    /// Reinitialize cached search state after a screen resize. Reflow can
+    /// replace every PageList node, so even flattened highlights that weren't
+    /// selected contain invalid node pointers once either dimension changes.
+    ///
+    /// Returns true when the reset occurred. The replacement search has
+    /// already loaded its active area through `init` in that case.
+    //
+    // PORT NOTE (oracle 627518447, `P3-W1 T5`): extracted VERBATIM from the
+    // inline body that used to live at the top of `feed`. The needle is copied
+    // into an owned `Vec<u8>` FIRST — the reference can pass `self.needle()`
+    // straight into `init` because Zig slices are unprotected, but in Rust that
+    // borrow of `self` must not be live across `self.deinit()` / `*self = new`.
+    // That shape is `feed`'s existing one, reused unchanged. `self.screen` is a
+    // raw `*mut Screen` alias throughout (memory: rust-mut-args-strongly-protected)
+    // and is never re-borrowed as `&mut Screen` here.
+    // fn resetIfDimensionsChanged(self: *ScreenSearch) Allocator.Error!bool {
+    fn reset_if_dimensions_changed(&mut self) -> Result<bool, OutOfMemory> {
+        // if (self.screen.pages.rows == self.rows and
+        //     self.screen.pages.cols == self.cols)
+        // {
+        //     return false;
+        // }
+        if unsafe { (*self.screen).pages.rows } == self.rows
+            && unsafe { (*self.screen).pages.cols } == self.cols
+        {
+            return Ok(false);
+        }
+
+        let needle_owned: Vec<u8> = self.needle().to_vec();
+        let new: ScreenSearch = ScreenSearch::init(self.allocator(), self.screen, &needle_owned)?;
+
+        self.deinit();
+        *self = new;
+
+        // New result should have matching dimensions
+        assert!(unsafe { (*self.screen).pages.rows } == self.rows);
+        assert!(unsafe { (*self.screen).pages.cols } == self.cols);
+        Ok(true)
+    }
+
     /// Returns all matches as an owned slice (caller must free).
     /// The matches are ordered from most recent to oldest (e.g. bottom
     /// of the screen to top of the screen).
@@ -494,42 +534,10 @@ impl ScreenSearch {
     /// potentially stale history results (pruned) and reclaim some memory.
     // pub fn feed(self: *ScreenSearch) Allocator.Error!void {
     pub fn feed(&mut self) -> Result<(), OutOfMemory> {
-        // If the screen resizes, we have to reset our entire search. That
-        // isn't ideal but we don't have a better way right now to handle
-        // reflowing the search results beyond putting a tracked pin for
-        // every single result.
-        // if (self.screen.pages.rows != self.rows or
-        //     self.screen.pages.cols != self.cols)
-        // {
-        if unsafe { (*self.screen).pages.rows } != self.rows
-            || unsafe { (*self.screen).pages.cols } != self.cols
-        {
-            // Reinit
-            // const new: ScreenSearch = try .init(
-            //     self.allocator(),
-            //     self.screen,
-            //     self.needle(),
-            // );
-            //
-            // PORT NOTE: `init` borrows `self.needle()` (a borrow of `self`) while
-            // building `new`; copy the needle into an owned buffer first so the
-            // subsequent `self.deinit()`/`self.* = new` don't alias.
-            let needle_owned: Vec<u8> = self.needle().to_vec();
-            let new: ScreenSearch =
-                ScreenSearch::init(self.allocator(), self.screen, &needle_owned)?;
-
-            // Deinit/reinit
-            // self.deinit();
-            // self.* = new;
-            self.deinit();
-            *self = new;
-
-            // New result should have matching dimensions
-            // assert(self.screen.pages.rows == self.rows);
-            // assert(self.screen.pages.cols == self.cols);
-            assert!(unsafe { (*self.screen).pages.rows } == self.rows);
-            assert!(unsafe { (*self.screen).pages.cols } == self.cols);
-        }
+        // Resize/reflow invalidates every flattened result, not just search
+        // state that needs another history feed.
+        // _ = try self.resetIfDimensionsChanged();
+        let _ = self.reset_if_dimensions_changed()?;
 
         // const history: *PageListSearch = if (self.history) |*h| &h.searcher else {
         //     // No history to feed, search is complete.
@@ -820,14 +828,16 @@ impl ScreenSearch {
     /// The caller must hold the necessary locks to access the screen state.
     // pub fn reloadActive(self: *ScreenSearch) Allocator.Error!void {
     pub fn reload_active(&mut self) -> Result<(), OutOfMemory> {
+        // This check must precede all inspection of cached highlights and
+        // searchers: column reflow may have freed every node they reference.
+        // if (try self.resetIfDimensionsChanged()) return;
+        if self.reset_if_dimensions_changed()? {
+            return Ok(());
+        }
+
         // reloadActive only inspects the selected history result, so validate
         // that result without scanning every cached match on this hot path.
         // self.validateSelectedHistory();
-        //
-        // PORT NOTE: upstream this sits immediately after
-        // `resetIfDimensionsChanged()`, which rustty's `ScreenSearch` does not
-        // have yet (it is a pre-WS7-C upstream commit that is not part of this
-        // workstream); here it is therefore the first statement.
         self.validate_selected_history();
 
         // const tw = reloadActive_tw;
@@ -1407,6 +1417,17 @@ impl ScreenSearch {
     /// ensure our selection sticks with contents changing.
     // pub fn select(self: *ScreenSearch, to: Select) Allocator.Error!bool {
     pub fn select(&mut self, to: Select) -> Result<bool, OutOfMemory> {
+        // A resize can replace any page node, including nodes retained by
+        // flattened history results. Reset before reloadActive or tracking a
+        // selected result so no pre-resize pointer is ever dereferenced.
+        //
+        // PORT NOTE (`P3-W1 T5`): this call must NOT sit inside any borrow of
+        // `self.history_results` / `self.active_results` / `self.selected` —
+        // after a reset those are new allocations. It is the first statement of
+        // the function precisely so that no such borrow can be live.
+        // _ = try self.resetIfDimensionsChanged();
+        let _ = self.reset_if_dimensions_changed()?;
+
         // Reload validates the selected history result before inspecting its
         // cached coordinates. Prune the remaining results afterward so every
         // candidate is valid before selection tracks it.
@@ -1951,6 +1972,99 @@ mod tests {
         drop(matches);
         search.deinit();
         s.deinit();
+        t.deinit(alloc);
+    }
+
+    // test "select after resize resets stale flattened results"
+    #[test]
+    fn select_after_resize_resets_stale_flattened_results() {
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 3, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+
+        {
+            let mut stream = t.vt_stream();
+            stream.next_slice(b"Fizz\r\nBuzz");
+            stream.deinit();
+        }
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"Fizz").unwrap();
+        search.search_all().unwrap();
+        assert!(search.select(Select::Next).unwrap());
+        assert!(search.selected_match().is_some());
+        assert_eq!(10 as size::CellCountInt, search.cols);
+
+        // Column reflow replaces the nodes referenced by the cached flattened
+        // active result. select() calls reload_active(), so dimension
+        // invalidation must run before either path dereferences those old nodes.
+        //
+        // SB: the searcher holds a raw `*mut Screen`; drive the resize through
+        // the SAME raw pointer rather than a `&mut Screen`
+        // (rust-mut-args-strongly-protected).
+        unsafe {
+            (*active_ptr)
+                .pages
+                .resize(crate::pagelist::resize::Resize {
+                    cols: Some(5),
+                    ..Default::default()
+                })
+                .unwrap()
+        };
+        assert_eq!(10 as size::CellCountInt, search.cols);
+
+        assert!(search.select(Select::Next).unwrap());
+        assert_eq!(5 as size::CellCountInt, search.cols);
+
+        let selected = search.selected_match().unwrap().untracked();
+        assert_eq!(5, unsafe {
+            crate::pagelist::Node::cols(selected.start.node)
+        });
+        assert_eq!(5, unsafe { crate::pagelist::Node::cols(selected.end.node) });
+
+        search.deinit();
+        t.deinit(alloc);
+    }
+
+    /// `P3-W1 T5` step 3. The oracle's own `select after resize ...` test cannot
+    /// tell the two new call sites apart: `select` delegates to `reload_active`,
+    /// and `reload_active`'s reset RETURNS EARLY, so removing either site alone
+    /// still resets (proven by mutation — see the commit body). This test gives
+    /// the `reload_active` site its own reproducer by calling it DIRECTLY after a
+    /// column resize, with no `select` in the path.
+    #[test]
+    fn reload_active_after_resize_resets_stale_flattened_results() {
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 3, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+
+        {
+            let mut stream = t.vt_stream();
+            stream.next_slice(b"Fizz\r\nBuzz");
+            stream.deinit();
+        }
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"Fizz").unwrap();
+        search.search_all().unwrap();
+        assert!(search.select(Select::Next).unwrap());
+        assert_eq!(10 as size::CellCountInt, search.cols);
+
+        unsafe {
+            (*active_ptr)
+                .pages
+                .resize(crate::pagelist::resize::Resize {
+                    cols: Some(5),
+                    ..Default::default()
+                })
+                .unwrap()
+        };
+        assert_eq!(10 as size::CellCountInt, search.cols);
+
+        // No select() in the path: reload_active alone must invalidate.
+        search.reload_active().unwrap();
+        assert_eq!(5 as size::CellCountInt, search.cols);
+        assert_eq!(3 as size::CellCountInt, search.rows);
+
+        search.deinit();
         t.deinit(alloc);
     }
 

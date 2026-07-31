@@ -381,21 +381,15 @@ impl PageIterator {
 
             Limit::Count(limit) => {
                 assert!(*limit > 0); // should be handled already
-                let len = core::cmp::min(
-                    unsafe { super::Node::rows(row.node) } - row.y,
-                    *limit as size::CellCountInt,
-                );
-                if (len as usize) > *limit {
-                    self.row = row.down(len as usize);
-                    *limit -= len as usize;
-                } else {
-                    self.row = None;
-                }
+                let available: usize = (unsafe { super::Node::rows(row.node) } - row.y) as usize;
+                let len = core::cmp::min(available, *limit);
+                *limit -= len;
+                self.row = if *limit > 0 { row.down(len) } else { None };
 
                 Some(Chunk {
                     node: row.node,
                     start: row.y,
-                    end: row.y + len,
+                    end: (row.y as usize + len) as size::CellCountInt,
                 })
             }
 
@@ -475,18 +469,15 @@ impl PageIterator {
 
             Limit::Count(limit) => {
                 assert!(*limit > 0); // should be handled already
-                let len = core::cmp::min(row.y, *limit as size::CellCountInt);
-                if (len as usize) > *limit {
-                    self.row = row.up(len as usize);
-                    *limit -= len as usize;
-                } else {
-                    self.row = None;
-                }
+                let available: usize = row.y as usize + 1;
+                let len = core::cmp::min(available, *limit);
+                *limit -= len;
+                self.row = if *limit > 0 { row.up(len) } else { None };
 
                 Some(Chunk {
                     node: row.node,
-                    start: row.y - len,
-                    end: row.y - 1,
+                    start: (available - len) as size::CellCountInt,
+                    end: available as size::CellCountInt,
                 })
             }
 

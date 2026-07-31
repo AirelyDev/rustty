@@ -27,7 +27,7 @@ use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError
 use super::resize::Resize;
 use super::scroll::Scroll;
 use super::{std_capacity, std_size, NodeData, Owned, PageList, Pin, Storage, Viewport};
-use crate::page::{Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
+use crate::page::{Capacity, Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
 use rustty_render_types::term_size as size;
@@ -12335,4 +12335,551 @@ fn pagelist_pagepool_no_leak_reset_then_deinit() {
         s.deinit();
     }
     scope.assert_returned_to_baseline();
+}
+
+// -- P3-W1 T1: width-aware pin traversal (oracle d6e24d985, tests 0ff4e41b2) --
+
+// ref: fn mixedWidthPinListForTest
+//
+// PORT NOTE: the reference fixture builds one arm as
+// `Node{ .data = .{ .resident = undefined } }`; we do NOT port that as
+// `MaybeUninit`. Every page here is a real page built with `create_page`,
+// exactly as the mixed-width arm of the reference fixture does.
+fn mixed_width_pin_list_for_test() -> PageList {
+    let mut result = PageList::init(2, 1, None).unwrap();
+
+    // This deliberately constructs a layout that normal PageList operations
+    // do not expose yet. Keep integrity checks paused through deinit so the
+    // fixture can exercise mixed-width traversal in isolation.
+    result.pause_integrity_checks(true);
+
+    for cols in [4u16, 3u16] {
+        let node = result
+            .create_page(super::CreatePage::new(Capacity {
+                cols,
+                rows: 1,
+                ..Capacity::default()
+            }))
+            .unwrap();
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+        unsafe { result.pages.append(node) };
+        result.total_rows += 1;
+    }
+
+    // Desired geometry is wider than the first and last stored pages.
+    result.cols = 4;
+    result
+}
+
+// ref: test "PageList Pin rightWrap exact row multiple"
+#[test]
+fn pagelist_pin_rightWrap_exact_row_multiple() {
+    let mut s = PageList::init(10, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 5, y: 0 }))
+        .unwrap();
+    let wrapped = start.right_wrap(14).unwrap();
+    let _ = wrapped.row_and_cell();
+
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 9, y: 1 }),
+        s.point_from_pin(point::Tag::Active, wrapped).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin leftWrap exact row multiple"
+#[test]
+fn pagelist_pin_leftWrap_exact_row_multiple() {
+    let mut s = PageList::init(10, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 5, y: 2 }))
+        .unwrap();
+    let wrapped = start.left_wrap(15).unwrap();
+    let _ = wrapped.row_and_cell();
+
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+        s.point_from_pin(point::Tag::Active, wrapped).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin rightWrap maximum distance"
+#[test]
+fn pagelist_pin_rightWrap_maximum_distance() {
+    let mut s = PageList::init(1, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+    assert_eq!(None, start.right_wrap(usize::MAX));
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin leftWrap maximum distance"
+#[test]
+fn pagelist_pin_leftWrap_maximum_distance() {
+    let mut s = PageList::init(1, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 0, y: 2 }))
+        .unwrap();
+    assert_eq!(None, start.left_wrap(usize::MAX));
+
+    s.deinit();
+}
+
+/// `P3-W1` row 1b: a ONE-COLUMN pagelist is constructible in production
+/// (`GridSize::update` floors the column count at 1, and `grid_size.columns`
+/// flows straight into `Terminal::resize`). At `cols == 1` the four
+/// `selection_gesture.rs` callers' literal `n = 1` DOES reach the wrap
+/// remainder path, so rows 1/2 of `REACHABILITY.md` are LIVE, not LATENT.
+/// This is the production-shaped reproducer: `right_wrap(1)` from the single
+/// column of row 0 must land on the single column of row 1.
+#[test]
+fn pagelist_pin_wrap_one_column_selection_gesture_shape() {
+    let mut s = PageList::init(1, 3, None).unwrap();
+
+    let start = s
+        .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+    let right = start.right_wrap(1).expect("row 1 exists");
+    let _ = right.row_and_cell();
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+        s.point_from_pin(point::Tag::Active, right).unwrap()
+    );
+
+    let back = right.left_wrap(1).expect("row 0 exists");
+    let _ = back.row_and_cell();
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+        s.point_from_pin(point::Tag::Active, back).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin row movement clamps across mixed-width pages"
+#[test]
+fn pagelist_pin_row_movement_clamps_across_mixed_width_pages() {
+    let mut s = mixed_width_pin_list_for_test();
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let third = unsafe { (*second).next };
+
+    let mk = |node: *mut super::Node, x: u16| Pin {
+        node,
+        y: 0,
+        x,
+        garbage: false,
+    };
+
+    assert!(mk(third, 2).eql(mk(second, 3).down(1).unwrap()));
+    assert!(mk(first, 1).eql(mk(second, 3).up(1).unwrap()));
+
+    match mk(second, 3).down_overflow(10) {
+        super::pin::PinOverflow::Offset(_) => panic!("expected overflow"),
+        super::pin::PinOverflow::Overflow { end, .. } => assert!(mk(third, 2).eql(end)),
+    }
+    match mk(second, 3).up_overflow(10) {
+        super::pin::PinOverflow::Offset(_) => panic!("expected overflow"),
+        super::pin::PinOverflow::Overflow { end, .. } => assert!(mk(first, 1).eql(end)),
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin wrapping crosses mixed-width pages"
+#[test]
+fn pagelist_pin_wrapping_crosses_mixed_width_pages() {
+    let mut s = mixed_width_pin_list_for_test();
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let third = unsafe { (*second).next };
+
+    let mk = |node: *mut super::Node, x: u16| Pin {
+        node,
+        y: 0,
+        x,
+        garbage: false,
+    };
+
+    assert!(mk(third, 2).eql(mk(first, 1).right_wrap(7).unwrap()));
+    assert!(mk(second, 0).eql(mk(third, 2).left_wrap(6).unwrap()));
+    assert!(mk(first, 0).left_wrap(1).is_none());
+    assert!(mk(third, 2).right_wrap(1).is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList Pin rejects columns beyond mixed-width page bounds"
+#[test]
+fn pagelist_pin_rejects_columns_beyond_mixed_width_page_bounds() {
+    let mut s = mixed_width_pin_list_for_test();
+
+    assert!(s
+        .pin(point::Point::Screen(point::Coordinate { x: 1, y: 0 }))
+        .is_some());
+    assert!(s
+        .pin(point::Point::Screen(point::Coordinate { x: 2, y: 0 }))
+        .is_none());
+    assert!(s
+        .pin(point::Point::Screen(point::Coordinate { x: 3, y: 1 }))
+        .is_some());
+    assert!(s
+        .pin(point::Point::Screen(point::Coordinate { x: 3, y: 2 }))
+        .is_none());
+
+    s.deinit();
+}
+
+// -- P3-W1 T2: the PageIterator count limit (oracle 9b466e9c5) ----------------
+
+// ref: test "PageList PageIterator reverse count includes row zero"
+#[test]
+fn pagelist_PageIterator_reverse_count_includes_row_zero() {
+    let mut s = PageList::init(2, 2, None).unwrap();
+
+    let mut it = super::iter::PageIterator {
+        row: Some(s.get_top_left(point::Tag::Screen)),
+        limit: super::iter::Limit::Count(1),
+        direction: super::iter::Direction::LeftUp,
+    };
+    let chunk = it.next().unwrap();
+    assert_eq!(0 as size::CellCountInt, chunk.start);
+    assert_eq!(1 as size::CellCountInt, chunk.end);
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList PageIterator count crosses page boundaries"
+#[test]
+fn pagelist_PageIterator_count_crosses_page_boundaries() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    let first = s.pages.first;
+    unsafe { (*super::Node::page(first)).pause_integrity_checks(true) };
+    while unsafe { super::Node::rows(first) } < unsafe { super::Node::capacity(first) }.rows {
+        let _ = s.grow().unwrap();
+    }
+    unsafe { (*super::Node::page(first)).pause_integrity_checks(false) };
+    let second = s.grow().unwrap().unwrap();
+
+    let mut down = super::iter::PageIterator {
+        row: Some(Pin {
+            node: first,
+            y: unsafe { super::Node::rows(first) } - 1,
+            x: 0,
+            garbage: false,
+        }),
+        limit: super::iter::Limit::Count(2),
+        direction: super::iter::Direction::RightDown,
+    };
+    {
+        let chunk = down.next().unwrap();
+        assert!(core::ptr::eq(first, chunk.node));
+        assert_eq!(unsafe { super::Node::rows(first) } - 1, chunk.start);
+        assert_eq!(unsafe { super::Node::rows(first) }, chunk.end);
+    }
+    {
+        let chunk = down.next().unwrap();
+        assert!(core::ptr::eq(second, chunk.node));
+        assert_eq!(0 as size::CellCountInt, chunk.start);
+        assert_eq!(1 as size::CellCountInt, chunk.end);
+    }
+    assert!(down.next().is_none());
+
+    let mut up = super::iter::PageIterator {
+        row: Some(Pin {
+            node: second,
+            y: 0,
+            x: 0,
+            garbage: false,
+        }),
+        limit: super::iter::Limit::Count(2),
+        direction: super::iter::Direction::LeftUp,
+    };
+    {
+        let chunk = up.next().unwrap();
+        assert!(core::ptr::eq(second, chunk.node));
+        assert_eq!(0 as size::CellCountInt, chunk.start);
+        assert_eq!(1 as size::CellCountInt, chunk.end);
+    }
+    {
+        let chunk = up.next().unwrap();
+        assert!(core::ptr::eq(first, chunk.node));
+        assert_eq!(unsafe { super::Node::rows(first) } - 1, chunk.start);
+        assert_eq!(unsafe { super::Node::rows(first) }, chunk.end);
+    }
+    assert!(up.next().is_none());
+
+    s.deinit();
+}
+
+// -- P3-W1 T3: the release-arithmetic subset ---------------------------------
+// oracle c753fe4a4, afbf5ba15, e6e4a9fdc, 30b42f42a. See
+// `.port/phase-3/REVIEW_CLASSES.md` §1: Zig traps only in safety builds, Rust
+// panics in debug and WRAPS in release, so each of these tests asserts a VALUE
+// and is deliberately NOT gated on `debug_assertions` — a release wrap produces
+// a wrong answer with no panic, and a `#[should_panic]`-only control would be
+// blind to exactly that case. Run the file with `--release` as well as debug.
+
+// ref: test "PageList scroll minimum row delta"
+#[test]
+fn pagelist_scroll_minimum_row_delta() {
+    let mut s = PageList::init(10, 3, None).unwrap();
+
+    // Create one row of history so scrolling all the way back has an
+    // observable result.
+    s.grow_rows(1).unwrap();
+    s.scroll(Scroll::DeltaRow(isize::MIN));
+
+    assert!(matches!(s.viewport, Viewport::Top));
+
+    s.deinit();
+}
+
+// ref: test "PageList: jump minimum prompt delta"
+#[test]
+fn pagelist_jump_minimum_prompt_delta() {
+    let mut s = PageList::init(10, 3, None).unwrap();
+
+    s.scroll(Scroll::DeltaPrompt(isize::MIN));
+    assert!(matches!(s.viewport, Viewport::Active));
+
+    s.deinit();
+}
+
+// ref: test "PageList Cell screenPoint supports long scrollback"
+//
+// PORT NOTE: the reference builds a `[]Node` of 307 metadata-only nodes with
+// `.data = .{ .resident = undefined }`. rustty does NOT construct `undefined`
+// pages (see the `mixed_width_pin_list_for_test` note); instead this uses THREE
+// real pages and temporarily raises the two leading pages' `size.rows` to the
+// `CellCountInt` maximum. `screen_point` reads nothing but that metadata field
+// and the `prev` links, so the model is exact for the code under test, and the
+// real sizes are restored before `deinit`.
+#[test]
+fn pagelist_Cell_screenPoint_supports_long_scrollback() {
+    let mut s = PageList::init(1, 1, None).unwrap();
+    s.pause_integrity_checks(true);
+
+    for _ in 0..2 {
+        let node = s
+            .create_page(super::CreatePage::new(Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            }))
+            .unwrap();
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+        unsafe { s.pages.append(node) };
+        s.total_rows += 1;
+    }
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let third = unsafe { (*second).next };
+
+    let rows_per_page = size::CellCountInt::MAX;
+    for node in [first, second] {
+        unsafe { (*super::Node::page(node)).size.rows = rows_per_page };
+    }
+
+    // Two full-height leading pages exceed the u16 row range, which is the
+    // whole point: the pre-fix accumulator was `size::CellCountInt`.
+    let expected_y: u32 = 2 * rows_per_page as u32;
+    assert!(expected_y > size::CellCountInt::MAX as u32);
+
+    let rac = Pin {
+        node: third,
+        y: 0,
+        x: 0,
+        garbage: false,
+    }
+    .row_and_cell();
+    let cell = super::access::Cell {
+        node: third,
+        row: rac.row,
+        cell: rac.cell,
+        row_idx: 0,
+        col_idx: 0,
+    };
+    assert_eq!(
+        point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: expected_y
+        }),
+        cell.screen_point()
+    );
+
+    // Restore the true sizes so deinit sees a consistent list.
+    for node in [first, second] {
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+    }
+    s.deinit();
+}
+
+// ref: test "PageList pointFromPin rejects overflowing screen coordinate"
+//
+// PORT NOTE: the reference allocates 65,539 metadata-only `Node`s so the
+// accumulated Y exceeds `u32`. That is ~16 MB of `undefined` page structs in
+// rustty terms, so instead this builds a THREE-page list, sets every page's
+// `size.rows` to the `CellCountInt` maximum, and closes the `next` chain into a
+// RING. `point_from_pin`'s walk is a pure accumulate-until-found loop over
+// `next`, so a ring drives exactly the same arithmetic with 65k iterations
+// instead of 65k allocations, and the pin it searches for is a page that is not
+// in the ring. Pre-fix this panicked "attempt to add with overflow" in debug and
+// LOOPED FOREVER on a wrapped accumulator in release; post-fix the checked add
+// returns `None`, which is the oracle's fallback and also guarantees
+// termination. The ring is undone before `deinit`.
+#[test]
+fn pagelist_pointFromPin_rejects_overflowing_screen_coordinate() {
+    let mut s = PageList::init(1, 1, None).unwrap();
+    s.pause_integrity_checks(true);
+
+    let mut extra: Vec<*mut super::Node> = Vec::new();
+    for _ in 0..3 {
+        let node = s
+            .create_page(super::CreatePage::new(Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            }))
+            .unwrap();
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+        extra.push(node);
+    }
+    // The first two join the list; the third stays detached and is the pin we
+    // search for, so the walk never terminates by finding it.
+    for &node in &extra[..2] {
+        unsafe { s.pages.append(node) };
+        s.total_rows += 1;
+    }
+    let target = extra[2];
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    let third = unsafe { (*second).next };
+    let saved_next = unsafe { (*third).next };
+
+    for node in [first, second, third] {
+        unsafe { (*super::Node::page(node)).size.rows = size::CellCountInt::MAX };
+    }
+    // Close the ring.
+    unsafe { (*third).next = first };
+
+    assert_eq!(
+        None,
+        s.point_from_pin(
+            point::Tag::Screen,
+            Pin {
+                node: target,
+                y: 0,
+                x: 0,
+                garbage: false,
+            }
+        )
+    );
+
+    // Undo the ring and the sizes.
+    unsafe { (*third).next = saved_next };
+    for node in [first, second, third] {
+        unsafe { (*super::Node::page(node)).size.rows = 1 };
+    }
+    // The detached page never entered the list, so free it explicitly.
+    unsafe { s.pages.append(target) };
+    s.total_rows += 1;
+    s.deinit();
+}
+
+// -- P3-W1 T4 step 3: growth from a zero capacity dimension (oracle 8307349ec) --
+
+// ref: test "PageList increaseCapacity from zero-capacity dimensions"
+#[test]
+fn pagelist_increaseCapacity_from_zero_capacity_dimensions() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    // Compact the only page. A plain page has no styled, grapheme,
+    // or hyperlink content so the exact capacity is zero in every
+    // managed dimension.
+    let mut node = s.compact(s.pages.first).unwrap().unwrap();
+    let cap = |n: *mut super::Node| unsafe { super::Node::capacity(n) };
+    assert_eq!(0, cap(node).styles);
+    assert_eq!(0, cap(node).grapheme_bytes);
+    assert_eq!(0, cap(node).string_bytes);
+    assert_eq!(0, cap(node).hyperlink_bytes);
+
+    // Increasing each dimension from zero must actually grow it.
+    // Regression: 0 * 2 == 0 used to "succeed" without growing,
+    // which turned caller retry loops into infinite loops.
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::Styles))
+        .unwrap();
+    assert!(cap(node).styles > 0);
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
+        .unwrap();
+    assert!(cap(node).grapheme_bytes > 0);
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::StringBytes))
+        .unwrap();
+    assert!(cap(node).string_bytes > 0);
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::HyperlinkBytes))
+        .unwrap();
+    assert!(cap(node).hyperlink_bytes > 0);
+
+    // Increasing a non-zero dimension still doubles.
+    let styles = cap(node).styles;
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::Styles))
+        .unwrap();
+    assert_eq!(styles * 2, cap(node).styles);
+
+    s.deinit();
+}
+
+/// `REACHABILITY.md` row 6's own note: the consequence of the pre-fix code is
+/// NOT a panic — `0 * 2 == 0`, so the dimension never grows and the
+/// unbounded-retry callers spin allocating a page per iteration. A
+/// `#[should_panic]` control is therefore blind to it and an unguarded
+/// reproduction of the caller loop would HANG the suite. This models the retry
+/// loop with an explicit ceiling instead: pre-fix it exhausts the ceiling,
+/// post-fix it terminates on the first iteration.
+#[test]
+fn pagelist_increaseCapacity_from_zero_terminates_within_a_bounded_retry() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    let mut node = s.compact(s.pages.first).unwrap().unwrap();
+    assert_eq!(0, unsafe { super::Node::capacity(node) }.styles);
+
+    const CEILING: usize = 8;
+    let mut iterations = 0usize;
+    while unsafe { super::Node::capacity(node) }.styles == 0 {
+        iterations += 1;
+        assert!(
+            iterations <= CEILING,
+            "increase_capacity did not grow a zero dimension in {CEILING} \
+             retries; every unbounded-retry caller (start_hyperlink, \
+             cursor_set_hyperlink, the reflow probes, insert_lines/delete_lines) \
+             is an infinite allocation loop in this state"
+        );
+        node = s
+            .increase_capacity(node, Some(IncreaseCapacity::Styles))
+            .unwrap();
+    }
+    assert_eq!(1, iterations, "one retry must be enough");
+
+    s.deinit();
 }

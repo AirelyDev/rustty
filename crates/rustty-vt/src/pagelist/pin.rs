@@ -44,6 +44,11 @@ impl PageList {
 
         // Grab the top left and move to the point.
         let mut p = self.get_top_left(pt.tag()).down(pt.coord().y as usize)?;
+        // Incomplete reflow can leave a page narrower than the desired width.
+        // Never manufacture an out-of-bounds pin for that page.
+        if x >= unsafe { super::Node::cols(p.node) } {
+            return None;
+        }
         p.x = x;
         Some(p)
     }
@@ -130,7 +135,17 @@ impl PageList {
             }
             coord.y = (p.y - tl.y) as u32;
         } else {
-            coord.y += (unsafe { super::Node::rows(tl.node) } - tl.y) as u32;
+            // PORT NOTE (oracle 30b42f42a, `REVIEW_CLASSES.md` §1): every
+            // cross-page row contribution is a CHECKED add. The reference used
+            // `std.math.add(u32, ...) catch return null`; the plain `+=` this
+            // replaces panicked in debug and WRAPPED SILENTLY in release for an
+            // unbounded PageList with more than 2^32 rows, converting a valid
+            // pin into a plausible-looking wrong point. `None` is the oracle's
+            // fallback — it reuses the existing "outside the range" result, so
+            // no caller sees a new error shape.
+            coord.y = coord
+                .y
+                .checked_add((unsafe { super::Node::rows(tl.node) } - tl.y) as u32)?;
             let mut node_ = unsafe { (*tl.node).next };
             loop {
                 if node_.is_null() {
@@ -139,11 +154,13 @@ impl PageList {
                 }
                 let node = node_;
                 if core::ptr::eq(node, p.node) {
-                    coord.y += p.y as u32;
+                    coord.y = coord.y.checked_add(p.y as u32)?;
                     break;
                 }
 
-                coord.y += unsafe { super::Node::rows(node) } as u32;
+                coord.y = coord
+                    .y
+                    .checked_add(unsafe { super::Node::rows(node) } as u32)?;
                 node_ = unsafe { (*node).next };
             }
         }
@@ -410,8 +427,14 @@ impl Pin {
     }
 
     /// Move the pin right n columns. n must fit within the size.
+    //
+    // PORT NOTE: the reference is `pub inline fn right`; it was narrowed to
+    // private here only because `right_wrap` was its sole caller. `d6e24d985`
+    // rewrites `right_wrap` as a per-row loop that no longer delegates to it,
+    // so the visibility is restored to the reference's `pub` rather than
+    // deleting a function the oracle still exports.
     #[inline]
-    fn right(&self, n: usize) -> Pin {
+    pub fn right(&self, n: usize) -> Pin {
         assert!((self.x as usize) + n < unsafe { super::Node::cols(self.node) } as usize);
         let mut result = self.pin_copy();
         // result.x +|= std.math.cast(size.CellCountInt, n) orelse
@@ -448,28 +471,32 @@ impl Pin {
     /// If the offset goes beyond the top of the screen, returns null.
     ///
     /// TODO: Unit tests.
+    //
+    // PORT NOTE (`P3-W1 T1`): this is the end state of TWO oracle commits.
+    // `0ff4e41b2` ("terminal: fix pin wrapping at row boundaries") first
+    // rebased the remainder arithmetic on `extra_after_remaining - 1`, then
+    // `d6e24d985` ("terminal: make pin traversal width-aware") replaced the
+    // remainder arithmetic entirely with the per-row loop below, because the
+    // closed form assumes every page has the same width — an assumption
+    // incomplete reflow violates. Both hashes are recorded so the parity ledger
+    // stays honest: `0ff4e41b2`'s four regression tests are ported (they still
+    // pass against this end state, which is the point), `d6e24d985`'s three
+    // mixed-width tests are ported alongside them, and the verbatim pre-fix
+    // comment "This assumes that all pages have the same width" is deleted with
+    // the code it described.
     pub fn left_wrap(&self, n: usize) -> Option<Pin> {
-        // NOTE: This assumes that all pages have the same width, which may
-        //       be violated under certain circumstances by incomplete reflow.
-        let cols = unsafe { super::Node::cols(self.node) } as usize;
-        let remaining_in_row = self.x as usize;
-
-        if n <= remaining_in_row {
-            return Some(self.left(n));
+        let mut result = *self;
+        let mut remaining = n;
+        while remaining > result.x as usize {
+            remaining -= result.x as usize + 1;
+            result = result.up(1)?;
+            // Crossing a row boundary lands on that destination row's final
+            // cell, whose width may differ from ours during reflow.
+            result.x = unsafe { super::Node::cols(result.node) } - 1;
         }
 
-        let extra_after_remaining = n - remaining_in_row;
-
-        let rows_off = 1 + extra_after_remaining / cols;
-
-        match self.up_overflow(rows_off) {
-            PinOverflow::Offset(v) => {
-                let mut result = v;
-                result.x = (cols - extra_after_remaining % cols) as size::CellCountInt;
-                Some(result)
-            }
-            PinOverflow::Overflow { .. } => None,
-        }
+        result.x -= remaining as size::CellCountInt;
+        Some(result)
     }
 
     /// Move the pin right n cells, wrapping to the next row as needed.
@@ -477,27 +504,22 @@ impl Pin {
     /// If the offset goes beyond the bottom of the screen, returns null.
     ///
     /// TODO: Unit tests.
+    //
+    // PORT NOTE (`P3-W1 T1`): see `left_wrap` — oracle `0ff4e41b2` then
+    // `d6e24d985`, end state only.
     pub fn right_wrap(&self, n: usize) -> Option<Pin> {
-        // NOTE: This assumes that all pages have the same width, which may
-        //       be violated under certain circumstances by incomplete reflow.
-        let cols = unsafe { super::Node::cols(self.node) } as usize;
-        let remaining_in_row = cols - self.x as usize - 1;
-
-        if n <= remaining_in_row {
-            return Some(self.right(n));
-        }
-
-        let extra_after_remaining = n - remaining_in_row;
-
-        let rows_off = 1 + extra_after_remaining / cols;
-
-        match self.down_overflow(rows_off) {
-            PinOverflow::Offset(v) => {
-                let mut result = v;
-                result.x = (extra_after_remaining % cols - 1) as size::CellCountInt;
-                Some(result)
+        let mut result = *self;
+        let mut remaining = n;
+        loop {
+            let row_remaining = (unsafe { super::Node::cols(result.node) } - result.x - 1) as usize;
+            if remaining <= row_remaining {
+                result.x += remaining as size::CellCountInt;
+                return Some(result);
             }
-            PinOverflow::Overflow { .. } => None,
+
+            remaining -= row_remaining + 1;
+            result = result.down(1)?;
+            result.x = 0;
         }
     }
 
@@ -548,7 +570,7 @@ impl Pin {
                     end: Pin {
                         node,
                         y: unsafe { super::Node::rows(node) } - 1,
-                        x: self.x,
+                        x: self.x.min(unsafe { super::Node::cols(node) } - 1),
                         garbage: false,
                     },
                     remaining: n_left,
@@ -563,7 +585,7 @@ impl Pin {
                         Ok(v) => v,
                         Err(_) => size::CellCountInt::MAX,
                     },
-                    x: self.x,
+                    x: self.x.min(unsafe { super::Node::cols(node) } - 1),
                     garbage: false,
                 });
             }
@@ -597,7 +619,7 @@ impl Pin {
                     end: Pin {
                         node,
                         y: 0,
-                        x: self.x,
+                        x: self.x.min(unsafe { super::Node::cols(node) } - 1),
                         garbage: false,
                     },
                     remaining: n_left,
@@ -612,7 +634,7 @@ impl Pin {
                         Ok(v) => v,
                         Err(_) => size::CellCountInt::MAX,
                     },
-                    x: self.x,
+                    x: self.x.min(unsafe { super::Node::cols(node) } - 1),
                     garbage: false,
                 });
             }
@@ -646,61 +668,76 @@ impl Pin {
 
 // =============================================================================
 // P3-W0 T6 step 3 — NEGATIVE CONTROLS for the LATENT verdicts in
-// `.port/phase-3/REACHABILITY.md`.
+// `.port/phase-3/REACHABILITY.md`, RE-POLARISED by `P3-W1 T1`.
 //
-// A LATENT verdict is only trustworthy if it is falsifiable. Each test below
-// calls the defect site DIRECTLY with an out-of-domain argument and asserts the
-// panic; each panics on today's `main` (proving the defect is real) while the
-// public API path does not (proving the verdict). If one of these ever STOPS
-// panicking, the defect analysis is wrong and the row must be escalated, not
-// downgraded.
+// These two tests were written by `P3-W0` to prove the `left_wrap`/`right_wrap`
+// defects were REAL while the production callers did not reach them (verdict
+// LATENT). `P3-W1` closed row 1b and found the verdict wrong: `GridSize::update`
+// floors the column count at 1 (`rustty-render-types/src/lib.rs`) and
+// `grid_size.columns` flows straight into `Terminal::resize`
+// (`rustty-termio/src/termio_impl.rs:1084`), so a ONE-COLUMN terminal is
+// constructible — and at `cols == 1` the callers' literal `n = 1` DOES reach
+// the remainder path. Rows 1/2 are therefore LIVE, and `d6e24d985`'s width-aware
+// rewrite is the fix.
+//
+// The tests are kept, with their arguments unchanged, but their assertions are
+// now the CORRECT answers rather than the buggy ones. Keeping them (rather than
+// deleting them) means a regression to the pre-fix arithmetic fails here as well
+// as in the ported oracle tests.
 // =============================================================================
 #[cfg(test)]
 mod p3_reachability_negative_controls {
     use super::super::PageList;
     use crate::point;
 
-    /// `pin.rs` `right_wrap`: `result.x = (extra_after_remaining % cols - 1)`.
-    /// When `extra_after_remaining` is an exact multiple of `cols` the modulo is
-    /// 0 and the `- 1` underflows `usize`. All four production callers pass
-    /// `n = 1` (selection_gesture.rs:910,915,925,930), which reaches this branch
-    /// only when `cols == 1`; at the standard widths used everywhere in this
-    /// suite `1 % cols == 1` and the subtraction is safe. Hence LATENT — but the
-    /// defect itself is real, and this is the proof.
+    /// `pin.rs` `right_wrap`, pre-fix: `result.x = (extra_after_remaining % cols - 1)`.
+    /// When `extra_after_remaining` was an exact multiple of `cols` the modulo
+    /// was 0 and the `- 1` underflowed `usize`. `d6e24d985`'s per-row loop has
+    /// no remainder arithmetic at all, so the same argument now returns the
+    /// correct destination.
     #[test]
-    #[should_panic(expected = "attempt to subtract with overflow")]
     fn p3_right_wrap_exact_row_multiple_underflows() {
-        let s = PageList::init(80, 24, None).unwrap();
+        let mut s = PageList::init(80, 24, None).unwrap();
         let pin = s
             .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
             .unwrap();
-        // 80 - 0 - 1 = 79 remaining in the row, so n = 79 + 80 = 159 gives
-        // extra_after_remaining = 80, and 80 % 80 == 0 -> 0 - 1 underflows.
-        let _ = pin.right_wrap(159);
+        // 80 - 0 - 1 = 79 remaining in the row, so n = 79 + 80 = 159 walks to
+        // the end of row 0, then across all of row 1, landing on the last cell
+        // of row 1 (x = 79, y = 1). Pre-fix this panicked with
+        // "attempt to subtract with overflow".
+        let got = pin.right_wrap(159).expect("within the pagelist");
+        assert_eq!(
+            point::Point::Active(point::Coordinate { x: 79, y: 1 }),
+            s.point_from_pin(point::Tag::Active, got).unwrap()
+        );
+        s.deinit();
     }
 
-    /// `pin.rs` `left_wrap`: the symmetric site,
-    /// `result.x = (cols - extra_after_remaining % cols)`. This one does not
-    /// underflow; on an exact row multiple it yields `x == cols`, which is ONE
-    /// PAST the last valid column. That is a silently invalid pin rather than a
-    /// panic, which is why it needs its own control with a value assertion
-    /// instead of `#[should_panic]`.
+    /// `pin.rs` `left_wrap`, pre-fix: the symmetric site,
+    /// `result.x = (cols - extra_after_remaining % cols)`. That one did not
+    /// underflow; on an exact row multiple it yielded `x == cols`, ONE PAST the
+    /// last valid column — a silently invalid pin rather than a panic, which is
+    /// why it keeps a value assertion instead of `#[should_panic]`. The value is
+    /// now the correct in-range answer.
     #[test]
     fn p3_left_wrap_exact_row_multiple_yields_out_of_range_x() {
-        let s = PageList::init(80, 24, None).unwrap();
+        let mut s = PageList::init(80, 24, None).unwrap();
         // Start far enough down that the upward walk stays in range.
         let pin = s
             .pin(point::Point::Active(point::Coordinate { x: 0, y: 10 }))
             .unwrap();
-        // x = 0 -> remaining_in_row = 0, so n = 80 gives
-        // extra_after_remaining = 80 and 80 % 80 == 0 -> x = 80 - 0 = 80,
-        // which is out of range for an 80-column page (valid x is 0..=79).
+        // x = 0 -> 1 cell consumed to reach the end of row 9, then 79 more
+        // walks left across row 9 to x = 0. Pre-fix this yielded x == 80.
         let got = pin.left_wrap(80).expect("within the pagelist");
         assert_eq!(
-            got.x, 80,
-            "the defect is real: an exact row multiple yields x == cols, one \
-             past the last valid column. If this ever stops being 80, the \
-             LATENT verdict in REACHABILITY.md must be re-derived, not deleted."
+            got.x, 0,
+            "post-fix the exact row multiple lands on a VALID column. If this \
+             ever becomes 80 again the pre-fix remainder arithmetic is back."
         );
+        assert_eq!(
+            point::Point::Active(point::Coordinate { x: 0, y: 9 }),
+            s.point_from_pin(point::Tag::Active, got).unwrap()
+        );
+        s.deinit();
     }
 }

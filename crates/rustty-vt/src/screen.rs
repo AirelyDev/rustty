@@ -1194,7 +1194,11 @@ impl Screen {
         debug_assert!(self.cursor.y > 0);
 
         let mut page_pin = unsafe { (*self.cursor.page_pin).up(1) }.unwrap();
-        page_pin.x = self.pages.cols - 1;
+        // PORT NOTE (oracle a55850c98, `P3-W1 T4`): the column comes from the
+        // page the pin actually REACHED, not from the desired screen width. If
+        // incomplete reflow left that previous page narrower, the desired width
+        // resolved an out-of-bounds column.
+        page_pin.x = unsafe { crate::pagelist::Node::cols(page_pin.node) } - 1;
         let page_rac = page_pin.row_and_cell();
         page_rac.cell
     }
@@ -2000,7 +2004,12 @@ impl Screen {
         // PORT NOTE: Rust has no `defer`; we run `assertIntegrity` at the end,
         // the single exit path of this body.
 
-        let cols = self.pages.cols;
+        // PORT NOTE (oracle e727a3658, `P3-W1 T4`): the desired `self.pages.cols`
+        // is NOT used to slice the backing cells any more. During incomplete
+        // reflow a stored page can be narrower than the desired width, and
+        // slicing to the desired width ran off the end of the row and tripped
+        // `clear_cells`' own bounds `debug_assert!`s before a single cell was
+        // cleared. The cells come from the OWNING page instead.
         let mut it = self
             .pages
             .page_iterator(pagelist::iter::Direction::RightDown, tl, bl);
@@ -2016,11 +2025,12 @@ impl Screen {
                 let row: *mut Row = unsafe { rows_base.add(i) };
 
                 let cells_offset = unsafe { (*row).cells() };
-                // const cells_multi: [*]Cell = row.cells.ptr(chunk.node.data.memory);
-                let cells_multi: *mut Cell = unsafe { cells_offset.ptr((*page).memory_ptr()) };
-                // const cells = cells_multi[0..self.pages.cols];
-                let cells: *mut [Cell] =
-                    core::ptr::slice_from_raw_parts_mut(cells_multi, cols as usize);
+                // const cells = page.getCells(row);
+                //
+                // Kept in the existing raw-pointer style: `get_cells` returns a
+                // `*mut [Cell]` and no `&mut [Cell]` is formed while the
+                // `*mut Page` alias is live (see the `clear_cells` PORT NOTE).
+                let cells: *mut [Cell] = unsafe { (*page).get_cells(row) };
 
                 // Clear all cells
                 if protected {
@@ -2116,7 +2126,7 @@ impl Screen {
             // If we have no left/right scroll region we can be sure
             // that we've cleared all the graphemes, so we clear the
             // flag, otherwise we ask the page to update the flag.
-            if cells_len == self.pages.cols as usize {
+            if cells_len == unsafe { (*page).size.cols } as usize {
                 unsafe { (*row).set_grapheme(false) };
             } else {
                 unsafe { (*page).update_row_grapheme_flag(row) };
@@ -2134,7 +2144,7 @@ impl Screen {
             // If we have no left/right scroll region we can be sure
             // that we've cleared all the hyperlinks, so we clear the
             // flag, otherwise we ask the page to update the flag.
-            if cells_len == self.pages.cols as usize {
+            if cells_len == unsafe { (*page).size.cols } as usize {
                 unsafe { (*row).set_hyperlink(false) };
             } else {
                 unsafe { (*page).update_row_hyperlink_flag(row) };
@@ -2142,20 +2152,44 @@ impl Screen {
         }
 
         if unsafe { (*row).styled() } {
-            for i in 0..cells_len {
-                let cell = unsafe { cells_base.add(i) };
-                if unsafe { (*cell).has_styling() } {
-                    unsafe {
-                        let base = (*page).memory_ptr();
-                        (*page).styles.release(base, (*cell).style_id());
-                    }
+            // Styled cells overwhelmingly come in runs sharing the same
+            // style (e.g. a colored status bar or a highlighted region),
+            // so group them and release each run with a single ref-count
+            // update rather than per cell.
+            //
+            // PORT NOTE (oracle 8d663a76e, `P3-W1 T6`). UB HAZARD: the style
+            // ids are read through the raw `*mut Cell` (`cells_base.add(..)`),
+            // exactly as the previous per-cell loop did, because
+            // `release_multiple` mutates page memory through `*mut Page`. A
+            // live `&mut [Cell]` across that call would be Stacked-Borrows UB
+            // (memory: rust-mut-args-strongly-protected).
+            //
+            // `release_multiple`'s own `ref_count >= n` assertion holds by
+            // construction: every cell in the run held a reference.
+            let mut i: usize = 0;
+            while i < cells_len {
+                let id = unsafe { (*cells_base.add(i)).style_id() };
+                if id == style::DEFAULT_ID {
+                    i += 1;
+                    continue;
                 }
+                let mut j = i + 1;
+                while j < cells_len && unsafe { (*cells_base.add(j)).style_id() } == id {
+                    j += 1;
+                }
+                unsafe {
+                    let base = (*page).memory_ptr();
+                    (*page)
+                        .styles
+                        .release_multiple(base, id, (j - i) as style::Id);
+                }
+                i = j;
             }
 
             // If we have no left/right scroll region we can be sure
             // that we've cleared all the styles, so we clear the
             // flag, otherwise we ask the page to update the flag.
-            if cells_len == self.pages.cols as usize {
+            if cells_len == unsafe { (*page).size.cols } as usize {
                 unsafe { (*row).set_styled(false) };
             } else {
                 unsafe { (*page).update_row_styled_flag(row) };
@@ -10156,6 +10190,322 @@ mod tests {
         s.deinit();
     }
 
+    // -- P3-W1 T4 step 2: stored page widths (oracle e727a3658, a55850c98) ----
+
+    // ref: test "Screen clearRows uses stored page width"
+    #[test]
+    fn screen_clear_rows_uses_stored_page_width() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 2,
+                rows: 1,
+                max_scrollback: 0,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        s.test_write_string(b"AB").unwrap();
+        let node = s.pages.pages.first;
+        // Model an incomplete reflow: the DESIRED width is now wider than the
+        // width the stored page actually has.
+        s.pages.cols = 4;
+
+        s.clear_rows(
+            point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            None,
+            false,
+        );
+
+        let page: *mut Page = unsafe { crate::pagelist::Node::page(node) };
+        let row0: *mut Row = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+        let cells: *mut [Cell] = unsafe { (*page).get_cells(row0) };
+        assert_eq!(2usize, cells.len());
+        for i in 0..cells.len() {
+            let cell = unsafe { (cells as *mut Cell).add(i) };
+            assert!(unsafe { (*cell).is_empty() });
+        }
+
+        // Restore the real width before deinit.
+        s.pages.cols = 2;
+        s.deinit();
+    }
+
+    // ref: test "Screen: cursorCellEndOfPrev across mixed-width pages"
+    #[test]
+    fn screen_cursor_cell_end_of_prev_across_mixed_width_pages() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 4,
+                rows: 2,
+                max_scrollback: 0,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        s.test_write_string(b"ABCDE").unwrap();
+        let first = s.pages.pages.first;
+        s.pages
+            .split(crate::pagelist::Pin {
+                node: first,
+                y: 1,
+                x: 0,
+                garbage: false,
+            })
+            .unwrap();
+        s.cursor_reload();
+        let second = unsafe { (*first).next };
+        // Model an incomplete reflow: the stored first page is narrower than
+        // the desired screen width.
+        s.pages.pause_integrity_checks(true);
+        unsafe { (*crate::pagelist::Node::page(first)).size.cols = 2 };
+
+        assert!(core::ptr::eq(second, unsafe { (*s.cursor.page_pin).node }));
+        let expected = crate::pagelist::Pin {
+            node: first,
+            y: 0,
+            x: 1,
+            garbage: false,
+        }
+        .row_and_cell()
+        .cell;
+        assert!(core::ptr::eq(expected, s.cursor_cell_end_of_prev()));
+
+        unsafe { (*crate::pagelist::Node::page(first)).size.cols = 4 };
+        s.pages.pause_integrity_checks(false);
+        s.deinit();
+    }
+
+    /// `e727a3658`'s SECOND hunk — `clear_cells` comparing `cells.len` against
+    /// `page.size.cols` instead of `self.pages.cols` — is not covered by the
+    /// oracle's own `clearRows` test (there, clearing the whole narrow row makes
+    /// both branches agree, because `update_row_*_flag` also scans
+    /// `page.size.cols`). The observable divergence is in the OTHER reflow
+    /// direction: a stored page WIDER than the desired width. Then a partial
+    /// clear whose length happens to equal the DESIRED width takes the
+    /// "we cleared everything" fast path and drops the row's `styled` flag while
+    /// styled cells still exist beyond the desired width — corrupting the row
+    /// flags rather than tripping an assert.
+    #[test]
+    fn screen_clear_cells_uses_stored_page_width_for_row_flags() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 4,
+                rows: 1,
+                max_scrollback: 0,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"ABCD").unwrap();
+
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        let row: *mut Row = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+        assert!(unsafe { (*row).styled() }, "the row starts styled");
+        assert_eq!(4, unsafe { (*page).size.cols });
+
+        // Park the cursor inside the narrower desired width so the screen's own
+        // integrity assertions stay satisfied for the modelled state.
+        s.cursor_horizontal_absolute(0);
+
+        // Model an incomplete reflow the other way: the DESIRED width is now
+        // NARROWER than the stored page.
+        s.pages.cols = 2;
+
+        // Clear exactly the first two cells — a partial clear whose length
+        // equals the desired width but NOT the stored width.
+        let cells: *mut [Cell] = unsafe { (*page).get_cells(row) };
+        let partial: *mut [Cell] = core::ptr::slice_from_raw_parts_mut(cells as *mut Cell, 2);
+        s.clear_cells(page, row, partial);
+
+        assert!(
+            unsafe { (*row).styled() },
+            "cells 2 and 3 are still styled, so the row flag must stay set; \
+             comparing cells.len against the DESIRED width drops it"
+        );
+
+        s.pages.cols = 4;
+        s.deinit();
+    }
+
+    // ref: test "Screen write regrows compacted page capacity"
+    #[test]
+    fn screen_write_regrows_compacted_page_capacity() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback: 0,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        // Compact the active page so every managed capacity dimension is
+        // zero, then reload the cursor since its cached row/cell pointers
+        // point into the replaced page.
+        {
+            let node = s
+                .pages
+                .compact(unsafe { (*s.cursor.page_pin).node })
+                .unwrap()
+                .unwrap();
+            let cap = unsafe { crate::pagelist::Node::capacity(node) };
+            assert_eq!(0, cap.styles);
+            assert_eq!(0, cap.grapheme_bytes);
+            assert_eq!(0, cap.string_bytes);
+            assert_eq!(0, cap.hyperlink_bytes);
+            s.cursor_reload();
+        }
+
+        // Styled write: exercises the manual_style_update single-retry
+        // path. Prior to increase_capacity handling zero dimensions, the
+        // retry would fail and the style would be dropped.
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"A").unwrap();
+
+        // Grapheme write: exercises the append_grapheme single-retry path.
+        // We can't use test_write_string here because it appends graphemes
+        // directly on the page without the capacity retry.
+        s.test_write_string(b"a").unwrap();
+        let prev = s.cursor_cell_left(1);
+        s.append_grapheme(prev, 0x0301).unwrap();
+
+        // Hyperlink: exercises the start_hyperlink retry loop, which used
+        // to loop forever when capacity growth from zero didn't grow.
+        s.start_hyperlink(b"https://example.com/", None).unwrap();
+        s.test_write_string(b"B").unwrap();
+        s.end_hyperlink();
+
+        // Verify the content landed on the page.
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        assert!(unsafe { (*page).styles.count() } >= 1);
+        assert!(unsafe { (*page).hyperlink_set.count() } >= 1);
+        assert!(unsafe { (*page).grapheme_count() } >= 1);
+
+        s.deinit();
+    }
+
+    /// `P3-W1 T6` step 4 (oracle 8d663a76e). A "no panic" test is blind to a
+    /// DOUBLE release, so this asserts the ref count reaches EXACTLY zero, from
+    /// an exactly-known starting value, for both the uniform-run case (one
+    /// `release_multiple` call) and the alternating case (which degrades to one
+    /// call per cell and is where an off-by-one run length would show up).
+    #[test]
+    fn screen_clear_cells_releases_styles_per_run() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 8,
+                rows: 1,
+                max_scrollback: 0,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        // One uniform run of four styled cells.
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"AAAA").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        let row: *mut Row = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+        let cells: *mut [Cell] = unsafe { (*page).get_cells(row) };
+        let base = unsafe { (*page).memory_ptr() };
+
+        let id = unsafe { (*(cells as *mut Cell)).style_id() };
+        assert_ne!(
+            crate::style::DEFAULT_ID,
+            id,
+            "the first cell must be styled"
+        );
+        assert_eq!(
+            4,
+            usize::from(unsafe { (*page).styles.ref_count(base, id) })
+        );
+
+        // Clear exactly the four styled cells.
+        let run: *mut [Cell] = core::ptr::slice_from_raw_parts_mut(cells as *mut Cell, 4);
+        s.clear_cells(page, row, run);
+
+        assert_eq!(
+            0,
+            usize::from(unsafe { (*page).styles.ref_count(base, id) }),
+            "one release_multiple per run must land the ref count on exactly \
+             zero -- not below it (double release) and not above (short run)"
+        );
+
+        s.deinit();
+    }
+
+    /// Companion to the run test: ALTERNATING styles, where every run has
+    /// length one. This is the case an off-by-one in the run scan would break
+    /// while the uniform case still passed.
+    #[test]
+    fn screen_clear_cells_releases_alternating_styles_exactly_once_each() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 8,
+                rows: 1,
+                max_scrollback: 0,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"A").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+        s.set_attribute(crate::sgr::Attribute::Italic).unwrap();
+        s.test_write_string(b"B").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"C").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        let row: *mut Row = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+        let cells: *mut [Cell] = unsafe { (*page).get_cells(row) };
+        let base = unsafe { (*page).memory_ptr() };
+        let cells_base = cells as *mut Cell;
+
+        let bold_id = unsafe { (*cells_base).style_id() };
+        let italic_id = unsafe { (*cells_base.add(1)).style_id() };
+        assert_ne!(bold_id, italic_id);
+        assert_eq!(bold_id, unsafe { (*cells_base.add(2)).style_id() });
+        assert_eq!(
+            2,
+            usize::from(unsafe { (*page).styles.ref_count(base, bold_id) })
+        );
+        assert_eq!(
+            1,
+            usize::from(unsafe { (*page).styles.ref_count(base, italic_id) })
+        );
+
+        let run: *mut [Cell] = core::ptr::slice_from_raw_parts_mut(cells_base, 3);
+        s.clear_cells(page, row, run);
+
+        assert_eq!(
+            0,
+            usize::from(unsafe { (*page).styles.ref_count(base, bold_id) })
+        );
+        assert_eq!(
+            0,
+            usize::from(unsafe { (*page).styles.ref_count(base, italic_id) })
+        );
+
+        s.deinit();
+    }
+
     // test "Screen clearRows protected"
     #[test]
     fn screen_clear_rows_protected() {
@@ -12771,9 +13121,9 @@ mod tests {
         // cursor movement functions). The bug pattern:
         //
         // 1. cursorDown creates a by-value copy of the pin via page_pin.down(n)
-        // 2. cursorChangePin is called, which may trigger adjustCapacity
+        // 2. cursorChangePin is called, which may trigger increaseCapacity
         //    if the target page's style map is full
-        // 3. adjustCapacity frees the old page and creates a new one
+        // 3. increaseCapacity frees the old page and creates a new one
         // 4. The local pin copy still points to the freed page
         // 5. rowAndCell() on the stale pin accesses freed memory
 
@@ -12794,7 +13144,7 @@ mod tests {
         assert!(!std::ptr::eq(start_page, new_page));
 
         // Fill new_page's style map to capacity. When we move INTO this page
-        // with a style set, adjustCapacity will be triggered.
+        // with a style set, increaseCapacity will be triggered.
         {
             unsafe { (*new_page).pause_integrity_checks(true) };
 
@@ -12845,7 +13195,7 @@ mod tests {
                     ));
 
                     // This cursorDown triggers the bug: the local page_pin copy
-                    // becomes stale after adjustCapacity, causing rowAndCell()
+                    // becomes stale after increaseCapacity, causing rowAndCell()
                     // to access freed memory.
                     s.cursor_down(1);
 

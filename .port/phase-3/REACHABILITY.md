@@ -66,3 +66,42 @@ four of the nine seed items needed evidence this triage did not gather (inspecto
 scroll provenance, `compact`/`exact_row_capacity` capacity reasoning, an
 end-to-end `Stream` drive, and the search-subsystem Miri fix). `P3-W1` owns
 closing them, and the ordering above is explicitly conditional on rows 1b and 4.
+
+---
+
+# `P3-W1` closure of the UNTRIAGED rows
+
+`P3-W1` owned rows **1b, 4, 5, 6, 9**. All five are closed below with evidence.
+Row 8's "not a defect" verdict was confirmed and acted on. The ranking changed:
+see the bottom of this section.
+
+| row | `P3-W0` verdict | `P3-W1` verdict | evidence |
+|---|---|---|---|
+| 1b | UNTRIAGED | **cols == 1 IS constructible → rows 1 and 2 are LIVE** | `GridSize::update` floors the column count at 1 (`crates/rustty-render-types/src/lib.rs:522`, `self.columns = 1.max(calc_cols)`), and `grid_size.columns` reaches `Terminal::resize` unmodified via `crates/rustty-termio/src/termio_impl.rs:1084` and `crates/rustty-termio/src/stream_handler.rs:1036`. No floor above 1 exists anywhere on that path. At `cols == 1` the four `selection_gesture.rs` callers' literal `n = 1` gives `1 % 1 == 0` and DOES reach `right_wrap`'s `- 1` underflow and `left_wrap`'s `x == cols`. The oracle agrees independently: `0ff4e41b2`'s commit message names "a maximum usize offset on a one-column page" and two of its four regression tests build `init(alloc, 1, 3, null)`. Fixed in `P3-W1 T1`. |
+| 4 | UNTRIAGED | **reachable in principle from the inspector; fixed** | `crates/rustty-inspector/src/widgets/pagelist.rs:1421` computes `row_delta = (drag_delta.x / avail_width) * total_f` as `f32` and `:1422` does `*delta_row = row_delta as isize`. `avail_width` is `ImGui_GetContentRegionAvail().x`, which is `0` for a collapsed or fully clipped content region; a leftward drag then yields `-inf`, and Rust's float→int `as` cast **saturates** (it is not UB), so `delta_row` is exactly `isize::MIN`. Degenerate but not impossible. Divergence direction worth noting: Zig's `@intFromFloat` on `-inf` is illegal behaviour caught by a safety build, so the oracle would trap in the widget; rustty saturates silently and carries `isize::MIN` into the VT. Fixed in `P3-W1 T3`. |
+| 5 | UNTRIAGED | **LIVE, debug/ReleaseSafe only** | The end-to-end `Stream` drive row 5 required now exists: `terminal_enabling_grapheme_mode_handles_stored_breaks_via_stream` feeds real `CSI ? 2027 l` / `h` and real UTF-8 and panics at `terminal.rs:1764` on the pre-fix tree. Release consequence, also required by row 5: it is a `debug_assert!`, so in release it is compiled out and the output is unchanged — a crash, not a miscompute. Fixed in `P3-W1 T4`. |
+| 6 | UNTRIAGED | **LATENT — fixed anyway** | The zero-capacity dimension is producible only by `compact` / `exact_row_capacity`. `compact` has **no production caller** — in rustty (only `pagelist/tests.rs` plus one search test) or in the **oracle at the pin** (`grep -rn '\.compact(' ghostty/src/` outside `PageList.zig` returns nothing). `PageList::split` reuses the source page's capacity, and `Screen::split_for_capacity` uses `exact_row_capacity` only to compare `Page::layout(...).total_size`, never to create a page. Fixed regardless: `pub` API, unbounded-allocation blast radius across 10 call sites, four-line fix — the same calculus row 4 applied. Fixed in `P3-W1 T4`. |
+| 8 | NOT A DEFECT | **confirmed** | Comment corrected in `search/sliding_window.rs`; the code is unchanged and is now pinned by `ascii_index_of_ignore_case_matches_the_oracle_for_an_empty_needle` so it cannot be "fixed" into a real divergence. `P3-W1 T5`. |
+| 9 | UNTRIAGED, "see the standing finding" | **the row's PREMISE IS FALSE; the real gap is `627518447`, now closed** | Row 9 says its reproducer "already exists in the form of those 9 Miri failures" and that `G6` is RED. That was already untrue when row 9 was written: the SB UB cluster was **fixed in `9e3fe1c` on 2026-07-11**, and the `search-screen-sb-ub-finding` memory was corrected to RESOLVED on 2026-07-29. Independently re-measured at the head of this lane: `bash .port/tools/miri-run.sh rustty-vt search 6 45 15` on `main` → **65/65 completed, ok=30, UB=0, TIMEOUT=0**, with the 35 `FAIL` entries all being documented `MIRI EXCEPTION` ignores (verified by reading the per-test output files, not the `VERDICT` banner). The lane is GREEN. The genuine, separate defect in row 9's sites — `reload_active`/`select` walking cached `FlattenedHighlight` nodes that reflow may have freed — is oracle `627518447` and is fixed in `P3-W1 T5`. |
+
+## What the ranking became
+
+Row 9 was ranked **1** on the premise of an already-failing Miri reproducer.
+That premise is false, so row 9 loses its claim to first place — the work is
+still real, but it is an ordinary un-ported upstream commit, not a red gate.
+Row 1b resolved **toward LIVE**, which promotes rows 1/2 from rank 6 to rank 1
+exactly as row 1b said it would. The order actually executed was:
+
+1. rows 1, 2 (`pin.rs`) — LIVE once row 1b closed
+2. row 3 (`iter.rs`) — done early, not last: it shares a file cluster with rows
+   1/2 and its forward-direction sibling defect is NOT dead code
+3. row 4 (`scroll.rs`) + row 7 (`screen_point`) + the `point_from_pin` widening
+4. rows 5, 6 + the stored-page-width and pool-assert items
+5. rows 8, 9 (search)
+
+Row 3's placement is the one deliberate departure from `P3-W0`'s order and it is
+a correction, not a convenience: `P3-W0` ranked `iter.rs` last as dead code, but
+that verdict covers only the **reverse** `Limit::Count` arm. The **forward** arm's
+`if (len as usize) > *limit` is an impossible condition on the same commit
+(`9b466e9c5`) and is equally unreachable today for the same reason — neither is
+worth deferring separately once the file is open.

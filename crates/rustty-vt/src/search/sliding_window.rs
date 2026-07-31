@@ -284,6 +284,14 @@ impl SlidingWindow {
     // pub fn next(self: *SlidingWindow) ?FlattenedHighlight {
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<FlattenedHighlight> {
+        // An empty needle represents an inactive search. Searching for it
+        // would otherwise produce a zero-length match, which highlight()
+        // cannot represent because its end offset is inclusive.
+        // if (self.needle.len == 0) return null;
+        if self.needle.is_empty() {
+            return None;
+        }
+
         // const slices = slices: {
         //     // If we have less data then the needle then we can't possibly match
         //     const data_len = self.data.len();
@@ -1154,9 +1162,18 @@ struct Prune {
 }
 
 // PORT NOTE: `std.ascii.indexOfIgnoreCase` — find the first index in `haystack`
-// where `needle` matches case-insensitively (ASCII). Returns null for an empty
-// needle per the std contract used by the reference (the sliding window never
-// passes an empty needle, but we mirror the semantics faithfully).
+// where `needle` matches case-insensitively (ASCII). Returns `Some(0)` for an
+// empty needle, which is what the reference does: `indexOfIgnoreCase` delegates
+// to `indexOfIgnoreCasePos(haystack, 0, needle)`, whose empty-needle result is
+// `start_index` — i.e. `0`, mirroring the `mem.indexOfPos` contract — NOT null.
+//
+// PORT NOTE (`P3-W1 T5`, `.port/phase-3/REACHABILITY.md` row 8): an earlier
+// version of this comment claimed the reference returns null for an empty
+// needle and directly contradicted the code beneath it. The CODE was right and
+// the COMMENT was the bug; "fixing" this to return `None` would introduce the
+// divergence the comment imagined. The empty needle is instead rejected by
+// `next()`'s early return above (oracle 5bc6588e4), which is where upstream
+// puts it.
 fn ascii_index_of_ignore_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
@@ -1543,6 +1560,41 @@ mod tests {
         assert_eq!(0, w.meta.len());
 
         w.deinit();
+    }
+
+    // test "SlidingWindow empty needle has no matches"
+    #[test]
+    fn sliding_window_empty_needle_has_no_matches() {
+        let alloc = Allocator;
+
+        let mut w: SlidingWindow = SlidingWindow::init(alloc, Direction::Forward, b"").unwrap();
+
+        let mut s = screen_init(80, 24, 0);
+        s.test_write_string(b"hello").unwrap();
+
+        let _ = w.append(s.pages.pages.first).unwrap();
+        assert!(w.next().is_none());
+
+        w.deinit();
+        s.deinit();
+    }
+
+    /// `REACHABILITY.md` row 8 direct control. The row's claim was that
+    /// `ascii_index_of_ignore_case` returning `Some(0)` for an empty needle is a
+    /// defect ("strictly worse than the pin"). It is not: Zig's
+    /// `std.ascii.indexOfIgnoreCase` delegates to `indexOfIgnoreCasePos(h, 0, n)`
+    /// and returns `start_index` — `0` — for an empty needle. rustty MATCHES the
+    /// oracle here and this test pins that, so a future reader cannot "fix" it
+    /// into a real divergence. The empty needle is rejected one level up, in
+    /// `next()`, which is where upstream `5bc6588e4` puts it.
+    #[test]
+    fn ascii_index_of_ignore_case_matches_the_oracle_for_an_empty_needle() {
+        assert_eq!(Some(0), super::ascii_index_of_ignore_case(b"hello", b""));
+        assert_eq!(Some(0), super::ascii_index_of_ignore_case(b"", b""));
+        // And the ordinary cases, so this is not a one-value test.
+        assert_eq!(Some(1), super::ascii_index_of_ignore_case(b"hello", b"EL"));
+        assert_eq!(None, super::ascii_index_of_ignore_case(b"hello", b"zz"));
+        assert_eq!(None, super::ascii_index_of_ignore_case(b"hi", b"hello"));
     }
 
     // test "SlidingWindow single append"

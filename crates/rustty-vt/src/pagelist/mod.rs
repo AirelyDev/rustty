@@ -1728,8 +1728,7 @@ impl PageList {
         Ok(())
     }
 
-    /// Deinit the pagelist. If you own the memory pool (used clonePool) then
-    /// this will reset the pool and retain capacity.
+    /// Deinit the pagelist, freeing all page memory and the memory pool.
     pub fn deinit(&mut self) {
         // Verify integrity before cleanup
         self.assert_integrity();
