@@ -75,6 +75,16 @@ help: <3196> was later invalidated at offsets [0x20..0x28] by a write access
    --> src/main.rs:345:18
 ```
 
+## The REAL code was also run under Miri
+
+`cargo +nightly miri test -p rustty-vt --lib -- screen_cursor_scroll_region_up`
+(2026-07-31, 1151 s): **7 passed, 0 failed**, including the 168-case
+`…_fast_matches_slow_differential`, which drives the shipped fast path 168 times
+through both of its clear branches. Only the pre-existing `Offset::ptr`
+integer-to-pointer-cast warnings appear (`term_size.rs:151`, already covered by
+the vt Miri lane's known set). The harness above is the *negative* control that
+run cannot provide: it shows what the forbidden shapes would have done.
+
 ## VACUITY FOUND AND FIXED while building this harness
 
 The first two versions of `rowslice_ub` were **vacuous**: they popped the
