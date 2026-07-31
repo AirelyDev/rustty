@@ -3227,6 +3227,693 @@ fn pagelist_compression_uses_temporary_scratch_for_oversized_pages() {
     s.deinit();
 }
 
+/// Overwrite a compressed node's encoded bytes in place, without restoring it.
+///
+/// PORT NOTE: the reference spells this `@memset(node.data.compressed.encoded,
+/// b)`. As with `compressed_encoded_for_test`, the payload is reached through
+/// the module's own raw `compressed_payload` projection so no `&NodeData` is
+/// formed; the pointer is derived from `addr_of_mut!` so the write carries
+/// mutable provenance.
+///
+/// # Panics
+/// Panics if the node is resident.
+fn compressed_encoded_fill_for_test(node: *mut super::Node, byte: u8) {
+    unsafe {
+        let data = core::ptr::addr_of_mut!((*node).data);
+        assert_eq!(NodeData::tag(data), NodeData::TAG_COMPRESSED);
+        let payload = NodeData::compressed_payload(data) as *mut crate::compress::CompressedPage;
+        (*payload).encoded.fill(byte);
+    }
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression skips
+/// visible history"` (9156ada16).
+#[test]
+fn pagelist_incremental_compression_skips_visible_history() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 3);
+
+    let initial_activity = s.page_compression.activity_serial;
+    assert!(initial_activity > 0);
+
+    s.scroll(Scroll::Top);
+    let top_activity = s.page_compression.activity_serial;
+    assert_ne!(top_activity, initial_activity);
+    assert_eq!(
+        IncrementalCompressionResult::Complete,
+        s.compress(CompressionMode::Drain)
+    );
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    assert_eq!(first, s.get_top_left(point::Tag::Viewport).node);
+    assert_eq!(
+        first,
+        s.get_bottom_right(point::Tag::Viewport).unwrap().node
+    );
+    assert!(!unsafe { super::Node::is_compressed(first) });
+
+    let mut eligible = super::compress::CompressionIterator::init(&s);
+    let mut compressed_pages: usize = 0;
+    while let Some(node) = eligible.next() {
+        compressed_pages += 1;
+        assert!(unsafe { super::Node::is_compressed(node) });
+    }
+    assert!(compressed_pages > 0);
+
+    // Move the viewport to the start of the second page. Rendering it restores
+    // that page, while the first page which just left view becomes eligible.
+    s.scroll(Scroll::Row(unsafe { super::Node::rows(first) } as usize));
+    assert_eq!(second, s.get_top_left(point::Tag::Viewport).node);
+    let _ = unsafe { super::Node::page(second) };
+    assert!(!unsafe { super::Node::is_compressed(second) });
+    let _ = s.compress(CompressionMode::Drain);
+    assert!(unsafe { super::Node::is_compressed(first) });
+    assert!(!unsafe { super::Node::is_compressed(second) });
+
+    // Returning to the active area makes every complete historical page
+    // eligible again, including the page which was just visible.
+    s.scroll(Scroll::Active);
+    let _ = s.compress(CompressionMode::Drain);
+    assert!(unsafe { super::Node::is_compressed(second) });
+    assert!(!s.page_compression.flags.did_compress);
+    assert!(!s.page_compression.flags.verifying);
+    assert_eq!(None, s.page_compression.last_serial);
+    assert_eq!(0u64, s.page_compression.next_serial);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList owns incremental compression
+/// state"` (9156ada16).
+#[test]
+fn pagelist_owns_incremental_compression_state() {
+    use super::compress::{IncrementalCompressionFlags, IncrementalCompressionState};
+
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let state = IncrementalCompressionState {
+        flags: IncrementalCompressionFlags {
+            did_compress: true,
+            verifying: true,
+        },
+        activity_serial: 42,
+        last_serial: Some(42),
+        next_serial: 43,
+    };
+    let bumped = IncrementalCompressionState {
+        activity_serial: 43,
+        ..Default::default()
+    };
+    let kept = IncrementalCompressionState {
+        activity_serial: 42,
+        ..Default::default()
+    };
+
+    s.page_compression = state;
+    s.scroll(Scroll::Top);
+    assert_eq!(bumped, s.page_compression);
+
+    // Every scroll restarts traversal, even if clamping leaves the viewport in
+    // the same place. Missing an eligible page is worse than a no-op pass.
+    s.page_compression = state;
+    s.scroll(Scroll::Top);
+    assert_eq!(bumped, s.page_compression);
+
+    s.page_compression = state;
+    s.scroll(Scroll::Active);
+    assert_eq!(bumped, s.page_compression);
+
+    s.page_compression = state;
+    s.resize(Resize {
+        cols: Some(80),
+        rows: Some(24),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(bumped, s.page_compression);
+
+    s.page_compression = state;
+    s.reset();
+    assert_eq!(kept, s.page_compression);
+
+    s.page_compression = state;
+    assert_eq!(
+        IncrementalCompressionResult::Complete,
+        s.compress(CompressionMode::Full)
+    );
+    assert_eq!(kept, s.page_compression);
+
+    s.page_compression = state;
+    let mut opts = super::access::Clone {
+        top: point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut cloned = s.clone(&mut opts).unwrap();
+    assert_eq!(
+        IncrementalCompressionState::default(),
+        cloned.page_compression
+    );
+    cloned.deinit();
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression
+/// bounds inspected pages"` (9156ada16).
+#[test]
+fn pagelist_incremental_compression_bounds_inspected_pages() {
+    const MAX: usize = super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED;
+
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, MAX + 1);
+
+    // Precompress every candidate so the incremental pass exercises its
+    // metadata-only skip budget without stopping at a resident attempt.
+    let _ = s.compress(CompressionMode::Full);
+    s.page_compression.reset();
+    s.page_compression.mark_activity();
+    assert_eq!(MAX + 1, s.memory_stats().compressed_pages);
+
+    let mut expected_last = s.pages.first;
+    for _ in 1..MAX {
+        expected_last = unsafe { (*expected_last).next };
+    }
+
+    let first = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, first);
+    assert_eq!(
+        unsafe { (*expected_last).serial },
+        s.page_compression.last_serial.unwrap()
+    );
+
+    let second = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, second);
+    assert!(s.page_compression.flags.verifying);
+    assert!(s.page_compression.last_serial.is_none());
+
+    // The verification pass is bounded independently, too.
+    assert_eq!(
+        IncrementalCompressionResult::Pending,
+        s.compress(CompressionMode::Incremental)
+    );
+    assert_eq!(
+        IncrementalCompressionResult::Complete,
+        s.compress(CompressionMode::Incremental)
+    );
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression
+/// advances after failure"` (9156ada16).
+#[test]
+fn pagelist_incremental_compression_advances_after_failure() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    fill_incompressible(first, 0x494E_4352_5041_5353);
+
+    let failed = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, failed);
+    assert!(!unsafe { super::Node::is_compressed(first) });
+
+    // The unsuccessful first page does not stall the pass. The next step
+    // continues at the following serial and compresses that page.
+    let continued = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, continued);
+    assert!(unsafe { super::Node::is_compressed(second) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression
+/// advances after decommit failure"` (9156ada16).
+///
+/// PORT NOTE (WS7 B10): tripwire injection is compiled out when
+/// `debug_assertions` is off, so this test is inert under `--release` and is
+/// ignored there rather than left to fail — same convention as
+/// `pagelist_compress_page_decommit_failure_leaves_the_page_resident`.
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "tripwire failure injection is disabled without debug_assertions"
+)]
+#[test]
+fn pagelist_incremental_compression_advances_after_decommit_failure() {
+    use rustty_util::tripwire::ResetMode;
+
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+
+    super::compress::COMPRESS_PAGE_TW.with(|tw| {
+        tw.borrow_mut().errorAlways(
+            super::compress::CompressPageFp::Decommit,
+            super::compress::DecommitFailed,
+        )
+    });
+    let failed = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, failed);
+    assert!(!unsafe { super::Node::is_compressed(s.pages.first) });
+    super::compress::COMPRESS_PAGE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+    // The failed candidate remains resident and the pass continues at the
+    // next serial once reclamation is available again.
+    let continued = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, continued);
+    assert!(unsafe { super::Node::is_compressed((*s.pages.first).next) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression
+/// restarts after replacement"` (9156ada16).
+///
+/// PORT NOTE: the audit matcher credited this oracle test to
+/// `pagelist_compress_incremental_restarts_after_list_mutation` on name
+/// similarity alone. That test erases history; it never replaces a node through
+/// `increase_capacity`, so the oracle's actual claim — a continuation serial
+/// that disappeared with the old node makes the pass restart and consider the
+/// oversized replacement — was unasserted. Ported here.
+#[test]
+fn pagelist_incremental_compression_restarts_after_replacement() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let initial = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, initial);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    let old = s.pages.first;
+    let old_serial = unsafe { (*old).serial };
+    let mut replacement = old;
+    while unsafe { (*super::Node::page(replacement)).memory_len() } <= std_size() {
+        replacement = s
+            .increase_capacity(replacement, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+    assert_ne!(unsafe { (*replacement).serial }, old_serial);
+    assert!(unsafe { (*super::Node::page(replacement)).memory_len() } > std_size());
+    assert!(!unsafe { super::Node::is_compressed(replacement) });
+
+    // The exact continuation serial disappeared with the old node. The pass
+    // restarts at the first page and considers the oversized replacement.
+    let restarted = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, restarted);
+    assert!(unsafe { super::Node::is_compressed(replacement) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression
+/// restarts after reset"` (9156ada16).
+///
+/// PORT NOTE: like the test above, this oracle test was being credited to
+/// `pagelist_compress_incremental_restarts_after_list_mutation` purely by name
+/// overlap; nothing in the tree called `reset` between incremental steps.
+#[test]
+fn pagelist_incremental_compression_restarts_after_reset() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let initial = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, initial);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    // Reset replaces every page and clears the PageList-owned traversal.
+    s.reset();
+    grow_cold_pages_for_test(&mut s, 1);
+    let restarted = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, restarted);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression
+/// restarts after active boundary resize"` (9156ada16).
+#[test]
+fn pagelist_incremental_compression_restarts_after_active_boundary_resize() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let initial = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, initial);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    let first = s.pages.first;
+    let all_rows = s.total_rows as size::CellCountInt;
+    s.resize(Resize {
+        rows: Some(all_rows),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(first, s.get_top_left(point::Tag::Active).node);
+
+    // Restore the page while it is active. Resize reset the traversal, and
+    // active contents remain ineligible.
+    let _ = unsafe { super::Node::page(first) };
+    let active = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, active);
+    assert_eq!(
+        IncrementalCompressionResult::Complete,
+        s.compress(CompressionMode::Incremental)
+    );
+
+    // Shrinking the active area makes the page fully historical again. The
+    // resize reset the PageList-owned cursor, so the next step can reclaim it.
+    s.resize(Resize {
+        rows: Some(24),
+        ..Default::default()
+    })
+    .unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+    assert_eq!(
+        IncrementalCompressionResult::Pending,
+        s.compress(CompressionMode::Incremental)
+    );
+    assert!(unsafe { super::Node::is_compressed(first) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression
+/// restarts after prune reuse"` (9156ada16).
+#[test]
+fn pagelist_incremental_compression_restarts_after_prune_reuse() {
+    let mut s = PageList::init(Options {
+        max_size: Some(2 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let initial = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, initial);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    let reused = s.pages.first;
+    let old_serial = unsafe { (*reused).serial };
+    while unsafe { super::Node::rows(s.pages.last) }
+        < unsafe { super::Node::capacity(s.pages.last) }.rows
+    {
+        let _ = s.grow().unwrap();
+    }
+    assert_eq!(reused, s.grow().unwrap().unwrap());
+    assert_ne!(unsafe { (*reused).serial }, old_serial);
+
+    // Make the remaining old page fully historical. The continuation serial
+    // disappeared when its node was recycled, so the pass safely restarts.
+    grow_cold_pages_for_test(&mut s, 1);
+    let _ = s.compress(CompressionMode::Incremental);
+    assert_eq!(1usize, s.memory_stats().compressed_pages);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression
+/// restarts after earlier replacement"` (9156ada16).
+#[test]
+fn pagelist_incremental_compression_restarts_after_earlier_replacement() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 3);
+
+    let _ = s.compress(CompressionMode::Incremental);
+    let _ = s.compress(CompressionMode::Incremental);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+    assert!(unsafe { super::Node::is_compressed((*s.pages.first).next) });
+
+    // Replace a page before the still-valid continuation marker. The list's
+    // allocation serial changes even though the marker itself remains, so the
+    // next step must restart and inspect the replacement.
+    let old_first = s.pages.first;
+    let old_serial = unsafe { (*old_first).serial };
+    let replacement = s
+        .increase_capacity(old_first, Some(IncreaseCapacity::GraphemeBytes))
+        .unwrap();
+    assert_ne!(unsafe { (*replacement).serial }, old_serial);
+    assert!(!unsafe { super::Node::is_compressed(replacement) });
+
+    let _ = s.compress(CompressionMode::Incremental);
+    assert!(unsafe { super::Node::is_compressed(replacement) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList incremental compression keeps
+/// progress after tail growth"` (9156ada16).
+#[test]
+fn pagelist_incremental_compression_keeps_progress_after_tail_growth() {
+    const MAX: usize = super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED;
+
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, MAX + 1);
+    let _ = s.compress(CompressionMode::Full);
+    s.page_compression.reset();
+    s.page_compression.mark_activity();
+
+    let mut expected_last = s.pages.first;
+    for _ in 1..MAX {
+        expected_last = unsafe { (*expected_last).next };
+    }
+
+    let first = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, first);
+    assert_eq!(
+        unsafe { (*expected_last).serial },
+        s.page_compression.last_serial.unwrap()
+    );
+
+    // Allocate a new page at the active tail between steps. It is after the
+    // continuation marker and must not restart progress through cold history.
+    let next_serial = s.page_serial;
+    while s.page_serial == next_serial {
+        let _ = s.grow().unwrap();
+    }
+    let continued = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, continued);
+    assert!(s.page_compression.flags.verifying);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList lazily restores compressed
+/// history made active by resize"` (9156ada16).
+#[test]
+fn pagelist_lazily_restores_compressed_history_made_active_by_resize() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let first = s.pages.first;
+    let (memory_ptr, memory_len) = unsafe {
+        let page = super::Node::page(first);
+        *(*page).get_row_and_cell(0, 0).cell = Cell::init('X' as u32);
+        ((*page).memory_ptr(), (*page).memory_len())
+    };
+    let page_size = s.page_size;
+
+    let _ = s.compress(CompressionMode::Full);
+    assert!(unsafe { super::Node::is_compressed(first) });
+
+    // Pull all scrollback into the active area by making the viewport as tall
+    // as the complete screen. A row-only resize needs only page metadata, so
+    // the newly active page can remain compressed until its contents are used.
+    let all_rows = s.total_rows as size::CellCountInt;
+    s.resize(Resize {
+        rows: Some(all_rows),
+        ..Default::default()
+    })
+    .unwrap();
+    let active = s.get_top_left(point::Tag::Active);
+    assert_eq!(first, active.node);
+    assert_eq!(0 as size::CellCountInt, active.y);
+    assert!(unsafe { super::Node::is_compressed(first) });
+    assert_eq!(page_size, s.page_size);
+
+    // The compression pass must not reconsider the node now that it is active.
+    // Content access follows the normal page boundary, which recommits and
+    // restores the retained mapping before returning the cell.
+    let _ = s.compress(CompressionMode::Full);
+    assert!(unsafe { super::Node::is_compressed(first) });
+    let cell = s
+        .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+    assert_eq!('X' as u32, unsafe { (*cell.cell).content_codepoint() });
+    assert!(!unsafe { super::Node::is_compressed(first) });
+    assert_eq!(memory_ptr, unsafe {
+        (*super::Node::page(first)).memory_ptr()
+    });
+    assert_eq!(memory_len, unsafe {
+        (*super::Node::page(first)).memory_len()
+    });
+    assert_eq!(page_size, s.page_size);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList compression restores through
+/// page access"` (9156ada16).
+#[test]
+fn pagelist_compression_restores_through_page_access() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let node = s.pages.first;
+    let (memory_ptr, memory_len, expected) = unsafe {
+        let page = super::Node::page(node);
+        (*page).dirty = true;
+        *(*page).get_row_and_cell(3, 2).cell = Cell::init('X' as u32);
+        let ptr = (*page).memory_ptr();
+        let len = (*page).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+    let page_size = s.page_size;
+
+    assert!(s.compress_page(node));
+    assert!(unsafe { super::Node::is_compressed(node) });
+    assert_eq!(24 as size::CellCountInt, unsafe { super::Node::rows(node) });
+    assert_eq!(80 as size::CellCountInt, unsafe { super::Node::cols(node) });
+    assert_eq!(memory_ptr, unsafe {
+        (*super::Node::metadata(node)).memory_ptr()
+    });
+    assert_eq!(memory_len, unsafe {
+        (*super::Node::metadata(node)).memory_len()
+    });
+    assert_eq!(page_size, s.page_size);
+
+    // Pin access restores the page without changing its retained mapping.
+    let page_pin = Pin {
+        node,
+        x: 3,
+        y: 2,
+        garbage: false,
+    };
+    assert_eq!('X' as u32, unsafe {
+        (*page_pin.row_and_cell().cell).content_codepoint()
+    });
+    assert!(!unsafe { super::Node::is_compressed(node) });
+    unsafe {
+        let page = super::Node::page(node);
+        assert_eq!(memory_ptr, (*page).memory_ptr());
+        assert_eq!(
+            core::slice::from_raw_parts((*page).memory_ptr(), memory_len),
+            &expected[..]
+        );
+        assert!((*page).dirty);
+    }
+
+    // Recompressing exercises reuse of the page-pool scratch item. Page
+    // iterator chunks also restore before exposing row memory.
+    assert!(s.compress_page(node));
+    let mut page_it = Pin {
+        node,
+        x: 0,
+        y: 0,
+        garbage: false,
+    }
+    .page_iterator(super::iter::Direction::RightDown, None);
+    let chunk = page_it.next().unwrap();
+    assert_eq!(
+        unsafe { super::Node::rows(node) } as usize,
+        chunk.rows().len()
+    );
+    assert!(!unsafe { super::Node::is_compressed(node) });
+    unsafe {
+        let page = super::Node::page(node);
+        assert_eq!(
+            core::slice::from_raw_parts((*page).memory_ptr(), memory_len),
+            &expected[..]
+        );
+    }
+
+    // Read-only PageList operations restore through the same boundary.
+    assert!(s.compress_page(node));
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut cloned = s.clone(&mut opts).unwrap();
+    assert!(!unsafe { super::Node::is_compressed(node) });
+    assert_eq!('X' as u32, unsafe {
+        (*(*super::Node::page(cloned.pages.first))
+            .get_row_and_cell(3, 2)
+            .cell)
+            .content_codepoint()
+    });
+    cloned.deinit();
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList reset discards malformed
+/// compressed data"` (9156ada16).
+#[test]
+fn pagelist_reset_discards_malformed_compressed_data() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let node = s.pages.first;
+    assert!(s.compress_page(node));
+    compressed_encoded_fill_for_test(node, 0xFF);
+
+    s.reset();
+    assert!(!unsafe { super::Node::is_compressed(s.pages.first) });
+    assert_eq!(1usize, s.total_pages());
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList deinit discards malformed
+/// compressed data"` (9156ada16).
+#[test]
+fn pagelist_deinit_discards_malformed_compressed_data() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    let node = s.pages.first;
+    assert!(s.compress_page(node));
+    compressed_encoded_fill_for_test(node, 0xFF);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList prune reuses malformed
+/// compressed page memory"` (9156ada16).
+#[test]
+fn pagelist_prune_reuses_malformed_compressed_page_memory() {
+    let mut s = PageList::init(Options {
+        max_size: Some(2 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
+
+    // Allocate the second page so the first one can be pruned and reused.
+    while core::ptr::eq(s.pages.first, s.pages.last) {
+        let _ = s.grow().unwrap();
+    }
+    let first = s.pages.first;
+    assert!(s.compress_page(first));
+    compressed_encoded_fill_for_test(first, 0xFF);
+
+    let mut reused = false;
+    let growth_limit = unsafe { super::Node::capacity(s.pages.last) }.rows as usize + 1;
+    for _ in 0..growth_limit {
+        if let Some(new_node) = s.grow().unwrap() {
+            if core::ptr::eq(new_node, first) {
+                reused = true;
+                break;
+            }
+        }
+    }
+
+    assert!(reused);
+    assert_eq!(first, s.pages.last);
+    assert!(!unsafe { super::Node::is_compressed(first) });
+    assert_eq!(1 as size::CellCountInt, unsafe { super::Node::rows(first) });
+    unsafe { (*super::Node::page(first)).assert_integrity() };
+
+    s.deinit();
+}
+
 /// PORTS: oracle@main PageList.zig `Node.Owned` (16e4b5e98) — every node
 /// records how its backing memory was allocated. A heap-owned page smaller than
 /// the standard pool item must still be freed to the heap, never returned to

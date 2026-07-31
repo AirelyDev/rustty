@@ -69,6 +69,70 @@ and mutation-proved: flipping `>` to `>=` fails the exact-limit case with
 arm the oracle gets for free from `readStreaming`, since Rust's `Read` may return
 fewer bytes than requested and the cap must apply to the accumulated length.
 
+## Second pass — the 16 cold-history compression absences
+
+A later run of this tool (after the 70%-of-tokens tightening described below)
+surfaced **16 further absences**, fifteen in `src/terminal/PageList.zig` from the
+same `9156ada16` cold-history compression series and one in
+`src/terminal/c/terminal.zig`. Each was confirmed against the code before being
+believed. Fifteen were genuinely absent and are now ported:
+
+| oracle test | ported as |
+| --- | --- |
+| `PageList incremental compression skips visible history` | `pagelist_incremental_compression_skips_visible_history` |
+| `PageList owns incremental compression state` | `pagelist_owns_incremental_compression_state` |
+| `PageList incremental compression bounds inspected pages` | `pagelist_incremental_compression_bounds_inspected_pages` |
+| `PageList incremental compression advances after failure` | `pagelist_incremental_compression_advances_after_failure` |
+| `PageList incremental compression advances after decommit failure` | `pagelist_incremental_compression_advances_after_decommit_failure` |
+| `PageList incremental compression restarts after active boundary resize` | `pagelist_incremental_compression_restarts_after_active_boundary_resize` |
+| `PageList incremental compression restarts after prune reuse` | `pagelist_incremental_compression_restarts_after_prune_reuse` |
+| `PageList incremental compression restarts after earlier replacement` | `pagelist_incremental_compression_restarts_after_earlier_replacement` |
+| `PageList incremental compression keeps progress after tail growth` | `pagelist_incremental_compression_keeps_progress_after_tail_growth` |
+| `PageList lazily restores compressed history made active by resize` | `pagelist_lazily_restores_compressed_history_made_active_by_resize` |
+| `PageList compression restores through page access` | `pagelist_compression_restores_through_page_access` |
+| `PageList reset discards malformed compressed data` | `pagelist_reset_discards_malformed_compressed_data` |
+| `PageList deinit discards malformed compressed data` | `pagelist_deinit_discards_malformed_compressed_data` |
+| `PageList prune reuses malformed compressed page memory` | `pagelist_prune_reuses_malformed_compressed_page_memory` |
+| `clipboard_write without callback is unsupported and silent` | `clipboard_write_without_callback_is_unsupported_and_silent` (`rustty-vt-c`) |
+
+Two oracle tests the tool did **not** flag were absent anyway — one Rust test,
+`pagelist_compress_incremental_restarts_after_list_mutation`, was carrying three
+oracle names on name similarity alone while asserting only its own (it erases
+history; it never replaces a node or calls `reset`). Both are now ported for real
+as `pagelist_incremental_compression_restarts_after_replacement` and
+`pagelist_incremental_compression_restarts_after_reset`. **A green name match is
+not evidence that the assertions exist.**
+
+### Accepted absence (1)
+
+- `src/terminal/PageList.zig::PageList incremental compression advances after allocation failure`
+
+The oracle test's entire content is an allocator seam: it wraps the list in
+`std.testing.FailingAllocator`, sets `fail_index` so the **exact-sized encoded
+allocation** inside `compress.Page.init` fails, and asserts that the pass moves on
+to the next page rather than retrying the failed candidate.
+
+rustty has no injectable analogue. The encoded buffer is
+`scratch[..encoded_len].to_vec()` in `crates/rustty-vt/src/compress/page.rs` — a
+global-allocator `Vec` that **aborts** on OOM under the crate's DG5 abort policy
+rather than returning an error, and no allocator parameter reaches this path. The
+port deliberately does not carry an allocator through `compress_page`, so there is
+no failpoint to arm and no `libc`/global-allocator shim may be added for one test.
+
+The *structural* claim — a failed candidate does not stall the pass, and the next
+step continues at the following serial — is not lost. It is asserted twice over,
+through the two failure seams that do exist, and both are mutation-proved:
+
+- `pagelist_incremental_compression_advances_after_failure` (incompressible page,
+  `compress_page` returns false at the codec),
+- `pagelist_incremental_compression_advances_after_decommit_failure`
+  (`COMPRESS_PAGE_TW` tripwire on the strict-decommit step).
+
+Rewinding the continuation marker on failure (`last_serial = None` in the
+non-compressing arm of `compress_incremental`) fails **both** of them on
+`assertion failed: unsafe { super::Node::is_compressed(second) }`. What is
+genuinely unported is only the allocation-shaped instance of that same claim.
+
 ## Note on the matcher — it was wrong five times
 
 Every reported "gap" in this pass was confirmed against the code before being
