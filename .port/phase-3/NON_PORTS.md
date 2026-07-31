@@ -275,3 +275,28 @@ this workstream's.
    golden. If the offset algorithm regresses, those fail first. The exact
    divergent pixel is recorded above so a future reader can re-measure it in one
    command rather than rediscovering it.
+
+---
+
+# `check_tests_ported.py` delta from the `max_scrollback` rename (P3-W3 T2)
+
+`86f81fb5b` renames `Terminal.Options.max_scrollback` to `max_scrollback_bytes`
+**and renames the three tests whose names embed it**. The port follows upstream,
+so three reference names that still exist at the PIN no longer match:
+
+| reference name (still present at the PIN) | now named |
+|---|---|
+| `vt::Terminal: scrollUp with max_scrollback zero` | `terminal_scroll_up_with_max_scrollback_bytes_zero` |
+| `vt::Terminal: scrollUp with max_scrollback zero and top margin` | `terminal_scroll_up_with_max_scrollback_bytes_zero_and_top_margin` |
+| `vt::Terminal: scrollUp with max_scrollback zero and left/right margin` | `terminal_scroll_up_with_max_scrollback_bytes_zero_and_left_right_margin` |
+
+**No test was deleted or weakened** — only the three names changed, following
+`86f81fb5b`'s own rename (`git show 86f81fb5b -- src/terminal/Terminal.zig` shows
+the three `test "..."` headers renamed in the same hunk as the field). This is the
+same pin-lag mechanism as the P3-W7 rows above and as `P3-RV2`: the pin advance
+(`P3-W10`) resolves it **by construction**, because the reference names become the
+`_bytes` forms the port already uses. A per-file `GHOSTTY_SRC` override to paper
+over them is **forbidden**.
+
+`vt::HashMap ensureUnusedCapacity with tombstones` is **not** this workstream's
+(P3-W3 touches no HashMap code).
