@@ -345,6 +345,14 @@ GATE_REGISTRY=(
   # wasm artifact inherits it. HARD: green at landing, seconds, and BOTH FAIL arms
   # are mutation-proven (the `--self-test` arm drives the real macOS `rustty-os`
   # edge through the same detection).
+  # G-ONIG (2026-07-30). P3-W9 found that NO ci.sh lane passed --features
+  # oniguruma, so rustty-vt's string_map regex search and rustty-config's URL
+  # regex table were compiled by nothing. A test that is never built cannot
+  # fail, so those lanes were green by construction rather than by verification.
+  # The gate floors the DELTA (with-feature minus without), not the absolute
+  # count: -p rustty-vt --features oniguruma runs the WHOLE crate, so an
+  # absolute floor would hold even if every gated test vanished.
+  "G-ONIG|HARD|bash $GATES/check_oniguruma_lane.sh"
   "G-XEVREACH|HARD|sh $GATES/xev_scope_boundary_gate.sh"
   # G-BENCH (WS10 T4) — the `rustty-bench` unit-test lane, debug AND --release.
   # `B-compression.md` §4.5 records "`rustty-bench` is in NO gate". Half right:
