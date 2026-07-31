@@ -209,6 +209,7 @@ syn keyword rusttyConfigKeyword
 	\ gtk-toolbar-style
 	\ gtk-titlebar-style
 	\ gtk-wide-tabs
+	\ gtk-horizontal-tab-scroll
 	\ gtk-custom-css
 	\ desktop-notifications
 	\ progress-style

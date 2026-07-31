@@ -209,6 +209,7 @@ _config() {
     "--gtk-toolbar-style=-:::(flat raised raised-border)" \
     "--gtk-titlebar-style=-:::(native tabs)" \
     "--gtk-wide-tabs" \
+    "--gtk-horizontal-tab-scroll" \
     "--gtk-custom-css=-:::_files" \
     "--desktop-notifications" \
     "--progress-style" \

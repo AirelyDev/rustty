@@ -33,6 +33,11 @@
 #                                    ghostty's props/symbols_uucode "tables match
 #                                    uucode" tests whose live oracle R3 forbids
 #                                    in-crate. 0 diffs required.)
+#   G-THEMES check_theme_corpus.py   the 592 vendored iterm2 theme files match
+#                                    a committed per-file SHA-256 manifest
+#                                    -> HARD-FAIL. res_themes.rs only counts
+#                                    them; content drift is invisible to a
+#                                    count. P3-W9 T5.
 #   G-BENCH check_bench_tests.sh     `rustty-bench` lib tests, debug  -> HARD-FAIL
 #                                    AND --release, plus a test-count floor.
 #                                    The workspace lanes already RUN the crate;
@@ -442,6 +447,18 @@ GATE_REGISTRY=(
   # run_gate's PROGRESS-went-RED branch still escalates a genuine mismatch. Its
   # FAIL arm is proven by `--self-test` (exactly 1,631 diverging rows).
   "G-LZ4|PROGRESS|bash $GATES/check_lz4_byte_exact.sh"
+  # G-THEMES (P3-W9 T5) — the vendored iterm2 theme corpus vs a committed
+  # per-file SHA-256 manifest. `xtask/src/res_themes.rs` asserts the emitted
+  # count is exactly 592, which catches an add/delete and NOTHING else: content
+  # drift inside an existing theme is invisible to a count, and exactly ONE
+  # theme body is ever read by a test. Not hypothetical — the 20260720 re-vendor
+  # changed the CONTENT of four `Catppuccin *` files with the count unmoved.
+  # Its FAIL arm is executed, not asserted: flipping one byte in `0x96f` turned
+  # this RED while `emits_full_theme_corpus` stayed green (P3-W9 T5 step 3), and
+  # tampering with one manifest row trips the total-digest self-consistency arm.
+  # HARD: pure stdlib Python over in-repo files, no oracle and no toolchain, so
+  # it cannot legitimately BLOCK.
+  "G-THEMES|HARD|$PY $GATES/check_theme_corpus.py"
   "D4|PROGRESS|bash $GATES/check_comptime_phase.sh"
   "D5|PROGRESS|bash $GATES/check_paired_invariants.sh"
   "D6|PROGRESS|bash $GATES/check_sanitizer_canary.sh"

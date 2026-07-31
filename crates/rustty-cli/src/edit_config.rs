@@ -303,15 +303,15 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
 
         // If we reached this point then exec failed.
         // try stderr.print(
-        //     \\Failed to execute the editor. Error code={}.
+        //     \\Failed to execute the editor (E{s}).
         //     ...
         //     \\Editor: {s}
         //     \\Path: {s}
         //     \\
-        // , .{ err, editor, path });
+        // , .{ @tagName(errno), editor, path });
         writeln!(
             stderr,
-            "Failed to execute the editor. Error code={err}.\n\
+            "Failed to execute the editor (E{err}).\n\
              \n\
              This is usually due to the executable path not existing, invalid\n\
              permissions, or the shell environment not being set up\n\
@@ -320,6 +320,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
              Editor: {editor}\n\
              Path: {path}",
             editor = show(editor),
+            err = errno_suffix(&err),
         )?;
         // return 1;
         Ok(1)
@@ -331,6 +332,100 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         let _ = &command;
         unreachable!("edit-config requires a POSIX exec syscall")
     }
+}
+
+/// PORTS the `{s}` of the reference's `(E{s})` — `@tagName(errno)` over
+/// `std.posix.E` (oracle `f2a7652ab`), which renders e.g. `NOENT`, so the
+/// message reads `(ENOENT)`.
+///
+/// PORT NOTE: Rust's std has no errno-name table and the `libc` crate is
+/// banned, so the POSIX `execve(2)` error set is transcribed here — that is the
+/// complete set the reference's own `errno` can hold at this call site, since
+/// this is the return of a bare `execve`. Anything outside it falls back to the
+/// numeric code, which still round-trips to a name via `errno(3)` and is
+/// strictly more informative than the pre-`f2a7652ab` `Error code={}` form it
+/// replaces. This is a diagnostic string, not a control-flow input.
+// PORT NOTE: `E` in the reference is `std.posix.E`; the tag names below are the
+// same symbols with the `E` prefix stripped, matching `@tagName`.
+fn errno_suffix(err: &std::io::Error) -> String {
+    // execve(2), POSIX.1-2024 ERRORS section, in the standard's order.
+    const EXECVE_ERRNOS: &[(i32, &str)] = &[
+        (libc_free::E2BIG, "2BIG"),
+        (libc_free::EACCES, "ACCES"),
+        (libc_free::EAGAIN, "AGAIN"),
+        (libc_free::EFAULT, "FAULT"),
+        (libc_free::EINVAL, "INVAL"),
+        (libc_free::EIO, "IO"),
+        (libc_free::EISDIR, "ISDIR"),
+        (libc_free::ELOOP, "LOOP"),
+        (libc_free::EMFILE, "MFILE"),
+        (libc_free::ENAMETOOLONG, "NAMETOOLONG"),
+        (libc_free::ENFILE, "NFILE"),
+        (libc_free::ENOENT, "NOENT"),
+        (libc_free::ENOEXEC, "NOEXEC"),
+        (libc_free::ENOMEM, "NOMEM"),
+        (libc_free::ENOTDIR, "NOTDIR"),
+        (libc_free::EPERM, "PERM"),
+        (libc_free::ETXTBSY, "TXTBSY"),
+    ];
+
+    match err.raw_os_error() {
+        Some(code) => EXECVE_ERRNOS
+            .iter()
+            .find(|(c, _)| *c == code)
+            .map_or_else(|| code.to_string(), |(_, name)| (*name).to_string()),
+        None => err.to_string(),
+    }
+}
+
+/// The `errno` values used above, as plain constants (the `libc` crate is
+/// banned).
+///
+/// **These are NOT all portable, and the first draft of this table got it
+/// wrong.** Values 1..=26 happen to agree between Darwin and Linux, but
+/// `EAGAIN` does NOT: it is **35** on Darwin and **11** on Linux, and
+/// `ELOOP`/`ENAMETOOLONG` diverge too. Every divergent value is spelled
+/// per-target below.
+///
+/// Darwin values verified by reading the SDK header on this host:
+/// `grep -E '^#define[[:space:]]+(EPERM|ENOENT|…)[[:space:]]'
+/// "$(xcrun --show-sdk-path)/usr/include/sys/errno.h"`.
+/// Linux values are `asm-generic/errno-base.h` (1..=34) + `asm-generic/errno.h`
+/// (ELOOP 40, ENAMETOOLONG 36); `errno_table_matches_the_host_libc` below
+/// re-derives every row from the running platform, so a wrong number fails on
+/// whichever host it is wrong for rather than being trusted from a comment.
+mod libc_free {
+    // Identical on Darwin and Linux.
+    pub const EPERM: i32 = 1;
+    pub const ENOENT: i32 = 2;
+    pub const EIO: i32 = 5;
+    pub const E2BIG: i32 = 7;
+    pub const ENOEXEC: i32 = 8;
+    pub const ENOMEM: i32 = 12;
+    pub const EACCES: i32 = 13;
+    pub const EFAULT: i32 = 14;
+    pub const ENOTDIR: i32 = 20;
+    pub const EISDIR: i32 = 21;
+    pub const EINVAL: i32 = 22;
+    pub const ENFILE: i32 = 23;
+    pub const EMFILE: i32 = 24;
+    pub const ETXTBSY: i32 = 26;
+
+    // Divergent.
+    #[cfg(target_vendor = "apple")]
+    pub const EAGAIN: i32 = 35;
+    #[cfg(not(target_vendor = "apple"))]
+    pub const EAGAIN: i32 = 11;
+
+    #[cfg(target_vendor = "apple")]
+    pub const ELOOP: i32 = 62;
+    #[cfg(not(target_vendor = "apple"))]
+    pub const ELOOP: i32 = 40;
+
+    #[cfg(target_vendor = "apple")]
+    pub const ENAMETOOLONG: i32 = 63;
+    #[cfg(not(target_vendor = "apple"))]
+    pub const ENAMETOOLONG: i32 = 36;
 }
 
 /// Interpret command bytes as an `OsStr` for `std::process::Command` (R3: argv
@@ -345,4 +440,69 @@ fn as_os_str(bytes: &[u8]) -> &std::ffi::OsStr {
 #[cfg(unix)]
 fn show(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     String::from_utf8_lossy(bytes)
+}
+
+/// `P3-W9 T7` step 1 (oracle `f2a7652ab`): the `(E{s})` errno-name form.
+#[cfg(all(test, unix))]
+mod errno_tests {
+    use super::{errno_suffix, libc_free};
+
+    /// The reference gets errno names from `@tagName(std.posix.E)`, i.e. from
+    /// the target's own libc. rustty transcribes the numbers by hand (the
+    /// `libc` crate is banned), so the transcription MUST be re-derived from
+    /// the running platform rather than trusted.
+    ///
+    /// `std::io::Error::from_raw_os_error(n).to_string()` is `strerror(n)` on
+    /// unix, so this asserts each constant against the host's real message.
+    /// It caught a genuine bug while being written: the first draft had
+    /// `EAGAIN = 11`, which is the LINUX value — on Darwin 11 is `EDEADLK`, so
+    /// a resource-limit exec failure would have printed `(EAGAIN)` for a
+    /// deadlock error and vice versa.
+    #[test]
+    fn errno_table_matches_the_host_libc() {
+        // (constant, a distinctive lowercase fragment of the host strerror)
+        let rows: &[(i32, &str)] = &[
+            (libc_free::EPERM, "not permitted"),
+            (libc_free::ENOENT, "no such file"),
+            (libc_free::EIO, "input/output error"),
+            (libc_free::E2BIG, "argument list too long"),
+            (libc_free::ENOEXEC, "exec format error"),
+            (libc_free::ENOMEM, "memory"),
+            (libc_free::EACCES, "permission denied"),
+            (libc_free::EFAULT, "bad address"),
+            (libc_free::ENOTDIR, "not a directory"),
+            (libc_free::EISDIR, "is a directory"),
+            (libc_free::EINVAL, "invalid argument"),
+            (libc_free::EMFILE, "too many open files"),
+            (libc_free::ETXTBSY, "text file busy"),
+            (libc_free::EAGAIN, "temporarily unavailable"),
+            (libc_free::ELOOP, "symbolic links"),
+            (libc_free::ENAMETOOLONG, "name too long"),
+        ];
+        for (code, fragment) in rows {
+            let msg = std::io::Error::from_raw_os_error(*code)
+                .to_string()
+                .to_lowercase();
+            assert!(
+                msg.contains(fragment),
+                "errno {code} is {msg:?} on this host, expected it to contain \
+                 {fragment:?} — the hand-transcribed table is wrong for this target"
+            );
+        }
+    }
+
+    /// The rendered suffix is the errno NAME, matching the oracle's
+    /// `(E{s})` = `@tagName`.
+    #[test]
+    fn errno_suffix_renders_the_name_not_the_number() {
+        let e = std::io::Error::from_raw_os_error(libc_free::ENOENT);
+        assert_eq!(errno_suffix(&e), "NOENT");
+        let e = std::io::Error::from_raw_os_error(libc_free::EACCES);
+        assert_eq!(errno_suffix(&e), "ACCES");
+
+        // Outside the execve set: fall back to the number, never to a wrong
+        // name. 4095 is not a real errno on any supported target.
+        let e = std::io::Error::from_raw_os_error(4095);
+        assert_eq!(errno_suffix(&e), "4095");
+    }
 }

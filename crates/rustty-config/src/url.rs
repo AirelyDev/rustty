@@ -62,8 +62,6 @@ const NO_TRAILING_PUNCTUATION: &str = r"(?<![,.])";
 
 const NO_TRAILING_COLON: &str = r"(?<!:)";
 
-const TRAILING_SPACES_AT_EOL: &str = r"(?: +(?= *$))?";
-
 const DOTTED_PATH_LOOKAHEAD: &str = r"(?=[\w\-.~:\/?#@!$&*+;=%]*\.)";
 
 const NON_DOTTED_PATH_LOOKAHEAD: &str = r"(?![\w\-.~:\/?#@!$&*+;=%]*\.)";
@@ -107,13 +105,11 @@ const ROOTED_OR_RELATIVE_PATH_PREFIX: &str = r"(?:\.\.\/|\.\/|(?<!\w)~\/|(?:[\w]
 //     path_chars ++ "+" ++
 //     dotted_path_space_segments ++
 //     no_trailing_colon ++
-//     trailing_spaces_at_eol ++
 //     "|" ++
 //     non_dotted_path_lookahead ++
 //     path_chars ++ "+" ++
 //     any_path_space_segments ++
 //     no_trailing_colon ++
-//     trailing_spaces_at_eol ++
 //     ")";
 fn rooted_or_relative_path_branch() -> String {
     let mut s = String::new();
@@ -124,14 +120,12 @@ fn rooted_or_relative_path_branch() -> String {
     s.push('+');
     s.push_str(DOTTED_PATH_SPACE_SEGMENTS);
     s.push_str(NO_TRAILING_COLON);
-    s.push_str(TRAILING_SPACES_AT_EOL);
     s.push('|');
     s.push_str(NON_DOTTED_PATH_LOOKAHEAD);
     s.push_str(PATH_CHARS);
     s.push('+');
     s.push_str(ANY_PATH_SPACE_SEGMENTS);
     s.push_str(NO_TRAILING_COLON);
-    s.push_str(TRAILING_SPACES_AT_EOL);
     s.push(')');
     s
 }
@@ -143,8 +137,7 @@ const BARE_RELATIVE_PATH_PREFIX: &str = r"(?<!\$\d*)(?<!\w)[\w][\w\-.]*\/";
 //     dotted_path_lookahead ++
 //     bare_relative_path_prefix ++
 //     path_chars ++ "+" ++
-//     no_trailing_colon ++
-//     trailing_spaces_at_eol;
+//     no_trailing_colon;
 fn bare_relative_path_branch() -> String {
     let mut s = String::new();
     s.push_str(DOTTED_PATH_LOOKAHEAD);
@@ -152,7 +145,6 @@ fn bare_relative_path_branch() -> String {
     s.push_str(PATH_CHARS);
     s.push('+');
     s.push_str(NO_TRAILING_COLON);
-    s.push_str(TRAILING_SPACES_AT_EOL);
     s
 }
 
@@ -175,6 +167,41 @@ pub fn regex() -> String {
     s.push('|');
     s.push_str(&bare_relative_path_branch());
     s
+}
+
+// PORT NOTE (NOT a reference test — area G OQ-4 / `P3-W9 T1 Step 2`): the oracle
+// keeps ONE copy of this regex (`src/config/url.zig`). rustty has TWO, because
+// `rustty-vt` cannot depend on `rustty-config` (R4: config is ABOVE vt, so a
+// vt->config edge is a cycle) and vt's `StringMap` URL tests need the same
+// fixture. The second copy is `rustty_vt::string_map::url`.
+//
+// Nothing detected a one-sided edit. Oracle `9fc2a3085` (delete
+// `trailing_spaces_at_eol`) is exactly the shape that hazard produces: a
+// one-line upstream deletion that must be applied at two rustty sites. This gate
+// converts that into a one-line-per-site fix WITH a guarantee.
+//
+// Deliberately NOT behind the `oniguruma` feature: `.port/tools/ci.sh` never
+// passes `--features oniguruma` (`grep -rn oniguruma .port/tools/ci.sh` -> 0
+// hits), so the `url regex` behaviour table below is exercised by NO CI lane.
+// The duplication gate must not inherit that hole, so it runs on default
+// features — which is possible because both regex assemblies are pure string
+// builds with no oniguruma dependency.
+#[cfg(test)]
+mod duplication_gate {
+    #[test]
+    fn regex_is_byte_identical_to_the_vt_copy() {
+        let config_copy = super::regex();
+        let vt_copy = rustty_vt::string_map::url::regex();
+        // `String` is UTF-8 bytes, so `==` here IS byte identity; comparing the
+        // strings (rather than `as_bytes()`) only makes the failure readable.
+        assert_eq!(
+            config_copy, vt_copy,
+            "rustty-config::url::regex() and rustty_vt::string_map::url::regex() \
+             have diverged. They are two transcriptions of ONE oracle constant \
+             (src/config/url.zig `pub const regex`); every edit must be applied \
+             to BOTH."
+        );
+    }
 }
 
 // test "url regex" {
@@ -340,7 +367,7 @@ mod tests {
                 b"/Users/ghostty.user/code/../example.py",
             ),
             case(b"../example.py", b"../example.py"),
-            case(b"../example.py ", b"../example.py "),
+            case(b"../example.py ", b"../example.py"),
             case(b"first time ../example.py contributor ", b"../example.py"),
             case(
                 b"[link](/home/user/ghostty.user/example)",
@@ -392,8 +419,9 @@ mod tests {
                 b"IPv6 in markdown [link](http://[2001:db8::1]/docs)",
                 b"http://[2001:db8::1]/docs",
             ),
-            // File paths with spaces
-            case(b"./spaces-end.   ", b"./spaces-end.   "),
+            // Trailing whitespace isn't part of a detected file path.
+            case(b"./spaces-end.   ", b"./spaces-end."),
+            // File paths with internal spaces
             case(b"./space middle", b"./space middle"),
             case(b"../test folder/file.txt", b"../test folder/file.txt"),
             case(b"/tmp/test folder/file.txt", b"/tmp/test folder/file.txt"),

@@ -196,6 +196,7 @@ complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l gtk-titleba
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l gtk-toolbar-style -r -f -a "flat raised raised-border" -d "Determines the appearance of the top and bottom bars tab bar."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l gtk-titlebar-style -r -f -a "native tabs" -d "The style of the GTK titlebar."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l gtk-wide-tabs  -f -d "If `true` (default), then the Rustty GTK tabs will be \"wide.\" Wide tabs are the new typical Gnome style where tabs fill their available space."
+complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l gtk-horizontal-tab-scroll  -f -d "If `true` (default), then two-finger horizontal scrolling on a touchpad will switch between tabs."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l gtk-custom-css -r -F -d "Custom CSS files to be loaded."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l desktop-notifications  -f -d "If `true` (default), applications running in the terminal can show desktop notifications using certain escape sequences such as OSC 9 or OSC 777."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l progress-style  -f -d "If `true` (default), applications running in the terminal can show graphical progress bars using the ConEmu OSC 9;4 escape sequence."

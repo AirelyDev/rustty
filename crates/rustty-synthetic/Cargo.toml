@@ -22,6 +22,12 @@ rustty-os = { workspace = true }
 # rustty-args is member 15, strictly-earlier than rustty-synthetic (29) — acyclic (R4).
 rustty-args = { workspace = true }
 
+[dev-dependencies]
+# `P3-W9 T4` step 4 only: `rustty_vt::apc::Handler::{feed_slice,end}` take the
+# crate's `Allocator` seam (`allocator_api2::alloc::Global`), so the APC-validity
+# test needs the type by name. Test-only; the library never allocates through it.
+allocator-api2 = { workspace = true }
+
 # main_gen.zig: `pub const main = synthetic.cli.main;`
 [[bin]]
 name = "rustty-synthetic"
