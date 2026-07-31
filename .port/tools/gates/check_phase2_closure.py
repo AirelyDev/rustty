@@ -103,9 +103,39 @@ OPEN_MARKERS = [
     re.compile(r"\bDEFERRED\.\*\*"),
 ]
 
-# An owner: a workstream id, or Phase 3 (the upstream-resync phase). `WS-n` in prose
-# ("fix in WS-n") is a placeholder, not an owner, and is deliberately not matched.
-OWNER_RE = re.compile(r"\b(WS(?:[1-9][0-9]|[1-9]))\b|\b(Phase[ -]3)\b")
+# An owner: a Phase-2 workstream id, a Phase-3 workstream id, or bare `Phase 3`.
+# `WS-n` in prose ("fix in WS-n") is a placeholder, not an owner, and is
+# deliberately not matched.
+#
+# `P3-W<n>` WAS NOT MATCHED AT ALL until 2026-07-30, which is a worse failure
+# than it looks. Rows owned by `P3-W8 T2` reported as "NO owner named" — the
+# gate's loudest verdict — when they were in fact properly owned. A gate that
+# invents violations destroys trust as fast as one that misses them, and the
+# fix for a false RED is usually to weaken something, which is how real rows get
+# laundered. Both directions are now covered.
+OWNER_RE = re.compile(
+    r"\b(WS(?:[1-9][0-9]|[1-9]))\b"
+    r"|\b(P3-W(?:1[0-9]|[0-9]))\b"
+    r"|\b(Phase[ -]3)\b"
+)
+
+
+def derive_p3_workstreams():
+    """(open, closed) Phase-3 workstream ids, derived from GIT rather than a doc.
+
+    A Phase-3 workstream is CLOSED once its merge commit is on the branch. That
+    is an objective, self-updating signal — unlike the Phase-2 ROADMAP checklist,
+    which drifted so badly that four of its rows contradicted merged commits.
+    There is no checklist to rot here, so don't create one.
+    """
+    out = subprocess.run(
+        ["git", "log", "--format=%s", "--all"],
+        cwd=ROOT, capture_output=True, text=True,
+    ).stdout
+    closed = set(re.findall(r"^merge: (P3-W(?:1[0-9]|[0-9]))\b", out, re.M))
+    # Every id the plan defines; anything not merged is open.
+    allids = {f"P3-W{i}" for i in range(0, 11)}
+    return allids - closed, closed
 
 # Text that marks an entry as no longer open.
 # STRONG disposition markers only. Deliberately NOT included: bare "DONE", "PORTED",
@@ -766,11 +796,16 @@ def main():
         print("cannot bind without it. This is not a pass.")
         sys.exit(3)
     open_ws, closed_ws = derive_workstreams(open(roadmap_path, errors="ignore").read())
+    # Phase-3 workstreams join the same sets, derived from git merge commits.
+    p3_open, p3_closed = derive_p3_workstreams()
+    open_ws |= p3_open
+    closed_ws |= p3_closed
 
     if "--check-derivation" in argv:
         print("derived from", ROADMAP)
         print("  OPEN  :", ", ".join(sorted(open_ws)))
         print("  CLOSED:", ", ".join(sorted(closed_ws)))
+        print("  (P3-W* derived from `merge: P3-W<n>` commits, not from any checklist)")
         sys.exit(0)
 
     # Anti-vacuity on the derivation itself.
