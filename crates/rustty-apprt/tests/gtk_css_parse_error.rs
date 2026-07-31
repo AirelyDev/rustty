@@ -21,7 +21,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gtk4::prelude::*;
+// NOTE: no `use gtk4::prelude::*` — `connect_parsing_error` and `load_from_string`
+// are INHERENT methods on `CssProvider` in this gtk4-rs, so the glob resolved
+// nothing and rustc reported it unused under `--features gtk,gtk-v4_16`. Removed
+// rather than allow()'d; a glob reported unused genuinely brings in nothing.
 
 #[test]
 #[ignore = "headed GTK; run: cargo test -p rustty-apprt --features gtk,gtk-v4_16 \
