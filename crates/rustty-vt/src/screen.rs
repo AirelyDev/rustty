@@ -1203,6 +1203,13 @@ impl Screen {
     // `src_row` dangling on the retry if they aliased. The reference enforces
     // this with `assert(src_page != node.page())`; the port encodes the
     // disjointness as a `debug_assert!` on the node pointers, not a comment.
+    //
+    // NEGATIVE CONTROL EXECUTED (`P3-W2` T4 Step 4): dropping the retry (return
+    // `current` on the first clone error) FAILS both
+    // `screen_scroll_above_hyperlink_dense_row_to_{fresh,existing}_page`
+    // (`assertion left == right failed; left: 10, right: 2` — the destination
+    // page ends up with 2 of the 10 hyperlinks) AND both
+    // `terminal_{insert,delete}Lines_hyperlink_dense_row_crosses_page_boundary`.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     #[allow(clippy::too_many_arguments)]
     pub fn clone_partial_row_grow_capacity(

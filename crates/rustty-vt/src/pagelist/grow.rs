@@ -482,6 +482,20 @@ impl PageList {
     // the requirement in prose and enforces it with
     // `assert(src_page != node.page())`; the port encodes the disjointness as a
     // `debug_assert!` on the node pointers rather than leaving it a comment.
+    //
+    // NEGATIVE CONTROLS EXECUTED (`P3-W2` T4 Step 4), both against
+    // `pagelist_erase{Row,RowBounded}_hyperlink_dense_row_crosses_page_boundary`:
+    //
+    // 1. DROP THE RETRY (return `current` on the first clone error) — both tests
+    //    FAIL: `assertion failed: unsafe { (*list_cell.cell).hyperlink() }`. The
+    //    row crosses the page boundary with its hyperlink flags but no map
+    //    entries, i.e. exactly the half-mutated state the commit fixes.
+    // 2. DROP THE `for_clone_error` MAPPING (always return `None`, i.e. rehash at
+    //    the same capacity) — both tests HANG rather than failing an assertion:
+    //    the rehash never makes room, so the retry loop spins forever (killed at
+    //    >60s). Recorded as observed: the error->dimension mapping is what makes
+    //    this loop TERMINATE, not merely what makes it correct. There is no
+    //    iteration bound here because the reference has none.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn clone_row_grow_capacity(
         &mut self,
