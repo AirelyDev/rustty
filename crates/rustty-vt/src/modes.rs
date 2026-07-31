@@ -57,6 +57,46 @@ impl Default for ModeState {
     }
 }
 
+// PORT NOTE (P3-W4 T2, has no upstream counterpart): an instrumentation counter
+// for how many times synchronized output has been CLEARED
+// (`set(.synchronized_output, false)`).
+//
+// Why it exists: `89b103dd5` MOVES the synchronized-output reset (and the pixel
+// geometry update) OUT of every resize wrapper — `termio/Termio.zig`,
+// `terminal/c/terminal.zig` — and INTO `Terminal.resize`. A port that keeps both
+// copies double-clears, which is behaviourally invisible; a port that deletes
+// both without adding the terminal-side move loses the reset entirely, and no
+// resize KAT would notice either way. Only a COUNT distinguishes 0 / 1 / 2.
+//
+// Gating: `cfg(debug_assertions)`, NOT `cfg(test)`. `cfg(test)` is only true for
+// the crate currently compiled with `--test`, so the counter would read zero
+// from `rustty-vt-c`'s and `rustty-termio`'s tests, which are exactly the two
+// call sites this guards. `debug_assertions` is the same stand-in the tripwire
+// module uses for Zig's `builtin.is_test`; see its PORT NOTE.
+#[cfg(debug_assertions)]
+thread_local! {
+    static SYNC_OUTPUT_CLEARS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(debug_assertions)]
+#[inline]
+fn sync_output_clear_bump() {
+    SYNC_OUTPUT_CLEARS.with(|c| c.set(c.get() + 1));
+}
+
+/// Number of `set(.synchronized_output, false)` calls on this thread since the
+/// last `sync_output_clear_reset`. Instrumentation only; see the PORT NOTE.
+#[cfg(debug_assertions)]
+pub fn sync_output_clear_count() -> usize {
+    SYNC_OUTPUT_CLEARS.with(|c| c.get())
+}
+
+/// Reset the synchronized-output clear counter for this thread.
+#[cfg(debug_assertions)]
+pub fn sync_output_clear_reset() {
+    SYNC_OUTPUT_CLEARS.with(|c| c.set(0));
+}
+
 impl ModeState {
     /// Reset the modes to their default values. This also clears the
     /// saved state.
@@ -70,6 +110,10 @@ impl ModeState {
         // PORT NOTE: the reference `switch (mode) { inline else => ... }` resolves
         // `entryForMode(mode)` at comptime and sets the matching ModePacked
         // field. We set the corresponding bit by the entry index.
+        #[cfg(debug_assertions)]
+        if matches!(mode, Mode::SynchronizedOutput) && !value {
+            sync_output_clear_bump();
+        }
         let entry_idx = index_for_mode(mode);
         self.values.set_bit(entry_idx, value);
     }

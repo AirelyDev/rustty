@@ -236,6 +236,71 @@ impl<'a> Handler<'a> {
         }
     }
 
+    /// Resize the terminal and apply any side effects (if supported)
+    /// as a result of that.
+    ///
+    /// This is different than a direct `Terminal.resize` operation
+    /// because it also handles the side effects like mode 2048 in-band
+    /// size reports if write_pty is set.
+    //
+    // PORT NOTE (area D §6.5): this stays on `stream_terminal::Handler`. It
+    // touches only `Terminal` + `Effects`, both already in `rustty-vt`; moving
+    // it up a tier would force a `rustty-vt` -> apprt edge (R4).
+    pub fn resize(
+        &mut self,
+        value: crate::terminal::Resize,
+    ) -> Result<(), crate::terminal::ResizeError> {
+        // try self.terminal.resize(self.terminal.gpa(), value);
+        let gpa = self.term().gpa();
+        self.term().resize(gpa, value)?;
+
+        // Mode 2048 reports require complete, current cell pixel geometry.
+        // const cell_size = value.cell_size_px orelse return;
+        let Some(cell_size) = value.cell_size_px else {
+            return Ok(());
+        };
+
+        // If we have no in-band size reports enabled then do nothing.
+        if !self.term().modes.get(modes::Mode::InBandSizeReports) {
+            return Ok(());
+        }
+
+        // If we have no write_pty effect, do nothing.
+        if self.effects.write_pty.is_none() {
+            return Ok(());
+        }
+
+        // The maximum mode-2048 response is covered by size_report's maximum
+        // value test. Reserve the final byte for the callback's sentinel.
+        //
+        // PORT NOTE: the reference reserves `buf[writer.end]` for the Zig
+        // `[:0]const u8` sentinel the callback takes. rustty's `write_pty`
+        // callback takes a plain `&[u8]` (see the `Effects::write_pty` PORT
+        // NOTE), so the reserved byte is kept — the encoder still only gets
+        // `buf.len() - 1` bytes, so the capacity budget is identical — but no
+        // NUL is appended.
+        let mut buf = [0u8; 128];
+        let end = {
+            let mut writer = crate::fixed_writer::FixedWriter::new(&mut buf[..127]);
+            // size_report.encode(...) catch unreachable;
+            size_report::encode(
+                &mut writer,
+                size_report::Style::Mode2048,
+                size_report::Size {
+                    rows: value.rows,
+                    columns: value.cols,
+                    cell_width: cell_size.width,
+                    cell_height: cell_size.height,
+                },
+            )
+            .expect("mode 2048 report always fits in 127 bytes");
+            writer.end
+        };
+        self.write_pty(&buf[..end]);
+
+        Ok(())
+    }
+
     // PORT NOTE: the reference's `vt`/`vtFallible` comptime dispatcher (a single
     // `switch (action)` over `Action.Tag`) is distributed across the
     // `impl stream::Handler for Handler` methods below: the Rust `Stream`
@@ -2089,6 +2154,246 @@ mod tests {
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }
     }
+
+    // -- Handler.resize tests (oracle 89b103dd5) ------------------------------
+    //
+    // PORT NOTE: the reference tests hang a `var` on a local `S` struct to count
+    // / capture `writePty` calls. Rust's `write_pty` is a bare `fn` pointer, so
+    // the counters live in thread-locals (same idiom as `CAPTURE`/`cap_*`).
+    thread_local! {
+        static WRITE_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    fn calls_reset() {
+        WRITE_CALLS.with(|c| c.set(0));
+        CAPTURE.with(|c| *c.borrow_mut() = None);
+    }
+
+    fn calls_get() -> usize {
+        WRITE_CALLS.with(|c| c.get())
+    }
+
+    fn count_write_pty(_: &mut Handler, data: &[u8]) {
+        WRITE_CALLS.with(|c| c.set(c.get() + 1));
+        CAPTURE.with(|c| *c.borrow_mut() = Some(data.to_vec()));
+    }
+
+    fn cell_9x18() -> crate::terminal::ResizeCellSize {
+        crate::terminal::ResizeCellSize {
+            width: 9,
+            height: 18,
+        }
+    }
+
+    // test "resize clears synchronized output on unchanged cell dimensions"
+    #[test]
+    fn resize_clears_synchronized_output_on_unchanged_cell_dimensions() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        t.modes.set(modespkg::Mode::SynchronizedOutput, true);
+        {
+            let mut s = t.vt_stream();
+            s.handler
+                .resize(crate::terminal::Resize {
+                    cols: 80,
+                    rows: 24,
+                    cell_size_px: Some(cell_9x18()),
+                })
+                .unwrap();
+        }
+
+        assert!(!t.modes.get(modespkg::Mode::SynchronizedOutput));
+        assert_eq!(720_u32, t.width_px);
+        assert_eq!(432_u32, t.height_px);
+
+        t.deinit(Global);
+    }
+
+    // test "resize reports mode 2048 geometry"
+    #[test]
+    fn resize_reports_mode_2048_geometry() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        calls_reset();
+
+        t.modes.set(modespkg::Mode::InBandSizeReports, true);
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+            s.handler
+                .resize(crate::terminal::Resize {
+                    cols: 100,
+                    rows: 40,
+                    cell_size_px: Some(cell_9x18()),
+                })
+                .unwrap();
+        }
+
+        assert_eq!(
+            b"\x1B[48;40;100;720;900t".as_slice(),
+            cap_take().unwrap().as_slice()
+        );
+
+        t.deinit(Global);
+    }
+
+    // test "resize suppresses mode 2048 reports"
+    #[test]
+    fn resize_suppresses_mode_2048_reports() {
+        calls_reset();
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // Disabled mode suppresses a report even with pixels and a callback.
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+            s.handler
+                .resize(crate::terminal::Resize {
+                    cols: 80,
+                    rows: 24,
+                    cell_size_px: Some(cell_9x18()),
+                })
+                .unwrap();
+        }
+        assert_eq!(0_usize, calls_get());
+
+        // Missing pixel geometry suppresses a report even with the mode enabled.
+        t.modes.set(modespkg::Mode::InBandSizeReports, true);
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+            s.handler
+                .resize(crate::terminal::Resize {
+                    cols: 80,
+                    rows: 24,
+                    cell_size_px: None,
+                })
+                .unwrap();
+        }
+        assert_eq!(0_usize, calls_get());
+
+        // A read-only stream has no write effect and remains successful.
+        let mut readonly_terminal = Terminal::init(Global, opts(80, 24)).unwrap();
+        readonly_terminal
+            .modes
+            .set(modespkg::Mode::InBandSizeReports, true);
+        {
+            let mut readonly_stream = readonly_terminal.vt_stream();
+            readonly_stream
+                .handler
+                .resize(crate::terminal::Resize {
+                    cols: 80,
+                    rows: 24,
+                    cell_size_px: Some(cell_9x18()),
+                })
+                .unwrap();
+        }
+        assert_eq!(0_usize, calls_get());
+
+        readonly_terminal.deinit(Global);
+        t.deinit(Global);
+    }
+
+    // test "resize failure resets synchronized output but does not write"
+    //
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn resize_failure_resets_synchronized_output_but_does_not_write() {
+        calls_reset();
+
+        let mut t = Terminal::init(Global, opts(10, 1)).unwrap();
+
+        t.modes.set(modespkg::Mode::SynchronizedOutput, true);
+        t.modes.set(modespkg::Mode::InBandSizeReports, true);
+
+        // PORT NOTE: the reference swaps in a `testing.FailingAllocator`. This
+        // port's seam is the `Tabstops::resize` tripwire, whose only fail point
+        // (`DynamicAlloc`) sits at the dynamic-stops allocation that
+        // `Tabstops::init` reaches from `Terminal::resize`. 513 columns is past
+        // `PREALLOC_COLUMNS`, so the allocation IS attempted.
+        crate::tabstops::resize_tw_error_always(crate::tabstops::ResizeFp::DynamicAlloc);
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+            assert_eq!(
+                Err(crate::terminal::ResizeError::OutOfMemory),
+                s.handler.resize(crate::terminal::Resize {
+                    cols: 513,
+                    rows: 1,
+                    cell_size_px: Some(cell_9x18()),
+                })
+            );
+        }
+        crate::tabstops::resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+        assert!(!t.modes.get(modespkg::Mode::SynchronizedOutput));
+        assert_eq!(0_usize, calls_get());
+        assert_eq!(10 as size::CellCountInt, t.cols);
+
+        t.deinit(Global);
+    }
+
+    // test "resize effects do not change canonical terminal state"
+    #[test]
+    fn resize_effects_do_not_change_canonical_terminal_state() {
+        let mut authoritative = Terminal::init(Global, opts(10, 5)).unwrap();
+        let mut readonly = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        authoritative
+            .modes
+            .set(modespkg::Mode::InBandSizeReports, true);
+        readonly.modes.set(modespkg::Mode::InBandSizeReports, true);
+
+        let value = crate::terminal::Resize {
+            cols: 20,
+            rows: 10,
+            cell_size_px: Some(cell_9x18()),
+        };
+        {
+            let mut authoritative_stream = authoritative.vt_stream();
+            authoritative_stream.handler.effects.write_pty = Some(noop_write_pty);
+            authoritative_stream.handler.resize(value).unwrap();
+        }
+        {
+            let mut readonly_stream = readonly.vt_stream();
+            readonly_stream.handler.resize(value).unwrap();
+        }
+
+        assert_eq!(authoritative.cols, readonly.cols);
+        assert_eq!(authoritative.rows, readonly.rows);
+        assert_eq!(authoritative.width_px, readonly.width_px);
+        assert_eq!(authoritative.height_px, readonly.height_px);
+        // std.meta.eql(authoritative.modes, readonly.modes)
+        assert_eq!(authoritative.modes.values, readonly.modes.values);
+        assert_eq!(authoritative.modes.saved, readonly.modes.saved);
+        assert_eq!(authoritative.modes.default, readonly.modes.default);
+        assert_eq!(
+            authoritative.scrolling_region.top,
+            readonly.scrolling_region.top
+        );
+        assert_eq!(
+            authoritative.scrolling_region.bottom,
+            readonly.scrolling_region.bottom
+        );
+        assert_eq!(
+            authoritative.scrolling_region.left,
+            readonly.scrolling_region.left
+        );
+        assert_eq!(
+            authoritative.scrolling_region.right,
+            readonly.scrolling_region.right
+        );
+
+        readonly.deinit(Global);
+        authoritative.deinit(Global);
+    }
+
+    fn noop_write_pty(_: &mut Handler, _: &[u8]) {}
 
     // test "basic print"
     #[test]

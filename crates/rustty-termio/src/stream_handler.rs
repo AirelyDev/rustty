@@ -1025,15 +1025,28 @@ impl<M: AppMailbox> StreamHandler<M> {
                 let grid_size = unsafe { *self.size }.grid();
                 // self.terminal.resize(
                 //     self.alloc,
-                //     grid_size.columns,
-                //     grid_size.rows,
+                //     .{
+                //         .cols = grid_size.columns,
+                //         .rows = grid_size.rows,
+                //     },
                 // ) catch |err| {
                 //     log.err("error updating terminal size: {}", .{err});
                 // };
+                //
+                // PORT NOTE (oracle 89b103dd5): no cell size here — this path
+                // only restores the grid dimensions, so the terminal's existing
+                // pixel geometry is left alone.
                 let alloc = self.alloc;
                 if self
                     .term()
-                    .resize(alloc, grid_size.columns, grid_size.rows)
+                    .resize(
+                        alloc,
+                        rustty_vt::terminal::Resize {
+                            cols: grid_size.columns,
+                            rows: grid_size.rows,
+                            cell_size_px: None,
+                        },
+                    )
                     .is_err()
                 {
                     // log.err("error updating terminal size: {}", .{err});

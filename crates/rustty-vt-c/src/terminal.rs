@@ -1635,20 +1635,17 @@ pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
 
 // pub fn resize(terminal_, cols, rows, cell_width_px, cell_height_px) ... {
 //     const wrapper = terminal_ orelse return .invalid_value;
-//     const t = wrapper.terminal;
-//     if (cols == 0 or rows == 0) return .invalid_value;
-//     t.resize(t.gpa(), cols, rows) catch return .out_of_memory;
-//     t.width_px = std.math.mul(u32, cols, cell_width_px) catch std.math.maxInt(u32);
-//     t.height_px = std.math.mul(u32, rows, cell_height_px) catch std.math.maxInt(u32);
-//     t.modes.set(.synchronized_output, false);
-//     if (t.modes.get(.in_band_size_reports)) in_band: {
-//         const func = wrapper.effects.write_pty orelse break :in_band;
-//         var buf: [1024]u8 = undefined;
-//         var writer: std.Io.Writer = .fixed(&buf);
-//         size_report.encode(&writer, .mode_2048, .{ .rows, .columns, .cell_width, .cell_height }) catch break :in_band;
-//         const data = writer.buffered();
-//         func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
-//     }
+//     wrapper.stream.handler.resize(.{
+//         .cols = cols,
+//         .rows = rows,
+//         .cell_size_px = .{
+//             .width = cell_width_px,
+//             .height = cell_height_px,
+//         },
+//     }) catch |err| return switch (err) {
+//         error.InvalidValue => .invalid_value,
+//         error.OutOfMemory => .out_of_memory,
+//     };
 //     return .success;
 // }
 /// # Safety
@@ -1664,69 +1661,39 @@ pub unsafe fn resize(
     if terminal_.is_null() {
         return Result::InvalidValue;
     }
-    // const t = wrapper.terminal;
-    // SAFETY: `terminal_` is a live wrapper.
-    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
 
-    // if (cols == 0 or rows == 0) return .invalid_value;
-    if cols == 0 || rows == 0 {
-        return Result::InvalidValue;
-    }
-
-    // t.resize(t.gpa(), cols, rows) catch return .out_of_memory;
-    // SAFETY: short-lived deref; no overlapping `&mut ZigTerminal` is held.
-    let gpa = unsafe { (*t).gpa() };
-    if unsafe { (*t).resize(gpa, cols, rows) }.is_err() {
-        return Result::OutOfMemory;
-    }
-
-    // Update pixel sizes
-    // t.width_px = std.math.mul(u32, cols, cell_width_px) catch std.math.maxInt(u32);
-    // t.height_px = std.math.mul(u32, rows, cell_height_px) catch std.math.maxInt(u32);
-    // PORT NOTE: `std.math.mul(...) catch maxInt(u32)` is saturate-on-overflow.
-    unsafe {
-        (*t).width_px = (cols as u32).saturating_mul(cell_width_px);
-        (*t).height_px = (rows as u32).saturating_mul(cell_height_px);
-    }
-
-    // Disable synchronized output mode so that we show changes
-    // immediately for a resize. This is allowed by the spec.
-    // t.modes.set(.synchronized_output, false);
-    unsafe { (*t).modes.set(modes::Mode::SynchronizedOutput, false) };
-
-    // If we have in-band size reporting enabled, send a report.
-    // if (t.modes.get(.in_band_size_reports)) in_band: {
-    if unsafe { (*t).modes.get(modes::Mode::InBandSizeReports) } {
-        // const func = wrapper.effects.write_pty orelse break :in_band;
-        // SAFETY: `effects` is a sibling field of the live wrapper.
-        if let Some(func) = unsafe { (*terminal_).effects.write_pty } {
-            // var buf: [1024]u8 = undefined; var writer = .fixed(&buf);
-            // size_report.encode(&writer, .mode_2048, .{...}) catch break :in_band;
-            // PORT NOTE: the reference encodes into a fixed `[1024]u8`. rustty's
-            // `size_report::encode` writes via `core::fmt::Write`; we accumulate
-            // into a `String` (ASCII only) and hand its bytes to the callback,
-            // matching `report_device_attributes`. An encode failure is the
-            // `catch break :in_band` early-out.
-            let mut buf = String::new();
-            let encode_ok = size_report::encode(
-                &mut buf,
-                size_report::Style::Mode2048,
-                size_report::Size {
-                    rows,
-                    columns: cols,
-                    cell_width: cell_width_px,
-                    cell_height: cell_height_px,
-                },
-            )
-            .is_ok();
-            if encode_ok {
-                // const data = writer.buffered();
-                // func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
-                let data = buf.as_bytes();
-                let userdata = unsafe { (*terminal_).effects.userdata };
-                func(terminal_, userdata, data.as_ptr(), data.len());
-            }
-        }
+    // wrapper.stream.handler.resize(.{ ... }) catch |err| return switch (err) {
+    //     error.InvalidValue => .invalid_value,
+    //     error.OutOfMemory => .out_of_memory,
+    // };
+    //
+    // PORT NOTE (oracle 89b103dd5, area C): the whole inline body that used to
+    // live here — the zero-dimension check, the saturating `width_px`/
+    // `height_px` multiply, the `modes.set(.synchronized_output, false)`, and
+    // the in-band mode-2048 `size_report::encode` — is now owned by
+    // `Terminal::resize` + `stream_terminal::Handler::resize`. Do NOT re-add any
+    // of it: the geometry must be applied even when the grid is unchanged, and
+    // the synchronized-output clear must happen exactly once (guarded by
+    // `rustty_vt::modes::sync_output_clear_count`).
+    // SAFETY: `terminal_` is a live wrapper; the handler aliases its terminal.
+    let r = unsafe {
+        (*terminal_)
+            .stream
+            .handler
+            .resize(rustty_vt::terminal::Resize {
+                cols,
+                rows,
+                cell_size_px: Some(rustty_vt::terminal::ResizeCellSize {
+                    width: cell_width_px,
+                    height: cell_height_px,
+                }),
+            })
+    };
+    if let Err(err) = r {
+        return match err {
+            rustty_vt::terminal::ResizeError::InvalidValue => Result::InvalidValue,
+            rustty_vt::terminal::ResizeError::OutOfMemory => Result::OutOfMemory,
+        };
     }
 
     // return .success;
@@ -5539,11 +5506,12 @@ mod tests {
             let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
-            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+            // Pixel geometry must still be applied when the cell dimensions match.
+            assert_eq!(Result::Success, unsafe { resize(t, 80, 24, 9, 18) });
 
             let zt = unsafe { (*t).terminal };
-            assert_eq!(100u32 * 9, unsafe { (*zt).width_px });
-            assert_eq!(40u32 * 18, unsafe { (*zt).height_px });
+            assert_eq!(80u32 * 9, unsafe { (*zt).width_px });
+            assert_eq!(24u32 * 18, unsafe { (*zt).height_px });
             unsafe { free(t) };
         });
     }
@@ -5578,8 +5546,20 @@ mod tests {
             let zt = unsafe { (*t).terminal };
             unsafe { (*zt).modes.set(modes::Mode::SynchronizedOutput, true) };
 
-            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+            // NEGATIVE-CONTROL ASSERTION (P3-W4 T2 Step 5): the clear must
+            // happen EXACTLY ONCE. `89b103dd5` moves the clear out of this
+            // wrapper and into `Terminal::resize`; a port that keeps both
+            // double-clears (== 2, behaviourally invisible) and a port that
+            // deletes both without the terminal-side move loses it entirely
+            // (== 0). Only the count separates the three cases — the
+            // `!get(SynchronizedOutput)` assertion below passes for both 1 and
+            // 2. See the `sync_output_clear_count` PORT NOTE in vt/modes.rs.
+            rustty_vt::modes::sync_output_clear_reset();
+
+            // The terminal-level reset must run even if grid work is unnecessary.
+            assert_eq!(Result::Success, unsafe { resize(t, 80, 24, 9, 18) });
             assert!(!unsafe { (*zt).modes.get(modes::Mode::SynchronizedOutput) });
+            assert_eq!(1, rustty_vt::modes::sync_output_clear_count());
             unsafe { free(t) };
         });
     }

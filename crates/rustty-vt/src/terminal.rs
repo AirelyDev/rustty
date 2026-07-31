@@ -559,6 +559,52 @@ pub enum DeccolmMode {
     Cols132 = 1,
 }
 
+/// A terminal resize expressed in cells with optional per-cell pixel
+/// geometry. It is highly recommended that callers supply cell geometry
+/// but a terminal can technically function without it (but some reports
+/// like certain mouse reporting modes and Kitty image protocol will
+/// not be functional).
+///
+/// Cell pixel dimensions must already be scaled for the current display DPI.
+// pub const Resize = struct {
+//     cols: size.CellCountInt,
+//     rows: size.CellCountInt,
+//     cell_size_px: ?struct { width: u32, height: u32 } = null,
+// };
+//
+// PORT NOTE: the reference `cell_size_px` is an anonymous inline struct; Rust
+// has no anonymous struct types, so it is named `ResizeCellSize`. There is no
+// field default in Rust, so every construction spells out `cell_size_px: None`
+// where the reference relies on the `= null` default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Resize {
+    pub cols: size::CellCountInt,
+    pub rows: size::CellCountInt,
+    pub cell_size_px: Option<ResizeCellSize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResizeCellSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+// pub const ResizeError = error{ OutOfMemory, InvalidValue };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeError {
+    /// Resize requires allocation
+    OutOfMemory,
+
+    /// Input value was invalid, such as a 0-sized dimension.
+    InvalidValue,
+}
+
+impl From<OutOfMemory> for ResizeError {
+    fn from(_: OutOfMemory) -> ResizeError {
+        ResizeError::OutOfMemory
+    }
+}
+
 /// Modal screen changes. These map to the literal terminal
 /// modes to enable or disable alternate screen modes. They each
 /// have subtle behaviors so we define them as an enum here.
@@ -5302,22 +5348,34 @@ impl Terminal {
             .set(modespkg::Mode::Column132, mode == DeccolmMode::Cols132);
 
         // Resize to the requested size
-        // try self.resize(
-        //     alloc,
-        //     switch (mode) {
+        // try self.resize(alloc, .{
+        //     .cols = switch (mode) {
         //         .@"132_cols" => 132,
         //         .@"80_cols" => 80,
         //     },
-        //     self.rows,
-        // );
+        //     .rows = self.rows,
+        // });
         self.resize(
             alloc,
-            match mode {
-                DeccolmMode::Cols132 => 132,
-                DeccolmMode::Cols80 => 80,
+            Resize {
+                cols: match mode {
+                    DeccolmMode::Cols132 => 132,
+                    DeccolmMode::Cols80 => 80,
+                },
+                rows: self.rows,
+                cell_size_px: None,
             },
-            self.rows,
-        )?;
+        )
+        .map_err(|e| match e {
+            ResizeError::OutOfMemory => OutOfMemory,
+            // PORT NOTE: `deccolm` passes a constant non-zero column count and
+            // the terminal's own row count (always >= 1), so the reference's
+            // inferred error set can never carry `InvalidValue` here. Rust's
+            // error type is explicit, so the impossible arm is spelled out.
+            ResizeError::InvalidValue => {
+                unreachable!("deccolm resize dimensions are always non-zero")
+            }
+        })?;
 
         // Erase our display and move our cursor.
         // self.eraseDisplay(.complete, false);
@@ -5329,14 +5387,48 @@ impl Terminal {
     }
 
     /// Resize the underlying terminal.
+    ///
+    /// This has follow-on impacts:
+    ///
+    ///   - If the column count changes, tabstops are reset.
+    ///   - The scroll region is always reset
+    ///   - Synchronized output mode is reset before grid resize work.
+    ///
+    /// If this returns an error, the terminal is in a bad state currently.
+    /// We will make this safe soon.
     pub fn resize(
         &mut self,
         alloc: Allocator,
-        cols: size::CellCountInt,
-        rows: size::CellCountInt,
-    ) -> Result<(), OutOfMemory> {
-        // If our cols/rows didn't change then we're done
-        // if (self.cols == cols and self.rows == rows) return;
+        opts: Resize,
+    ) -> core::result::Result<(), ResizeError> {
+        // Screen and scrolling-region invariants require non-zero dimensions.
+        // Validate before changing any terminal state.
+        // if (opts.cols == 0 or opts.rows == 0) return error.InvalidValue;
+        if opts.cols == 0 || opts.rows == 0 {
+            return Err(ResizeError::InvalidValue);
+        }
+
+        let cols = opts.cols;
+        let rows = opts.rows;
+
+        // If we have cell geometry, set that now.
+        // if (opts.cell_size_px) |cell_size| {
+        //     self.width_px = std.math.mul(u32, opts.cols, cell_size.width) catch
+        //         std.math.maxInt(u32);
+        //     self.height_px = std.math.mul(u32, opts.rows, cell_size.height) catch
+        //         std.math.maxInt(u32);
+        // }
+        // PORT NOTE: `std.math.mul(...) catch maxInt(u32)` is saturate-on-overflow.
+        if let Some(cell_size) = opts.cell_size_px {
+            self.width_px = u32::from(cols).saturating_mul(cell_size.width);
+            self.height_px = u32::from(rows).saturating_mul(cell_size.height);
+        }
+
+        // self.modes.set(.synchronized_output, false);
+        self.modes.set(modespkg::Mode::SynchronizedOutput, false);
+
+        // If our cols/rows didn't change, skip grid work but still apply pixels.
+        // if (self.cols == opts.cols and self.rows == opts.rows) return;
         if self.cols == cols && self.rows == rows {
             return Ok(());
         }
@@ -5365,7 +5457,7 @@ impl Terminal {
             // to match the `resize` signature.
             let tabstops = match Tabstops::init(alloc, cols as usize, TABSTOP_INTERVAL as usize) {
                 Ok(t) => t,
-                Err(_e) => return Err(OutOfMemory),
+                Err(_e) => return Err(ResizeError::OutOfMemory),
             };
             // PORT NOTE: `Tabstops::deinit` consumes `self` by value (mirrors
             // the reference `self.tabstops.deinit(alloc)`); we take the field
@@ -5411,8 +5503,16 @@ impl Terminal {
                     rows,
                     reflow: false,
                     // PORT NOTE: the reference omits `prompt_redraw` here, so it
-                    // takes the `Resize` struct field default of `.true`.
-                    prompt_redraw: osc::semantic_prompt::Redraw::True,
+                    // takes the `Screen.Resize` struct field default, which is
+                    // `.false` (`Screen.zig` `prompt_redraw: ... = .false`).
+                    //
+                    // PORT FINDING (P3-W4 T2): this previously read
+                    // `Redraw::True`, citing a `.true` default that the reference
+                    // has never had. The alternate screen would therefore clear
+                    // its cursor row on resize whenever the cursor's semantic
+                    // content was not `.output`. Guarded by
+                    // `terminal_resize_does_not_prompt_redraw_the_alternate_screen`.
+                    prompt_redraw: osc::semantic_prompt::Redraw::False,
                 })?;
             }
         }
@@ -15165,9 +15265,33 @@ mod tests {
 
             // Grow then shrink columns repeatedly to drive reflow page churn.
             for _ in 0..10 {
-                t.resize(alloc, 60, 5).unwrap();
-                t.resize(alloc, 8, 5).unwrap();
-                t.resize(alloc, 20, 5).unwrap();
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 60,
+                        rows: 5,
+                        cell_size_px: None,
+                    },
+                )
+                .unwrap();
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 8,
+                        rows: 5,
+                        cell_size_px: None,
+                    },
+                )
+                .unwrap();
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 20,
+                        rows: 5,
+                        cell_size_px: None,
+                    },
+                )
+                .unwrap();
             }
 
             // We should have produced real page churn.
@@ -16804,7 +16928,15 @@ mod tests {
 
         t.set_cursor_pos(1, 10);
         t.save_cursor();
-        t.resize(alloc, 5, 5).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 5,
+                rows: 5,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.restore_cursor();
         t.print('X' as u32).unwrap();
 
@@ -17080,9 +17212,205 @@ mod tests {
 
         t.print('x' as u32).unwrap();
         t.print('😀' as u32).unwrap(); // 0x1F600
-        t.resize(alloc, 2, 3).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 2,
+                rows: 3,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.set_cursor_pos(1, 2);
         t.print('😀' as u32).unwrap(); // 0x1F600
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize resets synchronized output"
+    #[test]
+    fn terminal_resize_resets_synchronized_output() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::SynchronizedOutput, true);
+        t.resize(
+            alloc,
+            Resize {
+                cols: 10,
+                rows: 5,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+        assert!(!t.modes.get(modespkg::Mode::SynchronizedOutput));
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize rejects zero dimensions before mutation"
+    #[test]
+    fn terminal_resize_rejects_zero_dimensions_before_mutation() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.width_px = 100;
+        t.height_px = 100;
+        t.flags.dirty.clear = false;
+
+        assert_eq!(
+            Err(ResizeError::InvalidValue),
+            t.resize(
+                alloc,
+                Resize {
+                    cols: 0,
+                    rows: 5,
+                    cell_size_px: Some(ResizeCellSize {
+                        width: 9,
+                        height: 18
+                    }),
+                }
+            )
+        );
+        assert_eq!(
+            Err(ResizeError::InvalidValue),
+            t.resize(
+                alloc,
+                Resize {
+                    cols: 10,
+                    rows: 0,
+                    cell_size_px: Some(ResizeCellSize {
+                        width: 9,
+                        height: 18
+                    }),
+                }
+            )
+        );
+
+        assert_eq!(10 as size::CellCountInt, t.cols);
+        assert_eq!(5 as size::CellCountInt, t.rows);
+        assert_eq!(100_u32, t.width_px);
+        assert_eq!(100_u32, t.height_px);
+        assert!(!t.flags.dirty.clear);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize preserves pixel dimensions when omitted"
+    #[test]
+    fn terminal_resize_preserves_pixel_dimensions_when_omitted() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.width_px = 90;
+        t.height_px = 90;
+        t.resize(
+            alloc,
+            Resize {
+                cols: 20,
+                rows: 10,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(90_u32, t.width_px);
+        assert_eq!(90_u32, t.height_px);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize updates pixels without changing cell dimensions"
+    #[test]
+    fn terminal_resize_updates_pixels_without_changing_cell_dimensions() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.resize(
+            alloc,
+            Resize {
+                cols: 10,
+                rows: 5,
+                cell_size_px: Some(ResizeCellSize {
+                    width: 9,
+                    height: 18,
+                }),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(90_u32, t.width_px);
+        assert_eq!(90_u32, t.height_px);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize pixel dimensions saturate"
+    #[test]
+    fn terminal_resize_pixel_dimensions_saturate() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(2, 3)).unwrap();
+
+        t.resize(
+            alloc,
+            Resize {
+                cols: 2,
+                rows: 3,
+                cell_size_px: Some(ResizeCellSize {
+                    width: u32::MAX,
+                    height: u32::MAX,
+                }),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(u32::MAX, t.width_px);
+        assert_eq!(u32::MAX, t.height_px);
+
+        t.deinit(alloc);
+    }
+
+    // PORT FINDING GUARD (P3-W4 T2): the alternate screen's `Screen::resize`
+    // must use the reference's `Screen.Resize.prompt_redraw` DEFAULT, which is
+    // `.false`. rustty passed `.true` here, citing a default the reference has
+    // never had. With `.true` the alternate screen clears the cursor's prompt
+    // row on every resize whenever the cursor's semantic content is not
+    // `.output`; with `.false` it does not. No upstream test covers this
+    // because upstream never had the bug.
+    #[test]
+    fn terminal_resize_does_not_prompt_redraw_the_alternate_screen() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        // Enter the alternate screen and put a prompt-ish line on it with the
+        // cursor still marked as prompt input (the condition
+        // `clear_prompt_for_redraw` keys off).
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+        unsafe {
+            (*t.screens.active).cursor_set_semantic_content(
+                crate::screen::SemanticContentArg::Prompt(
+                    osc::semantic_prompt::PromptKind::Initial,
+                ),
+            );
+        }
+        t.print_string(b"> abc").unwrap();
+
+        // shell_redraws_prompt is what the PRIMARY screen keys off; the
+        // alternate screen must not honor it regardless.
+        t.flags.shell_redraws_prompt = osc::semantic_prompt::Redraw::True;
+
+        t.resize(
+            alloc,
+            Resize {
+                cols: 20,
+                rows: 3,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+
+        let s = t.plain_string(Global).unwrap();
+        assert_eq!(b"> abc".as_slice(), s.as_slice());
 
         t.deinit(alloc);
     }
@@ -17105,7 +17433,17 @@ mod tests {
         // `Tabstops::init` reaches from `Terminal::resize`. 513 columns is past
         // `PREALLOC_COLUMNS`, so the allocation IS attempted.
         crate::tabstops::resize_tw_error_always(crate::tabstops::ResizeFp::DynamicAlloc);
-        assert_eq!(Err(OutOfMemory), t.resize(alloc, 513, 1));
+        assert_eq!(
+            Err(ResizeError::OutOfMemory),
+            t.resize(
+                alloc,
+                Resize {
+                    cols: 513,
+                    rows: 1,
+                    cell_size_px: None
+                }
+            )
+        );
         crate::tabstops::resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
 
         // The original Tabstops was never replaced: cols is unchanged and the
@@ -17129,11 +17467,27 @@ mod tests {
         t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
         t.print('0' as u32).unwrap();
         t.modes.set(modespkg::Mode::EnableMode3, true);
-        t.resize(alloc, cols, rows).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.set_left_and_right_margin(2, 0);
         t.print_repeat(1850).unwrap();
         let _ = t.modes.restore(modespkg::Mode::EnableMode3);
-        t.resize(alloc, cols, rows).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         t.deinit(alloc);
     }
@@ -17153,7 +17507,15 @@ mod tests {
         t.print('2' as u32).unwrap();
         t.print('3' as u32).unwrap();
         let new_cols: size::CellCountInt = 2;
-        t.resize(alloc, new_cols, rows).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: new_cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         let str = t.plain_string(Global).unwrap();
         assert_eq!(str.as_slice(), "01".as_bytes());
@@ -17175,7 +17537,15 @@ mod tests {
         t.print('2' as u32).unwrap();
         t.print('3' as u32).unwrap();
         let new_cols: size::CellCountInt = 2;
-        t.resize(alloc, new_cols, rows).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: new_cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         let str = t.plain_string(Global).unwrap();
         assert_eq!(str.as_slice(), "01\n23".as_bytes());
@@ -17202,7 +17572,15 @@ mod tests {
             }
         }
 
-        t.resize(alloc, 60, 30).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 60,
+                rows: 30,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         t.deinit(alloc);
     }
@@ -17227,7 +17605,15 @@ mod tests {
             t.print('x' as u32).unwrap();
         }
 
-        t.resize(alloc, 60, 30).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 60,
+                rows: 30,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         t.deinit(alloc);
     }
@@ -17257,7 +17643,15 @@ mod tests {
         }
 
         t.save_cursor();
-        t.resize(alloc, 5, 3).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 5,
+                rows: 3,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.restore_cursor();
 
         {
@@ -17305,7 +17699,15 @@ mod tests {
         }
 
         t.save_cursor();
-        t.resize(alloc, 5, 3).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 5,
+                rows: 3,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.restore_cursor();
 
         {
