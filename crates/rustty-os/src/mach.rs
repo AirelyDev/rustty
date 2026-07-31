@@ -141,7 +141,13 @@ impl TaggedPageAllocator {
             mem_align_forward(aligned_len + max_drop_len, page_size)
         };
         // PORT NOTE: `next_mmap_addr_hint` is a Zig std internal mmap-placement hint
-        // with no Rust std equivalent. The reference seeds the kernel hint and
+        // with no Rust std equivalent. `e8525c0fd` moved it into the allocator
+        // itself —
+        //   // Static local next_mmap_addr_hint since this has been removed from stdlib now
+        //   var next_mmap_addr_hint: ?[*]align(std.heap.page_size_min) u8 = null;
+        // — which is a Zig-stdlib-removal accommodation, N/A here
+        // (`.port/phase-3/NON_PORTS.md` §E24: there is no global to replace).
+        // The reference seeds the kernel hint and
         // updates it post-map purely as an optimization; passing a null hint (let
         // the kernel choose) is behavior-equivalent for allocation correctness.
         let hint: *mut std::ffi::c_void = std::ptr::null_mut();

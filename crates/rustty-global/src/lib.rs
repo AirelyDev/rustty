@@ -89,16 +89,49 @@ pub use environ::{
 // to `rustty-core`. See `seam::Xev`.
 pub use seam::Xev as xev;
 
-/// Global process state. This is initialized in main() for exe artifacts
-/// and by rustty_init() for lib artifacts. This should ONLY be used by
-/// the C API. The Zig API should NOT use any global state and should
-/// rely on allocators being passed in as parameters.
-// PARITY: reference `pub var state: GlobalState = undefined;`. Zig leaves the
-// process-global state `undefined` until `init()` runs in `main()`/`ghostty_init()`.
+/// Global process state. This is initialized in main() for exe artifacts and
+/// by rustty_init() for lib artifacts. Most other methods in this file will
+/// retrieve items stored in this state.
+///
+/// This should ONLY be used by the C API. The Rust API should NOT use any
+/// global state and should rely on allocators being passed in as parameters.
+// PARITY: reference `var state: ?GlobalState = null;` (`7121ab6c3` changed it
+// from `undefined` to a nullable defaulting to null). Zig leaves the
+// process-global state empty until `init()` runs in `main()`/`ghostty_init()`.
 // Per the agreed DI/OnceLock mechanism (R4 break #1), the rustty container is an
 // `OnceLock` that is empty until `set` from the entrypoint, which is the
-// memory-safe analogue of the reference's `undefined`-then-init contract.
+// memory-safe analogue of the reference's null-then-init contract.
 pub static STATE: std::sync::OnceLock<GlobalState> = std::sync::OnceLock::new();
+
+// The options accepted by the reference `global.init`.
+//
+// PARITY (`048619a6b` / `e8525c0fd`): the reference declares
+//
+// ```zig
+// pub const InitOpts = union(enum) {
+//     main: std.process.Init.Minimal,
+//
+//     /// Same as `main` but for auxiliary tool binaries (e.g. ghostty-bench
+//     /// and ghostty-gen) that have their own CLI action namespace. This
+//     /// skips detection of ghostty app CLI actions, since tool actions
+//     /// (e.g. `+terminal-stream`) are not valid app actions and would
+//     /// otherwise cause init to fail with InvalidAction.
+//     tool: std.process.Init.Minimal,
+//
+//     c: struct {
+//         argc: usize,
+//         argv: [*][*:0]u8,
+//         environ: std.process.Environ,
+//     },
+// };
+// ```
+//
+// PORT NOTE: rustty has no single generic `init` to dispatch on, so the three
+// arms are three entry points instead of a tagged union: `main` is
+// [`GlobalState::new`], `c` is [`GlobalState::new_with_environ`] (called by
+// `rustty-apprt-c`'s `rustty_init`, which owns the argc/argv seam), and `tool`
+// is N/A — see the PORT NOTE on [`GlobalState::new_with_environ`] for why.
+// The union itself is therefore recorded here rather than declared.
 
 /// This represents the global process state. There should only
 /// be one of these at any given moment. This is extracted into a dedicated
@@ -135,15 +168,54 @@ pub struct GlobalState<Action = (), ResourcesDir = ()> {
     /// the temp directory discovered once at init so `randomTmpPath` need not
     /// re-derive (and re-allocate) it per call.
     pub tmp_dir_path: Option<Vec<u8>>,
+    /// Returns the global state logging configuration.
+    ///
+    /// Asserts that the global state is initialized.
+    // PARITY: reference `logging: Logging,` plus its free accessor
+    // `pub fn logging() GlobalState.Logging { return state.?.logging; }`.
+    // See the FREE ACCESSORS note below for why the accessor is a field read
+    // in rustty.
     pub logging: Logging,
+    /// Returns the global state rlimits, or an empty one when testing.
+    ///
+    /// Asserts that the global state is initialized when not running as a test.
+    // PARITY: reference `rlimits: ResourceLimits = .{},` plus its free accessor
+    // `pub fn rlimits() ResourceLimits`.
     pub rlimits: ResourceLimits,
 
     /// The app resources directory, equivalent to zig-out/share when we build
     /// from source. This is null if we can't detect it.
+    ///
+    /// Returns the global state resources_dir, or an empty one when testing.
+    ///
+    /// Asserts that the global state is initialized when not running as a test.
     // PARITY: reference `resources_dir: internal_os.ResourcesDir,` — DEFERRED
     // SEAM, the concrete `internal_os.ResourcesDir` type is wired in `rustty-core`.
+    // The reference free accessor is `pub fn resourcesDir() internal_os.ResourcesDir`.
     pub resources_dir: ResourcesDir,
 }
+
+// FREE ACCESSORS (`e8525c0fd`/`a77c706a1`).
+//
+// Upstream grew a set of module-level accessors over the nullable `state`:
+// `io()`, `alloc()`, `environ()`, `environMap()`, `syncEnviron()`, `args()`,
+// `tmpDirPath()`, `resourcesDir()`, `rlimits()`, `logging()` and `action()`.
+// Each is one line — `if (builtin.is_test) return <testing fallback>; return
+// state.?.<field>;` — over the ONE process-global `state`.
+//
+// PORT NOTE: rustty's `GlobalState` is GENERIC over the two deferred-seam types
+// (`Action`, `ResourcesDir`, break #1/R4) and is therefore instantiated at two
+// different bindings — `rustty_global::STATE` and `rustty_core::STATE`. A free
+// accessor in this crate cannot name "the" state, so only the accessors whose
+// value is NON-generic are free functions here: `environ()`, `environ_map()`,
+// `sync_environ()` and `tmp_dir_path()` (see the `environ` module, which owns
+// the matching process-globals). The generic-valued ones — `logging()`,
+// `rlimits()`, `resources_dir()`, `action()` — stay field reads on whichever
+// `GlobalState` the caller holds, which is why their reference docs are
+// attached to the fields above. `io()`/`alloc()` are Zig-allocator/`std.Io`
+// seams with no rustty analogue (Rust's allocator and I/O are process-wide);
+// see `seam::Allocator`. `args()` is owned by `rustty-apprt-c` (`ARGV`), which
+// is the crate that receives the C argc/argv.
 
 impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     /// Initialize the global state.
@@ -155,27 +227,39 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     // reference body is reproduced here verbatim in comments so no logic/comment
     // is lost; `rustty-core`'s wiring will execute it through injected seams.
     //
-    // pub fn init(self: *GlobalState) !void {
-    //     // const start = try std.time.Instant.now();
-    //     // const start_micro = std.time.microTimestamp();
-    //     // defer {
-    //     //     const end = std.time.Instant.now() catch unreachable;
-    //     //     // "[updateFrame critical time] <START us>\t<TIME_TAKEN us>"
-    //     //     std.log.err("[global init time] start={}us duration={}ns", .{ start_micro, end.since(start) / std.time.ns_per_us });
-    //     // }
-    //
+    // pub fn init(opts: InitOpts) !void {
     //     // Initialize ourself to nothing so we don't have any extra state.
     //     // IMPORTANT: this MUST be initialized before any log output because
     //     // the log function uses the global state.
-    //     self.* = .{
+    //     state = .{
+    //         .io_impl = undefined,
     //         .gpa = null,
     //         .alloc = undefined,
+    //         .environ = switch (opts) {
+    //             .main, .tool => |m| m.environ,
+    //             .c => |c| c.environ,
+    //         },
+    //         .args = switch (opts) {
+    //             .main, .tool => |m| m.args,
+    //             // TODO: Using the C API from Windows is unsupported at this time.
+    //             //
+    //             // When do we plan on supporting Windows, it's recommended to
+    //             // ensure that the C API can take a UNICODE_STRING (aka []16, a
+    //             // WTF-16 string) so that it can just be passed into
+    //             // std.process.Args.Vector directly.
+    //             .c => |c| .{ .vector = if (builtin.os.tag == .windows)
+    //                 return error.UnsupportedOSForCApi
+    //             else
+    //                 c.argv[0..c.argc] },
+    //         },
+    //         .tmp_dir_path = null,
     //         .action = null,
     //         .logging = .{},
     //         .rlimits = .{},
     //         .resources_dir = .{},
     //     };
-    //     errdefer self.deinit();
+    //     const self = &state.?;
+    //     errdefer deinit();
     //
     //     self.gpa = gpa: {
     //         // Use the libc allocator if it is available because it is WAY
@@ -191,7 +275,7 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     //             }) break :gpa null;
     //         }
     //
-    //         break :gpa GPA{};
+    //         break :gpa .init;
     //     };
     //
     //     self.alloc = if (self.gpa) |*value|
@@ -201,11 +285,30 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     //     else
     //         unreachable;
     //
+    //     // Set up our main I/O implementation (fully threaded w/allocator). Note
+    //     // that we cannot use any implementation supplied from main at this point,
+    //     // because there are some later initialization steps that depend on us
+    //     // mutating the environment, and thus it needs to be re-synced farther
+    //     // down. For that, we need a stable implementation that allows us to do so.
+    //     self.io_impl = .init(self.alloc, .{
+    //         .argv0 = .init(self.args),
+    //         .environ = self.environ,
+    //     });
+    //
+    //     // Discover and save the temporary directory path
+    //     self.tmp_dir_path = try allocTmpDir(self.alloc, self.environ);
+    //
     //     // We first try to parse any action that we may be executing.
-    //     self.action = try cli.action.detectArgs(
-    //         cli.ghostty.Action,
-    //         self.alloc,
-    //     );
+    //     // Tool binaries (ghostty-bench, ghostty-gen) have their own action
+    //     // namespace and detect their own actions, so we skip detection here.
+    //     self.action = switch (opts) {
+    //         .main, .c => try cli.action.detectArgs(
+    //             cli.ghostty.Action,
+    //             self.alloc,
+    //             self.args,
+    //         ),
+    //         .tool => null,
+    //     };
     //
     //     // If we have an action executing, we disable logging by default
     //     // since we write to stderr we don't want logs messing up our
@@ -217,13 +320,17 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     //     // maybe once for logging) so for now this is an easy way to do
     //     // this. Env vars are useful for logging too because they are
     //     // easy to set.
-    //     if ((try internal_os.getenv(self.alloc, "GHOSTTY_LOG"))) |v| {
-    //         defer v.deinit(self.alloc);
-    //         self.logging = cli.args.parsePackedStruct(Logging, v.value) catch .{};
+    //     logging: {
+    //         const v = self.environ.getAlloc(self.alloc, "GHOSTTY_LOG") catch |err| switch (err) {
+    //             error.EnvironmentVariableMissing => break :logging,
+    //             else => return err,
+    //         };
+    //         defer self.alloc.free(v);
+    //         self.logging = cli.args.parsePackedStruct(GlobalState.Logging, v) catch .{};
     //     }
     //
     //     // Setup our signal handlers before logging
-    //     initSignals();
+    //     GlobalState.initSignals();
     //
     //     // Setup our Xev backend if we're dynamic
     //     if (comptime xev.dynamic) xev.detect() catch |err| {
@@ -267,7 +374,10 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     //
     //     // We need to make sure the process locale is set properly. Locale
     //     // affects a lot of behaviors in a shell.
-    //     try internal_os.ensureLocale(self.alloc);
+    //     //
+    //     // We need to re-sync the environment after this completes.
+    //     try internal_os.ensureLocale();
+    //     syncEnviron();
     //
     //     // Initialize glslang for shader compilation
     //     try glslang.init();
@@ -285,6 +395,7 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     //         std.log.warn("failed to init i18n, translations will not be available err={}", .{err});
     //     };
     // }
+    //
     //
     // PARITY accessor: the seam-free, leaf-safe construction of the data fields
     // that the reference `init` zero-initializes before performing its upward
@@ -348,16 +459,27 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
 
     /// Cleans up the global state. This doesn't _need_ to be called but
     /// doing so in dev modes will check for memory leaks.
+    ///
+    /// Asserts that the state exists.
     // PARITY (BREAK #1, R4): the reference `deinit` frees `resources_dir`, flushes
-    // `crash` logs, and deinits the GPA (which is where leak diagnostics print).
-    // Those touch the `os`/`crash` upward crates and the GPA seam, so they are
+    // `crash` logs, releases the tmp dir path and the I/O instance, and deinits
+    // the GPA (which is where leak diagnostics print). Those touch the
+    // `os`/`crash` upward crates and the GPA/`std.Io` seams, so they are
     // DEFERRED SEAMS executed by `rustty-core`. Reference body reproduced verbatim:
     //
-    // pub fn deinit(self: *GlobalState) void {
+    // pub fn deinit() void {
+    //     const self = &state.?;
+    //
     //     self.resources_dir.deinit(self.alloc);
     //
     //     // Flush our crash logs
     //     crash.deinit();
+    //
+    //     // Release our tmp_dir_path if needed
+    //     if (self.tmp_dir_path) |td| freeTmpDir(self.alloc, td);
+    //
+    //     // Release our I/O instance
+    //     self.io_impl.deinit();
     //
     //     if (self.gpa) |*value| {
     //         // We want to ensure that we deinit the GPA because this is
@@ -365,6 +487,10 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     //         _ = value.deinit();
     //     }
     // }
+    //
+    // PORT NOTE: `tmp_dir_path` is an owned `Option<Vec<u8>>` and the resources
+    // dir / crash log flush are seams, so rustty's leaf `deinit` has nothing
+    // left to do: `Drop` releases the tmp dir path.
     pub fn deinit(&mut self) {}
 
     // PARITY (DEFERRED SEAM): reference `fn initSignals() void`. POSIX signal

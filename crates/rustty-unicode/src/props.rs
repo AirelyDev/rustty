@@ -37,6 +37,22 @@ pub enum GraphemeBreakNoControl {
     IndicConjunctBreakConsonant = 16,
 }
 
+/// PARITY: the reference `Properties` is a `packed struct(u16)` whose final
+/// field is:
+///
+/// > Explicit padding to give the struct a power-of-two backing integer.
+/// > This is a performance workaround: with a non-power-of-two backing
+/// > integer (u9), Zig 0.16 lowers loads/stores of this struct through
+/// > mismatched exotic-width LLVM integer types (store i9 / load i16),
+/// > which blocks LLVM from promoting temporaries to registers and forces
+/// > stack round-trips in hot paths like `graphemeBreak`. See
+/// > https://github.com/ziglang/zig/issues/21891 for the upstream issue.
+/// > The size of the lookup table is unchanged (@sizeOf was already 2).
+///
+/// PORT NOTE: rustty's `Properties` is a plain Rust struct built from the
+/// embedded table, not a bit-packed one, so rustc never lowers it through an
+/// exotic-width integer and no `_padding: u7` field is needed. The generated
+/// table data is unaffected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Properties {
     /// Codepoint width. We clamp to [0, 2] since Ghostty handles control

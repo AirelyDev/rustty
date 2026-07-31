@@ -272,7 +272,9 @@ impl std::ops::Deref for EnvironRef {
     }
 }
 
-/// Helper to return the state's environment.
+/// Helper to return either the state's environment, or one from testing.
+///
+/// Asserts that the global state is initialized when not running as a test.
 ///
 /// PORT NOTE: upstream asserts the global state is initialized when not running
 /// as a test and returns `std.testing.environ` otherwise. See the module docs:
@@ -287,7 +289,10 @@ pub fn environ() -> EnvironRef {
     )
 }
 
-/// Helper to create an environment map off of the state's environment.
+/// Helper to create an environment map off of the state's environment, or one
+/// from testing. The map is created off of the state allocator.
+///
+/// Asserts that the global state is initialized when not running as a test.
 ///
 /// PORT NOTE: `pub fn environMap() !std.process.Environ.Map`.
 #[must_use]
@@ -319,18 +324,30 @@ pub fn set_environ(new: Environ) {
     }
 }
 
-/// Re-synchronizes the global Environ from the process. No-op on Windows.
+/// Re-synchronizes the global Environ (both the higher-level and I/O versions)
+/// from the process. No-op on Windows, asserts libc and an initialized global
+/// state on everything else.
 ///
 /// It is not valid to run this within any code that needs to be run through
 /// tests. For any of these, re-factor the code to take an environment map
 /// instead, where you can modify the environment as needed.
 ///
-/// NOTE: Be cognizant of where you are calling this! There is no concurrency
-/// control on this function (or for that matter, `environ` or `environMap`).
-/// Direct modification of the system environment is becoming more discouraged,
+/// NOTE: Be cognizant of where you are calling this! While the only real
+/// difference between the POSIX environment and higher-level Zig `PosixBlock`
+/// struct is that the latter has a length versus the former's many-item
+/// pointer state, there is no concurrency control on this function (or for
+/// that matter, `environ` or `environMap`. Direct modification of the system
+/// environment is becoming more discouraged in the standard library as well,
 /// and this should be kept in mind when resorting to lower-level `setenv` or
-/// `unsetenv` — as a rule, beyond initialization, favor an environment map
-/// whenever possible.
+/// `unsetenv` - as a rule, beyond initialization, favor
+/// `std.process.Environ.Map` whenever possible.
+///
+/// PORT NOTE: the "higher-level and I/O versions" split is a Zig-ism —
+/// upstream must re-point BOTH `state.environ` and `state.io_impl.environ`
+/// because `std.Io.Threaded` caches its own copy. rustty has one owned copy
+/// (see [`ENVIRON`]), so a single publish is the whole re-sync. Likewise
+/// `assert(builtin.link_libc)` is vacuous here: Rust's `std` always links
+/// libc, and `std::env::vars_os` is the same `environ` read.
 //
 // PORT NOTE: `pub fn syncEnviron() void`. Upstream re-reads `std.c.environ`
 // directly; `std::env::vars_os` is the same read through Rust's std (which is
@@ -434,6 +451,26 @@ mod tests {
             map.get(&b"WEIRD"[..]).map(Vec::as_slice),
             Some(&[0xff_u8, 0xfe, b'x'][..])
         );
+    }
+
+    // `containsUnemptyConstant` (`e8525c0fd`) — present AND non-empty. This is
+    // what `Config.probableCliEnvironment` asks of `TERM_PROGRAM`, so the
+    // empty-value case is load-bearing: an exported-but-empty `TERM_PROGRAM`
+    // must NOT read as a graphical terminal.
+    #[test]
+    fn contains_unempty_constant_requires_a_non_empty_value() {
+        let e = Environ::from_entries(vec![
+            b"TERM_PROGRAM=ghostty".to_vec(),
+            b"EMPTY=".to_vec(),
+            b"NOEQUALS".to_vec(),
+        ]);
+
+        assert!(e.contains_unempty_constant(b"TERM_PROGRAM"));
+        assert!(!e.contains_unempty_constant(b"EMPTY"));
+        assert!(!e.contains_unempty_constant(b"MISSING"));
+        assert!(!e.contains_unempty_constant(b"NOEQUALS"));
+        // A prefix of a real key must not match.
+        assert!(!e.contains_unempty_constant(b"TERM"));
     }
 
     #[test]

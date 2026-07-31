@@ -229,8 +229,10 @@ impl TerminalStream {
             Some(f) => f,
             None => return Ok(()),
         };
-        // var read_buf: [64 * 1024]u8 align(std.atomic.cache_line) = undefined;
-        // var f_reader = f.reader(&read_buf);
+        // Unbuffered: readSliceShort below reads directly into `buf`,
+        // avoiding a per-chunk memcpy through an intermediate reader
+        // buffer that would pollute the measurement.
+        // var f_reader = f.reader(global.io(), &.{});
         // const r = &f_reader.interface;
         let r = f;
 
@@ -239,11 +241,11 @@ impl TerminalStream {
         // the benchmark exercises the stream with realistic chunk sizes.
         // var buf: [64 * 1024]u8 = undefined;
         //
-        // PORT NOTE (4c5b1d5d5): the reference bumps BOTH buffers — the
-        // `std.Io.Reader` backing buffer and the dispatch buffer. rustty's
-        // `read_slice_short` reads straight from the `DataFile` with no
-        // intermediate reader buffer (see `options::read_slice_short`), so
-        // there is only one buffer here and it is the one that matters: it
+        // PORT NOTE (4c5b1d5d5): the reference's final shape is an UNBUFFERED
+        // `std.Io.Reader` plus this 64 KiB dispatch buffer. rustty's
+        // `read_slice_short` already reads straight from the `DataFile` with no
+        // intermediate reader buffer (see `options::read_slice_short`), so the
+        // unbuffered half is structural here and this is the only buffer: it
         // determines how often the stream crosses a chunk boundary, which is
         // the measurement-relevant half of the reference's change.
         let mut buf = [0u8; 64 * 1024];

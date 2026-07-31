@@ -601,6 +601,11 @@ mod tests {
         }
     }
 
+    // Differential test: the SIMD implementation must agree with the
+    // scalar implementation on any input. Exercises random mixtures of
+    // ASCII, escapes, controls, valid and invalid UTF-8, at various
+    // lengths (including chunk-boundary straddling cases).
+    //
     // PORT NOTE (divergence, deliberate): the reference drives this fuzz with
     // `std.Random.DefaultPrng` (Xoshiro256++) seeded `0xf00dface`. Reproducing
     // that bit-for-bit would mean duplicating ~80 lines of `std.Random` into

@@ -73,40 +73,53 @@ fn int_fitting_range(to: usize) -> TagType {
 ///
 /// For the Zig enum, the enum value is not guaranteed to be stable, so
 /// it shouldn't be relied for things like serialization.
+///
+/// PORT NOTE (`e8525c0fd`): upstream restructured this from a
+/// `fields_i`/`holes` running pair into a `names_raw`/`values_raw` pair fed to
+/// Zig 0.16's `@Enum` builtin. The two forms compute the SAME values — for the
+/// `.c` target the old `fields_i + holes` is exactly the new `from` (nulls seen
+/// plus non-nulls seen), and for `.zig` `holes` never increments so it is
+/// exactly the new `to`. Rustty builds a runtime `EnumType` descriptor rather
+/// than synthesizing a type, so the `@Enum`/`comptime_int` half has no
+/// analogue; the naming below follows the new upstream shape.
 pub fn enum_type(target: Target, keys: &[Option<&str>]) -> EnumType {
-    let mut fields: Vec<(String, usize)> = Vec::with_capacity(keys.len());
-    let mut fields_i: usize = 0;
-    let mut holes: usize = 0;
-    for key_ in keys {
-        let key: &str = match key_ {
-            Some(k) => k,
-            None => {
-                match target {
-                    // For Zig we don't track holes because the enum value
-                    // isn't guaranteed to be stable and we want to use the
-                    // smallest possible backing type.
-                    Target::Zig => {}
-
-                    // For C we must track holes to preserve ABI compatibility
-                    // with subsequent values.
-                    Target::C => holes += 1,
-                }
-                continue;
-            }
-        };
-
-        fields.push((key.to_string(), fields_i + holes));
-        fields_i += 1;
+    // Remove any holes in the input (null values). As mentioned in the
+    // function docs, in the event of the C ABI, we need to preserve the
+    // original value, so we account for that.
+    let mut names_actual: Vec<String> = Vec::with_capacity(keys.len());
+    let mut values_actual: Vec<usize> = Vec::with_capacity(keys.len());
+    let mut to: usize = 0;
+    for (from, key) in keys.iter().enumerate() {
+        if let Some(key) = key {
+            names_actual.push((*key).to_string());
+            values_actual.push(match target {
+                // For C we must track holes to preserve ABI compatibility
+                // with subsequent values.
+                Target::C => from,
+                // For Zig we don't track holes because the enum value
+                // isn't guaranteed to be stable and we want to use the
+                // smallest possible backing type.
+                Target::Zig => to,
+            });
+            to += 1;
+        }
     }
 
-    // Assigned to var so that the type name is nicer in stack traces.
+    let tag_int = match target {
+        Target::C => TagType::CInt,
+        Target::Zig => int_fitting_range(to - 1),
+    };
 
+    // PORT NOTE: upstream's `@Enum(TagInt, .exhaustive, names_actual, ...)` is
+    // preceded by
+    //   // We have to transform our comptime_int values into the actual int
+    //   // we're creating the enum as.
+    // — a `comptime_int` -> `TagInt` widening that Rust does not need, since
+    // `values_actual` is already a concrete `usize` and `EnumType` stores the
+    // tag width separately.
     EnumType {
-        tag_type: match target {
-            Target::C => TagType::CInt,
-            Target::Zig => int_fitting_range(fields_i - 1),
-        },
-        fields,
+        tag_type: tag_int,
+        fields: names_actual.into_iter().zip(values_actual).collect(),
     }
 }
 

@@ -151,6 +151,10 @@ pub enum Error {
     /// Zig `error.InvalidUtf8`/`error.InvalidWtf8` — the windows
     /// `utf8ToUtf16LeAllocZ` re-encode of cwd/command line.
     InvalidUtf8,
+    /// `error.NoChildProcess` — `waitPid` saw `ECHILD` (`a77c706a1`).
+    NoChildProcess,
+    /// `error.InvalidWaitOptions` — `waitPid` saw `EINVAL` (`a77c706a1`).
+    InvalidWaitOptions,
     /// `posix.unexpectedErrno(err)` — any other errno (payload carries it).
     Unexpected(i32),
 }
@@ -167,6 +171,8 @@ impl core::fmt::Display for Error {
             Error::PermissionDenied => "PermissionDenied",
             Error::ProcessFdQuotaExceeded => "ProcessFdQuotaExceeded",
             Error::DeadLock => "DeadLock",
+            Error::NoChildProcess => "NoChildProcess",
+            Error::InvalidWaitOptions => "InvalidWaitOptions",
             Error::LockedRegionLimitExceeded => "LockedRegionLimitExceeded",
             Error::InvalidUtf8 => "InvalidUtf8",
             Error::Unexpected(_) => "Unexpected",
@@ -616,8 +622,14 @@ impl<'a> Command<'a> {
         };
 
         // Fork.
+        //
+        // Wrapper for the raw fork syscall. This preserves the error handling from
+        // the std.posix wrapper that was removed in Zig 0.16.
+        //
         // PORT NOTE: Zig `posix.fork()` maps EAGAIN/ENOMEM to `error.SystemResources`
-        // and anything else to `unexpectedErrno`.
+        // and anything else to `unexpectedErrno`; `a77c706a1` hoisted that mapping
+        // into a local `fn fork()` when the std wrapper went away. rustty has
+        // always had the mapping inline here, so the extraction is cosmetic.
         let pid = unsafe { libc::fork() };
         if pid < 0 {
             return Err(match errno() {
@@ -937,6 +949,10 @@ impl<'a> Command<'a> {
             use rustty_os::windows;
             // Block until the process exits. This returns immediately if the
             // process already exited.
+            //
+            // NOTE: We can use the pid directly as posix.system.pid_t is still an
+            // alias for a handle under Windows. We might want to keep an eye on if
+            // this changes, though.
             let result =
                 unsafe { win_kernel32::WaitForSingleObject(self.pid.unwrap(), windows::INFINITE) };
             if result == windows::WAIT_FAILED {
@@ -957,7 +973,8 @@ impl<'a> Command<'a> {
         #[cfg(not(windows))]
         {
             let res = if block {
-                posix_waitpid(self.pid.unwrap(), 0)
+                // _ = try waitPid(self.pid.?, &status, 0);
+                posix_waitpid(self.pid.unwrap(), 0)?
             } else {
                 // We specify NOHANG because its not our fault if the process we launch
                 // for the tty doesn't properly waitpid its children. We don't want
@@ -967,7 +984,8 @@ impl<'a> Command<'a> {
                 // wait call has not been performed, so we need to keep trying until we get
                 // a non-zero pid back, otherwise we end up with zombie processes.
                 loop {
-                    let res = posix_waitpid(self.pid.unwrap(), libc::WNOHANG as u32);
+                    // const pid = try waitPid(self.pid.?, &status, posix.system.W.NOHANG);
+                    let res = posix_waitpid(self.pid.unwrap(), libc::WNOHANG as u32)?;
                     if res.pid != 0 {
                         break res;
                     }
@@ -1360,30 +1378,42 @@ pub(crate) struct WaitPidResult {
     pub(crate) status: u32,
 }
 
-/// PORT NOTE (Zig-std shim): `posix.waitpid` — loops on EINTR; ECHILD/EINVAL are
-/// unreachable per the Zig std contract (the process exists and is ours; the
-/// flags are valid).
+/// Wrapper for the raw waitpid syscall. Status is only initialized on success;
+/// interrupted waits are retried and all other errors are propagated.
 ///
-/// Kept VERBATIM (`unreachable!`) for the `Command::wait` path, which reproduces
-/// the Zig-std contract this port models elsewhere. `killPid` uses
-/// [`posix_waitpid_checked`] instead — see its docs for why the two callers need
-/// different contracts.
+/// PORT NOTE (`a77c706a1`): at the pin this went through Zig std's
+/// `posix.waitpid`, whose contract makes `ECHILD`/`EINVAL` `unreachable` — and
+/// rustty reproduced that as a `unreachable!()` panic. Zig 0.16 removed the
+/// wrapper, so upstream hand-rolled this one and took the opportunity to
+/// PROPAGATE those two instead:
+///
+/// ```zig
+/// .CHILD => return error.NoChildProcess,
+/// .INVAL => return error.InvalidWaitOptions,
+/// ```
+///
+/// rustty follows, which removes a reachable panic: `ECHILD` is genuinely
+/// reachable here because rustty has a second reaper in
+/// `crates/rustty-xev/src/process.rs` (see [`posix_waitpid_checked`]).
 #[cfg(not(windows))]
-pub(crate) fn posix_waitpid(pid: libc::pid_t, flags: u32) -> WaitPidResult {
+pub(crate) fn posix_waitpid(pid: libc::pid_t, flags: u32) -> Result<WaitPidResult, Error> {
     loop {
         let mut status: libc::c_int = 0;
         let rc = unsafe { libc::waitpid(pid, &mut status, flags as libc::c_int) };
         if rc >= 0 {
-            return WaitPidResult {
+            return Ok(WaitPidResult {
                 pid: rc,
                 status: status as u32,
-            };
+            });
         }
         match errno() {
             libc::EINTR => continue,
-            // .CHILD => unreachable, // The process specified does not exist.
-            // .INVAL => unreachable, // Invalid flags.
-            _ => unreachable!("waitpid: unexpected errno"),
+            // .CHILD => return error.NoChildProcess,
+            libc::ECHILD => return Err(Error::NoChildProcess),
+            // .INVAL => return error.InvalidWaitOptions,
+            libc::EINVAL => return Err(Error::InvalidWaitOptions),
+            // else => |err| return posix.unexpectedErrno(err),
+            err => return Err(Error::Unexpected(err)),
         }
     }
 }
@@ -1525,6 +1555,10 @@ fn execveZ(
     }
 }
 
+/// This functionality has been taken from Zig stdlib, a simplified
+/// version of the exec bits with PATH search so that we can just
+/// offload to execve below.
+///
 /// PORT NOTE (Zig-std shim): `posix.execvpeZ` — Zig implements the `p`-variant in
 /// userspace (macOS has no execvpe(3)): a file containing '/' execs directly;
 /// otherwise every PATH segment is tried with the candidate built in a stack
@@ -1542,8 +1576,16 @@ fn execvpeZ(
         return execveZ(file.as_ptr(), child_argv, envp);
     }
 
-    // const PATH = posix.getenvZ("PATH") orelse "/usr/local/bin:/bin/:/usr/bin";
+    // const PATH = global.environ().getPosix("PATH") orelse "/usr/local/bin:/bin/:/usr/bin";
     // (libc getenv: reads the environ block in place, no allocation.)
+    //
+    // PORT NOTE (`e8525c0fd`): upstream moved this read from `posix.getenvZ`
+    // to the captured global environ. rustty deliberately keeps `libc::getenv`:
+    // this runs BETWEEN fork and exec in the child, where the only safe
+    // operations are async-signal-safe ones. `rustty_global::environ()` takes
+    // an `RwLock` read guard, and a lock held by another thread at fork time is
+    // not released in the child — a deadlock. The two reads see the same block
+    // because `sync_environ` publishes from `environ` in the first place.
     let path_env = unsafe { libc::getenv(c"PATH".as_ptr()) };
     let path_bytes: &[u8] = if path_env.is_null() {
         b"/usr/local/bin:/bin/:/usr/bin"
@@ -1592,6 +1634,8 @@ fn execvpeZ_search(
         path_buf[search_path.len() + 1..][..file_slice.len()].copy_from_slice(file_slice);
         path_buf[path_len] = 0;
         let full_path = path_buf.as_ptr() as *const c_char;
+        // Replace here, switch on error (any error means that replace
+        // failed, but we might need to retry).
         err = execveZ(full_path, child_argv, envp);
         match err {
             ExecveError::AccessDenied => seen_eacces = true,

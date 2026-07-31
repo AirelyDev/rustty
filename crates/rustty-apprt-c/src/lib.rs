@@ -241,7 +241,7 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 
     // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
 
-    // The `.c` arm of `global.init`'s `args` field (`global.zig:62-77`):
+    // The `.c` arm of `global.init`'s `args` field (`global.zig:62-77`, `e8525c0fd`):
     //
     //   // TODO: Using the C API from Windows is unsupported at this time.
     //   //
@@ -251,15 +251,22 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
     //   // std.process.Args.Vector directly.
     //   .c => |c| .{ .vector = if (builtin.os.tag == .windows)
     //       return error.UnsupportedOSForCApi
-    //   else ... },
+    //   else
+    //       c.argv[0..c.argc] },
     //
     // `error.UnsupportedOSForCApi` propagates out of `state.init()`, which
     // `ghostty_init` turns into the logged `return 1`. rustty owns the argc/argv
     // seam here (see `rustty-global`'s `new_with_environ` PORT NOTE), so the
     // guard lives at this entry point and produces the same observable rc.
-    #[cfg(target_os = "windows")]
-    {
-        let _ = (argc, argv);
+    //
+    // PORT NOTE: `if cfg!(windows)`, NOT `#[cfg(target_os = "windows")]`. The
+    // body is unreachable on this host either way, but `cfg!` keeps it COMPILED
+    // and type-checked on every target, so the arm cannot rot into something
+    // that does not build on the one platform where it is the live path. There
+    // is no Windows toolchain here to run it, which is recorded verification
+    // debt — compiling it everywhere is the most this host can do.
+    if cfg!(windows) {
+        // std.log.err("failed to initialize ghostty error={}", .{err});
         log(
             Level::Err,
             "default",

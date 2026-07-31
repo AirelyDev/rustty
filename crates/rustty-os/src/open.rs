@@ -113,12 +113,25 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
     // before spawning the process.
     exe.stderr(std::process::Stdio::piped());
 
-    // In the snap on Linux the launcher exports LD_LIBRARY_PATH pointing at
-    // the snap's bundled libraries. Leaking this into child process can can be
-    // problematic, so let's drop it from the env
     if build_config::snap() {
+        // In the snap on Linux the launcher exports LD_LIBRARY_PATH
+        // pointing at the snap's bundled libraries. Leaking this into
+        // child process can can be problematic, so let's drop it from the
+        // env.
+        //
+        // Note that `spawn` copies the passed in `Environ.Map` into a
+        // fresh `Environ` block, so this is safe to release immediately
+        // after spawn.
+        //
+        // PORT NOTE (`e8525c0fd`): upstream switched from
+        // `std.process.getEnvMap(alloc)` to `global.environMap()` and hands
+        // the map to `spawn` explicitly. `std::process::Command` already
+        // starts from the inherited environment and applies `env_remove` as an
+        // override at spawn time, so there is no map to build or release —
+        // the copy-into-a-fresh-block note is what `Command` does for us.
         exe.env_remove("LD_LIBRARY_PATH");
     }
+    // Non-snap releases don't need to alter the env.
 
     // Spawn the process on our same thread so we can detect failure
     // quickly.

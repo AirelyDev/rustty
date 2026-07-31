@@ -490,6 +490,11 @@ pub fn run() -> Result<u8, Error> {
 
 /// We store a global ref to the decompressed data. All of our frames reference into this data
 /// (ported to a run-scope local `Vec<u8>`; see `run`).
+///
+/// Heap allocated list of frames. The underlying frame data references decompressed_data
+/// (the reference's second global, `frames`; also a run-scope local here).
+///
+/// Decompress the frames into a slice of individual frames
 // fn decompressFrames(gpa: Allocator) !void {
 fn decompress_frames() -> Result<Vec<u8>, Error> {
     // var src: std.Io.Reader = .fixed(framedata);

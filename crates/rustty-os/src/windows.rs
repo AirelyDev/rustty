@@ -5,6 +5,22 @@
 //! Ports the reference's `src/os/windows.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 //!
+//! NOTE: The Windows part of the Zig stdlib is currently in the process of
+//! having most of its features removed, with the ultimate goal of switching to
+//! serve as a support for higher-level functionality offered in places like
+//! `std.Io` only. As such this file serves as a "bridge" between type
+//! information (mostly coming from stdlib) and manually-defined constants and
+//! external functions.
+//!
+//! PORT NOTE (`e8525c0fd`, `.port/phase-3/NON_PORTS.md` §E25): that upstream
+//! note describes a migration rustty was born on the far side of — Rust has no
+//! `std.os.windows` to lean on, so this module has always declared its own
+//! constants and `extern`s. The rewrite is a CONVERGENCE, not a delta. The
+//! constants and `extern`s upstream added for symbols no rustty code calls
+//! (`MEM_*`/`PAGE_READWRITE`/`FILE_NON_DIRECTORY_FILE`, the `PROC_THREAD_*`
+//! numeric set, and the `ntdll` `NtCreateFile` path) are deliberately not
+//! transcribed: they would be dead surface a `dead_code` sweep removes again.
+//!
 //! PORT NOTE: the reference is `const std = @import("std"); const windows =
 //! std.os.windows;` followed by a set of re-exports of Win32 constants, types,
 //! and functions "so we can just import one file". Zig's `std.os.windows`
@@ -163,6 +179,7 @@ pub fn GetComputerNameA(lpBuffer: LPSTR, nSize: *mut DWORD) -> BOOL {
 // re-export without reimplementing the std wrapper.
 pub type OpenFileFn = unsafe extern "system" fn();
 
+// Bit-field and enum constant values
 pub const FILE_ATTRIBUTE_NORMAL: DWORD = 0x00000080;
 pub const FILE_FLAG_OVERLAPPED: DWORD = 0x40000000;
 pub const FILE_SHARE_READ: DWORD = 0x00000001;
@@ -171,7 +188,7 @@ pub const HANDLE_FLAG_INHERIT: DWORD = 0x00000001;
 pub const INFINITE: DWORD = 0xFFFFFFFF;
 pub const INVALID_HANDLE_VALUE: HANDLE = !0usize as HANDLE;
 pub const MAX_PATH: usize = 260;
-pub const OPEN_EXISTING: DWORD = 3;
+pub const OPEN_EXISTING: DWORD = 3; // Known as FILE_OPEN in Windows docs
 pub const PIPE_ACCESS_OUTBOUND: DWORD = 0x00000002;
 pub const PIPE_TYPE_BYTE: DWORD = 0x00000000;
 pub const S_OK: HRESULT = 0;
@@ -180,6 +197,14 @@ pub const SYNCHRONIZE: DWORD = 0x00100000;
 pub const WAIT_FAILED: DWORD = 0xFFFFFFFF;
 pub const FALSE: BOOL = 0;
 pub const TRUE: BOOL = 1;
+
+// Types needed for ntdll calls
+//
+// PORT NOTE (§E25): upstream re-exports `ACCESS_MASK`, `IO_STATUS_BLOCK`,
+// `NTSTATUS` and `OBJECT_ATTRIBUTES` from `std.os.windows` for its new
+// `ntdll.NtCreateFile` binding. rustty's Windows pty path calls `CreateFileW`
+// directly (see `OpenFileFn` above), so no `ntdll` call site exists and the
+// four types would be dead surface.
 
 pub mod exp {
     use super::{c_void, BOOL, DWORD, DWORD_PTR, HANDLE, LPWSTR, PVOID, SIZE_T};

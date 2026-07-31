@@ -70,6 +70,13 @@ impl std::fmt::Display for CheckArgError {
 // pub const Options = struct {
 #[derive(Default)]
 pub struct Options {
+    /// We store an I/O implementation to make maintenance easier.
+    // _io: std.Io,
+    //   PORT NOTE (`e8525c0fd`): upstream threads a `std.Io` handle through
+    //   every filesystem call (`cwd.realPathFile(self._io, ...)`). Rust's
+    //   `std::fs`/`std::path` are ambient, so there is no handle to store and
+    //   the field is deliberately absent.
+
     /// This is set by the CLI parser for deinit.
     // _arena: ?ArenaAllocator = null,
     //   PORT NOTE: no shared arena; each collected value owns its bytes. The struct

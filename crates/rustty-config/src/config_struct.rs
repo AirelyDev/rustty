@@ -5447,16 +5447,21 @@ fn probable_cli_environment() -> bool {
     //
     // if (global.environ().containsUnemptyConstant("TERM_PROGRAM")) return true;
     //
-    // PORT NOTE: this read MUST go through the captured global environ, not
-    // `std::env`. The `.c` arm of `global.init` installs a caller-supplied
-    // block (`rustty_global::environ::set_environ`), and libghostty embedders
-    // rely on the heuristic seeing THAT block rather than the host process's.
+    // PORT NOTE (`e8525c0fd`): upstream replaced `std.posix.getenv("TERM_PROGRAM")`
+    // with the captured global environ, and this read MUST follow it there rather
+    // than to `std::env`. Two reasons, both real: the `.c` arm of `global.init`
+    // installs a caller-supplied block (`rustty_global::environ::set_environ`) and
+    // libghostty embedders rely on the heuristic seeing THAT block rather than the
+    // host process's; and `std::env::var` is a lossy `String` read, which the
+    // byte-slice rule forbids. The WASI/libc caveat above is Zig-specific — Rust's
+    // `OsString` path has no such restriction — but it is recorded because it is
+    // why upstream's comment exists at all.
     if rustty_global::environ::environ().contains_unempty_constant(b"TERM_PROGRAM") {
         return true;
     }
 
     // CLI arguments makes things probable
-    // if (std.os.argv.len > 1) return true;
+    // if (global.args().vector.len > 1) return true;
     if std::env::args_os().len() > 1 {
         return true;
     }
