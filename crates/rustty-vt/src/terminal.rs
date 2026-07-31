@@ -335,6 +335,11 @@ pub struct Flags {
     /// True if the window is focused.
     pub focused: bool,
 
+    /// True if the terminal view may be visible. Unknown visibility is
+    /// represented as visible so callers behave conservatively.
+    // visible: bool = true,
+    pub visible: bool,
+
     /// True if the terminal is in a password entry mode. This is set
     /// to true based on termios state. This is set
     /// to true based on termios state.
@@ -366,6 +371,7 @@ impl Default for Flags {
             mouse_format: mouse::Format::X10,
             mouse_shift_capture: MouseShiftCapture::Null,
             focused: true,
+            visible: true,
             password_input: false,
             selection_scroll: false,
             search_viewport_dirty: false,
@@ -6316,8 +6322,21 @@ impl Terminal {
         // self.title.clearRetainingCapacity();
         // self.glyph_glossary.clearAndFree(self.gpa());
         // self.status_display = .main;
+        // const visible = self.flags.visible;
+        // self.modes.reset();
+        // self.flags = .{
+        //     // Visibility belongs to the view rather than terminal state, so a
+        //     // terminal reset must not make a hidden view potentially visible.
+        //     .visible = visible,
+        // };
+        let visible = self.flags.visible;
         self.modes.reset();
-        self.flags = Flags::default();
+        self.flags = Flags {
+            // Visibility belongs to the view rather than terminal state, so a
+            // terminal reset must not make a hidden view potentially visible.
+            visible,
+            ..Flags::default()
+        };
         self.tabstops.reset(TABSTOP_INTERVAL as usize);
         self.previous_char = None;
         // PORT NOTE: `std.ArrayList.clearRetainingCapacity` keeps the allocation

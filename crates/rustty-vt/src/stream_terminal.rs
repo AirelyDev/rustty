@@ -664,6 +664,13 @@ impl<'a> Handler<'a> {
             | modes::Mode::InBandSizeReports
             | modes::Mode::FocusEvent => {}
 
+            // .report_visibility => if (enabled) self.sendVisibilityReport(),
+            modes::Mode::ReportVisibility => {
+                if enabled {
+                    self.send_visibility_report();
+                }
+            }
+
             // .mouse_event_x10 => {
             //     if (enabled) {
             //         self.terminal.flags.mouse_event = .x10;
@@ -1216,7 +1223,38 @@ impl<'a> Handler<'a> {
                 device_status::encode_color_scheme_report(&mut resp, scheme);
                 self.write_pty(&resp);
             }
+
+            // .visibility => self.sendVisibilityReport(),
+            device_status::Request::Visibility => self.send_visibility_report(),
         }
+    }
+
+    // fn sendVisibilityReport(self: *Handler) void {
+    //     const write_pty = self.effects.write_pty orelse return;
+    //     var buf: [device_status.max_visibility_report_encode_size + 1]u8 = undefined;
+    //     var writer: std.Io.Writer = .fixed(buf[0..device_status.max_visibility_report_encode_size]);
+    //     device_status.encodeVisibilityReport(&writer, ...) catch return;
+    //     buf[writer.end] = 0;
+    //     write_pty(self, buf[0..writer.end :0]);
+    // }
+    //
+    // PORT NOTE: rustty's `encode_visibility_report` appends to a `Vec<u8>` (the
+    // established seam shared with `encode_color_scheme_report`) and cannot
+    // fail, so the reference's `catch return` has no reachable arm. The
+    // sentinel byte the reference reserves is a Zig `[:0]const u8` encoding
+    // detail; rustty's `write_pty` callback takes a plain `&[u8]`.
+    fn send_visibility_report(&mut self) {
+        if self.effects.write_pty.is_none() {
+            return;
+        }
+        let visibility = if self.term().flags.visible {
+            device_status::Visibility::PotentiallyVisible
+        } else {
+            device_status::Visibility::NotVisible
+        };
+        let mut buf = Vec::with_capacity(device_status::MAX_VISIBILITY_REPORT_ENCODE_SIZE);
+        device_status::encode_visibility_report(&mut buf, visibility);
+        self.write_pty(&buf);
     }
 
     // fn reportEnquiry(self: *Handler) void {
@@ -4441,6 +4479,60 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "visibility reports"
+    //
+    // NEGATIVE CONTROL (P3-W4 T7 Step 5), vt half. Three independently
+    // droppable behaviours, three assertions:
+    //   (1) mode 2033 exists and an explicit CSI ? 998 n query answers without
+    //       enabling it,
+    //   (2) ENABLING always sends an immediate report, even when already
+    //       enabled (and DISABLING sends nothing) — a count assertion, because
+    //       a value assertion cannot tell "sent again" from "still the old
+    //       value",
+    //   (3) RIS PRESERVES `flags.visible` (the exemption). Removing the
+    //       exemption makes the final assertion fail.
+    #[test]
+    fn visibility_reports() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        calls_reset();
+
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+
+            // Mode 2033 is supported and initially disabled.
+            s.next_slice(b"\x1B[?2033$p");
+            assert_eq!(b"\x1B[?2033;2$y".as_slice(), cap_take().unwrap().as_slice());
+
+            // A one-shot query reports the current state without enabling the
+            // mode.
+            s.next_slice(b"\x1B[?998n");
+            assert_eq!(b"\x1B[?999;1n".as_slice(), cap_take().unwrap().as_slice());
+            assert!(!s.handler.term().modes.get(modespkg::Mode::ReportVisibility));
+
+            // Enabling always sends an immediate report, even when already
+            // enabled.
+            s.handler.term().flags.visible = false;
+            s.next_slice(b"\x1B[?2033h");
+            assert_eq!(b"\x1B[?999;2n".as_slice(), cap_take().unwrap().as_slice());
+            let count = calls_get();
+            s.next_slice(b"\x1B[?2033h");
+            assert_eq!(count + 1, calls_get());
+
+            // Disabling sends no report.
+            s.next_slice(b"\x1B[?2033l");
+            assert_eq!(count + 1, calls_get());
+
+            // A terminal reset preserves the view's externally owned
+            // visibility.
+            s.next_slice(b"\x1Bc");
+            s.next_slice(b"\x1B[?998n");
+            assert_eq!(b"\x1B[?999;2n".as_slice(), cap_take().unwrap().as_slice());
+        }
+
+        t.deinit(Global);
+    }
+
     // test "device status: readonly ignores all"
     #[test]
     fn device_status_readonly_ignores_all() {
@@ -4452,6 +4544,7 @@ mod tests {
             s.next_slice(b"\x1B[5n");
             s.next_slice(b"\x1B[6n");
             s.next_slice(b"\x1B[?996n");
+            s.next_slice(b"\x1B[?998n");
 
             // Terminal should still be functional
             s.next_slice(b"Test");

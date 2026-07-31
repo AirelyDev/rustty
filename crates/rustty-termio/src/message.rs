@@ -49,6 +49,16 @@ pub enum Message<'a> {
         force: bool,
     },
 
+    /// Request a visibility report is sent to the pty.
+    // visibility_report: struct { visible: bool, force: bool },
+    VisibilityReport {
+        /// The visibility state to report.
+        visible: bool,
+
+        /// Send the report even when mode 2033 is disabled.
+        force: bool,
+    },
+
     /// Purposely crash the renderer. This is used for testing and debugging.
     /// See the "crash" binding action.
     //

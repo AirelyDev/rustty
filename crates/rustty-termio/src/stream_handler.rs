@@ -983,6 +983,22 @@ impl<M: AppMailbox> StreamHandler<M> {
                 }
             }
 
+            // .report_visibility => if (enabled) self.messageWriter(.{
+            //     .visibility_report = .{
+            //         .visible = self.terminal.flags.visible,
+            //         .force = true,
+            //     },
+            // }),
+            modes::Mode::ReportVisibility => {
+                if enabled {
+                    let visible = self.term().flags.visible;
+                    self.messageWriter(Message::VisibilityReport {
+                        visible,
+                        force: true,
+                    });
+                }
+            }
+
             // .focus_event => if (enabled) self.messageWriter(.{
             //     .focused = self.terminal.flags.focused,
             // }),
@@ -1194,6 +1210,18 @@ impl<M: AppMailbox> StreamHandler<M> {
             // .color_scheme => self.messageWriter(.{ .color_scheme_report = .{ .force = true } }),
             device_status::Request::ColorScheme => {
                 self.messageWriter(Message::ColorSchemeReport { force: true });
+            }
+
+            // .visibility => self.messageWriter(.{ .visibility_report = .{
+            //     .visible = self.terminal.flags.visible,
+            //     .force = true,
+            // } }),
+            device_status::Request::Visibility => {
+                let visible = self.term().flags.visible;
+                self.messageWriter(Message::VisibilityReport {
+                    visible,
+                    force: true,
+                });
             }
         }
         Ok(())
@@ -3204,6 +3232,80 @@ mod tests {
             "DEC mode 12 must apply when no explicit default blink is configured"
         );
         h.renderer_wakeup.deinit();
+        term.deinit(Global);
+    }
+
+    // Pops one message from the SPSC termio mailbox (the queue the handler's
+    // `messageWriter` pushes into).
+    fn mailbox_pop(mailbox: *mut Mailbox) -> Option<Message<'static>> {
+        match unsafe { &*mailbox } {
+            Mailbox::Spsc { queue, .. } => queue.pop(),
+        }
+    }
+
+    // NEGATIVE CONTROL (P3-W4 T7 Step 5), termio half. `6c8c07981` adds TWO
+    // independently droppable termio arms: the mode-2033 ENABLE arm and the
+    // CSI ? 998 n DSR arm. Both must push a FORCED `VisibilityReport` carrying
+    // the terminal's current `flags.visible`. Dropping either is invisible to
+    // every existing termio KAT.
+    #[test]
+    fn stream_handler_visibility_report_arms_push_forced_messages() {
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        term.flags.visible = false;
+
+        let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+            crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+        ));
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+        let state: *mut State = Box::into_raw(Box::new(State {
+            mutex,
+            terminal: &raw mut term,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: rustty_renderer::state::Mouse::default(),
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }));
+        let mut h = handler_for(&raw mut term, mailbox, state);
+
+        // (a) Enabling mode 2033 pushes a forced report with the current state.
+        h.setMode(modes::Mode::ReportVisibility, true).unwrap();
+        match mailbox_pop(mailbox) {
+            Some(Message::VisibilityReport { visible, force }) => {
+                assert!(!visible, "the report must carry terminal.flags.visible");
+                assert!(force, "a mode-2033 enable is a FORCED report");
+            }
+            other => panic!("expected a VisibilityReport, got {:?}", other.is_some()),
+        }
+
+        // (b) DISABLING pushes nothing.
+        h.setMode(modes::Mode::ReportVisibility, false).unwrap();
+        assert!(
+            mailbox_pop(mailbox).is_none(),
+            "disabling mode 2033 must not push a report"
+        );
+
+        // (c) An explicit CSI ? 998 n query pushes a forced report too.
+        term.flags.visible = true;
+        h.deviceStatusReport(rustty_vt::device_status::Request::Visibility)
+            .unwrap();
+        match mailbox_pop(mailbox) {
+            Some(Message::VisibilityReport { visible, force }) => {
+                assert!(visible);
+                assert!(force, "an explicit query is answered unconditionally");
+            }
+            other => panic!("expected a VisibilityReport, got {:?}", other.is_some()),
+        }
+
+        h.renderer_wakeup.deinit();
+        unsafe {
+            drop(Box::from_raw(state));
+            drop(Box::from_raw(mutex));
+            drop(Box::from_raw(mailbox));
+        }
         term.deinit(Global);
     }
 

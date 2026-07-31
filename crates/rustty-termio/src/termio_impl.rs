@@ -1691,10 +1691,73 @@ impl<M: AppMailbox> Termio<M> {
             conditional::Theme::Light => device_status::ColorScheme::Light,
             conditional::Theme::Dark => device_status::ColorScheme::Dark,
         };
-        let mut output = Vec::new();
+        // PORT NOTE (oracle f00e90694, T7 Step 6): this call site ALREADY
+        // routed through the shared `encode_color_scheme_report` rather than
+        // hand-writing "\x1B[?997;1n"/";2n"; the only delta was that the buffer
+        // did not name the encoder's advertised maximum. It does now, so the
+        // constant and its call site cannot drift apart silently.
+        let mut output = Vec::with_capacity(device_status::MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE);
         device_status::encode_color_scheme_report(&mut output, scheme);
         // try self.queueWrite(td, output, false);
         self.queueWrite(td, &output, false)
+    }
+
+    /// Sends a visibility report to the pty. Unforced reports are only sent
+    /// while DEC mode 2033 is enabled.
+    // pub fn visibilityReport(self: *Termio, td: *ThreadData, visible: bool, force: bool) !void {
+    pub fn visibilityReport(
+        &mut self,
+        td: &mut ThreadData<M>,
+        visible: bool,
+        force: bool,
+    ) -> Result<(), Error> {
+        // self.renderer_state.mutex.lockUncancelable(global.io());
+        // defer self.renderer_state.mutex.unlock(global.io());
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `colorSchemeReport`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        let result = self.visibilityReportLocked(td, visible, force);
+        // (the deferred renderer-state unlock — fires on the `try` error too.)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        result
+    }
+
+    // (The body of `visibilityReport` inside its lock; split out so the
+    // guard-less unlock above is the single `defer`.)
+    fn visibilityReportLocked(
+        &mut self,
+        td: &mut ThreadData<M>,
+        visible: bool,
+        force: bool,
+    ) -> Result<(), Error> {
+        // if (!force and !self.renderer_state.terminal.modes.get(.report_visibility)) return;
+        //
+        // SAFETY: `renderer_state.terminal` is the live shared terminal pointer;
+        // the read happens under the caller-held lock.
+        if !force
+            && !unsafe {
+                (*(*self.renderer_state).terminal)
+                    .modes
+                    .get(Mode::ReportVisibility)
+            }
+        {
+            return Ok(());
+        }
+
+        // var buf: [max_visibility_report_encode_size]u8 = undefined;
+        // var writer: std.Io.Writer = .fixed(&buf);
+        // try device_status.encodeVisibilityReport(&writer, ...);
+        // try self.queueWrite(td, writer.buffered(), false);
+        let mut buf = Vec::with_capacity(device_status::MAX_VISIBILITY_REPORT_ENCODE_SIZE);
+        device_status::encode_visibility_report(
+            &mut buf,
+            if visible {
+                device_status::Visibility::PotentiallyVisible
+            } else {
+                device_status::Visibility::NotVisible
+            },
+        );
+        self.queueWrite(td, &buf, false)
     }
 
     /// Get information about the process(es) attached to the backend. Returns

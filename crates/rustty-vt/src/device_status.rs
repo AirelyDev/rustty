@@ -16,6 +16,33 @@ pub enum ColorScheme {
     Dark,
 }
 
+/// The visibility state reported in response to a CSI ? 998 n query or when
+/// DEC mode 2033 is enabled.
+// pub const Visibility = lib.Enum(lib.target, &.{
+//     "potentially_visible",
+//     "not_visible",
+// });
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Visibility {
+    PotentiallyVisible,
+    NotVisible,
+}
+
+/// Maximum number of bytes that `encode_visibility_report` will write.
+// pub const max_visibility_report_encode_size = "\x1B[?999;2n".len;
+pub const MAX_VISIBILITY_REPORT_ENCODE_SIZE: usize = "\x1B[?999;2n".len();
+
+/// Encode a visibility report response for CSI ? 998 n queries and DEC mode
+/// 2033 notifications.
+pub fn encode_visibility_report(writer: &mut Vec<u8>, visibility: Visibility) {
+    writer.extend_from_slice(match visibility {
+        // .potentially_visible => "\x1B[?999;1n",
+        Visibility::PotentiallyVisible => b"\x1B[?999;1n",
+        // .not_visible => "\x1B[?999;2n",
+        Visibility::NotVisible => b"\x1B[?999;2n",
+    });
+}
+
 /// An enum(u16) of the available device status requests.
 // PORT NOTE: the reference builds this enum at comptime from `entries`, where
 // each value is `@bitCast(Tag{ .value = entry.value, .question = entry.question })`.
@@ -31,6 +58,8 @@ pub enum Request {
     CursorPosition = 6,
     // .{ .name = "color_scheme", .value = 996, .question = true } => 996 | (1<<15)
     ColorScheme = 996 | (1 << 15),
+    // .{ .name = "visibility", .value = 998, .question = true } => 998 | (1<<15)
+    Visibility = 998 | (1 << 15),
 }
 
 /// The tag type for our enum is a u16 but we use a packed struct
@@ -100,6 +129,7 @@ pub fn req_from_int(v: u16, question: bool) -> Option<Request> {
                 x if x == Request::OperatingStatus as u16 => Request::OperatingStatus,
                 x if x == Request::CursorPosition as u16 => Request::CursorPosition,
                 x if x == Request::ColorScheme as u16 => Request::ColorScheme,
+                x if x == Request::Visibility as u16 => Request::Visibility,
                 _ => unreachable!(),
             });
         }
@@ -155,6 +185,11 @@ const ENTRIES: &[Entry] = &[
         value: 996,
         question: true,
     },
+    Entry {
+        name: "visibility",
+        value: 998,
+        question: true,
+    },
 ];
 
 #[cfg(test)]
@@ -180,6 +215,20 @@ mod tests {
         buf.clear();
         encode_color_scheme_report(&mut buf, ColorScheme::Light);
         assert_eq!(b"\x1B[?997;2n", &buf[..]);
+    }
+
+    // test "encode visibility report"
+    #[test]
+    fn encode_visibility_report_test() {
+        let mut buf = Vec::new();
+        encode_visibility_report(&mut buf, Visibility::PotentiallyVisible);
+        assert_eq!(b"\x1B[?999;1n", &buf[..]);
+        assert!(buf.len() <= MAX_VISIBILITY_REPORT_ENCODE_SIZE);
+
+        buf.clear();
+        encode_visibility_report(&mut buf, Visibility::NotVisible);
+        assert_eq!(b"\x1B[?999;2n", &buf[..]);
+        assert!(buf.len() <= MAX_VISIBILITY_REPORT_ENCODE_SIZE);
     }
 
     #[test]

@@ -271,6 +271,7 @@ pub enum Mode {
     SynchronizedOutput = 2026,
     GraphemeCluster = 2027,
     ReportColorScheme = 2031,
+    ReportVisibility = 2033,
     InBandSizeReports = 2048,
 }
 
@@ -519,6 +520,7 @@ const ENTRIES: &[ModeEntry] = &[
     e("synchronized_output", 2026),
     e("grapheme_cluster", 2027),
     e("report_color_scheme", 2031),
+    e("report_visibility", 2033),
     e("in_band_size_reports", 2048),
 ];
 
@@ -567,6 +569,7 @@ const MODE_BY_INDEX: &[Mode] = &[
     Mode::SynchronizedOutput,
     Mode::GraphemeCluster,
     Mode::ReportColorScheme,
+    Mode::ReportVisibility,
     Mode::InBandSizeReports,
 ];
 

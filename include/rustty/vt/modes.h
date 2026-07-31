@@ -92,6 +92,7 @@ extern "C" {
 #define RUSTTY_MODE_SYNC_OUTPUT      (rustty_mode_new(2026, false)) /**< Synchronized output */
 #define RUSTTY_MODE_GRAPHEME_CLUSTER (rustty_mode_new(2027, false)) /**< Grapheme cluster mode */
 #define RUSTTY_MODE_COLOR_SCHEME_REPORT (rustty_mode_new(2031, false)) /**< Report color scheme */
+#define RUSTTY_MODE_VISIBILITY_REPORT (rustty_mode_new(2033, false)) /**< Report terminal visibility */
 #define RUSTTY_MODE_IN_BAND_RESIZE   (rustty_mode_new(2048, false)) /**< In-band size reports */
 /** @} */
 
