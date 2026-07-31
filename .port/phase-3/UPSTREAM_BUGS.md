@@ -83,3 +83,35 @@ UB. The configuration that triggers it is a documented, user-settable value.
 Ported as-is. Fixing it locally would mean inventing behaviour the reference does
 not have, and the correct resolution is an upstream decision about what that arm
 should do.
+
+---
+
+## U3 — tmux control-mode integer overflow on unbounded `([0-9]+)`
+
+**Found:** 2026-07-31, untrusted-input panic sweep.
+
+`control.zig:233-237` parses tmux control-mode notification fields with
+`std.fmt.parseInt(...) catch unreachable`, and the regexes that produce those
+captures use an **unbounded** `([0-9]+)`. So a line like
+
+```
+%output %99999999999999999999999999 x
+```
+
+overflows `usize`. Upstream that is `unreachable` — UB in ReleaseFast, a panic in
+ReleaseSafe. rustty reproduces it at `crates/rustty-vt/src/tmux/control.rs:384`
+and seven siblings, where `parse_int_usize(...).unwrap()` panics.
+
+**Reachability is proven, not assumed:** a throwaway probe drove the malformed
+line through the real parser and panicked at `control.rs:384:83`. The probe was
+removed afterwards.
+
+Left faithful. rustty's behaviour matches the reference's ReleaseSafe behaviour
+exactly; making it recover would invent semantics the oracle does not define, and
+the right fix (bound the capture, or return an error) is an upstream decision.
+
+Note the contrast with the tmux `unreachable!()` defect fixed the same day
+(`control.rs:315`): there the oracle **recovered** (`catch |err| { log.warn;
+break :cmd; }`) and rustty panicked, which is a divergence. Here both panic. Same
+file, same subsystem, opposite verdicts — which is why each site has to be read
+against the oracle rather than pattern-matched.

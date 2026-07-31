@@ -6898,6 +6898,47 @@ it does on macOS. This removes only the exit RACE — the KAT still spawns a rea
 
 ---
 
+### xev ThreadPool `join` sync-load ordering — DELIBERATE DEVIATION [2026-07-31, xev SB-UB lane]
+
+Sibling of the `Event` shutdown-wake deviation below, in the same subsystem and for
+the same class of reason.
+
+**What differs.** The oracle loads `sync` with `.monotonic` (Relaxed) in
+`ThreadPool.join`. rustty uses **Acquire**. Rationale in full at the site
+(`crates/rustty-xev/src/thread_pool.rs`, `ThreadPool::join`).
+
+**Why.** Miri found a real data race, not a theoretical one: workers steal by
+traversing peers' **stack-allocated** `Thread`s, while the joiner's notify chain
+causes those very frames to die.
+
+```
+UB: Data race between (1) non-atomic read on thread `unnamed-5`
+    [(*target).next, Thread::pop work-stealing]
+and (2) deallocation on thread `unnamed-7`
+    [that worker's frame dying at the end of Thread::run]
+```
+
+A Relaxed load inherits only the *last* worker's release, so the peers' steal
+reads are unordered against the teardowns. Every write to `sync` is an RMW, so a
+single Acquire synchronizes with every worker's release through the release
+sequence and the edge propagates down the chain.
+
+**4-criterion basis.**
+1. **Conscious and recorded** — decided from a reproduced Miri diagnostic, argued
+   in-code and here.
+2. **Strictly stronger, never weaker** — Acquire adds ordering. No state, no
+   behaviour, no API changes; it cannot hang, being a load.
+3. **The alternative is worse** — reproducing `.monotonic` exactly keeps a
+   documented data race in a thread pool that the terminal's I/O path runs on.
+   R1 fidelity does not extend to reproducing UB that the source language's
+   weaker memory model happens to tolerate in practice.
+4. **Bounded and revisitable** — one atomic ordering on one load. If upstream
+   strengthens it, this converges rather than diverges.
+
+**Caveat:** verified on macOS only. The Linux `epoll` File-watcher path routes
+through this pool and its `unregister` call site changed shape in the same fix; it
+compiles under `cargo check` but was not run on Linux.
+
 ### xev ThreadPool `Event` shutdown wake — DELIBERATE DEVIATION (controller-approved) [2026-07-19, Task 1]
 
 **[RECLASSIFIED — WS19 T2, 2026-07-29, audit §E.2.]** Filed among the deferrals despite
