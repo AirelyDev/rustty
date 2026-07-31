@@ -16,8 +16,10 @@ The oracle working tree at `/Users/gael/projects/ghostty` was advanced (detached
 
 The plan modelled the advance as one-directional — "the reference side of every beyond-pin G3b
 artifact disappears by construction, the config row goes to 0". **That model is wrong, and the
-measurement shows it.** Both G3b and G3 read a *directory* (`/Users/gael/projects/ghostty/src`) but
-resolve their file list from the FIXED phase-0 `crate_map`. Advancing therefore re-reads the *same*
+measurement shows it.** G3b reads a *directory* (`/Users/gael/projects/ghostty/src`) but resolves
+its file list from the FIXED phase-0 `crate_map`. (G3, `check_comments_fidelity.py`, does **not**
+read the oracle tree at all — it compares against the phase-0 comment census; see "Which gates the
+advance actually moved" below.) Advancing therefore re-reads the *same*
 files at a newer SHA, which simultaneously:
 
 * **removes** reference sentences upstream deleted in `4749c4e93..6ad1fe7d8`, and
