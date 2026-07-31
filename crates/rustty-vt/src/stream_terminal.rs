@@ -53,7 +53,6 @@ use crate::device_status;
 use crate::kitty;
 use crate::modes;
 use crate::osc;
-use crate::screen::CursorStyle;
 use crate::sgr;
 use crate::size_report;
 use crate::stream;
@@ -109,11 +108,6 @@ pub struct Handler<'a> {
     /// to send commands to the terminal emulator. This is used by
     /// the kitty graphics protocol.
     pub apc_handler: ApcHandler,
-
-    /// Default cursor style used by DECSCUSR reset (CSI 0 q).
-    pub default_cursor: bool,
-    pub default_cursor_style: CursorStyle,
-    pub default_cursor_blink: bool,
 
     // PORT NOTE: ties the `'a` effect-callback lifetime to the handler without a
     // stored borrow; the actual aliased `Terminal` is held as a raw pointer.
@@ -229,9 +223,6 @@ impl<'a> Handler<'a> {
             effects: Effects::READONLY,
             // apc_handler: .{} (the reference field default)
             apc_handler: ApcHandler::default(),
-            default_cursor: true,
-            default_cursor_style: CursorStyle::Block,
-            default_cursor_blink: false,
             _phantom: PhantomData,
         }
     }
@@ -1581,49 +1572,13 @@ impl<'a> stream::Handler for Handler<'a> {
         self.term().set_cursor_pos(v.row as usize, v.col as usize);
     }
 
-    // .cursor_style => { ... }
+    // .cursor_style => self.terminal.setCursorStyle(value),
+    //
+    // PORT NOTE (oracle c594031d5): the DECSCUSR style/blink resolution and the
+    // `default_cursor*` fields it read moved onto `Terminal` itself. Do NOT
+    // re-add them here: two owners would double-apply DECSCUSR.
     fn cursor_style(&mut self, v: ansi::CursorStyle) {
-        // self.default_cursor = false;
-        self.default_cursor = false;
-
-        // const blink = switch (value) {
-        //     .default => self.default_cursor_blink,
-        //     .steady_block, .steady_bar, .steady_underline => false,
-        //     .blinking_block, .blinking_bar, .blinking_underline => true,
-        // };
-        let blink = match v {
-            ansi::CursorStyle::Default => self.default_cursor_blink,
-            ansi::CursorStyle::SteadyBlock
-            | ansi::CursorStyle::SteadyBar
-            | ansi::CursorStyle::SteadyUnderline => false,
-            ansi::CursorStyle::BlinkingBlock
-            | ansi::CursorStyle::BlinkingBar
-            | ansi::CursorStyle::BlinkingUnderline => true,
-        };
-        // const style: Screen.CursorStyle = switch (value) {
-        //     .default => style: {
-        //         self.default_cursor = true;
-        //         break :style self.default_cursor_style;
-        //     },
-        //     .blinking_block, .steady_block => .block,
-        //     .blinking_bar, .steady_bar => .bar,
-        //     .blinking_underline, .steady_underline => .underline,
-        // };
-        let style: CursorStyle = match v {
-            ansi::CursorStyle::Default => {
-                self.default_cursor = true;
-                self.default_cursor_style
-            }
-            ansi::CursorStyle::BlinkingBlock | ansi::CursorStyle::SteadyBlock => CursorStyle::Block,
-            ansi::CursorStyle::BlinkingBar | ansi::CursorStyle::SteadyBar => CursorStyle::Bar,
-            ansi::CursorStyle::BlinkingUnderline | ansi::CursorStyle::SteadyUnderline => {
-                CursorStyle::Underline
-            }
-        };
-        // self.terminal.modes.set(.cursor_blinking, blink);
-        self.term().modes.set(modes::Mode::CursorBlinking, blink);
-        // self.terminal.screens.active.cursor.cursor_style = style;
-        self.term().active_mut().cursor.cursor_style = style;
+        self.term().set_cursor_style(v);
     }
 
     // .erase_display_below => self.terminal.eraseDisplay(.below, value),
@@ -1751,19 +1706,12 @@ impl<'a> stream::Handler for Handler<'a> {
         self.term().reverse_index();
     }
 
-    // .full_reset => {
-    //     self.terminal.fullReset();
-    //     self.default_cursor = true;
-    //     self.terminal.modes.set(.cursor_blinking, self.default_cursor_blink);
-    //     self.terminal.screens.active.cursor.cursor_style = self.default_cursor_style;
-    // },
+    // .full_reset => self.terminal.fullReset(),
+    //
+    // PORT NOTE (oracle c594031d5): `Terminal::full_reset` now performs the
+    // cursor-default restore itself (`setCursorStyle(.default)`).
     fn full_reset(&mut self) {
         self.term().full_reset();
-        self.default_cursor = true;
-        let blink = self.default_cursor_blink;
-        self.term().modes.set(modes::Mode::CursorBlinking, blink);
-        let style = self.default_cursor_style;
-        self.term().active_mut().cursor.cursor_style = style;
     }
 
     // .set_mode => try self.setMode(value.mode, true),
@@ -2150,6 +2098,8 @@ mod tests {
                 palette: DynamicPalette::default_palette(),
             },
             default_modes: modespkg::ModePacked::default(),
+            default_cursor_style: crate::screen::CursorStyle::Block,
+            default_cursor_blink: Some(false),
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }

@@ -534,6 +534,10 @@ impl<M: AppMailbox> Termio<M> {
                 max_scrollback_bytes: scrollback_limits(opts.full_config).0,
                 max_scrollback_lines: scrollback_limits(opts.full_config).1,
                 default_modes,
+                // .default_cursor_style = opts.config.cursor_style,
+                // .default_cursor_blink = opts.config.cursor_blink,
+                default_cursor_style: opts.config.cursor_style,
+                default_cursor_blink: opts.config.cursor_blink,
                 colors: rustty_vt::terminal::Colors {
                     // .background = .init(opts.config.background.toTerminalRGB()),
                     background: color::DynamicRGB::init(opts.config.background.to_terminal_rgb()),
@@ -569,12 +573,11 @@ impl<M: AppMailbox> Termio<M> {
         // write into `*self_`; on error we return before writing, so no
         // partial-init cleanup is needed — the errdefer collapses.)
 
-        // Set our default cursor style
-        // term.screens.active.cursor.cursor_style = opts.config.cursor_style;
-        //
-        // SAFETY: `term.screens.active` is the live active-screen pointer just
-        // returned by `Terminal::init`.
-        unsafe { (*term.screens.active).cursor.cursor_style = opts.config.cursor_style };
+        // PORT NOTE (oracle c594031d5): the "Set our default cursor style"
+        // poke at `term.screens.active.cursor.cursor_style` that used to live
+        // here is DELETED. The defaults are passed into `Terminal::init` above
+        // (`default_cursor_style` / `default_cursor_blink`) and `init` applies
+        // them via `setCursorStyle(.default)`.
 
         // Setup our terminal size in pixels for certain requests.
         // term.width_px = term.cols * opts.size.cell.width;
@@ -596,8 +599,6 @@ impl<M: AppMailbox> Termio<M> {
         let handler_osc = opts.config.osc_color_report_format;
         let handler_clipboard_write = opts.config.clipboard_write;
         let handler_enquiry_response = opts.config.enquiry_response.clone();
-        let handler_cursor_style = opts.config.cursor_style;
-        let handler_cursor_blink = opts.config.cursor_blink;
 
         // (PORT NOTE: `opts.surface_mailbox`/`opts.renderer_wakeup`/`opts.renderer_state`
         // /`opts.renderer_mailbox`/`alloc` are all `Copy` — the reference uses each
@@ -668,14 +669,9 @@ impl<M: AppMailbox> Termio<M> {
             clipboard_write: handler_clipboard_write,
             // .enquiry_response = opts.config.enquiry_response,
             enquiry_response: handler_enquiry_response,
-            // .default_cursor_style = opts.config.cursor_style,
-            default_cursor_style: handler_cursor_style,
-            // .default_cursor_blink = opts.config.cursor_blink,
-            default_cursor_blink: handler_cursor_blink,
             // (reference field defaults for the handler fields not in the literal:
-            // `default_cursor = true`, `apc = .{}`, `dcs = .{}`,
-            // `tmux_viewer = null`, `termio_messaged = false`, `seen_title = false`.)
-            default_cursor: true,
+            // `apc = .{}`, `dcs = .{}`, `tmux_viewer = null`,
+            // `termio_messaged = false`, `seen_title = false`.)
             apc: rustty_vt::apc::Handler::default(),
             dcs: rustty_vt::dcs::Handler::default(),
             tmux_viewer: None,
@@ -1875,6 +1871,8 @@ mod scrollback_limit_handoff_tests {
                     palette: rustty_vt::color::DynamicPalette::default_palette(),
                 },
                 default_modes: rustty_vt::modes::ModePacked::default(),
+                default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+                default_cursor_blink: Some(false),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },

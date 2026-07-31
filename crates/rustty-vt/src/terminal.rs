@@ -462,6 +462,12 @@ pub struct Options {
     /// will revert back to this state.
     pub default_modes: modespkg::ModePacked,
 
+    /// Cursor state restored by DECSCUSR default and RIS.
+    // default_cursor_style: Screen.CursorStyle = .block,
+    // default_cursor_blink: ?bool = false,
+    pub default_cursor_style: crate::screen::CursorStyle,
+    pub default_cursor_blink: Option<bool>,
+
     /// The total storage limit for Kitty images in bytes. Has no effect
     /// if kitty images are disabled at build-time.
     // kitty_image_storage_limit: usize = switch (build_options.artifact) {
@@ -557,6 +563,35 @@ pub enum TerminalCompressionResult {
 pub enum DeccolmMode {
     Cols80 = 0,
     Cols132 = 1,
+}
+
+/// Terminal-level cursor state shared by all screens.
+// pub const Cursor = struct {
+//     is_default: bool = true,
+//     default_style: Screen.CursorStyle = .block,
+//     default_blink: ?bool = false,
+// };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cursor {
+    /// Whether the current cursor appearance follows the configured defaults.
+    pub is_default: bool,
+
+    /// Configured style restored by DECSCUSR default and RIS.
+    pub default_style: crate::screen::CursorStyle,
+
+    /// Configured blink restored by DECSCUSR default and RIS. Null selects
+    /// the terminal emulator default, which is blinking.
+    pub default_blink: Option<bool>,
+}
+
+impl Default for Cursor {
+    fn default() -> Cursor {
+        Cursor {
+            is_default: true,
+            default_style: crate::screen::CursorStyle::Block,
+            default_blink: Some(false),
+        }
+    }
 }
 
 /// A terminal resize expressed in cells with optional per-cell pixel
@@ -676,6 +711,10 @@ pub struct Terminal {
 
     /// The modes that this terminal currently has active.
     pub modes: modespkg::ModeState,
+
+    /// Terminal-level cursor state.
+    // cursor: Cursor = .{}
+    pub cursor: Cursor,
 
     /// The most recently set mouse shape for the terminal.
     pub mouse_shape: mouse::Shape,
@@ -834,7 +873,10 @@ impl Terminal {
             }
         };
 
-        Ok(Terminal {
+        // var result: Terminal = .{ ... };
+        // result.setCursorStyle(.default);
+        // return result;
+        let mut result = Terminal {
             cols,
             rows,
             width_px: 0,
@@ -857,10 +899,17 @@ impl Terminal {
                 default: opts.default_modes,
                 ..modespkg::ModeState::default()
             },
+            cursor: Cursor {
+                default_style: opts.default_cursor_style,
+                default_blink: opts.default_cursor_blink,
+                ..Cursor::default()
+            },
             mouse_shape: mouse::Shape::Text,
             glyph_glossary: glyph::Glossary::empty(),
             flags: Flags::default(),
-        })
+        };
+        result.set_cursor_style(ansi::CursorStyle::Default);
+        Ok(result)
     }
 
     pub fn deinit(&mut self, alloc: Allocator) {
@@ -915,6 +964,72 @@ impl Terminal {
         // return .init(self);
         let self_ptr: *mut Terminal = self;
         Handler::init(self_ptr)
+    }
+
+    /// Change the cursor's current shape and blink behavior.
+    ///
+    /// The terminal parser uses this for DECSCUSR (`CSI Ps SP q`), but the behavior
+    /// is general: `.default` selects the configured defaults, while any other
+    /// value selects a concrete appearance until it is changed again or reset.
+    pub fn set_cursor_style(&mut self, value: ansi::CursorStyle) {
+        use crate::screen::CursorStyle as Style;
+        use ansi::CursorStyle as Req;
+
+        // Remember whether future configuration changes should update the visible
+        // cursor. An explicit appearance must remain in effect until the program
+        // selects the default again.
+        self.cursor.is_default = value == Req::Default;
+
+        // Convert the request into the concrete values used by the renderer and
+        // terminal mode state. A null default blink means the emulator default.
+        let blink = match value {
+            Req::Default => self.cursor.default_blink.unwrap_or(true),
+            Req::SteadyBlock | Req::SteadyBar | Req::SteadyUnderline => false,
+            Req::BlinkingBlock | Req::BlinkingBar | Req::BlinkingUnderline => true,
+        };
+        self.modes.set(modespkg::Mode::CursorBlinking, blink);
+
+        let style = match value {
+            Req::Default => self.cursor.default_style,
+            Req::BlinkingBlock | Req::SteadyBlock => Style::Block,
+            Req::BlinkingBar | Req::SteadyBar => Style::Bar,
+            Req::BlinkingUnderline | Req::SteadyUnderline => Style::Underline,
+        };
+        // SAFETY: `screens.active` is a stable heap pointer owned by
+        // `self.screens`; the write is short-lived and does not alias.
+        unsafe { (*self.screens.active).cursor.cursor_style = style };
+    }
+
+    /// Change the default cursor shape.
+    ///
+    /// If the cursor currently follows its defaults, the visible shape changes
+    /// immediately. Otherwise the new shape is saved for the next reset or default
+    /// selection, such as DECSCUSR `CSI 0 SP q`.
+    pub fn set_default_cursor_style(&mut self, configured_style: crate::screen::CursorStyle) {
+        // Always retain the new default, even while an explicit appearance is
+        // active, so a later reset or default request can restore it.
+        self.cursor.default_style = configured_style;
+
+        // Do not overwrite an appearance explicitly selected by the program.
+        if self.cursor.is_default {
+            self.set_cursor_style(ansi::CursorStyle::Default);
+        }
+    }
+
+    /// Change the default cursor blink behavior.
+    ///
+    /// Null selects the terminal emulator default (blinking). Like the default
+    /// shape, this is applied immediately only when the cursor currently follows
+    /// its defaults; otherwise it is saved for the next reset or default selection.
+    pub fn set_default_cursor_blink(&mut self, blink: Option<bool>) {
+        // Keep the configured value separate from the currently resolved mode so
+        // null can continue to mean "use the emulator default."
+        self.cursor.default_blink = blink;
+
+        // Do not overwrite blink behavior explicitly selected by the program.
+        if self.cursor.is_default {
+            self.set_cursor_style(ansi::CursorStyle::Default);
+        }
     }
 
     /// The general allocator we should use for this terminal.
@@ -6225,6 +6340,8 @@ impl Terminal {
             left: 0,
             right: self.cols - 1,
         };
+        // self.setCursorStyle(.default);
+        self.set_cursor_style(ansi::CursorStyle::Default);
 
         // Always mark dirty so we redraw everything
         // self.flags.dirty.clear = true;
@@ -6497,6 +6614,8 @@ mod tests {
                 palette: DynamicPalette::default_palette(),
             },
             default_modes: modespkg::ModePacked::default(),
+            default_cursor_style: crate::screen::CursorStyle::Block,
+            default_cursor_blink: Some(false),
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }
@@ -17145,6 +17264,88 @@ mod tests {
         }
 
         t.deinit(alloc);
+    }
+
+    // test "Terminal: cursor defaults update current default cursor"
+    #[test]
+    fn terminal_cursor_defaults_update_current_default_cursor() {
+        let mut o = opts(10, 10);
+        o.default_cursor_style = crate::screen::CursorStyle::Bar;
+        o.default_cursor_blink = Some(true);
+        let mut t = Terminal::init(Global, o).unwrap();
+
+        // Initialization applies the configured defaults.
+        assert!(t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Bar, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // Configuration changes are immediately visible while the cursor still
+        // follows its defaults.
+        t.set_default_cursor_style(crate::screen::CursorStyle::Underline);
+        t.set_default_cursor_blink(Some(false));
+        assert!(t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Underline, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(!t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // Null restores the terminal emulator's blinking default.
+        t.set_default_cursor_blink(None);
+        assert!(t.modes.get(modespkg::Mode::CursorBlinking));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursor defaults do not override explicit cursor"
+    //
+    // NEGATIVE CONTROL (P3-W4 T4 Step 4): the last block is upstream's RIS
+    // round-trip — set a style via DECSCUSR, `full_reset`, and assert the
+    // CONFIGURED default is restored, NOT the hardcoded initial one. A port that
+    // leaves the restore in the handler (or drops it) fails here.
+    #[test]
+    fn terminal_cursor_defaults_do_not_override_explicit_cursor() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.set_cursor_style(ansi::CursorStyle::BlinkingBar);
+        assert!(!t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Bar, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // New defaults are retained without replacing the explicit appearance.
+        t.set_default_cursor_style(crate::screen::CursorStyle::Underline);
+        t.set_default_cursor_blink(Some(false));
+        assert_eq!(
+            crate::screen::CursorStyle::Underline,
+            t.cursor.default_style
+        );
+        assert_eq!(Some(false), t.cursor.default_blink);
+        assert_eq!(crate::screen::CursorStyle::Bar, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // Selecting the default applies the values that changed above.
+        t.set_cursor_style(ansi::CursorStyle::Default);
+        assert!(t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Underline, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(!t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // A full reset also leaves the cursor on the configured defaults.
+        t.set_cursor_style(ansi::CursorStyle::SteadyBlock);
+        t.full_reset();
+        assert!(t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Underline, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(!t.modes.get(modespkg::Mode::CursorBlinking));
+
+        t.deinit(Global);
     }
 
     // test "Terminal: fullReset with a non-empty pen"

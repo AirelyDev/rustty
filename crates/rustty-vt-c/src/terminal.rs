@@ -802,6 +802,8 @@ fn new_(
             // of truth produces.
             colors: Colors::default(),
             default_modes: rustty_vt::modes::ModePacked::default(),
+            default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+            default_cursor_blink: Some(false),
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
         },
@@ -1423,10 +1425,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
 
         // .default_cursor_style => {
         //     const style = (if (value) |ptr| ptr.* else TerminalCursorStyle.block).toZig() orelse return .invalid_value;
-        //     wrapper.stream.handler.default_cursor_style = style;
-        //     if (wrapper.stream.handler.default_cursor) {
-        //         wrapper.terminal.screens.active.cursor.cursor_style = style;
-        //     }
+        //     wrapper.terminal.setDefaultCursorStyle(style);
         // },
         Option_::DefaultCursorStyle => {
             // const style = (if (value) |ptr| ptr.* else .block).toZig() orelse return .invalid_value;
@@ -1440,20 +1439,18 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 Some(s) => s,
                 None => return Result::InvalidValue,
             };
-            // wrapper.stream.handler.default_cursor_style = style;
-            unsafe { (*terminal_).stream.handler.default_cursor_style = style };
-            // if (wrapper.stream.handler.default_cursor) { ... }
-            if unsafe { (*terminal_).stream.handler.default_cursor } {
-                let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
-                unsafe { (*active).cursor.cursor_style = style };
-            }
+            // wrapper.terminal.setDefaultCursorStyle(style);
+            //
+            // PORT NOTE (oracle c594031d5): the C API no longer writes the
+            // handler's `default_cursor_style` (that field is gone) nor pokes
+            // the active screen's cursor style; `Terminal` owns both and its
+            // setter applies the change only while the cursor is still on its
+            // defaults.
+            unsafe { (*t).set_default_cursor_style(style) };
         }
         // .default_cursor_blink => {
         //     const blink = if (value) |ptr| ptr.* else false;
-        //     wrapper.stream.handler.default_cursor_blink = blink;
-        //     if (wrapper.stream.handler.default_cursor) {
-        //         wrapper.terminal.modes.set(.cursor_blinking, blink);
-        //     }
+        //     wrapper.terminal.setDefaultCursorBlink(blink);
         // },
         Option_::DefaultCursorBlink => {
             // const blink = if (value) |ptr| ptr.* else false;
@@ -1463,12 +1460,13 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             } else {
                 false
             };
-            // wrapper.stream.handler.default_cursor_blink = blink;
-            unsafe { (*terminal_).stream.handler.default_cursor_blink = blink };
-            // if (wrapper.stream.handler.default_cursor) { ... }
-            if unsafe { (*terminal_).stream.handler.default_cursor } {
-                unsafe { (*t).modes.set(modes::Mode::CursorBlinking, blink) };
-            }
+            // wrapper.terminal.setDefaultCursorBlink(blink);
+            //
+            // PORT NOTE: the reference's `blink` here is a plain `bool` (the C
+            // option is a `bool*`), widened to `Terminal.Cursor.default_blink`'s
+            // `?bool` at the setter boundary — a C caller can never select the
+            // `null` "emulator default" arm through this option.
+            unsafe { (*t).set_default_cursor_blink(Some(blink)) };
         }
 
         // .scrollback_max_bytes => wrapper.terminal.setScrollbackMaxBytes(
@@ -3801,6 +3799,14 @@ mod tests {
 
             // DECSCUSR reset restores the configured default style and blink.
             vtw(t, b"\x1b[0 q");
+            assert_eq!(rustty_vt::screen::CursorStyle::Underline, unsafe {
+                (*(*(*t).terminal).screens.active).cursor.cursor_style
+            });
+            assert!(unsafe { (*(*t).terminal).modes.get(modes::Mode::CursorBlinking) });
+
+            // RIS also restores cursor defaults from Terminal-owned state.
+            vtw(t, b"\x1b[2 q");
+            unsafe { reset(t) };
             assert_eq!(rustty_vt::screen::CursorStyle::Underline, unsafe {
                 (*(*(*t).terminal).screens.active).cursor.cursor_style
             });
