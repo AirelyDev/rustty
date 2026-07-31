@@ -1930,6 +1930,18 @@ Miri does not run these slowly; it cannot run them at all.
    the count of `MIRI EXCEPTION (rustty-xev …)` strings = **30**), so an
    exception added without ASan reach is a RED rather than a smaller green.
    Measured: `31 test(s) ran — test result: ok. 31 passed; 0 failed`, 0 findings.
+
+   **A 31st annotation was added later** (2026-07-31, the xev Stacked-Borrows
+   fix): `crates/rustty-xev/tests/surface_parity.rs:200`,
+   `public_loop_surface_is_live` — live `kqueue(2)`, the same structural class as
+   the other 30 and pre-existing red before it was annotated. `live_ffi_unit_floor`
+   greps **`crates/<crate>/src` only**, so the floor stays 30 and remains
+   correct; do NOT "update" it to 31, which would make the gate demand one more
+   *unit* test than the crate has and turn it permanently red. The integration
+   test is covered by the same ASan companion invocation, just not counted by the
+   unit floor. Recorded here rather than left as a silent discrepancy between the
+   annotation count (32 strings, 31 attributes + 1 comment header) and the
+   documented 30.
 2. `sanitizers.sh`'s green line was **vacuity-blind**: it echoed
    `grep 'test result' | tail -1`, i.e. the *Doc-tests* summary, always
    `0 passed; 0 filtered out`. A run of 31 real tests and a filter matching
