@@ -387,7 +387,7 @@ impl<M: AppMailbox> Termio<M> {
     //         break :opts .{
     //             .cols = grid_size.columns,
     //             .rows = grid_size.rows,
-    //             .max_scrollback = opts.full_config.@"scrollback-limit",
+    //             .max_scrollback_bytes = opts.full_config.@"scrollback-limit",
     //             .default_modes = default_modes,
     //             .colors = .{
     //                 .background = .init(opts.config.background.toTerminalRGB()),
@@ -530,7 +530,8 @@ impl<M: AppMailbox> Termio<M> {
             rustty_vt::terminal::Options {
                 cols: grid_size.columns,
                 rows: grid_size.rows,
-                max_scrollback: opts.full_config.scrollback_limit,
+                max_scrollback_bytes: Some(opts.full_config.scrollback_limit),
+                max_scrollback_lines: None,
                 default_modes,
                 colors: rustty_vt::terminal::Colors {
                     // .background = .init(opts.config.background.toTerminalRGB()),

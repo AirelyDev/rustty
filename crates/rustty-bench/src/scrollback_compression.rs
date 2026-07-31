@@ -234,14 +234,14 @@ impl ScrollbackCompression {
     // PORT NOTE (WS7 D8): the oracle option is `max_scrollback_bytes: ?usize`
     // (oracle@main renamed and split the field into a bytes/lines pair). rustty's
     // `terminal::Options` is still at the pinned oracle's shape — a single
-    // `max_scrollback: usize` in BYTES — so `--max-scrollback` maps onto it
+    // `max_scrollback_bytes: usize` in BYTES — so `--max-scrollback` maps onto it
     // directly. Recorded as a plan/reality divergence.
     pub fn create(
         alloc: Allocator,
         opts: Options,
     ) -> Result<Box<ScrollbackCompression>, OutOfMemory> {
         let mut topts = terminal_options(opts.terminal_rows, opts.terminal_cols);
-        topts.max_scrollback = opts.max_scrollback;
+        topts.max_scrollback_bytes = Some(opts.max_scrollback);
         let terminal = Terminal::init(alloc, topts)?;
         Ok(Box::new(ScrollbackCompression { opts, terminal }))
     }

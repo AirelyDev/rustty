@@ -1940,7 +1940,8 @@ mod tests {
         TermOptions {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: Colors {
                 background: crate::color::DynamicRGB::UNSET,
                 foreground: crate::color::DynamicRGB::UNSET,

@@ -799,7 +799,8 @@ mod tests {
         crate::terminal::Options {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: crate::terminal::Colors::default(),
             default_modes: crate::modes::ModePacked::default(),
             kitty_image_storage_limit: 320 * 1000 * 1000,

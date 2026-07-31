@@ -339,7 +339,8 @@ mod tests {
             Options {
                 cols: 5,
                 rows: 5,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: crate::kitty::graphics_image::Limits::DIRECT,
             },
@@ -428,7 +429,8 @@ mod tests {
             Options {
                 cols: 40,
                 rows: 5,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: crate::kitty::graphics_image::Limits::DIRECT,
             },
@@ -520,7 +522,8 @@ mod tests {
             Options {
                 cols: 40,
                 rows: 5,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: crate::kitty::graphics_image::Limits::DIRECT,
             },

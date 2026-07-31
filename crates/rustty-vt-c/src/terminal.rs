@@ -775,7 +775,8 @@ fn new_(alloc_: Option<&CAllocator>, opts: Options) -> std::result::Result<Termi
         ZigTerminalOptions {
             cols: opts.cols,
             rows: opts.rows,
-            max_scrollback: opts.max_scrollback,
+            max_scrollback_bytes: Some(opts.max_scrollback),
+            max_scrollback_lines: None,
             // PORT NOTE: the reference relies on the `Options` field defaults for
             // the remaining fields. rustty-vt has no `Default` for `Options`; we
             // replicate the (ghostty-artifact) defaults that rustty-vt's source

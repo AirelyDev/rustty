@@ -1517,7 +1517,8 @@ mod tests {
         TerminalOptions {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: Colors {
                 background: DynamicRGB::UNSET,
                 foreground: DynamicRGB::UNSET,
@@ -1531,15 +1532,16 @@ mod tests {
     }
     use crate::kitty;
 
-    // PORT NOTE: helper to build a `Screen` with the (cols, rows, max_scrollback)
+    // PORT NOTE: helper to build a `Screen` with the (cols, rows, max_scrollback_bytes)
     // the reference tests pass — the remaining `Options` fields take defaults.
-    fn screen_init(cols: u16, rows: u16, max_scrollback: usize) -> Screen {
+    fn screen_init(cols: u16, rows: u16, max_scrollback_bytes: usize) -> Screen {
         Screen::init(
             Allocator,
             ScreenOptions {
                 cols,
                 rows,
-                max_scrollback,
+                max_scrollback_bytes: Some(max_scrollback_bytes),
+                max_scrollback_lines: None,
                 ..ScreenOptions::default()
             },
         )

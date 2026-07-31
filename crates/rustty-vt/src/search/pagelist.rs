@@ -252,7 +252,8 @@ mod tests {
         TerminalOptions {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: Colors {
                 background: DynamicRGB::UNSET,
                 foreground: DynamicRGB::UNSET,
@@ -620,7 +621,8 @@ mod tests {
         let mut t: Terminal = Terminal::init(
             alloc,
             TerminalOptions {
-                max_scrollback: 10 * 1024 * 1024,
+                max_scrollback_bytes: Some(10 * 1024 * 1024),
+                max_scrollback_lines: None,
                 ..terminal_opts(80, 24)
             },
         )

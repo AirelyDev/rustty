@@ -447,7 +447,15 @@ pub struct ScrollingRegion {
 pub struct Options {
     pub cols: size::CellCountInt,
     pub rows: size::CellCountInt,
-    pub max_scrollback: usize,
+    /// The maximum size of scrollback in bytes. Null is unlimited and zero
+    /// disables scrollback.
+    pub max_scrollback_bytes: Option<usize>,
+
+    /// The maximum number of physical scrollback rows, excluding the active
+    /// area. Null is unlimited. The effective limit permits at least one
+    /// standard page and only complete historical pages are pruned.
+    pub max_scrollback_lines: Option<usize>,
+
     pub colors: Colors,
 
     /// The default mode state. When the terminal gets a reset, it
@@ -757,7 +765,8 @@ impl Terminal {
             crate::screen::Options {
                 cols,
                 rows,
-                max_scrollback: opts.max_scrollback,
+                max_scrollback_bytes: opts.max_scrollback_bytes,
+                max_scrollback_lines: opts.max_scrollback_lines,
                 kitty_image_storage_limit: opts.kitty_image_storage_limit,
                 kitty_image_loading_limits: opts.kitty_image_loading_limits,
             },
@@ -5643,14 +5652,15 @@ impl Terminal {
                     crate::screen::Options {
                         cols: self.cols,
                         rows: self.rows,
-                        // .max_scrollback = switch (key) {
+                        // .max_scrollback_bytes = switch (key) {
                         //     .primary => primary.pages.explicit_max_size,
                         //     .alternate => 0,
                         // },
-                        max_scrollback: match key {
-                            crate::screen_set::Key::Primary => primary_max,
-                            crate::screen_set::Key::Alternate => 0,
+                        max_scrollback_bytes: match key {
+                            crate::screen_set::Key::Primary => Some(primary_max),
+                            crate::screen_set::Key::Alternate => Some(0),
                         },
+                        max_scrollback_lines: None,
 
                         // Inherit our Kitty image settings from the primary
                         // screen if we have to initialize.
@@ -6135,7 +6145,7 @@ mod tests {
     }
 
     // PORT NOTE: the reference tests call `init(alloc, .{ .cols = .., .rows = .. })`
-    // and rely on `Options` field defaults (`max_scrollback = 10_000`,
+    // and rely on `Options` field defaults (`max_scrollback_bytes = 10_000`,
     // `colors = .default`, `default_modes = .{}`, kitty limits). Rust `Options`
     // has no field defaults, so this helper supplies them verbatim, mirroring the
     // reference `Options` declaration. `colors = .default` expands to
@@ -6145,7 +6155,8 @@ mod tests {
         Options {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: Colors {
                 background: DynamicRGB::UNSET,
                 foreground: DynamicRGB::UNSET,
@@ -6158,15 +6169,15 @@ mod tests {
         }
     }
 
-    // Same as `opts` but with a caller-supplied `max_scrollback`, mirroring
-    // reference inits like `.{ .rows, .cols, .max_scrollback = 0 }`.
+    // Same as `opts` but with a caller-supplied `max_scrollback_bytes`, mirroring
+    // reference inits like `.{ .rows, .cols, .max_scrollback_bytes = 0 }`.
     fn opts_sb(
         cols: size::CellCountInt,
         rows: size::CellCountInt,
-        max_scrollback: usize,
+        max_scrollback_bytes: usize,
     ) -> Options {
         Options {
-            max_scrollback,
+            max_scrollback_bytes: Some(max_scrollback_bytes),
             ..opts(cols, rows)
         }
     }
@@ -6187,6 +6198,30 @@ mod tests {
     // `t.screens.active.pages.getCell(.{ .viewport = .{ .x, .y } })` literals.
     fn viewport_pt(x: size::CellCountInt, y: u32) -> point::Point {
         point::Point::Viewport(point::Coordinate { x, y })
+    }
+
+    // ref: test "Terminal forwards optional scrollback limits"
+    #[test]
+    fn terminal_forwards_optional_scrollback_limits() {
+        let max_lines: usize = 123;
+        let mut t = Terminal::init(
+            Global,
+            Options {
+                max_scrollback_bytes: None,
+                max_scrollback_lines: Some(max_lines),
+                ..opts(80, 24)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(usize::MAX, unsafe {
+            (*t.screens.active).pages.explicit_max_size
+        });
+        assert_eq!(max_lines, unsafe {
+            (*t.screens.active).pages.explicit_max_lines
+        });
+
+        t.deinit(Global);
     }
 
     // test "Terminal: zero-width character attaches to pending wrap cell"
@@ -11762,10 +11797,10 @@ mod tests {
         t.deinit(Global);
     }
 
-    // test "Terminal: scrollUp with max_scrollback zero"
+    // test "Terminal: scrollUp with max_scrollback_bytes zero"
     #[test]
-    fn terminal_scroll_up_with_max_scrollback_zero() {
-        // When max_scrollback is 0, scrollUp should still work but not retain history
+    fn terminal_scroll_up_with_max_scrollback_bytes_zero() {
+        // When max_scrollback_bytes is 0, scrollUp should still work but not retain history
         let mut t = Terminal::init(Global, opts_sb(5, 5, 0)).unwrap();
 
         t.print_string("AAAAA".as_bytes()).unwrap();
@@ -11794,10 +11829,10 @@ mod tests {
         t.deinit(Global);
     }
 
-    // test "Terminal: scrollUp with max_scrollback zero and top margin"
+    // test "Terminal: scrollUp with max_scrollback_bytes zero and top margin"
     #[test]
-    fn terminal_scroll_up_with_max_scrollback_zero_and_top_margin() {
-        // When max_scrollback is 0 and top margin is set, should use deleteLines path
+    fn terminal_scroll_up_with_max_scrollback_bytes_zero_and_top_margin() {
+        // When max_scrollback_bytes is 0 and top margin is set, should use deleteLines path
         let mut t = Terminal::init(Global, opts_sb(5, 5, 0)).unwrap();
 
         t.print_string("AAAAA".as_bytes()).unwrap();
@@ -11825,10 +11860,10 @@ mod tests {
         t.deinit(Global);
     }
 
-    // test "Terminal: scrollUp with max_scrollback zero and left/right margin"
+    // test "Terminal: scrollUp with max_scrollback_bytes zero and left/right margin"
     #[test]
-    fn terminal_scroll_up_with_max_scrollback_zero_and_left_right_margin() {
-        // When max_scrollback is 0 with left/right margins, uses deleteLines path
+    fn terminal_scroll_up_with_max_scrollback_bytes_zero_and_left_right_margin() {
+        // When max_scrollback_bytes is 0 with left/right margins, uses deleteLines path
         let mut t = Terminal::init(Global, opts_sb(10, 5, 0)).unwrap();
 
         t.print_string("AAAAABBBBB".as_bytes()).unwrap();

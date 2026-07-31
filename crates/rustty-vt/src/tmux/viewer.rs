@@ -2204,13 +2204,14 @@ fn cast_cell(value: usize) -> Option<size::CellCountInt> {
 
 /// Mirror of `Terminal.init(alloc, .{ .cols, .rows })` — the reference only
 /// sets cols/rows; the remaining `Terminal.Options` fields take their struct
-/// defaults (`max_scrollback = 10_000`, `colors = .default`, `default_modes =
+/// defaults (`max_scrollback_bytes = 10_000`, `colors = .default`, `default_modes =
 /// .{}`, kitty limits per artifact).
 fn terminal_opts(cols: size::CellCountInt, rows: size::CellCountInt) -> terminal::Options {
     terminal::Options {
         cols,
         rows,
-        max_scrollback: 10_000,
+        max_scrollback_bytes: Some(10_000),
+        max_scrollback_lines: None,
         colors: terminal::Colors::default(),
         default_modes: modes::ModePacked::default(),
         kitty_image_storage_limit: 320 * 1000 * 1000,

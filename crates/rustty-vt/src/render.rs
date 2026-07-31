@@ -1646,14 +1646,15 @@ mod tests {
     use allocator_api2::alloc::Global;
 
     // PORT NOTE: the reference `Terminal.init(alloc, .{ .cols, .rows })` relies on
-    // `Options` field defaults (`max_scrollback = 10_000`, `colors = .default`,
+    // `Options` field defaults (`max_scrollback_bytes = 10_000`, `colors = .default`,
     // `default_modes = .{}`, kitty limits). Rust `Options` has no field defaults,
     // so this helper supplies them verbatim, mirroring the reference declaration.
     fn opts(cols: size::CellCountInt, rows: size::CellCountInt) -> Options {
         Options {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: Colors::default(),
             default_modes: modespkg::ModePacked::default(),
             kitty_image_storage_limit: 320 * 1000 * 1000,
@@ -1664,10 +1665,11 @@ mod tests {
     fn opts_sb(
         cols: size::CellCountInt,
         rows: size::CellCountInt,
-        max_scrollback: usize,
+        max_scrollback_bytes: usize,
     ) -> Options {
         Options {
-            max_scrollback,
+            max_scrollback_bytes: Some(max_scrollback_bytes),
+            max_scrollback_lines: None,
             ..opts(cols, rows)
         }
     }
