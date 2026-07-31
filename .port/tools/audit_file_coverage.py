@@ -135,6 +135,20 @@ def main():
         if only and f"/{only}/" not in rel and not rel.startswith(f"src/{only}"):
             continue
         zlines = nonblank(os.path.join(ORACLE, rel))
+        # An ARGUED non-port is settled before any size heuristic runs.
+        #
+        # This used to be checked only in the `not cands` branch, which made the
+        # disposition depend on whether anything happened to MENTION the file.
+        # `quirks_memset.zig` is recorded as a deliberate non-port at NON_PORTS.md
+        # E34; when a PORT NOTE explaining *why it is not ported* was added to
+        # `rustty-bench/src/main_bench.rs`, `cited_by()` matched it, `cands` went
+        # non-empty, the NON-PORT branch was skipped, and the file flipped to THIN
+        # (49 vs 304 lines) — turning the gate RED for documenting the decision it
+        # already accepted. Writing down a reason must never make a gate angrier.
+        if rel in nonported:
+            rows.append(("NON-PORT", rel, zlines, 0))
+            recorded.append(rel)
+            continue
         # UNION, not fallback. A filename match short-circuiting the citation
         # lookup is what kept Config.zig reading THIN at 463 lines: `config.rs`
         # exists and matched, so the 27k-line config_struct.rs that actually
