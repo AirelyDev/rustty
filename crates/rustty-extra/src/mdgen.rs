@@ -211,7 +211,21 @@ mod tests {
     /// Every documented config field appears exactly once as a definition term,
     /// with the `--` CLI prefix in the man(1) flavor and without it in man(5)
     /// (`mdgen.zig:33-35`).
+    /// MIRI EXCEPTION (measured 2026-07-30, criterion 2: intractable runtime).
+    /// This test renders EVERY documented config field (204 options) and the
+    /// full CLI action set through the markdown->roff pipeline. Natively it is
+    /// milliseconds; under Miri's interpreter it did not complete in **71 min**
+    /// on the Linux VM or in **53 min** on macOS — two independent hosts, no
+    /// output, no completion. It hung `check_leaks.sh` for both a Phase-3 lane
+    /// and the Linux lane simultaneously.
+    ///
+    /// `mdgen` arrived with WS13 and was swept into the G6 Miri lane without
+    /// ever being triaged for tractability. It exercises no `unsafe`: the whole
+    /// module is `String`/`Vec` formatting over `rustty-config` metadata, so
+    /// Miri has no UB surface to find here that the native run does not already
+    /// cover. Excluded from the Miri lane, NOT from the native suite.
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn gen_config_covers_every_field_and_honors_the_cli_flag() {
         let mut cli = Vec::new();
         gen_config(&mut cli, true);
@@ -266,7 +280,21 @@ mod tests {
 
     /// All 18 CLI actions, with `--help`/`--version` spelled as flags and the rest
     /// as `+action` (`mdgen.zig:57-67`).
+    /// MIRI EXCEPTION (measured 2026-07-30, criterion 2: intractable runtime).
+    /// This test renders EVERY documented config field (204 options) and the
+    /// full CLI action set through the markdown->roff pipeline. Natively it is
+    /// milliseconds; under Miri's interpreter it did not complete in **71 min**
+    /// on the Linux VM or in **53 min** on macOS — two independent hosts, no
+    /// output, no completion. It hung `check_leaks.sh` for both a Phase-3 lane
+    /// and the Linux lane simultaneously.
+    ///
+    /// `mdgen` arrived with WS13 and was swept into the G6 Miri lane without
+    /// ever being triaged for tractability. It exercises no `unsafe`: the whole
+    /// module is `String`/`Vec` formatting over `rustty-config` metadata, so
+    /// Miri has no UB surface to find here that the native run does not already
+    /// cover. Excluded from the Miri lane, NOT from the native suite.
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn gen_actions_covers_every_action_with_the_right_sigil() {
         let mut out = Vec::new();
         gen_actions(&mut out);
