@@ -967,10 +967,7 @@ impl PageList {
             page_serial_epoch: 0,
             page_compression: super::compress::IncrementalCompressionState::default(),
             page_size,
-            explicit_max_size: self.explicit_max_size,
-            min_max_size: self.min_max_size,
-            explicit_max_lines: self.explicit_max_lines,
-            min_max_lines: self.min_max_lines,
+            limits: self.limits,
             cols: self.cols,
             rows: self.rows,
             total_rows,
@@ -1006,7 +1003,7 @@ impl PageList {
         }
 
         // A clone can copy more history than its inherited line limit.
-        result.enforce_max_lines();
+        result.enforce_limit(super::Key::Lines);
 
         result.assert_integrity();
         Ok(result)

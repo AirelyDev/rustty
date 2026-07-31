@@ -82,7 +82,7 @@ impl PageList {
         // `scroll` and therefore marks activity twice. That is FAITHFUL: the
         // oracle's inner `scroll` call runs its own defer before the outer one
         // runs its own.
-        if self.explicit_max_size != 0 {
+        if self.limits.bytes.explicit != 0 {
             self.page_compression.reset();
             self.page_compression.mark_activity();
         }
@@ -92,7 +92,7 @@ impl PageList {
 
     fn scroll_impl(&mut self, behavior: Scroll) {
         // Special case no-scrollback mode to never allow scrolling.
-        if self.explicit_max_size == 0 {
+        if self.limits.bytes.explicit == 0 {
             self.viewport = Viewport::Active;
             return;
         }

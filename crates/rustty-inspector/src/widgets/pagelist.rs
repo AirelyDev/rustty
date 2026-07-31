@@ -474,7 +474,10 @@ fn summaryTable(pages: &PageList) {
     );
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
     let mut limit_buf: [u8; 64] = [0; 64];
-    let limit = formatBytes(&mut limit_buf, pages.max_size());
+    let limit = formatBytes(
+        &mut limit_buf,
+        pages.limits.max(rustty_vt::pagelist::Key::Bytes),
+    );
     unsafe { dcimgui_sys::ImGui_TextUnformatted(limit.as_ptr()) };
 
     // cimgui.c.ImGui_TableNextRow();

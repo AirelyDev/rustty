@@ -52,7 +52,7 @@ use crate::osc;
 use crate::page as pagepkg;
 use crate::page::u21;
 use crate::page::{Cell, Page, Row};
-use crate::pagelist::{self, OutOfMemory, PageList, Pin};
+use crate::pagelist::{self, Key, OutOfMemory, PageList, Pin};
 use crate::point;
 use crate::selection;
 use crate::selection::Selection;
@@ -5437,8 +5437,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(usize::MAX, s.pages.explicit_max_size);
-        assert_eq!(max_lines, s.pages.explicit_max_lines);
+        assert_eq!(usize::MAX, s.pages.limits.bytes.explicit);
+        assert_eq!(max_lines, s.pages.limits.lines.explicit);
         assert!(!s.no_scrollback);
 
         s.deinit();
@@ -5467,30 +5467,30 @@ mod tests {
         //     the pagelist keeps only its structural minimum.
         let mut zero = Screen::init(Allocator, sopts(Some(0))).unwrap();
         assert!(zero.no_scrollback);
-        assert_eq!(0usize, zero.pages.explicit_max_size);
+        assert_eq!(0usize, zero.pages.limits.bytes.explicit);
 
         let page_rows: usize =
             unsafe { crate::pagelist::Node::capacity(zero.pages.pages.first) }.rows as usize;
         let grow: usize = 20 * page_rows;
         zero.pages.grow_rows(grow).unwrap();
-        assert!(zero.pages.page_size <= zero.pages.max_size());
+        assert!(zero.pages.page_size <= zero.pages.limits.max(Key::Bytes));
         let zero_rows = zero.pages.total_rows;
 
         // (b) None is UNLIMITED: scrollback is enabled and growth is unbounded.
         let mut unlimited = Screen::init(Allocator, sopts(None)).unwrap();
         assert!(!unlimited.no_scrollback);
-        assert_eq!(usize::MAX, unlimited.pages.explicit_max_size);
+        assert_eq!(usize::MAX, unlimited.pages.limits.bytes.explicit);
         unlimited.pages.grow_rows(grow).unwrap();
         assert_eq!(grow + 1, unlimited.pages.total_rows);
         let unlimited_rows = unlimited.pages.total_rows;
 
         // (c) Some(n) PRUNES at n: scrollback is enabled but bounded.
-        let bounded_limit = 2 * zero.pages.min_max_size;
+        let bounded_limit = 2 * zero.pages.limits.bytes.min;
         let mut bounded = Screen::init(Allocator, sopts(Some(bounded_limit))).unwrap();
         assert!(!bounded.no_scrollback);
-        assert_eq!(bounded_limit, bounded.pages.explicit_max_size);
+        assert_eq!(bounded_limit, bounded.pages.limits.bytes.explicit);
         bounded.pages.grow_rows(grow).unwrap();
-        assert!(bounded.pages.page_size <= bounded.pages.max_size());
+        assert!(bounded.pages.page_size <= bounded.pages.limits.max(Key::Bytes));
         let bounded_rows = bounded.pages.total_rows;
 
         // The three encodings must be strictly ordered; any two of them

@@ -833,14 +833,18 @@ pub fn internalStateTable(screen: &Screen) {
     unsafe { dcimgui_sys::ImGui_Text(c"Memory Limit".as_ptr()) };
     // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
-    // cimgui.c.ImGui_Text("%d bytes (%d KiB)", pages.maxSize(), units.toKibiBytes(pages.maxSize()));
-    //
-    // PORT NOTE: `pages.maxSize()` -> the ported `PageList::max_size()`.
+    // const max_bytes = pages.limits.max(.bytes);
+    // cimgui.c.ImGui_Text(
+    //     "%d bytes (%d KiB)",
+    //     max_bytes,
+    //     units.toKibiBytes(max_bytes),
+    // );
+    let max_bytes = pages.limits.max(rustty_vt::pagelist::Key::Bytes);
     unsafe {
         dcimgui_sys::ImGui_Text(
             c"%d bytes (%d KiB)".as_ptr(),
-            pages.max_size() as c_int,
-            units::toKibiBytes(pages.max_size()) as c_int,
+            max_bytes as c_int,
+            units::toKibiBytes(max_bytes) as c_int,
         )
     };
 

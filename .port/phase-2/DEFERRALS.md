@@ -6047,21 +6047,28 @@ From **WS7 Phase B review (I1)** — these need the final
    `Node::page(pin.node)` call → `test result: FAILED`, naming
    `src/widgets/pagelist.rs:1763`; reverted → `2 passed`.
 
-2. **`PageList::Limits` / `Limits::enforce` has no rustty counterpart.** The
-   oracle's 11th `markActivity` call site (`oracle@main:PageList.zig:6312`, inside
-   `Limits.enforce`) therefore has nothing to port onto. rustty's PageList carries
-   its byte limit as a plain field with no `Limits` struct, so there are 10
-   `mark_activity` sites, not 11. See the PORT NOTE next to `mark_activity` in
-   `crates/rustty-vt/src/pagelist/compress.rs`.
+2. ~~**`PageList::Limits` / `Limits::enforce` has no rustty counterpart.**~~
+   **CLOSED — `P3-W3` T3, 2026-07-30 (re-vet row `P3-RV1`).** The resync DID
+   introduce `PageList.Limits` (`5b2d3b7df` + `f4c68d65e`), so the pin-conditional
+   assertion fired. `crates/rustty-vt/src/pagelist/mod.rs` now carries `Limits` /
+   `Limit` / `Key`, and the oracle's 11th `markActivity` site is ported as the
+   `page_compression.mark_activity()` call inside `PageList::enforce_limit` (the port
+   of `Limits.enforce`). rustty's `mark_activity` site count is now **11**, matching
+   the oracle.
 
-   **RESTATED AS A PHASE 3 RE-VET ROW [WS19 T2, 2026-07-29 — audit row O5].** This is
-   not a Phase-2 deferral: there is nothing in the pinned tree to port. `Limits` is a
-   **beyond-pin** struct, so the item is **pin-conditional** and its owner is
-   **Phase 3** (`.port/phase-3/`, upstream resync), whose re-vet list carries the exact
-   assertion to make: *"if the resync introduces a `PageList::Limits` struct, then
-   `Limits::enforce` must call `mark_activity` on entry, taking rustty's
-   `mark_activity` site count from 10 to 11."* If the resync does **not** introduce it,
-   the row closes with no work. **Owner: Phase 3. Trigger: the resync.**
+   **One correction to the assertion as written.** The re-vet row said `enforce` must
+   `mark_activity` **on entry**. That was true of the intermediate commit
+   (`5b2d3b7df`'s `enforceMaxLines`) but NOT of the final oracle shape: `f4c68d65e`
+   moved the bump to `if (removed == 0) pagelist.page_compression.markActivity();`
+   *inside* the prune loop, after the active-boundary `break`. An `enforce` call that
+   finds the limit exceeded but removes nothing (the oldest page still overlaps the
+   active area) therefore does NOT invalidate an in-flight incremental compression
+   traversal. The port follows the final oracle, not the assertion's wording.
+
+   Guarded by `pagelist_replacements_preserve_compression_continuation_and_mark_activity`'s
+   sibling, `pagelist_enforce_limit_marks_activity_and_preserves_continuation`
+   (`crates/rustty-vt/src/pagelist/tests.rs`), whose fail arm was proven by removing
+   the `mark_activity()` call.
 
 ## ~~Deferred to WS8 upstream sweep~~ ~~→ OWNER: WS10 (BL-4 perf series)~~ **→ OWNER: Phase 3 — BEYOND-PIN** — WS7 Phase C divergence #11 (`Screen::cursor_scroll_region_up` unported) [re-owned WS19 T2, 2026-07-29 — audit row O3; re-owned again WS10 T18, 2026-07-30]
 

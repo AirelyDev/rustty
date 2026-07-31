@@ -157,7 +157,7 @@ impl PageList {
         // it always has SOME extra space (due to the way we allocate by page).
         // So even with no scrollback we have some growth. It is architecturally
         // much simpler to just hide that for no-scrollback cases.
-        if self.explicit_max_size == 0 {
+        if self.limits.bytes.explicit == 0 {
             return Scrollbar {
                 total: self.rows as usize,
                 offset: 0,
@@ -307,7 +307,7 @@ impl PageList {
 
             // Growing inside the last page moves the active boundary without
             // allocating; that alone can make the first page wholly historical.
-            self.enforce_max_lines();
+            self.enforce_limit(super::Key::Lines);
             self.assert_integrity();
             return Ok(None);
         }
@@ -328,7 +328,7 @@ impl PageList {
         // initial allocation.
         if !self.pages.first.is_null()
             && !core::ptr::eq(self.pages.first, self.pages.last)
-            && self.page_size + super::std_size() > self.max_size()
+            && self.page_size + super::std_size() > self.limits.max(super::Key::Bytes)
         {
             // prune:
             let first = unsafe { self.pages.pop_first() };
@@ -431,7 +431,7 @@ impl PageList {
 
             // Byte-limit recycling may leave history above the independent line
             // limit, so enforce it after the recycled page becomes the new tail.
-            self.enforce_max_lines();
+            self.enforce_limit(super::Key::Lines);
             self.assert_integrity();
             return Ok(Some(first));
         }
@@ -461,7 +461,7 @@ impl PageList {
 
         // Appending a page can cross the line limit and can make the oldest
         // active-boundary page wholly historical.
-        self.enforce_max_lines();
+        self.enforce_limit(super::Key::Lines);
         self.assert_integrity();
         Ok(Some(next_node))
     }

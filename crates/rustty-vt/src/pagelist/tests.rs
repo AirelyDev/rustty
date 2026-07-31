@@ -27,8 +27,8 @@ use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError
 use super::resize::Resize;
 use super::scroll::Scroll;
 use super::{
-    std_capacity, std_size, IntegrityError, NodeData, Options, Owned, PageList, Pin, Storage,
-    Viewport,
+    std_capacity, std_size, IntegrityError, Key, Limits, NodeData, Options, Owned, PageList, Pin,
+    Storage, Viewport,
 };
 use crate::page::{Capacity, Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
@@ -1701,7 +1701,7 @@ fn pagelist_grow_reuses_non_standard_page_without_leak() {
     assert!(!core::ptr::eq(s.pages.first, s.pages.last));
 
     // Continue growing until we exceed max_size AND the last page is full
-    while s.page_size + std_size() <= s.max_size()
+    while s.page_size + std_size() <= s.limits.max(Key::Bytes)
         || unsafe { super::Node::rows(s.pages.last) < super::Node::capacity(s.pages.last).rows }
     {
         let _ = s.grow().unwrap();
@@ -1823,7 +1823,7 @@ fn pagelist_grow_non_standard_page_prune_protection() {
 
     // Verify prune path conditions are met
     assert!(!core::ptr::eq(s.pages.first, s.pages.last));
-    assert!(s.page_size + std_size() > s.max_size());
+    assert!(s.page_size + std_size() > s.limits.max(Key::Bytes));
     assert!(s.total_rows() >= s.rows as usize);
 
     // Verify last page is at capacity (so grow must prune or allocate new)
@@ -4863,6 +4863,337 @@ fn screen_jump_forward_prompt_skips_multiline_continuation() {
     s.deinit();
 }
 
+// ref: test "PageList set max bytes prunes immediately and can be raised"
+#[test]
+fn pagelist_set_max_bytes_prunes_immediately_and_can_be_raised() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+
+    let mut s = PageList::init(Options {
+        max_size: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    // Build four complete pages of history followed by the active row.
+    s.grow_rows(4 * page_rows).unwrap();
+    assert_eq!(5usize, s.total_pages());
+
+    let removed = s.pages.first;
+    let retained = unsafe { (*s.pages.last).prev };
+    let removed_pin = s
+        .track_pin(Pin {
+            node: removed,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+    let retained_pin = s
+        .track_pin(Pin {
+            node: retained,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+
+    s.scroll(Scroll::Pin(unsafe { (*retained_pin).pin_copy() }));
+    assert_eq!(3 * page_rows, s.scrollbar().offset);
+
+    // The active-area minimum is two pages. Lowering below that immediately
+    // removes all older complete historical pages.
+    s.set_max_bytes(Some(std_size()));
+    assert_eq!(std_size(), s.limits.bytes.explicit);
+    assert_eq!(2 * std_size(), s.limits.max(Key::Bytes));
+    assert_eq!(s.limits.max(Key::Bytes), s.page_size);
+    assert_eq!(2usize, s.total_pages());
+    assert_eq!(page_rows, s.total_rows - s.rows as usize);
+    assert!(core::ptr::eq(retained, s.pages.first));
+    assert!(core::ptr::eq(retained, unsafe { (*removed_pin).node }));
+    assert!(unsafe { (*removed_pin).garbage });
+    assert!(core::ptr::eq(retained, unsafe { (*retained_pin).node }));
+    assert!(!unsafe { (*retained_pin).garbage });
+    assert_eq!(0usize, s.scrollbar().offset);
+
+    // Raising the limit doesn't allocate or otherwise change retained data,
+    // but subsequent growth can exceed the previous effective limit.
+    let limited_size = s.page_size;
+    let limited_rows = s.total_rows;
+    s.set_max_bytes(Some(8 * std_size()));
+    assert_eq!(limited_size, s.page_size);
+    assert_eq!(limited_rows, s.total_rows);
+    s.grow_rows(2 * page_rows).unwrap();
+    assert!(s.page_size > limited_size);
+
+    // Null restores unlimited growth and likewise preserves current data.
+    let raised_size = s.page_size;
+    let raised_rows = s.total_rows;
+    s.set_max_bytes(None);
+    assert_eq!(usize::MAX, s.limits.bytes.explicit);
+    assert_eq!(raised_size, s.page_size);
+    assert_eq!(raised_rows, s.total_rows);
+    s.grow_rows(5 * page_rows).unwrap();
+    assert!(s.page_size > 8 * std_size());
+
+    s.untrack_pin(retained_pin);
+    s.untrack_pin(removed_pin);
+    s.deinit();
+}
+
+// ref: test "PageList set max bytes zero preserves active boundary"
+#[test]
+fn pagelist_set_max_bytes_zero_preserves_active_boundary() {
+    let mut s = PageList::init(Options {
+        max_size: None,
+        ..Options::new(80, 1)
+    })
+    .unwrap();
+
+    // Make the sole page larger than the effective zero-byte limit. Its first
+    // row will be history, but the same indivisible page also contains active.
+    while s.page_size <= s.limits.bytes.min {
+        let _ = s
+            .increase_capacity(s.pages.first, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+    let _ = s.grow().unwrap();
+    assert_eq!(1usize, s.total_pages());
+    assert!(core::ptr::eq(
+        s.pages.first,
+        s.get_top_left(point::Tag::Active).node
+    ));
+    assert!(s.get_top_left(point::Tag::Active).y > 0);
+
+    s.scroll(Scroll::Top);
+    assert!(s.viewport == super::Viewport::Top);
+
+    s.set_max_bytes(Some(0));
+    assert_eq!(0usize, s.limits.bytes.explicit);
+    assert!(s.page_size > s.limits.max(Key::Bytes));
+    assert_eq!(1usize, s.total_pages());
+    assert!(s.viewport == super::Viewport::Active);
+    assert_eq!(
+        Scrollbar {
+            total: s.rows as usize,
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    // No-scrollback mode cannot be moved back into the retained boundary row.
+    s.scroll(Scroll::Top);
+    assert!(s.viewport == super::Viewport::Active);
+
+    s.deinit();
+}
+
+// ref: test "PageList set max lines prunes immediately and can be raised"
+#[test]
+fn pagelist_set_max_lines_prunes_immediately_and_can_be_raised() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+    let lowered_lines = page_rows + page_rows / 2;
+
+    let mut s = PageList::init(Options {
+        max_size: None,
+        max_lines: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    s.grow_rows(4 * page_rows).unwrap();
+    assert_eq!(5usize, s.total_pages());
+
+    let removed = s.pages.first;
+    let retained = unsafe { (*s.pages.last).prev };
+    let removed_pin = s
+        .track_pin(Pin {
+            node: removed,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+    let retained_pin = s
+        .track_pin(Pin {
+            node: retained,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+
+    s.scroll(Scroll::Pin(unsafe { (*retained_pin).pin_copy() }));
+    assert_eq!(3 * page_rows, s.scrollbar().offset);
+
+    // Whole-page enforcement undershoots a non-page-aligned line limit.
+    s.set_max_lines(Some(lowered_lines));
+    assert_eq!(lowered_lines, s.limits.lines.explicit);
+    assert_eq!(lowered_lines, s.limits.max(Key::Lines));
+    assert_eq!(page_rows, s.total_rows - s.rows as usize);
+    assert_eq!(2usize, s.total_pages());
+    assert!(core::ptr::eq(retained, s.pages.first));
+    assert!(core::ptr::eq(retained, unsafe { (*removed_pin).node }));
+    assert!(unsafe { (*removed_pin).garbage });
+    assert!(core::ptr::eq(retained, unsafe { (*retained_pin).node }));
+    assert!(!unsafe { (*retained_pin).garbage });
+    assert_eq!(0usize, s.scrollbar().offset);
+
+    let limited_size = s.page_size;
+    let limited_rows = s.total_rows;
+    s.set_max_lines(Some(4 * page_rows));
+    assert_eq!(limited_size, s.page_size);
+    assert_eq!(limited_rows, s.total_rows);
+    s.grow_rows(2 * page_rows).unwrap();
+    assert!(s.total_rows - s.rows as usize > lowered_lines);
+
+    let raised_size = s.page_size;
+    let raised_rows = s.total_rows;
+    s.set_max_lines(None);
+    assert_eq!(usize::MAX, s.limits.lines.explicit);
+    assert_eq!(raised_size, s.page_size);
+    assert_eq!(raised_rows, s.total_rows);
+    s.grow_rows(3 * page_rows).unwrap();
+    assert!(s.total_rows - s.rows as usize > 4 * page_rows);
+
+    s.untrack_pin(retained_pin);
+    s.untrack_pin(removed_pin);
+    s.deinit();
+}
+
+// ref: test "PageList set max limits remain independent"
+#[test]
+fn pagelist_set_max_limits_remain_independent() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+    let byte_limit = 3 * std_size();
+    let line_limit = page_rows / 2;
+
+    let mut s = PageList::init(Options {
+        max_size: None,
+        max_lines: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    s.grow_rows(4 * page_rows).unwrap();
+
+    // The byte setter leaves the line limit unlimited.
+    s.set_max_bytes(Some(byte_limit));
+    assert_eq!(byte_limit, s.limits.bytes.explicit);
+    assert_eq!(usize::MAX, s.limits.lines.explicit);
+    assert_eq!(3usize, s.total_pages());
+    assert_eq!(2 * page_rows, s.total_rows - s.rows as usize);
+
+    // The smaller runtime line limit prunes one more complete page without
+    // changing the configured byte limit. Its effective value is raised to
+    // the existing one-page minimum.
+    s.set_max_lines(Some(line_limit));
+    assert_eq!(byte_limit, s.limits.bytes.explicit);
+    assert_eq!(line_limit, s.limits.lines.explicit);
+    assert_eq!(page_rows, s.limits.max(Key::Lines));
+    assert_eq!(2usize, s.total_pages());
+    assert_eq!(page_rows, s.total_rows - s.rows as usize);
+
+    // Removing only the line limit leaves byte enforcement in effect.
+    s.set_max_lines(None);
+    s.grow_rows(3 * page_rows).unwrap();
+    assert_eq!(byte_limit, s.page_size);
+    assert_eq!(3usize, s.total_pages());
+    assert!(s.total_rows - s.rows as usize > page_rows);
+
+    s.deinit();
+}
+
+// PORT NOTE (rustty-only guard, `P3-W3` T3 Step 4 / re-vet row `P3-RV1`): the
+// sibling of `pagelist_replacements_preserve_compression_continuation_and_mark_activity`
+// for the ELEVENTH `mark_activity` site, the one inside `enforce_limit`. Trimming
+// scrollback mutates the node set under an in-flight incremental compression
+// traversal, so the activity token must be bumped while the traversal
+// continuation (`last_serial`/`next_serial`) and its flags are preserved.
+//
+// The second half is what pins the oracle's exact placement: `f4c68d65e` bumps
+// activity on the FIRST ACTUAL REMOVAL (`if (removed == 0)`), not on entry — an
+// `enforce` that finds the limit exceeded but immediately hits the
+// active-boundary `break` must NOT invalidate the traversal.
+#[test]
+fn pagelist_enforce_limit_marks_activity_and_preserves_continuation() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+
+    let mut s = PageList::init(Options {
+        max_size: None,
+        max_lines: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+    s.grow_rows(4 * page_rows).unwrap();
+
+    let state = super::compress::IncrementalCompressionState {
+        flags: super::compress::IncrementalCompressionFlags {
+            did_compress: false,
+            verifying: true,
+        },
+        activity_serial: 42,
+        last_serial: Some(7),
+        next_serial: 8,
+    };
+
+    // (a) An enforcement that actually removes pages bumps activity_serial and
+    //     preserves the continuation.
+    s.page_compression = state;
+    s.set_max_lines(Some(page_rows));
+    assert_eq!(
+        super::compress::IncrementalCompressionState {
+            activity_serial: 43,
+            ..state
+        },
+        s.page_compression
+    );
+
+    // (b) A second enforcement that removes NOTHING (already at the limit)
+    //     leaves the whole compression state alone.
+    s.page_compression = state;
+    s.set_max_lines(Some(page_rows));
+    assert_eq!(state, s.page_compression);
+
+    s.deinit();
+
+    // (c) An enforcement that IS exceeded but whose only over-limit page is the
+    //     active-boundary page breaks out having removed nothing, and must not
+    //     bump activity. This is the case that distinguishes the oracle's
+    //     `if (removed == 0)` placement from a bump on entry: the single page
+    //     below is larger than the zero-byte effective limit AND contains the
+    //     active area, so `exceeded(.bytes)` is true while the prune loop
+    //     removes nothing.
+    let mut b = PageList::init(Options {
+        max_size: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+    while b.page_size <= b.limits.bytes.min {
+        let _ = b
+            .increase_capacity(b.pages.first, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+    let _ = b.grow().unwrap();
+    assert_eq!(1usize, b.total_pages());
+    assert!(core::ptr::eq(
+        b.pages.first,
+        b.get_top_left(point::Tag::Active).node
+    ));
+
+    b.page_compression = state;
+    b.set_max_bytes(Some(0));
+    assert!(b.limits.exceeded(&b, Key::Bytes));
+    assert_eq!(1usize, b.total_pages());
+    assert_eq!(state, b.page_compression);
+
+    b.deinit();
+}
+
 // PORT NOTE (rustty-only guard, `P3-W3` T1 Step 4): `5b2d3b7df` adds
 // `IntegrityError.MaxLinesExceeded` but no upstream test reaches it — every
 // oracle path that can exceed the line limit calls `enforceMaxLines` first, so
@@ -4904,7 +5235,7 @@ fn pagelist_integrity_detects_max_lines_exceeded() {
 
     // Raising the limit back to unlimited restores a valid list so `deinit`'s
     // own integrity assertion holds.
-    s.explicit_max_lines = usize::MAX;
+    s.limits.lines.explicit = usize::MAX;
     assert_eq!(Ok(()), s.verify_integrity());
 
     s.deinit();
@@ -4922,7 +5253,7 @@ fn pagelist_max_lines_uses_one_page_minimum() {
     })
     .unwrap();
 
-    assert_eq!(page_rows, s.max_lines());
+    assert_eq!(page_rows, s.limits.max(Key::Lines));
 
     // The requested limit is below one page, so a complete page of history
     // remains valid.
@@ -4958,7 +5289,7 @@ fn pagelist_max_lines_does_not_round_larger_limits() {
     })
     .unwrap();
 
-    assert_eq!(max_lines, s.max_lines());
+    assert_eq!(max_lines, s.limits.max(Key::Lines));
     s.grow_rows(max_lines).unwrap();
     assert_eq!(max_lines, s.total_rows - s.rows as usize);
 
@@ -5019,9 +5350,9 @@ fn pagelist_max_lines_and_max_size_enforce_the_smaller_limit() {
         .unwrap();
 
         s.grow_rows(4 * page_rows).unwrap();
-        assert!(s.total_rows - s.rows as usize <= s.max_lines());
+        assert!(s.total_rows - s.rows as usize <= s.limits.max(Key::Lines));
         assert!(s.total_pages() <= 2);
-        assert!(s.page_size < s.max_size());
+        assert!(s.page_size < s.limits.max(Key::Bytes));
 
         s.deinit();
     }
@@ -5036,8 +5367,8 @@ fn pagelist_max_lines_and_max_size_enforce_the_smaller_limit() {
         .unwrap();
 
         s.grow_rows(2 * page_rows).unwrap();
-        assert!(s.total_rows - (s.rows as usize) < s.max_lines());
-        assert_eq!(s.max_size(), s.page_size);
+        assert!(s.total_rows - (s.rows as usize) < s.limits.max(Key::Lines));
+        assert_eq!(s.limits.max(Key::Bytes), s.page_size);
 
         s.deinit();
     }
@@ -5080,7 +5411,7 @@ fn pagelist_max_lines_applies_to_resize_and_clone() {
         ..Default::default()
     })
     .unwrap();
-    assert_eq!(PageList::min_max_lines(new_cols), s.min_max_lines);
+    assert_eq!(Limits::min_max_lines(new_cols), s.limits.lines.min);
 
     // Exercise the same active-row shrink through the reflow path. Reflow
     // completes before the newly historical complete page is pruned.
@@ -5105,9 +5436,9 @@ fn pagelist_max_lines_applies_to_resize_and_clone() {
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(PageList::min_max_lines(new_cols), reflowed.min_max_lines);
+        assert_eq!(Limits::min_max_lines(new_cols), reflowed.limits.lines.min);
         assert!(
-            reflowed.total_rows - reflowed.rows as usize <= reflowed.max_lines()
+            reflowed.total_rows - reflowed.rows as usize <= reflowed.limits.max(Key::Lines)
                 || core::ptr::eq(
                     reflowed.pages.first,
                     reflowed.get_top_left(point::Tag::Active).node
@@ -5124,13 +5455,13 @@ fn pagelist_max_lines_applies_to_resize_and_clone() {
     };
     let mut cloned = s.clone(&mut opts).unwrap();
 
-    assert_eq!(s.explicit_max_lines, cloned.explicit_max_lines);
-    assert_eq!(s.min_max_lines, cloned.min_max_lines);
-    assert_eq!(s.max_lines(), cloned.max_lines());
+    assert_eq!(s.limits.lines.explicit, cloned.limits.lines.explicit);
+    assert_eq!(s.limits.lines.min, cloned.limits.lines.min);
+    assert_eq!(s.limits.max(Key::Lines), cloned.limits.max(Key::Lines));
 
-    cloned.grow_rows(2 * cloned.max_lines()).unwrap();
+    cloned.grow_rows(2 * cloned.limits.max(Key::Lines)).unwrap();
     assert!(
-        cloned.total_rows - cloned.rows as usize <= cloned.max_lines()
+        cloned.total_rows - cloned.rows as usize <= cloned.limits.max(Key::Lines)
             || core::ptr::eq(
                 cloned.pages.first,
                 cloned.get_top_left(point::Tag::Active).node
