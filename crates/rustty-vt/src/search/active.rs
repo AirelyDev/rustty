@@ -76,6 +76,18 @@ impl ActiveSearch {
         // self.window.clearAndRetainCapacity();
         self.window.clear_and_retain_capacity();
 
+        // An empty needle represents an inactive search and has no overlap
+        // or history to load.
+        //
+        // PORT NOTE (oracle 5bc6588e4, `P3-W1 T5`): this guard is what keeps
+        // the `needle.len() - 1` overlap comparison below in range. Upstream
+        // does NOT saturate that site (only the two in `viewport.rs`, which has
+        // no such guard), so neither do we.
+        // if (self.window.needle.len == 0) return null;
+        if self.window.needle.is_empty() {
+            return Ok(None);
+        }
+
         // First up, add enough pages to cover the active area.
         // var rem: usize = list.rows;
         // var node_ = list.pages.last;
@@ -179,6 +191,28 @@ mod tests {
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }
+    }
+
+    /// `P3-W1 T5` (oracle 5bc6588e4). An empty needle is an INACTIVE search:
+    /// `update` must report no overlap page and produce no matches, rather than
+    /// walking the page list and running the `needle.len() - 1` overlap
+    /// comparison that would underflow.
+    #[test]
+    fn active_empty_needle_is_an_inactive_search() {
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 10)).unwrap();
+        let active_ptr: *mut crate::screen::Screen = t.screens.active;
+        unsafe { (*active_ptr).test_write_string(b"hello\nworld\n").unwrap() };
+
+        let mut search: ActiveSearch = ActiveSearch::init(alloc, b"").unwrap();
+        assert!(search
+            .update(unsafe { &(*active_ptr).pages })
+            .unwrap()
+            .is_none());
+        assert!(search.next().is_none());
+
+        search.deinit();
+        t.deinit(alloc);
     }
 
     // test "simple search"

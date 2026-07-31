@@ -234,6 +234,21 @@ impl ViewportSearch {
             .map(|e| e.node)
             .collect();
 
+        // const overlap_len = self.window.needle.len -| 1;
+        //
+        // PORT NOTE (oracle 5bc6588e4, `P3-W1 T5`): SATURATING, per
+        // `.port/phase-3/REVIEW_CLASSES.md` §1 — `-|` is `saturating_sub`, never
+        // a plain `-`. `ViewportSearch` has no empty-needle early return (unlike
+        // `ActiveSearch`), so an empty needle reaches here and `len - 1` would
+        // panic in debug and WRAP to `usize::MAX` in release, turning the
+        // overlap break into "never break".
+        let overlap_len = self.window.needle.len().saturating_sub(1);
+        debug_assert!(
+            self.window.needle.is_empty() || overlap_len == self.window.needle.len() - 1,
+            "saturation may only fire for the EMPTY needle; if it ever fires for \
+             a non-empty one, a real invariant is being absorbed silently"
+        );
+
         // Add enough overlap to cover needle.len - 1 bytes (if it
         // exists) so we can cover the overlap. We only do this for the
         // soft-wrapped prior pages.
@@ -259,7 +274,7 @@ impl ViewportSearch {
                 Err(e) => fail!(e),
             };
             added += appended.content_len;
-            if added >= self.window.needle.len() - 1 {
+            if added >= overlap_len {
                 break;
             }
 
@@ -312,7 +327,7 @@ impl ViewportSearch {
                     Err(e) => fail!(e),
                 };
                 added += appended.content_len;
-                if added >= self.window.needle.len() - 1 {
+                if added >= overlap_len {
                     break;
                 }
 
@@ -521,6 +536,27 @@ mod tests {
 
         search.deinit();
         s.deinit();
+        t.deinit(alloc);
+    }
+
+    /// `P3-W1 T5` (oracle 5bc6588e4). `ViewportSearch` has NO empty-needle early
+    /// return, so an empty needle reaches the overlap comparison. Pre-fix,
+    /// `self.window.needle.len() - 1` panicked in debug and wrapped to
+    /// `usize::MAX` in release, which turns "break once we have enough overlap"
+    /// into "never break" and walks the whole page list. The value asserted is
+    /// that the search completes and yields no matches.
+    #[test]
+    fn viewport_empty_needle_saturates_the_overlap_length() {
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 10)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        unsafe { (*active_ptr).test_write_string(b"hello\nworld\n").unwrap() };
+
+        let mut search: ViewportSearch = ViewportSearch::init(alloc, b"").unwrap();
+        let _ = search.update(unsafe { &(*active_ptr).pages }).unwrap();
+        assert!(search.next().is_none());
+
+        search.deinit();
         t.deinit(alloc);
     }
 
