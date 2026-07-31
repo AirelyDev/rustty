@@ -100,15 +100,24 @@ impl RendererConfig for Config {
         self.scroll_to_bottom.output
     }
 
-    fn font_features(&self) -> Vec<CString> {
-        // config `RepeatableString.list` is `Vec<Vec<u8>>` of non-NUL bytes
-        // (value_types.rs `value.to_vec()`), so `CString::new` never hits an interior
-        // NUL — the `.expect` is safe (RISK-5, adversary-CONFIRMED).
-        self.font_feature
-            .list
-            .iter()
-            .map(|s| CString::new(s.clone()).expect("font-feature contains no interior NUL"))
-            .collect()
+    fn font_features(&self) -> Vec<Vec<u8>> {
+        // config.@"font-feature".clone(alloc) -> `.list`
+        //
+        // PORT NOTE (fidelity): the reference item type is `[:0]const u8` and
+        // the only consumer (`font.shape.Options.features` ->
+        // `FeatureList.appendFromString`) reads it as a LENGTH-bounded slice,
+        // never as a C string, so the RAW bytes are the faithful carrier.
+        //
+        // This previously bridged to `Vec<CString>` with a
+        // `.expect("font-feature contains no interior NUL")`, justified by the
+        // claim that `RepeatableString.list` holds non-NUL bytes. That claim is
+        // FALSE: `RepeatableString::parse_cli` stores the config line's value
+        // verbatim (`value.to_vec()`), so `font-feature = a<0x00>b` in a config
+        // file lands in the list as `[97, 0, 98]` and aborted the process at
+        // renderer init. The reference passes those same three bytes to
+        // `appendFromString`, which rejects them as an unknown feature tag and
+        // moves on. See `font_features_carry_interior_nul_bytes`.
+        self.font_feature.list.clone()
     }
 
     fn font_style_bold(&self) -> bool {
@@ -227,5 +236,36 @@ impl RendererConfig for Config {
     fn scrollback_compression(&self) -> bool {
         // config.@"scrollback-compression" (WS7 D3, oracle 0fb89f4ff)
         self.scrollback_compression
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_struct::Config;
+
+    /// A config line's value is stored VERBATIM by `RepeatableString::parse_cli`,
+    /// so a literal 0x00 byte in the file reaches `font-feature`'s list. The
+    /// reference item type is `[:0]const u8`, read by LENGTH by its only
+    /// consumer, so those bytes must be carried through unchanged — not
+    /// funnelled through a `CString`, which cannot represent them and used to
+    /// abort the process here at renderer init.
+    ///
+    /// Feeds the actual malformed config TEXT rather than poking the list, so
+    /// the whole line-parse path is under test.
+    #[test]
+    fn font_features_carry_interior_nul_bytes() {
+        let mut c = Config::default();
+        let text: Vec<u8> = b"font-feature = liga\x00junk\nfont-feature = dlig\n".to_vec();
+        let mut iter = rustty_args::args::LineIterator::init(&text);
+        c.load_iter(&mut iter).unwrap();
+
+        let feats = c.font_features();
+        assert_eq!(feats.len(), 2);
+        // Byte-faithful: the NUL is INTERIOR and preserved, not a terminator.
+        // Truncating here would silently ENABLE `liga`, which the reference
+        // (`FeatureList.appendFromString` over the full 9-byte slice) does not.
+        assert_eq!(feats[0].as_slice(), b"liga\x00junk" as &[u8]);
+        assert_eq!(feats[1].as_slice(), b"dlig" as &[u8]);
     }
 }

@@ -308,8 +308,10 @@ pub struct DerivedConfig {
     pub font_thicken: bool,
     pub font_thicken_strength: u8,
     // Zig `std.ArrayListUnmanaged([:0]const u8)` — a list of null-terminated
-    // byte strings -> `Vec<CString>` (fidelity: byte strings, not lossy `String`).
-    pub font_features: Vec<CString>,
+    // byte strings -> `Vec<Vec<u8>>` (fidelity: RAW bytes, not a lossy `String`
+    // and not a `CString`, which cannot represent the interior NUL a config
+    // line may legally contain — see `RendererConfig::font_features`).
+    pub font_features: Vec<Vec<u8>>,
     pub font_styles: StyleStatus,
     pub font_shaping_break: FontShapingBreak,
     pub cursor_color: Option<TerminalColor>,
@@ -1864,15 +1866,10 @@ mod macos_impl {
             // Zig: `var font_shaper = try font.Shaper.init(alloc, .{
             //          .features = options.config.font_features.items });`
             // The `[:0]const u8` items -> the shaper's `Vec<Vec<u8>>` features
-            // (`CString::as_bytes` = the bytes without the NUL sentinel, matching the
-            // Zig `.len`-based content; the `change_config` precedent, generic.zig).
+            // (the RAW bytes, matching the Zig `.len`-based content; the
+            // `change_config` precedent, generic.zig).
             let font_shaper = Shaper::init(shape::Options {
-                features: options
-                    .config
-                    .font_features
-                    .iter()
-                    .map(|c| c.as_bytes().to_vec())
-                    .collect(),
+                features: options.config.font_features.clone(),
             })?; // errdefer -> Drop
 
             // Initialize all the data that requires a critical font section.
@@ -2510,14 +2507,10 @@ mod macos_impl {
                 // Zig: `var font_shaper = try font.Shaper.init(self.alloc, .{
                 //          .features = config.font_features.items });`
                 // The `[:0]const u8` items -> the shaper's `Vec<Vec<u8>>` features
-                // (`CString::as_bytes` = the bytes without the NUL sentinel, matching
-                // the Zig `.len`-based content). unlock-before-`?` (defer-equivalent).
+                // (the RAW bytes, matching the Zig `.len`-based content).
+                // unlock-before-`?` (defer-equivalent).
                 let font_shaper = match Shaper::init(shape::Options {
-                    features: config
-                        .font_features
-                        .iter()
-                        .map(|c| c.as_bytes().to_vec())
-                        .collect(),
+                    features: config.font_features.clone(),
                 }) {
                     Ok(s) => s,
                     Err(e) => {

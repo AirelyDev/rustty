@@ -15,8 +15,6 @@
 //!
 //! See `.port/phase-2/RENDERER_SURFACE_INIT_RESIZE_CONFIG_DESIGN.md` §1.
 
-use std::ffi::CString;
-
 use rustty_input::link::Link as InputLink;
 use rustty_render_types::{
     AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, FontShapingBreak,
@@ -38,7 +36,7 @@ use crate::generic::{Color, Path, RepeatablePath, TerminalColor};
 /// one reference config field; the reference's `init`-body clamps/casts stay in
 /// `DerivedConfig::init` (so the arithmetic is faithful in the renderer body),
 /// while transforms that would require naming a config-crate type (the
-/// `FontStyle != .false` comparison, the `RepeatableString -> Vec<CString>` bridge,
+/// `FontStyle != .false` comparison, the `RepeatableString -> Vec<Vec<u8>>` bridge,
 /// the config-`TerminalColor -> renderer-TerminalColor` map, `BoldColor.toTerminal`)
 /// are encapsulated in the config-side impl.
 pub trait RendererConfig {
@@ -56,10 +54,20 @@ pub trait RendererConfig {
     fn window_vsync(&self) -> bool;
     fn scroll_to_bottom_output(&self) -> bool; // config.@"scroll-to-bottom".output
 
-    // font-feature: config `RepeatableString` (Vec<Vec<u8>>) bridged to the
-    // renderer's `Vec<CString>` (the [:0]const u8 null-termination). The clone
-    // collapses into the owned Vec.
-    fn font_features(&self) -> Vec<CString>;
+    // font-feature: config `RepeatableString` (Vec<Vec<u8>>) carried through as
+    // RAW BYTES. The clone collapses into the owned Vec.
+    //
+    // PORT NOTE (fidelity): the reference item type is `[:0]const u8` and every
+    // consumer (`font.shape.Options.features` ->
+    // `FeatureList.appendFromString`) reads it as a LENGTH-bounded Zig slice,
+    // never as a C string. `Vec<u8>` is therefore the faithful carrier. This was
+    // a `Vec<CString>` and the conversion `.expect`ed no interior NUL — but a
+    // config line may contain a literal 0x00 byte, which `RepeatableString`
+    // stores verbatim, so that `.expect` was a config-file-driven panic where
+    // the reference simply parses the bytes and rejects them as an unknown
+    // feature tag. Truncating at the first NUL would be worse than the panic
+    // (`liga\0junk` would silently ENABLE `liga`, which the reference does not).
+    fn font_features(&self) -> Vec<Vec<u8>>;
 
     // font-style-{bold,italic,bold-italic}: config `FontStyle` enum; the
     // reference compares `!= .false`. The comparison is encapsulated in the impl

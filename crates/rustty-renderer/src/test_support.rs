@@ -20,8 +20,6 @@
 //! `None`/empty). `custom_shader_animation` is fixed to `True` (the config
 //! default `.true`).
 
-use std::ffi::CString;
-
 use rustty_input::link::Link as InputLink;
 use rustty_render_types::{
     AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, FontShapingBreak,
@@ -90,7 +88,7 @@ impl RendererConfig for MockConfig {
     fn scroll_to_bottom_output(&self) -> bool {
         false
     }
-    fn font_features(&self) -> Vec<CString> {
+    fn font_features(&self) -> Vec<Vec<u8>> {
         Vec::new()
     }
     fn font_style_bold(&self) -> bool {
