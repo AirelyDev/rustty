@@ -235,12 +235,13 @@ mod tests {
         let file = String::from_utf8(file).unwrap();
 
         let fields = rustty_config::config_struct::config_fields();
-        // 204, not the plan's 183: `config_fields()` has grown since the WS13 plan
-        // was written. Pinned so a table that silently shrinks cannot make the
-        // per-field loop below vacuous.
+        // 205, not the plan's 183: `config_fields()` has grown since the WS13 plan
+        // was written (204 -> 205 in `P3-W3` T4, which split `scrollback-limit`
+        // into `scrollback-limit-bytes` + `scrollback-limit-lines`). Pinned so a
+        // table that silently shrinks cannot make the per-field loop below vacuous.
         assert_eq!(
             fields.len(),
-            204,
+            205,
             "the field table changed; update this count"
         );
         for (name, _key) in fields {

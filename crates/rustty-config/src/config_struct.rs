@@ -198,7 +198,8 @@ pub enum Key {
     Input,
     WaitAfterCommand,
     AbnormalCommandExitRuntime,
-    ScrollbackLimit,
+    ScrollbackLimitBytes,
+    ScrollbackLimitLines,
     ScrollbackCompression,
     Scrollbar,
     Link,
@@ -487,7 +488,8 @@ impl Key {
             b"resize-overlay-position" => Some(Key::ResizeOverlayPosition),
             b"right-click-action" => Some(Key::RightClickAction),
             b"scroll-to-bottom" => Some(Key::ScrollToBottom),
-            b"scrollback-limit" => Some(Key::ScrollbackLimit),
+            b"scrollback-limit-bytes" => Some(Key::ScrollbackLimitBytes),
+            b"scrollback-limit-lines" => Some(Key::ScrollbackLimitLines),
             b"scrollback-compression" => Some(Key::ScrollbackCompression),
             b"scrollbar" => Some(Key::Scrollbar),
             b"search-background" => Some(Key::SearchBackground),
@@ -660,7 +662,8 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::Input => TypeId::of::<RepeatableReadableIO>(),
         Key::WaitAfterCommand => TypeId::of::<bool>(),
         Key::AbnormalCommandExitRuntime => TypeId::of::<u32>(),
-        Key::ScrollbackLimit => TypeId::of::<usize>(),
+        Key::ScrollbackLimitBytes => TypeId::of::<ScrollbackLimitBytes>(),
+        Key::ScrollbackLimitLines => TypeId::of::<ScrollbackLimitLines>(),
         Key::ScrollbackCompression => TypeId::of::<bool>(),
         Key::Scrollbar => TypeId::of::<Scrollbar>(),
         Key::Link => TypeId::of::<RepeatableLink>(),
@@ -2297,7 +2300,7 @@ pub struct Config {
     /// any exit code because of the way shell processes are launched via the login
     /// command.
     pub abnormal_command_exit_runtime: u32,
-    // @"scrollback-limit": usize = 50_000_000, // 50MB
+    // @"scrollback-limit-bytes": Limit(usize, 50_000_000) = .default,
     /// The size of the scrollback buffer in bytes. This also includes the active
     /// screen. No matter what this is set to, enough memory will always be
     /// allocated for the visible screen and anything leftover is the limit for
@@ -2320,11 +2323,32 @@ pub struct Config {
     ///
     /// This size is per terminal surface, not for the entire application.
     ///
-    /// It is not currently possible to set an unlimited scrollback buffer.
-    /// This is a future planned feature.
+    /// A separate maximum can be set with `scrollback-limit-lines`; if both limits
+    /// are set, then the first one reached will determine when scrollback is
+    /// removed.
+    ///
+    /// The default is 50 MB. Set this to `unlimited` to remove the byte limit.
     ///
     /// This can be changed at runtime but will only affect new terminal surfaces.
-    pub scrollback_limit: usize,
+    pub scrollback_limit_bytes: ScrollbackLimitBytes,
+    // @"scrollback-limit-lines": Limit(usize, std.math.maxInt(usize)) = .default,
+    /// The maximum number of lines of scrollback to retain. This excludes
+    /// the active screen. Soft-wrapped lines count as multiple lines.
+    ///
+    /// This limit is an estimate. Internally, Rustty will only trim lines
+    /// up to the minimum allocation unit that is used internally (called a
+    /// "page"). The size of a page depends on how many styles, graphemes, etc.
+    /// take up the screen. In practice, this can be anywhere from a handful to
+    /// a couple hundred lines. Importantly, memory is capped either way.
+    /// This means that the actual limited lines will likely be slightly
+    /// higher in practice.
+    ///
+    /// The default is `unlimited`. A separate maximum can be set with
+    /// `scrollback-limit-bytes`; if both limits are set, then the first one reached
+    /// will determine when scrollback is removed.
+    ///
+    /// This can be changed at runtime but will only affect new terminal surfaces.
+    pub scrollback_limit_lines: ScrollbackLimitLines,
     // @"scrollback-compression": bool = true,
     /// Whether to compress scrollback pages while the terminal is idle.
     ///
@@ -4972,7 +4996,8 @@ impl Default for Config {
             wait_after_command: false,
             abnormal_command_exit_runtime: 250,
             // 50_000_000 (50MB)
-            scrollback_limit: 50_000_000,
+            scrollback_limit_bytes: ScrollbackLimitBytes::default_value(),
+            scrollback_limit_lines: ScrollbackLimitLines::default_value(),
             scrollback_compression: true,
             scrollbar: Scrollbar::System,
             link: RepeatableLink::default(),
@@ -7488,7 +7513,8 @@ impl Config {
             Key::Input => c!(input),
             Key::WaitAfterCommand => c!(wait_after_command),
             Key::AbnormalCommandExitRuntime => c!(abnormal_command_exit_runtime),
-            Key::ScrollbackLimit => c!(scrollback_limit),
+            Key::ScrollbackLimitBytes => c!(scrollback_limit_bytes),
+            Key::ScrollbackLimitLines => c!(scrollback_limit_lines),
             Key::ScrollbackCompression => c!(scrollback_compression),
             Key::Scrollbar => c!(scrollbar),
             Key::Link => c!(link),
@@ -7776,7 +7802,8 @@ impl Config {
         cv!(input);
         cv!(wait_after_command);
         cv!(abnormal_command_exit_runtime);
-        cv!(scrollback_limit);
+        cv!(scrollback_limit_bytes);
+        cv!(scrollback_limit_lines);
         cv!(scrollback_compression);
         cv!(scrollbar);
         cv!(link);
@@ -8030,7 +8057,8 @@ pub(crate) const CONFIG_FIELDS: &[(&[u8], Key)] = &[
         b"abnormal-command-exit-runtime",
         Key::AbnormalCommandExitRuntime,
     ),
-    (b"scrollback-limit", Key::ScrollbackLimit),
+    (b"scrollback-limit-bytes", Key::ScrollbackLimitBytes),
+    (b"scrollback-limit-lines", Key::ScrollbackLimitLines),
     (b"scrollback-compression", Key::ScrollbackCompression),
     (b"scrollbar", Key::Scrollbar),
     (b"link", Key::Link),
@@ -8538,8 +8566,10 @@ impl Config {
             b"wait-after-command" => f_display!(wait_after_command),
             // @"abnormal-command-exit-runtime": u32
             b"abnormal-command-exit-runtime" => f_display!(abnormal_command_exit_runtime),
-            // @"scrollback-limit": usize
-            b"scrollback-limit" => f_display!(scrollback_limit),
+            // @"scrollback-limit-bytes": Limit(usize, 50_000_000)
+            b"scrollback-limit-bytes" => f_entry!(scrollback_limit_bytes),
+            // @"scrollback-limit-lines": Limit(usize, maxInt(usize))
+            b"scrollback-limit-lines" => f_entry!(scrollback_limit_lines),
             // @"scrollback-compression": bool
             b"scrollback-compression" => f_display!(scrollback_compression),
             // scrollbar: Scrollbar (bare enum)
@@ -9266,6 +9296,13 @@ impl Target for Config {
                 b"gtk-toolbar-style",
             )),
 
+            // Rustty 1.4 renamed `scrollback-limit` to `scrollback-limit-bytes`
+            // when `scrollback-limit-lines` was added so the units are explicit.
+            // .{ "scrollback-limit", cli.compatibilityRenamed(Config, "scrollback-limit-bytes") },
+            b"scrollback-limit" => Some(rustty_args::args::compatibility_renamed(
+                b"scrollback-limit-bytes",
+            )),
+
             // Ghostty 1.2 removed the `hidden` value from `gtk-tabs-location` and
             // moved it to `window-show-tab-bar`.
             // .{ "gtk-tabs-location", compatGtkTabsLocation },
@@ -9860,8 +9897,14 @@ impl Target for Config {
             b"wait-after-command" => field_bool!(wait_after_command),
             // @"abnormal-command-exit-runtime": u32
             b"abnormal-command-exit-runtime" => field_int!(abnormal_command_exit_runtime, u32),
-            // @"scrollback-limit": usize
-            b"scrollback-limit" => field_int!(scrollback_limit, usize),
+            // @"scrollback-limit-bytes": Limit(usize, 50_000_000)
+            b"scrollback-limit-bytes" => {
+                field_parsecli_value!(scrollback_limit_bytes, ScrollbackLimitBytes)
+            }
+            // @"scrollback-limit-lines": Limit(usize, maxInt(usize))
+            b"scrollback-limit-lines" => {
+                field_parsecli_value!(scrollback_limit_lines, ScrollbackLimitLines)
+            }
             // @"scrollback-compression": bool
             b"scrollback-compression" => field_bool!(scrollback_compression),
             // scrollbar: Scrollbar (bare enum)
@@ -10518,7 +10561,8 @@ mod parse_tests {
         b"right-click-action",
         b"scroll-to-bottom",
         b"scrollback-compression",
-        b"scrollback-limit",
+        b"scrollback-limit-bytes",
+        b"scrollback-limit-lines",
         b"scrollbar",
         b"search-background",
         b"search-foreground",
@@ -10574,7 +10618,7 @@ mod parse_tests {
     // reference) from `std.meta.fields(Config)`, so their counts must match.
     #[test]
     fn config_field_names_count_is_contract() {
-        assert_eq!(CONFIG_FIELD_NAMES.len(), 204);
+        assert_eq!(CONFIG_FIELD_NAMES.len(), 205);
     }
 
     // Every non-`_` Config field dispatches to a real parse arm. We use the
@@ -10662,7 +10706,7 @@ mod parse_tests {
     fn config_scrollback_compression_defaults_and_parses() {
         let c = Config::default();
         assert!(c.scrollback_compression);
-        assert_eq!(c.scrollback_limit, 50_000_000);
+        assert_eq!(c.scrollback_limit_bytes.value, 50_000_000);
 
         let mut c = Config::default();
         c.parse_into_field(b"scrollback-compression", Some(b"false"))
@@ -10922,7 +10966,8 @@ mod clone_changed_tests {
         Key::Input,
         Key::WaitAfterCommand,
         Key::AbnormalCommandExitRuntime,
-        Key::ScrollbackLimit,
+        Key::ScrollbackLimitBytes,
+        Key::ScrollbackLimitLines,
         Key::ScrollbackCompression,
         Key::Scrollbar,
         Key::Link,
@@ -11062,10 +11107,10 @@ mod clone_changed_tests {
     //   was deep-copied.
     #[test]
     fn key_exhaustive_parse_format_clone_changed() {
-        // `Key`-count contract: 204 variants, matching `CONFIG_FIELDS` and the
+        // `Key`-count contract: 205 variants, matching `CONFIG_FIELDS` and the
         // 204 field names.
-        assert_eq!(ALL_KEYS.len(), 204);
-        assert_eq!(CONFIG_FIELDS.len(), 204);
+        assert_eq!(ALL_KEYS.len(), 205);
+        assert_eq!(CONFIG_FIELDS.len(), 205);
 
         let default = Config::default();
 
@@ -11955,6 +12000,109 @@ mod integration_tests {
             // try testing.expect(cfg._conditional_set.contains(.theme));
             assert!(cfg._conditional_set.contains(&conditional::Key::Theme));
         }
+    }
+
+    // test "scrollback limits" {
+    #[test]
+    fn scrollback_limits() {
+        // var cfg = try Config.default(alloc);
+        let mut cfg = Config::default_config();
+        // try testing.expectEqual(@as(usize, 50_000_000), cfg.@"scrollback-limit-bytes".value);
+        assert_eq!(50_000_000usize, cfg.scrollback_limit_bytes.value);
+        // try testing.expectEqual(std.math.maxInt(usize), cfg.@"scrollback-limit-lines".value);
+        assert_eq!(usize::MAX, cfg.scrollback_limit_lines.value);
+
+        // var it: TestIterator = .{ .data = &.{
+        //     "--scrollback-limit-bytes=1234",
+        //     "--scrollback-limit-lines=567",
+        // } };
+        let mut it = TestIterator::new(&[
+            b"--scrollback-limit-bytes=1234",
+            b"--scrollback-limit-lines=567",
+        ]);
+        // try cfg.loadIter(alloc, &it);
+        cfg.load_iter(&mut it).unwrap();
+
+        // try testing.expectEqual(@as(usize, 1234), cfg.@"scrollback-limit-bytes".value);
+        assert_eq!(1234usize, cfg.scrollback_limit_bytes.value);
+        // try testing.expectEqual(@as(usize, 567), cfg.@"scrollback-limit-lines".value);
+        assert_eq!(567usize, cfg.scrollback_limit_lines.value);
+
+        // var unlimited_it: TestIterator = .{ .data = &.{
+        //     "--scrollback-limit-bytes=unlimited",
+        //     "--scrollback-limit-lines=unlimited",
+        // } };
+        let mut unlimited_it = TestIterator::new(&[
+            b"--scrollback-limit-bytes=unlimited",
+            b"--scrollback-limit-lines=unlimited",
+        ]);
+        cfg.load_iter(&mut unlimited_it).unwrap();
+
+        assert_eq!(usize::MAX, cfg.scrollback_limit_bytes.value);
+        assert_eq!(usize::MAX, cfg.scrollback_limit_lines.value);
+
+        // var reset_it: TestIterator = .{ .data = &.{
+        //     "--scrollback-limit-bytes=",
+        //     "--scrollback-limit-lines=",
+        // } };
+        let mut reset_it =
+            TestIterator::new(&[b"--scrollback-limit-bytes=", b"--scrollback-limit-lines="]);
+        cfg.load_iter(&mut reset_it).unwrap();
+
+        assert_eq!(50_000_000usize, cfg.scrollback_limit_bytes.value);
+        assert_eq!(usize::MAX, cfg.scrollback_limit_lines.value);
+
+        // PORT NOTE (rustty-only, `P3-W3` T4 Step 5): the oracle's tests are
+        // PARSE-ONLY, which a non-round-tripping formatter would pass. Assert
+        // that `unlimited` survives `format_entry` as the literal sentinel and
+        // that a finite value still formats as an integer.
+        {
+            let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+            cfg.format_entry_field(b"scrollback-limit-lines", &mut buf)
+                .unwrap();
+            assert_eq!(
+                b"scrollback-limit-lines = unlimited\n".as_slice(),
+                buf.written()
+            );
+        }
+        {
+            let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+            cfg.format_entry_field(b"scrollback-limit-bytes", &mut buf)
+                .unwrap();
+            assert_eq!(
+                b"scrollback-limit-bytes = 50000000\n".as_slice(),
+                buf.written()
+            );
+        }
+        // And that the formatted `unlimited` parses back to the same value.
+        let mut round = Config::default_config();
+        round
+            .parse_into_field(b"scrollback-limit-bytes", Some(b"unlimited"))
+            .unwrap();
+        assert_eq!(usize::MAX, round.scrollback_limit_bytes.value);
+        assert_eq!(None, round.scrollback_limit_bytes.optional());
+        assert_eq!(Some(50_000_000usize), cfg.scrollback_limit_bytes.optional());
+    }
+
+    // test "compatibility: scrollback-limit renamed to bytes" {
+    #[test]
+    fn compatibility_scrollback_limit_renamed_to_bytes() {
+        // var cfg = try Config.default(alloc);
+        let mut cfg = Config::default_config();
+        // var it: TestIterator = .{ .data = &.{ "--scrollback-limit=1234" } };
+        let mut it = TestIterator::new(&[b"--scrollback-limit=1234"]);
+        // try cfg.loadIter(alloc, &it);
+        cfg.load_iter(&mut it).unwrap();
+
+        // try testing.expectEqual(@as(usize, 1234), cfg.@"scrollback-limit-bytes".value);
+        assert_eq!(1234usize, cfg.scrollback_limit_bytes.value);
+
+        // var unlimited_it: TestIterator = .{ .data = &.{ "--scrollback-limit=unlimited" } };
+        let mut unlimited_it = TestIterator::new(&[b"--scrollback-limit=unlimited"]);
+        cfg.load_iter(&mut unlimited_it).unwrap();
+
+        // try testing.expectEqual(std.math.maxInt(usize), cfg.@"scrollback-limit-bytes".value);
+        assert_eq!(usize::MAX, cfg.scrollback_limit_bytes.value);
     }
 
     // test "compatibility: gtk-single-instance desktop" {
