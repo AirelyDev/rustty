@@ -335,6 +335,11 @@ pub struct Flags {
     /// True if the window is focused.
     pub focused: bool,
 
+    /// True if the terminal view may be visible. Unknown visibility is
+    /// represented as visible so callers behave conservatively.
+    // visible: bool = true,
+    pub visible: bool,
+
     /// True if the terminal is in a password entry mode. This is set
     /// to true based on termios state. This is set
     /// to true based on termios state.
@@ -366,6 +371,7 @@ impl Default for Flags {
             mouse_format: mouse::Format::X10,
             mouse_shift_capture: MouseShiftCapture::Null,
             focused: true,
+            visible: true,
             password_input: false,
             selection_scroll: false,
             search_viewport_dirty: false,
@@ -461,6 +467,12 @@ pub struct Options {
     /// The default mode state. When the terminal gets a reset, it
     /// will revert back to this state.
     pub default_modes: modespkg::ModePacked,
+
+    /// Cursor state restored by DECSCUSR default and RIS.
+    // default_cursor_style: Screen.CursorStyle = .block,
+    // default_cursor_blink: ?bool = false,
+    pub default_cursor_style: crate::screen::CursorStyle,
+    pub default_cursor_blink: Option<bool>,
 
     /// The total storage limit for Kitty images in bytes. Has no effect
     /// if kitty images are disabled at build-time.
@@ -559,6 +571,81 @@ pub enum DeccolmMode {
     Cols132 = 1,
 }
 
+/// Terminal-level cursor state shared by all screens.
+// pub const Cursor = struct {
+//     is_default: bool = true,
+//     default_style: Screen.CursorStyle = .block,
+//     default_blink: ?bool = false,
+// };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cursor {
+    /// Whether the current cursor appearance follows the configured defaults.
+    pub is_default: bool,
+
+    /// Configured style restored by DECSCUSR default and RIS.
+    pub default_style: crate::screen::CursorStyle,
+
+    /// Configured blink restored by DECSCUSR default and RIS. Null selects
+    /// the terminal emulator default, which is blinking.
+    pub default_blink: Option<bool>,
+}
+
+impl Default for Cursor {
+    fn default() -> Cursor {
+        Cursor {
+            is_default: true,
+            default_style: crate::screen::CursorStyle::Block,
+            default_blink: Some(false),
+        }
+    }
+}
+
+/// A terminal resize expressed in cells with optional per-cell pixel
+/// geometry. It is highly recommended that callers supply cell geometry
+/// but a terminal can technically function without it (but some reports
+/// like certain mouse reporting modes and Kitty image protocol will
+/// not be functional).
+///
+/// Cell pixel dimensions must already be scaled for the current display DPI.
+// pub const Resize = struct {
+//     cols: size.CellCountInt,
+//     rows: size.CellCountInt,
+//     cell_size_px: ?struct { width: u32, height: u32 } = null,
+// };
+//
+// PORT NOTE: the reference `cell_size_px` is an anonymous inline struct; Rust
+// has no anonymous struct types, so it is named `ResizeCellSize`. There is no
+// field default in Rust, so every construction spells out `cell_size_px: None`
+// where the reference relies on the `= null` default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Resize {
+    pub cols: size::CellCountInt,
+    pub rows: size::CellCountInt,
+    pub cell_size_px: Option<ResizeCellSize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResizeCellSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+// pub const ResizeError = error{ OutOfMemory, InvalidValue };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeError {
+    /// Resize requires allocation
+    OutOfMemory,
+
+    /// Input value was invalid, such as a 0-sized dimension.
+    InvalidValue,
+}
+
+impl From<OutOfMemory> for ResizeError {
+    fn from(_: OutOfMemory) -> ResizeError {
+        ResizeError::OutOfMemory
+    }
+}
+
 /// Modal screen changes. These map to the literal terminal
 /// modes to enable or disable alternate screen modes. They each
 /// have subtle behaviors so we define them as an enum here.
@@ -630,6 +717,10 @@ pub struct Terminal {
 
     /// The modes that this terminal currently has active.
     pub modes: modespkg::ModeState,
+
+    /// Terminal-level cursor state.
+    // cursor: Cursor = .{}
+    pub cursor: Cursor,
 
     /// The most recently set mouse shape for the terminal.
     pub mouse_shape: mouse::Shape,
@@ -788,7 +879,10 @@ impl Terminal {
             }
         };
 
-        Ok(Terminal {
+        // var result: Terminal = .{ ... };
+        // result.setCursorStyle(.default);
+        // return result;
+        let mut result = Terminal {
             cols,
             rows,
             width_px: 0,
@@ -811,10 +905,17 @@ impl Terminal {
                 default: opts.default_modes,
                 ..modespkg::ModeState::default()
             },
+            cursor: Cursor {
+                default_style: opts.default_cursor_style,
+                default_blink: opts.default_cursor_blink,
+                ..Cursor::default()
+            },
             mouse_shape: mouse::Shape::Text,
             glyph_glossary: glyph::Glossary::empty(),
             flags: Flags::default(),
-        })
+        };
+        result.set_cursor_style(ansi::CursorStyle::Default);
+        Ok(result)
     }
 
     pub fn deinit(&mut self, alloc: Allocator) {
@@ -869,6 +970,72 @@ impl Terminal {
         // return .init(self);
         let self_ptr: *mut Terminal = self;
         Handler::init(self_ptr)
+    }
+
+    /// Change the cursor's current shape and blink behavior.
+    ///
+    /// The terminal parser uses this for DECSCUSR (`CSI Ps SP q`), but the behavior
+    /// is general: `.default` selects the configured defaults, while any other
+    /// value selects a concrete appearance until it is changed again or reset.
+    pub fn set_cursor_style(&mut self, value: ansi::CursorStyle) {
+        use crate::screen::CursorStyle as Style;
+        use ansi::CursorStyle as Req;
+
+        // Remember whether future configuration changes should update the visible
+        // cursor. An explicit appearance must remain in effect until the program
+        // selects the default again.
+        self.cursor.is_default = value == Req::Default;
+
+        // Convert the request into the concrete values used by the renderer and
+        // terminal mode state. A null default blink means the emulator default.
+        let blink = match value {
+            Req::Default => self.cursor.default_blink.unwrap_or(true),
+            Req::SteadyBlock | Req::SteadyBar | Req::SteadyUnderline => false,
+            Req::BlinkingBlock | Req::BlinkingBar | Req::BlinkingUnderline => true,
+        };
+        self.modes.set(modespkg::Mode::CursorBlinking, blink);
+
+        let style = match value {
+            Req::Default => self.cursor.default_style,
+            Req::BlinkingBlock | Req::SteadyBlock => Style::Block,
+            Req::BlinkingBar | Req::SteadyBar => Style::Bar,
+            Req::BlinkingUnderline | Req::SteadyUnderline => Style::Underline,
+        };
+        // SAFETY: `screens.active` is a stable heap pointer owned by
+        // `self.screens`; the write is short-lived and does not alias.
+        unsafe { (*self.screens.active).cursor.cursor_style = style };
+    }
+
+    /// Change the default cursor shape.
+    ///
+    /// If the cursor currently follows its defaults, the visible shape changes
+    /// immediately. Otherwise the new shape is saved for the next reset or default
+    /// selection, such as DECSCUSR `CSI 0 SP q`.
+    pub fn set_default_cursor_style(&mut self, configured_style: crate::screen::CursorStyle) {
+        // Always retain the new default, even while an explicit appearance is
+        // active, so a later reset or default request can restore it.
+        self.cursor.default_style = configured_style;
+
+        // Do not overwrite an appearance explicitly selected by the program.
+        if self.cursor.is_default {
+            self.set_cursor_style(ansi::CursorStyle::Default);
+        }
+    }
+
+    /// Change the default cursor blink behavior.
+    ///
+    /// Null selects the terminal emulator default (blinking). Like the default
+    /// shape, this is applied immediately only when the cursor currently follows
+    /// its defaults; otherwise it is saved for the next reset or default selection.
+    pub fn set_default_cursor_blink(&mut self, blink: Option<bool>) {
+        // Keep the configured value separate from the currently resolved mode so
+        // null can continue to mean "use the emulator default."
+        self.cursor.default_blink = blink;
+
+        // Do not overwrite blink behavior explicitly selected by the program.
+        if self.cursor.is_default {
+            self.set_cursor_style(ansi::CursorStyle::Default);
+        }
     }
 
     /// The general allocator we should use for this terminal.
@@ -5302,22 +5469,34 @@ impl Terminal {
             .set(modespkg::Mode::Column132, mode == DeccolmMode::Cols132);
 
         // Resize to the requested size
-        // try self.resize(
-        //     alloc,
-        //     switch (mode) {
+        // try self.resize(alloc, .{
+        //     .cols = switch (mode) {
         //         .@"132_cols" => 132,
         //         .@"80_cols" => 80,
         //     },
-        //     self.rows,
-        // );
+        //     .rows = self.rows,
+        // });
         self.resize(
             alloc,
-            match mode {
-                DeccolmMode::Cols132 => 132,
-                DeccolmMode::Cols80 => 80,
+            Resize {
+                cols: match mode {
+                    DeccolmMode::Cols132 => 132,
+                    DeccolmMode::Cols80 => 80,
+                },
+                rows: self.rows,
+                cell_size_px: None,
             },
-            self.rows,
-        )?;
+        )
+        .map_err(|e| match e {
+            ResizeError::OutOfMemory => OutOfMemory,
+            // PORT NOTE: `deccolm` passes a constant non-zero column count and
+            // the terminal's own row count (always >= 1), so the reference's
+            // inferred error set can never carry `InvalidValue` here. Rust's
+            // error type is explicit, so the impossible arm is spelled out.
+            ResizeError::InvalidValue => {
+                unreachable!("deccolm resize dimensions are always non-zero")
+            }
+        })?;
 
         // Erase our display and move our cursor.
         // self.eraseDisplay(.complete, false);
@@ -5329,92 +5508,266 @@ impl Terminal {
     }
 
     /// Resize the underlying terminal.
+    ///
+    /// This has follow-on impacts:
+    ///
+    ///   - If the column count changes, tabstops are reset.
+    ///   - The scroll region is always reset
+    ///   - Synchronized output mode is reset for every successful resize.
+    ///
+    /// This handles errors gracefully and recovers the terminal back to
+    /// a clean usable state.
+    ///
+    /// The only error handling edge case is in the highly exceptional scenario
+    /// where the primary screen can be resized but the alternate screen cannot.
+    /// In this scenario, we attempt to clear the alt screen at the desired
+    /// new size. If that fails, we unconditionally deallocate the alt screen
+    /// and move to primary screen. This can break terminal programs but it
+    /// requires a really particular scenario where memory exists for one
+    /// but not the other and we do our best.
     pub fn resize(
         &mut self,
         alloc: Allocator,
-        cols: size::CellCountInt,
-        rows: size::CellCountInt,
-    ) -> Result<(), OutOfMemory> {
-        // If our cols/rows didn't change then we're done
-        // if (self.cols == cols and self.rows == rows) return;
+        opts: Resize,
+    ) -> core::result::Result<(), ResizeError> {
+        // Screen and scrolling-region invariants require non-zero dimensions.
+        // Validate before changing any terminal state.
+        // if (opts.cols == 0 or opts.rows == 0) return error.InvalidValue;
+        if opts.cols == 0 || opts.rows == 0 {
+            return Err(ResizeError::InvalidValue);
+        }
+
+        let cols = opts.cols;
+        let rows = opts.rows;
+
+        // Pixel geometry and synchronized output are updated on every valid
+        // resize attempt, including one that doesn't change the grid dimensions.
+        // Save their old values so later allocation failures can roll them back.
+        // errdefer {
+        //     self.width_px = old_width_px;
+        //     self.height_px = old_height_px;
+        //     self.modes.set(.synchronized_output, old_synchronized_output);
+        // }
+        //
+        // PORT NOTE: Rust has no `errdefer`; the block is spelled out as
+        // `resize_rollback_geometry` and invoked at every fallible exit below.
+        let old_width_px = self.width_px;
+        let old_height_px = self.height_px;
+        let old_synchronized_output = self.modes.get(modespkg::Mode::SynchronizedOutput);
+
+        // If our pixel geometry was set, then we set it even if our rows/cols
+        // didn't change.
+        // PORT NOTE: `std.math.mul(...) catch maxInt(u32)` is saturate-on-overflow.
+        if let Some(cell_size) = opts.cell_size_px {
+            self.width_px = u32::from(cols).saturating_mul(cell_size.width);
+            self.height_px = u32::from(rows).saturating_mul(cell_size.height);
+        }
+
+        // self.modes.set(.synchronized_output, false);
+        self.modes.set(modespkg::Mode::SynchronizedOutput, false);
+
+        // If our cols/rows didn't change, skip grid work but still apply pixels.
+        // if (self.cols == opts.cols and self.rows == opts.rows) return;
         if self.cols == cols && self.rows == rows {
             return Ok(());
         }
 
-        // Resize our tabstops
-        // if (self.cols != cols) {
-        //     const tabstops: Tabstops = try .init(
-        //         alloc,
-        //         cols,
-        //         TABSTOP_INTERVAL,
-        //     );
-        //     self.tabstops.deinit(alloc);
-        //     self.tabstops = tabstops;
-        // }
-        // PORT NOTE (parity 91f0cf67d): allocate and initialize the replacement
-        // FIRST, release the old tab stops only after allocation succeeds. A
-        // failed resize retains the original tab stops and remains safe to
-        // destroy. The upstream FailingAllocator test hunk is ported as
-        // `terminal_resize_preserves_tabstops_on_allocation_failure`, arming the
-        // `Tabstops::resize` tripwire fail point that this path reaches through
-        // `Tabstops::init` (WS8 T17 — the MAIN_PARITY PARTIAL row is now closed).
+        // Build replacement tabstops without touching the current table. Keep
+        // ownership here until every fallible resize operation has succeeded.
+        // var new_tabstops: ?Tabstops = null;
+        // errdefer if (new_tabstops) |*v| v.deinit(alloc);
+        let mut new_tabstops: Option<Tabstops> = None;
         if self.cols != cols {
+            // try tw.check(.tabstops);
+            #[cfg(test)]
+            if let Err(e) = resize_tw_check(ResizeFp::Tabstops) {
+                self.resize_rollback_geometry(old_width_px, old_height_px, old_synchronized_output);
+                return Err(e.into());
+            }
             // PORT NOTE: `Tabstops::init`'s allocation-failure type is its own
-            // `OutOfMemory`; both map to the reference `Allocator.Error`. We
-            // normalize to `pagelist::OutOfMemory` (this crate's canonical OOM)
-            // to match the `resize` signature.
-            let tabstops = match Tabstops::init(alloc, cols as usize, TABSTOP_INTERVAL as usize) {
-                Ok(t) => t,
-                Err(_e) => return Err(OutOfMemory),
-            };
-            // PORT NOTE: `Tabstops::deinit` consumes `self` by value (mirrors
-            // the reference `self.tabstops.deinit(alloc)`); we take the field
-            // out via `core::mem::take` (leaving an empty default) to call it,
-            // then overwrite with the freshly initialized tabstops.
-            core::mem::take(&mut self.tabstops).deinit(alloc);
-            self.tabstops = tabstops;
+            // `OutOfMemory`; both map to the reference `Allocator.Error`.
+            match Tabstops::init(alloc, cols as usize, TABSTOP_INTERVAL as usize) {
+                Ok(t) => new_tabstops = Some(t),
+                Err(_e) => {
+                    self.resize_rollback_geometry(
+                        old_width_px,
+                        old_height_px,
+                        old_synchronized_output,
+                    );
+                    return Err(ResizeError::OutOfMemory);
+                }
+            }
         }
 
-        // Resize primary screen, which supports reflow
+        // Resize primary screen, which supports reflow. We do this first
+        // because the cleanup situation is a lot better if this succeeds
+        // and alt fails than the reverse.
+        // try tw.check(.primary_screen);
         // const primary = self.screens.get(.primary).?;
         // try primary.resize(.{
-        //     .cols = cols,
-        //     .rows = rows,
+        //     .cols = opts.cols,
+        //     .rows = opts.rows,
         //     .reflow = self.modes.get(.wraparound),
         //     .prompt_redraw = self.flags.shell_redraws_prompt,
         // });
         let reflow = self.modes.get(modespkg::Mode::Wraparound);
         let prompt_redraw = self.flags.shell_redraws_prompt;
         let primary: *mut Screen = self.screens.get(crate::screen_set::Key::Primary).unwrap();
+
+        #[cfg(test)]
+        if let Err(e) = resize_tw_check(ResizeFp::PrimaryScreen) {
+            // errdefer if (new_tabstops) |*v| v.deinit(alloc);
+            if let Some(v) = new_tabstops.take() {
+                v.deinit(alloc);
+            }
+            self.resize_rollback_geometry(old_width_px, old_height_px, old_synchronized_output);
+            return Err(e.into());
+        }
         // SAFETY: `primary` is a stable heap pointer owned by `self.screens`;
         // `resize` takes `&mut Screen` and does not mutate `self.screens`.
-        unsafe {
+        if let Err(e) = unsafe {
             (*primary).resize(crate::screen::Resize {
                 cols,
                 rows,
                 reflow,
                 prompt_redraw,
-            })?;
+            })
+        } {
+            if let Some(v) = new_tabstops.take() {
+                v.deinit(alloc);
+            }
+            self.resize_rollback_geometry(old_width_px, old_height_px, old_synchronized_output);
+            return Err(e.into());
         }
 
-        // Alternate screen, if it exists, doesn't reflow
-        // if (self.screens.get(.alternate)) |alt| try alt.resize(.{
-        //     .cols = cols,
-        //     .rows = rows,
-        //     .reflow = false,
-        // });
+        // Alternate screen, if it exists, doesn't reflow. The primary resize
+        // above can't be losslessly undone, so if the alternate resize fails we
+        // replace it with an empty screen at the requested size. If that
+        // also fails, we fall back to the primary screen.
         if let Some(alt) = self.screens.get(crate::screen_set::Key::Alternate) {
-            // SAFETY: `alt` is a stable heap pointer owned by `self.screens`.
-            unsafe {
-                (*alt).resize(crate::screen::Resize {
-                    cols,
-                    rows,
-                    reflow: false,
-                    // PORT NOTE: the reference omits `prompt_redraw` here, so it
-                    // takes the `Resize` struct field default of `.true`.
-                    prompt_redraw: osc::semantic_prompt::Redraw::True,
-                })?;
+            'alt: {
+                let _err: ResizeError = 'resize: {
+                    #[cfg(test)]
+                    if let Err(e) = resize_tw_check(ResizeFp::AlternateScreen) {
+                        break 'resize e.into();
+                    }
+                    // SAFETY: `alt` is a stable heap pointer owned by `self.screens`.
+                    match unsafe {
+                        (*alt).resize(crate::screen::Resize {
+                            cols,
+                            rows,
+                            reflow: false,
+                            // PORT NOTE: the reference omits `prompt_redraw`
+                            // here, so it takes the `Screen.Resize` struct field
+                            // default, which is `.false` (`Screen.zig`
+                            // `prompt_redraw: ... = .false`).
+                            //
+                            // PORT FINDING (P3-W4 T2): this previously read
+                            // `Redraw::True`, citing a `.true` default the
+                            // reference has never had. The alternate screen
+                            // would therefore clear its cursor row on resize
+                            // whenever the cursor's semantic content was not
+                            // `.output`. Guarded by
+                            // `terminal_resize_does_not_prompt_redraw_the_alternate_screen`.
+                            prompt_redraw: osc::semantic_prompt::Redraw::False,
+                        })
+                    } {
+                        Err(e) => break 'resize e.into(),
+                        // Resize succeeded.
+                        Ok(()) => break 'alt,
+                    }
+                };
+
+                // log.warn("alternate screen resize failed, replacing it err={}", .{err});
+
+                // If the alternate screen isn't active, then we just free it
+                // and move on. It'll be reallocated when it gets reinitialized
+                // lazily. In this case, we just lose the prior data if the
+                // terminal program expected it to be saved.
+                if self.screens.active_key != crate::screen_set::Key::Alternate {
+                    self.screens
+                        .remove(alloc, crate::screen_set::Key::Alternate);
+                    break 'alt;
+                }
+
+                // The alt screen is active, so we temporarily switch to primary
+                // so we can safely remove the alt and recreate it blank. This
+                // loses the data but hopefully keeps us on the alt screen.
+                // SAFETY: `alt` is still live here (nothing has removed it yet).
+                let charset = unsafe { (*alt).charset.clone() };
+                self.screens.switch_to(crate::screen_set::Key::Primary);
+                self.screens
+                    .remove(alloc, crate::screen_set::Key::Alternate);
+
+                // Replace the alt screen with an empty version. If this fails
+                // we just go back to the primary screen. Not great, but best
+                // we can do.
+                // tw.check(.alternate_screen_init) catch break :alt;
+                #[cfg(test)]
+                if resize_tw_check(ResizeFp::AlternateScreenInit).is_err() {
+                    break 'alt;
+                }
+                // PORT NOTE (oracle b988efcfe): upstream's 0.16 regression fix
+                // changed this call's first argument from `alt.io` to
+                // `self.io()`. rustty's `ScreenSet::get_init` has no `io`
+                // parameter at all, so the pre-fix form is simply never
+                // reproduced and there is nothing to port.
+                let replacement = match self.screens.get_init(
+                    alloc,
+                    crate::screen_set::Key::Alternate,
+                    crate::screen::Options {
+                        cols,
+                        rows,
+                        // .max_scrollback = 0
+                        max_scrollback_bytes: Some(0),
+                        max_scrollback_lines: None,
+                        // Inherit our Kitty image settings from the primary
+                        // screen (see `switch_screen`'s PORT NOTE: kitty
+                        // graphics IS enabled in rustty, so the reference's
+                        // `build_options.kitty_graphics` arm is the live one).
+                        kitty_image_storage_limit: unsafe { (*primary).kitty_images.total_limit },
+                        kitty_image_loading_limits: unsafe { (*primary).kitty_images.image_limits },
+                    },
+                ) {
+                    Ok(r) => r,
+                    Err(_init_err) => {
+                        // log.warn("alternate screen replacement failed,
+                        //   falling back to primary err={}", .{init_err});
+                        break 'alt;
+                    }
+                };
+
+                // SAFETY: freshly initialized screen owned by `self.screens`.
+                unsafe { (*replacement).charset = charset };
+                self.screens.switch_to(crate::screen_set::Key::Alternate);
             }
+        }
+
+        // errdefer comptime unreachable;
+        //
+        // PORT NOTE: "No more failures are allowed after this point because the
+        // screens have committed their new sizes and the remaining Terminal
+        // state must follow." Zig's `errdefer comptime unreachable` is a
+        // COMPILE-TIME assertion that no fallible operation follows; Rust has no
+        // equivalent, so the property is held by construction — nothing below
+        // returns `Err` and the function's only remaining exit is `Ok(())`.
+        // The marker below is that contract written down at the commit point,
+        // as a real (non-vacuous) invariant: reaching here means every screen
+        // has already committed to the new size. A bare `debug_assert!(true)`
+        // would be a no-op that clippy rightly rejects.
+        debug_assert!(
+            unsafe { (*primary).pages.cols == cols && (*primary).pages.rows == rows },
+            "resize commit point reached without the primary screen at the new size"
+        );
+
+        // All fallible work is complete. Replace the old tabstop table only now.
+        if let Some(v) = new_tabstops.take() {
+            // PORT NOTE: `Tabstops::deinit` consumes `self` by value (mirrors
+            // the reference `self.tabstops.deinit(alloc)`); we take the field
+            // out via `core::mem::take` (leaving an empty default) to call it,
+            // then overwrite with the freshly initialized tabstops.
+            core::mem::take(&mut self.tabstops).deinit(alloc);
+            self.tabstops = v;
         }
 
         // Whenever we resize we just mark it as a screen clear
@@ -5442,6 +5795,25 @@ impl Terminal {
         };
 
         Ok(())
+    }
+
+    /// The pixel-geometry / synchronized-output `errdefer` of `resize`,
+    /// spelled out (Rust has no `errdefer`).
+    fn resize_rollback_geometry(
+        &mut self,
+        old_width_px: u32,
+        old_height_px: u32,
+        old_synchronized_output: bool,
+    ) {
+        self.width_px = old_width_px;
+        self.height_px = old_height_px;
+        // NOTE: when `old_synchronized_output` is false this re-clears the mode
+        // and therefore bumps `modes::sync_output_clear_count`. That counter
+        // measures the SUCCESS path (see its PORT NOTE); a rollback restoring
+        // `false` is indistinguishable from a clear at the `ModeState::set`
+        // seam, and no assertion counts an error path.
+        self.modes
+            .set(modespkg::Mode::SynchronizedOutput, old_synchronized_output);
     }
 
     /// Set the pwd for the terminal.
@@ -5502,7 +5874,7 @@ impl Terminal {
         // Growing can reallocate, which would invalidate an aliased `pwd` —
         // that cannot happen in the aliasing case, because an aliased source is
         // a subslice of `self.pwd`, hence `capacity <= self.pwd.capacity()`.
-        #[cfg(test)]
+        #[cfg(debug_assertions)]
         set_string_tw_check(SetStringFp::Reserve)?;
         let v: *mut Vec<u8> = core::ptr::addr_of_mut!(self.pwd);
         // SAFETY: `v` is the live `self.pwd`; `src` is readable for `src_len`
@@ -5582,7 +5954,7 @@ impl Terminal {
         // try self.title.ensureTotalCapacity(self.gpa(), capacity);
         //
         // PORT NOTE: grow-only + amortized => `reserve`, NOT `reserve_exact`.
-        #[cfg(test)]
+        #[cfg(debug_assertions)]
         set_string_tw_check(SetStringFp::Reserve)?;
         let v: *mut Vec<u8> = core::ptr::addr_of_mut!(self.title);
         // SAFETY: as in `set_pwd` above.
@@ -5950,8 +6322,21 @@ impl Terminal {
         // self.title.clearRetainingCapacity();
         // self.glyph_glossary.clearAndFree(self.gpa());
         // self.status_display = .main;
+        // const visible = self.flags.visible;
+        // self.modes.reset();
+        // self.flags = .{
+        //     // Visibility belongs to the view rather than terminal state, so a
+        //     // terminal reset must not make a hidden view potentially visible.
+        //     .visible = visible,
+        // };
+        let visible = self.flags.visible;
         self.modes.reset();
-        self.flags = Flags::default();
+        self.flags = Flags {
+            // Visibility belongs to the view rather than terminal state, so a
+            // terminal reset must not make a hidden view potentially visible.
+            visible,
+            ..Flags::default()
+        };
         self.tabstops.reset(TABSTOP_INTERVAL as usize);
         self.previous_char = None;
         // PORT NOTE: `std.ArrayList.clearRetainingCapacity` keeps the allocation
@@ -5974,6 +6359,8 @@ impl Terminal {
             left: 0,
             right: self.cols - 1,
         };
+        // self.setCursorStyle(.default);
+        self.set_cursor_style(ansi::CursorStyle::Default);
 
         // Always mark dirty so we redraw everything
         // self.flags.dirty.clear = true;
@@ -6024,26 +6411,96 @@ impl Terminal {
 // `RESIZE_TW`, `screen.rs`'s `SELECTION_STRING_TW` and `pagelist/mod.rs`'s
 // `INIT_TW`). The single `Reserve` point sits exactly where the reference's
 // `ensureTotalCapacity` can fail, in both `set_pwd` and `set_title`.
-#[cfg(test)]
+//
+// PORT NOTE (P3-W4 T5): the gate WIDENED from `cfg(test)` to
+// `cfg(debug_assertions)`. Reason: `439d35e27`'s C-API test
+// (`get vt_processing_error`) forces a `setTitle` allocation failure through
+// the PUBLIC `vt_write` path and lives in `rustty-vt-c`, a DIFFERENT crate.
+// `cfg(test)` is only true for the crate currently compiled with `--test`, so
+// the fail point would never trip from there and the test would be VACUOUS.
+// `cfg(debug_assertions)` is the same stand-in `tripwire::Module::enabled()`
+// itself uses for Zig's `builtin.is_test` (see its PORT NOTE), and it is off in
+// release, so production `set_pwd`/`set_title` are unchanged.
+#[cfg(debug_assertions)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum SetStringFp {
+pub enum SetStringFp {
     Reserve,
 }
 
-#[cfg(test)]
+#[cfg(debug_assertions)]
 thread_local! {
     pub(crate) static SET_STRING_TW:
         core::cell::RefCell<rustty_util::tripwire::Module<SetStringFp, OutOfMemory>> =
         core::cell::RefCell::new(rustty_util::tripwire::module());
 }
 
-// `try setString_tw.check(point)`. Only compiled in test builds; the call sites
-// are `#[cfg(test)]`-gated so production `set_pwd`/`set_title` are unchanged,
-// mirroring the Zig `enabled = builtin.is_test` gate.
-#[cfg(test)]
+// `try setString_tw.check(point)`.
+#[cfg(debug_assertions)]
 #[inline]
 fn set_string_tw_check(point: SetStringFp) -> Result<(), OutOfMemory> {
     SET_STRING_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+/// `setString_tw.errorAlways(point, error.OutOfMemory)` — cross-crate accessor.
+#[cfg(debug_assertions)]
+pub fn set_string_tw_error_always(point: SetStringFp) {
+    SET_STRING_TW.with(|tw| tw.borrow_mut().errorAlways(point, OutOfMemory));
+}
+
+/// `setString_tw.end(mode)` — cross-crate accessor.
+#[cfg(debug_assertions)]
+pub fn set_string_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    SET_STRING_TW.with(|tw| tw.borrow_mut().end(mode))
+}
+
+// const resize_tw = tripwire.module(enum {
+//     tabstops,
+//     primary_screen,
+//     alternate_screen,
+//     alternate_screen_init,
+// }, resize);
+//
+// PORT NOTE: same instance-vs-comptime-type idiom as `SET_STRING_TW` above; the
+// fail-point NAMES are the reference's verbatim. Distinct from
+// `tabstops::RESIZE_TW` (which injects inside `Tabstops::init`) and from
+// `screen::RESIZE_TW` (which injects inside `Screen::resize`).
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ResizeFp {
+    Tabstops,
+    PrimaryScreen,
+    AlternateScreen,
+    AlternateScreenInit,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RESIZE_TW:
+        core::cell::RefCell<rustty_util::tripwire::Module<ResizeFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+/// `try resize_tw.check(point)`.
+#[cfg(test)]
+#[inline]
+fn resize_tw_check(point: ResizeFp) -> Result<(), OutOfMemory> {
+    RESIZE_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+/// `resize_tw.errorAlways(point, error.OutOfMemory)`.
+#[cfg(test)]
+pub(crate) fn resize_tw_error_always(point: ResizeFp) {
+    RESIZE_TW.with(|tw| tw.borrow_mut().errorAlways(point, OutOfMemory));
+}
+
+/// `try resize_tw.end(mode)`.
+#[cfg(test)]
+pub(crate) fn resize_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    RESIZE_TW.with(|tw| tw.borrow_mut().end(mode))
 }
 
 #[cfg(test)]
@@ -6198,6 +6655,8 @@ mod tests {
                 palette: DynamicPalette::default_palette(),
             },
             default_modes: modespkg::ModePacked::default(),
+            default_cursor_style: crate::screen::CursorStyle::Block,
+            default_cursor_blink: Some(false),
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }
@@ -15165,9 +15624,33 @@ mod tests {
 
             // Grow then shrink columns repeatedly to drive reflow page churn.
             for _ in 0..10 {
-                t.resize(alloc, 60, 5).unwrap();
-                t.resize(alloc, 8, 5).unwrap();
-                t.resize(alloc, 20, 5).unwrap();
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 60,
+                        rows: 5,
+                        cell_size_px: None,
+                    },
+                )
+                .unwrap();
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 8,
+                        rows: 5,
+                        cell_size_px: None,
+                    },
+                )
+                .unwrap();
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 20,
+                        rows: 5,
+                        cell_size_px: None,
+                    },
+                )
+                .unwrap();
             }
 
             // We should have produced real page churn.
@@ -16804,7 +17287,15 @@ mod tests {
 
         t.set_cursor_pos(1, 10);
         t.save_cursor();
-        t.resize(alloc, 5, 5).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 5,
+                rows: 5,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.restore_cursor();
         t.print('X' as u32).unwrap();
 
@@ -16814,6 +17305,88 @@ mod tests {
         }
 
         t.deinit(alloc);
+    }
+
+    // test "Terminal: cursor defaults update current default cursor"
+    #[test]
+    fn terminal_cursor_defaults_update_current_default_cursor() {
+        let mut o = opts(10, 10);
+        o.default_cursor_style = crate::screen::CursorStyle::Bar;
+        o.default_cursor_blink = Some(true);
+        let mut t = Terminal::init(Global, o).unwrap();
+
+        // Initialization applies the configured defaults.
+        assert!(t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Bar, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // Configuration changes are immediately visible while the cursor still
+        // follows its defaults.
+        t.set_default_cursor_style(crate::screen::CursorStyle::Underline);
+        t.set_default_cursor_blink(Some(false));
+        assert!(t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Underline, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(!t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // Null restores the terminal emulator's blinking default.
+        t.set_default_cursor_blink(None);
+        assert!(t.modes.get(modespkg::Mode::CursorBlinking));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursor defaults do not override explicit cursor"
+    //
+    // NEGATIVE CONTROL (P3-W4 T4 Step 4): the last block is upstream's RIS
+    // round-trip — set a style via DECSCUSR, `full_reset`, and assert the
+    // CONFIGURED default is restored, NOT the hardcoded initial one. A port that
+    // leaves the restore in the handler (or drops it) fails here.
+    #[test]
+    fn terminal_cursor_defaults_do_not_override_explicit_cursor() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.set_cursor_style(ansi::CursorStyle::BlinkingBar);
+        assert!(!t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Bar, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // New defaults are retained without replacing the explicit appearance.
+        t.set_default_cursor_style(crate::screen::CursorStyle::Underline);
+        t.set_default_cursor_blink(Some(false));
+        assert_eq!(
+            crate::screen::CursorStyle::Underline,
+            t.cursor.default_style
+        );
+        assert_eq!(Some(false), t.cursor.default_blink);
+        assert_eq!(crate::screen::CursorStyle::Bar, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // Selecting the default applies the values that changed above.
+        t.set_cursor_style(ansi::CursorStyle::Default);
+        assert!(t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Underline, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(!t.modes.get(modespkg::Mode::CursorBlinking));
+
+        // A full reset also leaves the cursor on the configured defaults.
+        t.set_cursor_style(ansi::CursorStyle::SteadyBlock);
+        t.full_reset();
+        assert!(t.cursor.is_default);
+        assert_eq!(crate::screen::CursorStyle::Underline, unsafe {
+            (*t.screens.active).cursor.cursor_style
+        });
+        assert!(!t.modes.get(modespkg::Mode::CursorBlinking));
+
+        t.deinit(Global);
     }
 
     // test "Terminal: fullReset with a non-empty pen"
@@ -17080,9 +17653,205 @@ mod tests {
 
         t.print('x' as u32).unwrap();
         t.print('😀' as u32).unwrap(); // 0x1F600
-        t.resize(alloc, 2, 3).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 2,
+                rows: 3,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.set_cursor_pos(1, 2);
         t.print('😀' as u32).unwrap(); // 0x1F600
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize resets synchronized output"
+    #[test]
+    fn terminal_resize_resets_synchronized_output() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::SynchronizedOutput, true);
+        t.resize(
+            alloc,
+            Resize {
+                cols: 10,
+                rows: 5,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+        assert!(!t.modes.get(modespkg::Mode::SynchronizedOutput));
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize rejects zero dimensions before mutation"
+    #[test]
+    fn terminal_resize_rejects_zero_dimensions_before_mutation() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.width_px = 100;
+        t.height_px = 100;
+        t.flags.dirty.clear = false;
+
+        assert_eq!(
+            Err(ResizeError::InvalidValue),
+            t.resize(
+                alloc,
+                Resize {
+                    cols: 0,
+                    rows: 5,
+                    cell_size_px: Some(ResizeCellSize {
+                        width: 9,
+                        height: 18
+                    }),
+                }
+            )
+        );
+        assert_eq!(
+            Err(ResizeError::InvalidValue),
+            t.resize(
+                alloc,
+                Resize {
+                    cols: 10,
+                    rows: 0,
+                    cell_size_px: Some(ResizeCellSize {
+                        width: 9,
+                        height: 18
+                    }),
+                }
+            )
+        );
+
+        assert_eq!(10 as size::CellCountInt, t.cols);
+        assert_eq!(5 as size::CellCountInt, t.rows);
+        assert_eq!(100_u32, t.width_px);
+        assert_eq!(100_u32, t.height_px);
+        assert!(!t.flags.dirty.clear);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize preserves pixel dimensions when omitted"
+    #[test]
+    fn terminal_resize_preserves_pixel_dimensions_when_omitted() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.width_px = 90;
+        t.height_px = 90;
+        t.resize(
+            alloc,
+            Resize {
+                cols: 20,
+                rows: 10,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(90_u32, t.width_px);
+        assert_eq!(90_u32, t.height_px);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize updates pixels without changing cell dimensions"
+    #[test]
+    fn terminal_resize_updates_pixels_without_changing_cell_dimensions() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.resize(
+            alloc,
+            Resize {
+                cols: 10,
+                rows: 5,
+                cell_size_px: Some(ResizeCellSize {
+                    width: 9,
+                    height: 18,
+                }),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(90_u32, t.width_px);
+        assert_eq!(90_u32, t.height_px);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize pixel dimensions saturate"
+    #[test]
+    fn terminal_resize_pixel_dimensions_saturate() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(2, 3)).unwrap();
+
+        t.resize(
+            alloc,
+            Resize {
+                cols: 2,
+                rows: 3,
+                cell_size_px: Some(ResizeCellSize {
+                    width: u32::MAX,
+                    height: u32::MAX,
+                }),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(u32::MAX, t.width_px);
+        assert_eq!(u32::MAX, t.height_px);
+
+        t.deinit(alloc);
+    }
+
+    // PORT FINDING GUARD (P3-W4 T2): the alternate screen's `Screen::resize`
+    // must use the reference's `Screen.Resize.prompt_redraw` DEFAULT, which is
+    // `.false`. rustty passed `.true` here, citing a default the reference has
+    // never had. With `.true` the alternate screen clears the cursor's prompt
+    // row on every resize whenever the cursor's semantic content is not
+    // `.output`; with `.false` it does not. No upstream test covers this
+    // because upstream never had the bug.
+    #[test]
+    fn terminal_resize_does_not_prompt_redraw_the_alternate_screen() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        // Enter the alternate screen and put a prompt-ish line on it with the
+        // cursor still marked as prompt input (the condition
+        // `clear_prompt_for_redraw` keys off).
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+        unsafe {
+            (*t.screens.active).cursor_set_semantic_content(
+                crate::screen::SemanticContentArg::Prompt(
+                    osc::semantic_prompt::PromptKind::Initial,
+                ),
+            );
+        }
+        t.print_string(b"> abc").unwrap();
+
+        // shell_redraws_prompt is what the PRIMARY screen keys off; the
+        // alternate screen must not honor it regardless.
+        t.flags.shell_redraws_prompt = osc::semantic_prompt::Redraw::True;
+
+        t.resize(
+            alloc,
+            Resize {
+                cols: 20,
+                rows: 3,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+
+        let s = t.plain_string(Global).unwrap();
+        assert_eq!(b"> abc".as_slice(), s.as_slice());
 
         t.deinit(alloc);
     }
@@ -17105,13 +17874,341 @@ mod tests {
         // `Tabstops::init` reaches from `Terminal::resize`. 513 columns is past
         // `PREALLOC_COLUMNS`, so the allocation IS attempted.
         crate::tabstops::resize_tw_error_always(crate::tabstops::ResizeFp::DynamicAlloc);
-        assert_eq!(Err(OutOfMemory), t.resize(alloc, 513, 1));
+        assert_eq!(
+            Err(ResizeError::OutOfMemory),
+            t.resize(
+                alloc,
+                Resize {
+                    cols: 513,
+                    rows: 1,
+                    cell_size_px: None
+                }
+            )
+        );
         crate::tabstops::resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
 
         // The original Tabstops was never replaced: cols is unchanged and the
         // original interval-8 stop is still present.
         assert_eq!(10 as size::CellCountInt, t.cols);
         assert!(t.tabstops.get(8));
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize failure paths preserve consistent state"
+    //
+    // NEGATIVE CONTROL (P3-W4 T3 Step 3): one arm per fail point, each asserting
+    // a DIFFERENT piece of rolled-back state, because a single "resize failed
+    // and nothing changed" test cannot say which rollback arm regressed:
+    //   - `Tabstops`      trips BEFORE the tabstop table is replaced.
+    //   - `PrimaryScreen` trips after the tabstops were built (they must be
+    //                     freed) but before any screen mutated.
+    //   - `AlternateScreen` is the RECOVERY arm, not a restoration arm: the
+    //                     primary already resized, so the resize SUCCEEDS and
+    //                     the inactive alternate is dropped instead.
+    //
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn terminal_resize_failure_paths_preserve_consistent_state() {
+        let alloc = Global;
+
+        for tag in [
+            ResizeFp::Tabstops,
+            ResizeFp::PrimaryScreen,
+            ResizeFp::AlternateScreen,
+        ] {
+            let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+            t.print_string(b"primary").unwrap();
+            let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+            t.print_string(b"alternate").unwrap();
+            let _ = t.switch_screen(crate::screen_set::Key::Primary).unwrap();
+
+            t.width_px = 100;
+            t.height_px = 50;
+            t.modes.set(modespkg::Mode::SynchronizedOutput, true);
+            t.flags.dirty.clear = false;
+            t.scrolling_region = ScrollingRegion {
+                top: 1,
+                bottom: 2,
+                left: 1,
+                right: 8,
+            };
+            t.tabstops.unset(8);
+            t.tabstops.set(3);
+
+            let primary = t.screens.get(crate::screen_set::Key::Primary).unwrap();
+            let alternate = t.screens.get(crate::screen_set::Key::Alternate).unwrap();
+            let alternate_generation = t.screens.generation(crate::screen_set::Key::Alternate);
+            assert!(std::ptr::eq(
+                unsafe { (*primary).pages.pages.first },
+                unsafe { (*primary).pages.pages.last }
+            ));
+            assert!(std::ptr::eq(
+                unsafe { (*alternate).pages.pages.first },
+                unsafe { (*alternate).pages.pages.last }
+            ));
+
+            // PORT NOTE: `const before = t;` is a Zig by-value struct copy; the
+            // Rust port snapshots exactly the fields the reference compares.
+            let before_width_px = t.width_px;
+            let before_height_px = t.height_px;
+            let before_modes = (t.modes.values, t.modes.saved, t.modes.default);
+            let before_cols = t.cols;
+            let before_rows = t.rows;
+            let before_scrolling_region = (
+                t.scrolling_region.top,
+                t.scrolling_region.bottom,
+                t.scrolling_region.left,
+                t.scrolling_region.right,
+            );
+            let before_dirty_clear = t.flags.dirty.clear;
+            let before_tabstop_8 = t.tabstops.get(8);
+            let before_tabstop_3 = t.tabstops.get(3);
+            let before_active_key = t.screens.active_key;
+            let before_active = t.screens.active;
+            let (before_primary_cols, before_primary_rows, before_primary_total_rows) = unsafe {
+                (
+                    (*primary).pages.cols,
+                    (*primary).pages.rows,
+                    (*primary).pages.total_rows,
+                )
+            };
+            let before_primary_cursor_xy = unsafe { ((*primary).cursor.x, (*primary).cursor.y) };
+            let before_primary_page: Vec<u8> = unsafe {
+                let page: *const Page = crate::pagelist::Node::page((*primary).pages.pages.first);
+                core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
+            };
+            let (before_alt_cols, before_alt_rows, before_alt_total_rows) = unsafe {
+                (
+                    (*alternate).pages.cols,
+                    (*alternate).pages.rows,
+                    (*alternate).pages.total_rows,
+                )
+            };
+            let before_alt_cursor_xy = unsafe { ((*alternate).cursor.x, (*alternate).cursor.y) };
+            let before_alternate_page: Vec<u8> = unsafe {
+                let page: *const Page = crate::pagelist::Node::page((*alternate).pages.pages.first);
+                core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
+            };
+
+            resize_tw_error_always(tag);
+
+            // A failure after the primary screen has resized is recovered by
+            // dropping the inactive alternate and completing the resize. This
+            // also proves the alternate tripwire is after the primary resize
+            // rather than acting as a preflight check.
+            if tag == ResizeFp::AlternateScreen {
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 513,
+                        rows: 4,
+                        cell_size_px: Some(ResizeCellSize {
+                            width: 9,
+                            height: 18,
+                        }),
+                    },
+                )
+                .unwrap();
+
+                assert_eq!(513 as size::CellCountInt, t.cols);
+                assert_eq!(4 as size::CellCountInt, t.rows);
+                assert_eq!(4617_u32, t.width_px);
+                assert_eq!(72_u32, t.height_px);
+                assert!(!t.modes.get(modespkg::Mode::SynchronizedOutput));
+                assert!(t.flags.dirty.clear);
+                assert_eq!(513 as size::CellCountInt, unsafe { (*primary).pages.cols });
+                assert_eq!(4 as size::CellCountInt, unsafe { (*primary).pages.rows });
+                assert!(t.screens.get(crate::screen_set::Key::Alternate).is_none());
+                assert_eq!(
+                    alternate_generation.wrapping_add(1),
+                    t.screens.generation(crate::screen_set::Key::Alternate)
+                );
+                assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+                assert!(std::ptr::eq(primary, t.screens.active));
+                assert!(t.tabstops.get(8));
+                assert!(!t.tabstops.get(3));
+
+                // The alternate is recreated lazily at the terminal's new size.
+                let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+                let replacement = t.screens.get(crate::screen_set::Key::Alternate).unwrap();
+                assert_eq!(513 as size::CellCountInt, unsafe {
+                    (*replacement).pages.cols
+                });
+                assert_eq!(4 as size::CellCountInt, unsafe {
+                    (*replacement).pages.rows
+                });
+                assert!(unsafe {
+                    (*(*replacement)
+                        .pages
+                        .get_cell(point::Point::Active(point::Coordinate::default()))
+                        .unwrap()
+                        .cell)
+                        .is_empty()
+                });
+
+                resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+                t.deinit(alloc);
+                continue;
+            }
+
+            assert_eq!(
+                Err(ResizeError::OutOfMemory),
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 513,
+                        rows: 4,
+                        cell_size_px: Some(ResizeCellSize {
+                            width: 9,
+                            height: 18
+                        }),
+                    }
+                )
+            );
+
+            assert_eq!(before_width_px, t.width_px);
+            assert_eq!(before_height_px, t.height_px);
+            assert_eq!(
+                before_modes,
+                (t.modes.values, t.modes.saved, t.modes.default)
+            );
+            assert_eq!(before_cols, t.cols);
+            assert_eq!(before_rows, t.rows);
+            assert_eq!(
+                before_scrolling_region,
+                (
+                    t.scrolling_region.top,
+                    t.scrolling_region.bottom,
+                    t.scrolling_region.left,
+                    t.scrolling_region.right,
+                )
+            );
+            assert_eq!(before_dirty_clear, t.flags.dirty.clear);
+            assert_eq!(before_tabstop_8, t.tabstops.get(8));
+            assert_eq!(before_tabstop_3, t.tabstops.get(3));
+            assert_eq!(before_active_key, t.screens.active_key);
+            assert!(std::ptr::eq(before_active, t.screens.active));
+
+            unsafe {
+                assert_eq!(before_primary_cols, (*primary).pages.cols);
+                assert_eq!(before_primary_rows, (*primary).pages.rows);
+                assert_eq!(before_primary_total_rows, (*primary).pages.total_rows);
+                assert_eq!(
+                    before_primary_cursor_xy,
+                    ((*primary).cursor.x, (*primary).cursor.y)
+                );
+                let page: *const Page = crate::pagelist::Node::page((*primary).pages.pages.first);
+                let after = core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len());
+                assert!(
+                    before_primary_page == after,
+                    "primary page memory changed after a failed resize"
+                );
+
+                assert_eq!(before_alt_cols, (*alternate).pages.cols);
+                assert_eq!(before_alt_rows, (*alternate).pages.rows);
+                assert_eq!(before_alt_total_rows, (*alternate).pages.total_rows);
+                assert_eq!(
+                    before_alt_cursor_xy,
+                    ((*alternate).cursor.x, (*alternate).cursor.y)
+                );
+                let page: *const Page = crate::pagelist::Node::page((*alternate).pages.pages.first);
+                let after = core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len());
+                assert!(
+                    before_alternate_page == after,
+                    "alternate page memory changed after a failed resize"
+                );
+            }
+
+            resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            t.deinit(alloc);
+        }
+    }
+
+    // test "Terminal: alternate resize failure replaces active alternate screen"
+    //
+    // WS18 release lane: tripwire fail point; see the PORT NOTE above.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn terminal_alternate_resize_failure_replaces_active_alternate_screen() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+        unsafe { (*t.screens.active).charset.gl = charsets::Slots::G1 };
+        t.print_string(b"alternate").unwrap();
+        let generation = t.screens.generation(crate::screen_set::Key::Alternate);
+
+        resize_tw_error_always(ResizeFp::AlternateScreen);
+        t.resize(
+            alloc,
+            Resize {
+                cols: 20,
+                rows: 4,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+        resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+        let alternate = t.screens.get(crate::screen_set::Key::Alternate).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+        assert!(std::ptr::eq(alternate, t.screens.active));
+        assert_eq!(20 as size::CellCountInt, unsafe { (*alternate).pages.cols });
+        assert_eq!(4 as size::CellCountInt, unsafe { (*alternate).pages.rows });
+        assert!(unsafe {
+            (*(*alternate)
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate::default()))
+                .unwrap()
+                .cell)
+                .is_empty()
+        });
+        assert_eq!(charsets::Slots::G1, unsafe { (*alternate).charset.gl });
+        assert_eq!(
+            generation.wrapping_add(1),
+            t.screens.generation(crate::screen_set::Key::Alternate)
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: alternate resize replacement failure falls back to primary"
+    //
+    // WS18 release lane: tripwire fail point; see the PORT NOTE above.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn terminal_alternate_resize_replacement_failure_falls_back_to_primary() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+        resize_tw_error_always(ResizeFp::AlternateScreen);
+        resize_tw_error_always(ResizeFp::AlternateScreenInit);
+        t.resize(
+            alloc,
+            Resize {
+                cols: 20,
+                rows: 4,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+        resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+        let primary = t.screens.get(crate::screen_set::Key::Primary).unwrap();
+        assert!(t.screens.get(crate::screen_set::Key::Alternate).is_none());
+        assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+        assert!(std::ptr::eq(primary, t.screens.active));
+        assert_eq!(20 as size::CellCountInt, unsafe { (*primary).pages.cols });
+        assert_eq!(4 as size::CellCountInt, unsafe { (*primary).pages.rows });
 
         t.deinit(alloc);
     }
@@ -17129,11 +18226,27 @@ mod tests {
         t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
         t.print('0' as u32).unwrap();
         t.modes.set(modespkg::Mode::EnableMode3, true);
-        t.resize(alloc, cols, rows).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.set_left_and_right_margin(2, 0);
         t.print_repeat(1850).unwrap();
         let _ = t.modes.restore(modespkg::Mode::EnableMode3);
-        t.resize(alloc, cols, rows).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         t.deinit(alloc);
     }
@@ -17153,7 +18266,15 @@ mod tests {
         t.print('2' as u32).unwrap();
         t.print('3' as u32).unwrap();
         let new_cols: size::CellCountInt = 2;
-        t.resize(alloc, new_cols, rows).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: new_cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         let str = t.plain_string(Global).unwrap();
         assert_eq!(str.as_slice(), "01".as_bytes());
@@ -17175,7 +18296,15 @@ mod tests {
         t.print('2' as u32).unwrap();
         t.print('3' as u32).unwrap();
         let new_cols: size::CellCountInt = 2;
-        t.resize(alloc, new_cols, rows).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: new_cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         let str = t.plain_string(Global).unwrap();
         assert_eq!(str.as_slice(), "01\n23".as_bytes());
@@ -17202,7 +18331,15 @@ mod tests {
             }
         }
 
-        t.resize(alloc, 60, 30).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 60,
+                rows: 30,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         t.deinit(alloc);
     }
@@ -17227,7 +18364,15 @@ mod tests {
             t.print('x' as u32).unwrap();
         }
 
-        t.resize(alloc, 60, 30).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 60,
+                rows: 30,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
 
         t.deinit(alloc);
     }
@@ -17257,7 +18402,15 @@ mod tests {
         }
 
         t.save_cursor();
-        t.resize(alloc, 5, 3).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 5,
+                rows: 3,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.restore_cursor();
 
         {
@@ -17305,7 +18458,15 @@ mod tests {
         }
 
         t.save_cursor();
-        t.resize(alloc, 5, 3).unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 5,
+                rows: 3,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
         t.restore_cursor();
 
         {

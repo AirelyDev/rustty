@@ -940,6 +940,8 @@ fn new_(
             // of truth produces.
             colors: Colors::default(),
             default_modes: rustty_vt::modes::ModePacked::default(),
+            default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+            default_cursor_blink: Some(false),
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
         },
@@ -1579,10 +1581,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
 
         // .default_cursor_style => {
         //     const style = (if (value) |ptr| ptr.* else TerminalCursorStyle.block).toZig() orelse return .invalid_value;
-        //     wrapper.stream.handler.default_cursor_style = style;
-        //     if (wrapper.stream.handler.default_cursor) {
-        //         wrapper.terminal.screens.active.cursor.cursor_style = style;
-        //     }
+        //     wrapper.terminal.setDefaultCursorStyle(style);
         // },
         Option_::DefaultCursorStyle => {
             // const style = (if (value) |ptr| ptr.* else .block).toZig() orelse return .invalid_value;
@@ -1596,20 +1595,18 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 Some(s) => s,
                 None => return Result::InvalidValue,
             };
-            // wrapper.stream.handler.default_cursor_style = style;
-            unsafe { (*terminal_).stream.handler.default_cursor_style = style };
-            // if (wrapper.stream.handler.default_cursor) { ... }
-            if unsafe { (*terminal_).stream.handler.default_cursor } {
-                let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
-                unsafe { (*active).cursor.cursor_style = style };
-            }
+            // wrapper.terminal.setDefaultCursorStyle(style);
+            //
+            // PORT NOTE (oracle c594031d5): the C API no longer writes the
+            // handler's `default_cursor_style` (that field is gone) nor pokes
+            // the active screen's cursor style; `Terminal` owns both and its
+            // setter applies the change only while the cursor is still on its
+            // defaults.
+            unsafe { (*t).set_default_cursor_style(style) };
         }
         // .default_cursor_blink => {
         //     const blink = if (value) |ptr| ptr.* else false;
-        //     wrapper.stream.handler.default_cursor_blink = blink;
-        //     if (wrapper.stream.handler.default_cursor) {
-        //         wrapper.terminal.modes.set(.cursor_blinking, blink);
-        //     }
+        //     wrapper.terminal.setDefaultCursorBlink(blink);
         // },
         Option_::DefaultCursorBlink => {
             // const blink = if (value) |ptr| ptr.* else false;
@@ -1619,12 +1616,13 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             } else {
                 false
             };
-            // wrapper.stream.handler.default_cursor_blink = blink;
-            unsafe { (*terminal_).stream.handler.default_cursor_blink = blink };
-            // if (wrapper.stream.handler.default_cursor) { ... }
-            if unsafe { (*terminal_).stream.handler.default_cursor } {
-                unsafe { (*t).modes.set(modes::Mode::CursorBlinking, blink) };
-            }
+            // wrapper.terminal.setDefaultCursorBlink(blink);
+            //
+            // PORT NOTE: the reference's `blink` here is a plain `bool` (the C
+            // option is a `bool*`), widened to `Terminal.Cursor.default_blink`'s
+            // `?bool` at the setter boundary — a C caller can never select the
+            // `null` "emulator default" arm through this option.
+            unsafe { (*t).set_default_cursor_blink(Some(blink)) };
         }
 
         // .scrollback_max_bytes => wrapper.terminal.setScrollbackMaxBytes(
@@ -1824,20 +1822,17 @@ pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
 
 // pub fn resize(terminal_, cols, rows, cell_width_px, cell_height_px) ... {
 //     const wrapper = terminal_ orelse return .invalid_value;
-//     const t = wrapper.terminal;
-//     if (cols == 0 or rows == 0) return .invalid_value;
-//     t.resize(t.gpa(), cols, rows) catch return .out_of_memory;
-//     t.width_px = std.math.mul(u32, cols, cell_width_px) catch std.math.maxInt(u32);
-//     t.height_px = std.math.mul(u32, rows, cell_height_px) catch std.math.maxInt(u32);
-//     t.modes.set(.synchronized_output, false);
-//     if (t.modes.get(.in_band_size_reports)) in_band: {
-//         const func = wrapper.effects.write_pty orelse break :in_band;
-//         var buf: [1024]u8 = undefined;
-//         var writer: std.Io.Writer = .fixed(&buf);
-//         size_report.encode(&writer, .mode_2048, .{ .rows, .columns, .cell_width, .cell_height }) catch break :in_band;
-//         const data = writer.buffered();
-//         func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
-//     }
+//     wrapper.stream.handler.resize(.{
+//         .cols = cols,
+//         .rows = rows,
+//         .cell_size_px = .{
+//             .width = cell_width_px,
+//             .height = cell_height_px,
+//         },
+//     }) catch |err| return switch (err) {
+//         error.InvalidValue => .invalid_value,
+//         error.OutOfMemory => .out_of_memory,
+//     };
 //     return .success;
 // }
 /// # Safety
@@ -1853,69 +1848,39 @@ pub unsafe fn resize(
     if terminal_.is_null() {
         return Result::InvalidValue;
     }
-    // const t = wrapper.terminal;
-    // SAFETY: `terminal_` is a live wrapper.
-    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
 
-    // if (cols == 0 or rows == 0) return .invalid_value;
-    if cols == 0 || rows == 0 {
-        return Result::InvalidValue;
-    }
-
-    // t.resize(t.gpa(), cols, rows) catch return .out_of_memory;
-    // SAFETY: short-lived deref; no overlapping `&mut ZigTerminal` is held.
-    let gpa = unsafe { (*t).gpa() };
-    if unsafe { (*t).resize(gpa, cols, rows) }.is_err() {
-        return Result::OutOfMemory;
-    }
-
-    // Update pixel sizes
-    // t.width_px = std.math.mul(u32, cols, cell_width_px) catch std.math.maxInt(u32);
-    // t.height_px = std.math.mul(u32, rows, cell_height_px) catch std.math.maxInt(u32);
-    // PORT NOTE: `std.math.mul(...) catch maxInt(u32)` is saturate-on-overflow.
-    unsafe {
-        (*t).width_px = (cols as u32).saturating_mul(cell_width_px);
-        (*t).height_px = (rows as u32).saturating_mul(cell_height_px);
-    }
-
-    // Disable synchronized output mode so that we show changes
-    // immediately for a resize. This is allowed by the spec.
-    // t.modes.set(.synchronized_output, false);
-    unsafe { (*t).modes.set(modes::Mode::SynchronizedOutput, false) };
-
-    // If we have in-band size reporting enabled, send a report.
-    // if (t.modes.get(.in_band_size_reports)) in_band: {
-    if unsafe { (*t).modes.get(modes::Mode::InBandSizeReports) } {
-        // const func = wrapper.effects.write_pty orelse break :in_band;
-        // SAFETY: `effects` is a sibling field of the live wrapper.
-        if let Some(func) = unsafe { (*terminal_).effects.write_pty } {
-            // var buf: [1024]u8 = undefined; var writer = .fixed(&buf);
-            // size_report.encode(&writer, .mode_2048, .{...}) catch break :in_band;
-            // PORT NOTE: the reference encodes into a fixed `[1024]u8`. rustty's
-            // `size_report::encode` writes via `core::fmt::Write`; we accumulate
-            // into a `String` (ASCII only) and hand its bytes to the callback,
-            // matching `report_device_attributes`. An encode failure is the
-            // `catch break :in_band` early-out.
-            let mut buf = String::new();
-            let encode_ok = size_report::encode(
-                &mut buf,
-                size_report::Style::Mode2048,
-                size_report::Size {
-                    rows,
-                    columns: cols,
-                    cell_width: cell_width_px,
-                    cell_height: cell_height_px,
-                },
-            )
-            .is_ok();
-            if encode_ok {
-                // const data = writer.buffered();
-                // func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
-                let data = buf.as_bytes();
-                let userdata = unsafe { (*terminal_).effects.userdata };
-                func(terminal_, userdata, data.as_ptr(), data.len());
-            }
-        }
+    // wrapper.stream.handler.resize(.{ ... }) catch |err| return switch (err) {
+    //     error.InvalidValue => .invalid_value,
+    //     error.OutOfMemory => .out_of_memory,
+    // };
+    //
+    // PORT NOTE (oracle 89b103dd5, area C): the whole inline body that used to
+    // live here — the zero-dimension check, the saturating `width_px`/
+    // `height_px` multiply, the `modes.set(.synchronized_output, false)`, and
+    // the in-band mode-2048 `size_report::encode` — is now owned by
+    // `Terminal::resize` + `stream_terminal::Handler::resize`. Do NOT re-add any
+    // of it: the geometry must be applied even when the grid is unchanged, and
+    // the synchronized-output clear must happen exactly once (guarded by
+    // `rustty_vt::modes::sync_output_clear_count`).
+    // SAFETY: `terminal_` is a live wrapper; the handler aliases its terminal.
+    let r = unsafe {
+        (*terminal_)
+            .stream
+            .handler
+            .resize(rustty_vt::terminal::Resize {
+                cols,
+                rows,
+                cell_size_px: Some(rustty_vt::terminal::ResizeCellSize {
+                    width: cell_width_px,
+                    height: cell_height_px,
+                }),
+            })
+    };
+    if let Err(err) = r {
+        return match err {
+            rustty_vt::terminal::ResizeError::InvalidValue => Result::InvalidValue,
+            rustty_vt::terminal::ResizeError::OutOfMemory => Result::OutOfMemory,
+        };
     }
 
     // return .success;
@@ -2045,10 +2010,7 @@ pub enum TerminalData {
     KittyGraphics = 30,
     Selection = 31,
     ViewportActive = 32,
-    // PORT NOTE: `vt_processing_error = 33` (oracle `439d35e27`) is NOT yet
-    // ported — it needs `stream.handler.semantic_failure`, which is owned by
-    // `P3-W4 T5`. The discriminant is deliberately LEFT AS A GAP so 34/35 keep
-    // the oracle's ABI numbering; do not renumber to close it.
+    VtProcessingError = 33,
     ScrollbackMaxBytes = 34,
     ScrollbackMaxLines = 35,
     // /// Output type expected for querying the data of the given kind.
@@ -2056,7 +2018,12 @@ pub enum TerminalData {
     //     return switch (self) {
     //         .invalid => void,
     //         .cols, .rows, .cursor_x, .cursor_y => size.CellCountInt,
-    //         .cursor_pending_wrap, .cursor_visible, .mouse_tracking, .viewport_active => bool,
+    //         .cursor_pending_wrap,
+    //         .cursor_visible,
+    //         .mouse_tracking,
+    //         .viewport_active,
+    //         .vt_processing_error,
+    //         => bool,
     //         .active_screen => TerminalScreen,
     //         .kitty_keyboard_flags => u8,
     //         .scrollbar => TerminalScrollbar,
@@ -2204,6 +2171,10 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
                 (*active).pages.viewport,
                 rustty_vt::pagelist::Viewport::Active
             )
+        },
+        // .vt_processing_error => out.* = wrapper.stream.handler.semantic_failure,
+        TerminalData::VtProcessingError => unsafe {
+            *(out as *mut bool) = (*terminal_).stream.handler.semantic_failure
         },
 
         // .scrollback_max_bytes => {
@@ -3622,6 +3593,64 @@ mod tests {
         });
     }
 
+    // test "get vt_processing_error"
+    //
+    // WS18 release lane: the reference forces the failure with
+    // `testing.failing_allocator`; this port arms the `set_title` tripwire fail
+    // point in rustty-vt, whose gate is `cfg(debug_assertions)` precisely so it
+    // is reachable from THIS crate (see the `SetStringFp` PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run
+    // in debug — where it still runs and passes.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn get_vt_processing_error() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            let mut processing_error: bool = true;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::VtProcessingError,
+                    &mut processing_error as *mut _ as *mut c_void,
+                )
+            });
+            assert!(!processing_error);
+
+            // Force a non-graceful terminal-owned update failure through the
+            // public VT write path.
+            rustty_vt::terminal::set_string_tw_error_always(
+                rustty_vt::terminal::SetStringFp::Reserve,
+            );
+            vtw(t, b"\x1B]2;unavailable\x1B\\");
+            rustty_vt::terminal::set_string_tw_end(rustty_util::tripwire::ResetMode::Reset)
+                .unwrap();
+
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::VtProcessingError,
+                    &mut processing_error as *mut _ as *mut c_void,
+                )
+            });
+            assert!(processing_error);
+
+            // rustty_terminal_reset() does NOT clear it.
+            unsafe { reset(t) };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::VtProcessingError,
+                    &mut processing_error as *mut _ as *mut c_void,
+                )
+            });
+            assert!(processing_error);
+
+            unsafe { free(t) };
+        });
+    }
+
     // test "get null"
     #[test]
     fn get_null() {
@@ -4032,6 +4061,14 @@ mod tests {
 
             // DECSCUSR reset restores the configured default style and blink.
             vtw(t, b"\x1b[0 q");
+            assert_eq!(rustty_vt::screen::CursorStyle::Underline, unsafe {
+                (*(*(*t).terminal).screens.active).cursor.cursor_style
+            });
+            assert!(unsafe { (*(*t).terminal).modes.get(modes::Mode::CursorBlinking) });
+
+            // RIS also restores cursor defaults from Terminal-owned state.
+            vtw(t, b"\x1b[2 q");
+            unsafe { reset(t) };
             assert_eq!(rustty_vt::screen::CursorStyle::Underline, unsafe {
                 (*(*(*t).terminal).screens.active).cursor.cursor_style
             });
@@ -4708,6 +4745,40 @@ mod tests {
             assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
                 LAST_USERDATA
             });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "write_pty receives DECRQSS response" (oracle 39ae85f04)
+    //
+    // Area C §6.5 recorded a BOUNDED UNCERTAINTY: nobody had traced whether the
+    // C `vt_write` path delivers a DECRQSS reply through the `write_pty`
+    // trampoline. This test answers it definitively — and it does, so no
+    // additional C-side plumbing was needed beyond the `dcs_handler` field.
+    #[test]
+    fn write_pty_receives_decrqss_response() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            vtw(t, b"\x1B[1m\x1BP$qm\x1B\\");
+            assert_eq!(
+                b"\x1BP1$r0;1m\x1B\\".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
             unsafe { free(t) };
         });
     }
@@ -5907,11 +5978,12 @@ mod tests {
             let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
-            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+            // Pixel geometry must still be applied when the cell dimensions match.
+            assert_eq!(Result::Success, unsafe { resize(t, 80, 24, 9, 18) });
 
             let zt = unsafe { (*t).terminal };
-            assert_eq!(100u32 * 9, unsafe { (*zt).width_px });
-            assert_eq!(40u32 * 18, unsafe { (*zt).height_px });
+            assert_eq!(80u32 * 9, unsafe { (*zt).width_px });
+            assert_eq!(24u32 * 18, unsafe { (*zt).height_px });
             unsafe { free(t) };
         });
     }
@@ -5946,8 +6018,20 @@ mod tests {
             let zt = unsafe { (*t).terminal };
             unsafe { (*zt).modes.set(modes::Mode::SynchronizedOutput, true) };
 
-            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+            // NEGATIVE-CONTROL ASSERTION (P3-W4 T2 Step 5): the clear must
+            // happen EXACTLY ONCE. `89b103dd5` moves the clear out of this
+            // wrapper and into `Terminal::resize`; a port that keeps both
+            // double-clears (== 2, behaviourally invisible) and a port that
+            // deletes both without the terminal-side move loses it entirely
+            // (== 0). Only the count separates the three cases — the
+            // `!get(SynchronizedOutput)` assertion below passes for both 1 and
+            // 2. See the `sync_output_clear_count` PORT NOTE in vt/modes.rs.
+            rustty_vt::modes::sync_output_clear_reset();
+
+            // The terminal-level reset must run even if grid work is unnecessary.
+            assert_eq!(Result::Success, unsafe { resize(t, 80, 24, 9, 18) });
             assert!(!unsafe { (*zt).modes.get(modes::Mode::SynchronizedOutput) });
+            assert_eq!(1, rustty_vt::modes::sync_output_clear_count());
             unsafe { free(t) };
         });
     }

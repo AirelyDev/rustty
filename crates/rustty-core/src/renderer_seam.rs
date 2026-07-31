@@ -2154,6 +2154,8 @@ mod compression_tests {
                         max_scrollback_lines: None,
                         colors: rustty_vt::terminal::Colors::default(),
                         default_modes: rustty_vt::modes::ModePacked::default(),
+                        default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+                        default_cursor_blink: Some(false),
                         kitty_image_storage_limit: 0,
                         kitty_image_loading_limits:
                             rustty_vt::kitty::graphics_image::Limits::DIRECT,

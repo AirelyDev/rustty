@@ -906,6 +906,10 @@ impl Thread {
                 Message::ColorSchemeReport { force } => {
                     unsafe { (*io).colorSchemeReport(&mut *data, force) }?
                 }
+                // .visibility_report => |v| try io.visibilityReport(data, v.visible, v.force),
+                Message::VisibilityReport { visible, force } => {
+                    unsafe { (*io).visibilityReport(&mut *data, visible, force) }?
+                }
                 // .crash => @panic("crash request, crashing intentionally"),
                 Message::Crash => panic!("crash request, crashing intentionally"),
                 // .change_config => |config| {

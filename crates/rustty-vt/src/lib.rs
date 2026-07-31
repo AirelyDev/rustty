@@ -61,6 +61,10 @@ pub mod device_attributes;
 pub mod device_status;
 // pub const focus = @import("focus.zig");
 pub mod focus;
+// PORT NOTE: no upstream counterpart — `fixed_writer` is the stand-in for Zig's
+// `std.Io.Writer.fixed`, which the reference uses to encode VT responses into
+// stack buffers of a statically-known maximum size. See the module docs.
+pub mod fixed_writer;
 // pub const formatter = @import("formatter.zig");
 pub mod formatter;
 // pub const highlight = @import("highlight.zig");

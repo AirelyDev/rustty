@@ -1203,16 +1203,16 @@ fn row_data_from_c_int(v: c_int) -> Option<row::RowData> {
 // boundary). `Option` is a contiguous `#[repr(C)]` enum; `TerminalData` is NOT
 // (see below).
 //
-// `TerminalData` stops being contiguous at `P3-W3` T5: oracle `a27e04e8f` adds
-// `scrollback_max_bytes = 34` / `scrollback_max_lines = 35` while `33`
-// (`vt_processing_error`, oracle `439d35e27`) is not yet ported and its
-// discriminant is deliberately left as a hole so 34/35 keep upstream's ABI
-// numbering. A plain `0..N` range check would `transmute` 33 into an
-// UNINHABITED enum value — instant UB — so the hole is rejected explicitly.
-// When `P3-W4 T5` lands 33, delete `TERMINAL_DATA_HOLES`'s entry (NOT the
-// mechanism: 36+ may reopen a hole).
+// `TerminalData` went non-contiguous at `P3-W3` T5 (oracle `a27e04e8f` added
+// `scrollback_max_bytes = 34` / `scrollback_max_lines = 35` while `33`,
+// `vt_processing_error`, was not yet ported) and is CONTIGUOUS AGAIN as of
+// `P3-W4` T5, which lands 33 (oracle `439d35e27`). A plain `0..N` range check
+// would `transmute` a hole into an UNINHABITED enum value — instant UB — so
+// holes are rejected explicitly. The MECHANISM stays even though the list is
+// now empty: 36+ may reopen a hole, and re-deriving it from scratch under time
+// pressure is exactly how that UB gets reintroduced.
 const TERMINAL_DATA_MAX: c_int = 35;
-const TERMINAL_DATA_HOLES: &[c_int] = &[33];
+const TERMINAL_DATA_HOLES: &[c_int] = &[];
 fn terminal_data_from_c_int(v: c_int) -> Option<terminal::TerminalData> {
     if (0..=TERMINAL_DATA_MAX).contains(&v) && !TERMINAL_DATA_HOLES.contains(&v) {
         // SAFETY: `v` is a valid `TerminalData` discriminant (checked above).

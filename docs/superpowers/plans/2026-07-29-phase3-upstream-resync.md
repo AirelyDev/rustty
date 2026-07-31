@@ -3274,3 +3274,54 @@ re-benchmark against `origin/main`.
 
 
 
+
+---
+
+# `P3-W11` — Phase 3 completion sweep (the remainder, owned rather than parked)
+
+**Branch:** `p3-w11-sweep`. **Created 2026-07-31**, after W0–W4 and W6–W9 merged.
+
+This workstream exists because several lanes finished their *workstream* without
+finishing every *task*, and unfinished work with no live owner is exactly how the
+WS19 audit found 21 orphaned items. Rather than leave those tasks described only
+in merge messages, they are collected here with an owner the `G-P2` gate can see.
+
+**Nothing here is new scope.** Every item is a task the original plan already
+specified, or debt a lane filed with a runnable recipe.
+
+## Task 1: `P3-W6 T4` — Kitty temp-file → directory validation
+
+Security-relevant: removes the process-`TMPDIR` dependency from kitty image path
+validation. Its blocker is gone — `P3-W7` (which owned `global::tmp_dir_path`) is
+merged, so `Limits.temporary_directory` is reachable now.
+
+## Task 2: `P3-W6 T5` — Kitty transient usage / eviction
+
+## Task 3: `P3-W6 T6` — Viewport fingerprint reuse
+
+The largest remaining item: a single-pass rewrite carrying a **documented SB/UB
+hazard**. Treat it the way `P3-W2 T1` treated the hash-map pointer audit — prove
+the aliasing story before writing the fast path, not after.
+
+## Task 4: `P3-W8 T6`/`T7` — the Wayland hotkeys series (F-W1 … F-W4)
+
+**Not started at all** in the W8 lane; nothing of F-W1..F-W4 exists. The
+assessment's insertion points and the plan's `RefCell` `winproto()`/`winproto_mut()`
+hazard still stand as written in the `P3-W8` section above.
+
+## Task 5: `P3-W8 T5 step 3` — now unblocked
+
+It was blocked on `gtk-horizontal-tab-scroll`, which `P3-W9 T3` landed.
+
+## Task 6: **V21** — the Surface-level visibility KAT
+
+`.port/phase-2/VERIFICATION_DEBT.md` **V21**: `6c8c07981`'s Surface-level dedup
+and the end-to-end "report reaches the pty" assertion. `rustty-core` has no
+`Surface` fixture; the row carries a runnable recipe (extend `exec.rs`'s
+`TestTermio` into a `TestSurface`) and names the exact mutation that must fail.
+
+## `P3-W11` finale
+
+- [ ] Every task above either landed or re-filed with an owner in an OPEN workstream.
+- [ ] `G-P2` green; `check_phase2_closure.py --self-test` green.
+- [ ] Both platforms green.

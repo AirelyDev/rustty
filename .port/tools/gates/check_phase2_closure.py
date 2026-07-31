@@ -84,6 +84,7 @@ LEDGERS = [
     ".port/phase-2/INTEGRATION_PARITY.md",
 ]
 ROADMAP = "docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md"
+PHASE3_PLAN = "docs/superpowers/plans/2026-07-29-phase3-upstream-resync.md"
 
 # An "open claim": a line asserting that something is not done.
 OPEN_MARKERS = [
@@ -133,8 +134,20 @@ def derive_p3_workstreams():
         cwd=ROOT, capture_output=True, text=True,
     ).stdout
     closed = set(re.findall(r"^merge: (P3-W(?:1[0-9]|[0-9]))\b", out, re.M))
-    # Every id the plan defines; anything not merged is open.
-    allids = {f"P3-W{i}" for i in range(0, 11)}
+    # The id UNIVERSE comes from the plan's own `# \`P3-W<n>\`` headings, not a
+    # hardcoded range. A range silently excludes any workstream added later —
+    # P3-W11 was added on 2026-07-31 and a `range(0, 11)` would have made it an
+    # unrecognized owner, i.e. a false "NO owner named" on a correctly-owned row.
+    # Reading the plan means adding a workstream to the plan is what registers it.
+    plan = os.path.join(ROOT, PHASE3_PLAN)
+    allids = set()
+    if os.path.exists(plan):
+        allids = set(re.findall(r"^#\s+`(P3-W(?:1[0-9]|[0-9]))`",
+                                open(plan, errors="ignore").read(), re.M))
+    if not allids:
+        # Anti-vacuity: an empty universe would make every P3 owner unknown and
+        # therefore invalid. Fall back to whatever git proves exists.
+        allids = set(closed)
     return allids - closed, closed
 
 # Text that marks an entry as no longer open.

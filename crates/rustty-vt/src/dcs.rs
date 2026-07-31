@@ -393,6 +393,139 @@ pub enum Decrqss {
     Decslrm,
 }
 
+impl Decrqss {
+    /// Fixed upper bound for an encoded DECRPSS response. The comptime
+    /// calculated max at the time of writing this was around 63 so this
+    /// leaves a ton of space for future stuff. We don't do the comptime
+    /// calculation cause it complicated the implementation a bit too
+    /// much.
+    // pub const max_response_bytes = 256;
+    pub const MAX_RESPONSE_BYTES: usize = 256;
+
+    /// Encode the response for this request.
+    //
+    // pub fn encode(self: DECRQSS, t: *terminal.Terminal, response: []u8) ![]const u8
+    //
+    // PORT NOTE: the reference writes through `std.Io.Writer.fixed(response)`.
+    // rustty's encoders target `core::fmt::Write`, so the byte buffer is driven
+    // through `fixed_writer::FixedWriter` (the stand-in for
+    // `std.Io.Writer.fixed`) and an explicit `end` cursor. The buffer stays
+    // `&mut [u8]` end to end — the response is NEVER formatted through a
+    // `String`. Every overflow is `error.NoSpaceLeft`, which this crate models
+    // as `OutOfMemory` (same mapping as `Terminal::print_attributes`).
+    pub fn encode<'a>(
+        self,
+        t: &mut crate::terminal::Terminal,
+        response: &'a mut [u8],
+    ) -> Result<&'a [u8], OutOfMemory> {
+        use core::fmt::Write as _;
+
+        // const prefix_fmt = "\x1bP{d}$r";
+        // const prefix_len = std.fmt.comptimePrint(prefix_fmt, .{0}).len;
+        // writer.end = prefix_len;
+        const PREFIX_LEN: usize = "\x1bP0$r".len();
+        if response.len() < PREFIX_LEN {
+            return Err(OutOfMemory);
+        }
+        let mut end = PREFIX_LEN;
+
+        // Writes `args` at `end` through a fixed writer, advancing `end`.
+        macro_rules! print {
+            ($($arg:tt)*) => {{
+                let mut w = crate::fixed_writer::FixedWriter::new(&mut response[end..]);
+                write!(w, $($arg)*).map_err(|_| OutOfMemory)?;
+                end += w.end;
+            }};
+        }
+
+        match self {
+            // .none => {},
+            Decrqss::None => {}
+
+            // .sgr => {
+            //     const buf = try t.printAttributes(writer.buffer[writer.end..]);
+            //     writer.end += buf.len;
+            //     try writer.writeByte('m');
+            // },
+            Decrqss::Sgr => {
+                let buf_len = t
+                    .print_attributes(&mut response[end..])
+                    .map_err(|_| OutOfMemory)?
+                    .len();
+                end += buf_len;
+                if end >= response.len() {
+                    return Err(OutOfMemory);
+                }
+                response[end] = b'm';
+                end += 1;
+            }
+
+            // .decscusr => { ... try writer.print("{d} q", .{style}); },
+            Decrqss::Decscusr => {
+                let blink = t.modes.get(crate::modes::Mode::CursorBlinking);
+                let style: u8 = match unsafe { (*t.screens.active).cursor.cursor_style } {
+                    // .block, .block_hollow => if (blink) 1 else 2,
+                    crate::screen::CursorStyle::Block | crate::screen::CursorStyle::BlockHollow => {
+                        if blink {
+                            1
+                        } else {
+                            2
+                        }
+                    }
+                    // .underline => if (blink) 3 else 4,
+                    crate::screen::CursorStyle::Underline => {
+                        if blink {
+                            3
+                        } else {
+                            4
+                        }
+                    }
+                    // .bar => if (blink) 5 else 6,
+                    crate::screen::CursorStyle::Bar => {
+                        if blink {
+                            5
+                        } else {
+                            6
+                        }
+                    }
+                };
+                print!("{style} q");
+            }
+
+            // .decstbm => try writer.print("{d};{d}r", .{ top + 1, bottom + 1 }),
+            Decrqss::Decstbm => {
+                let top = t.scrolling_region.top + 1;
+                let bottom = t.scrolling_region.bottom + 1;
+                print!("{top};{bottom}r");
+            }
+
+            // .decslrm => if (t.modes.get(.enable_left_and_right_margin)) { ... },
+            Decrqss::Decslrm => {
+                if t.modes.get(crate::modes::Mode::EnableLeftAndRightMargin) {
+                    let left = t.scrolling_region.left + 1;
+                    let right = t.scrolling_region.right + 1;
+                    print!("{left};{right}s");
+                }
+            }
+        }
+
+        // const valid = writer.end > prefix_len;
+        let valid = end > PREFIX_LEN;
+
+        // try writer.writeAll("\x1b\\");
+        print!("\x1b\\");
+
+        // _ = try std.fmt.bufPrint(response[0..prefix_len], prefix_fmt, .{@intFromBool(valid)});
+        {
+            let mut w = crate::fixed_writer::FixedWriter::new(&mut response[0..PREFIX_LEN]);
+            write!(w, "\x1bP{}$r", u8::from(valid)).map_err(|_| OutOfMemory)?;
+        }
+
+        // return writer.buffered();
+        Ok(&response[..end])
+    }
+}
+
 // PORT NOTE: the reference uses the `DECRQSS` enum above only as a *command*
 // payload; the `.decrqss` *state* payload is a distinct anonymous struct
 //   struct { data: [2]u8 = undefined, len: u2 = 0 }
@@ -704,6 +837,124 @@ mod tests {
         let _ = h.put(b'q');
         assert!(h.unhook().is_none());
         h.deinit();
+    }
+
+    // PORT NOTE: `Terminal::init` in this crate has no field defaults, so the
+    // two DECRQSS encoding tests build their fixture through this helper
+    // (mirroring `terminal.rs`'s test `opts`).
+    fn decrqss_test_terminal() -> crate::terminal::Terminal {
+        crate::terminal::Terminal::init(
+            Global,
+            crate::terminal::Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback_bytes: Some(10_000),
+                max_scrollback_lines: None,
+                colors: crate::terminal::Colors::default(),
+                default_modes: crate::modes::ModePacked::default(),
+                default_cursor_style: crate::screen::CursorStyle::Block,
+                default_cursor_blink: Some(false),
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: crate::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap()
+    }
+
+    // test "DECRQSS response encoding"
+    #[test]
+    fn decrqss_response_encoding() {
+        let mut t = decrqss_test_terminal();
+
+        fn expect_response(
+            term: &mut crate::terminal::Terminal,
+            request: Decrqss,
+            expected: &[u8],
+        ) {
+            let mut buf = [0u8; Decrqss::MAX_RESPONSE_BYTES];
+            let encoded = request.encode(term, &mut buf).unwrap();
+            assert_eq!(expected, encoded);
+        }
+
+        expect_response(&mut t, Decrqss::None, b"\x1BP0$r\x1B\\");
+        expect_response(&mut t, Decrqss::Sgr, b"\x1BP1$r0m\x1B\\");
+
+        t.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        t.set_attribute(crate::sgr::Attribute::Underline(
+            crate::sgr::Underline::Curly,
+        ))
+        .unwrap();
+        expect_response(&mut t, Decrqss::Sgr, b"\x1BP1$r0;1;4:3m\x1B\\");
+
+        t.set_cursor_style(crate::ansi::CursorStyle::SteadyUnderline);
+        expect_response(&mut t, Decrqss::Decscusr, b"\x1BP1$r4 q\x1B\\");
+
+        t.scrolling_region.top = 4;
+        t.scrolling_region.bottom = 19;
+        expect_response(&mut t, Decrqss::Decstbm, b"\x1BP1$r5;20r\x1B\\");
+
+        expect_response(&mut t, Decrqss::Decslrm, b"\x1BP0$r\x1B\\");
+        t.modes
+            .set(crate::modes::Mode::EnableLeftAndRightMargin, true);
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 69;
+        expect_response(&mut t, Decrqss::Decslrm, b"\x1BP1$r3;70s\x1B\\");
+
+        t.deinit(Global);
+    }
+
+    // test "DECRQSS largest response fits fixed buffer"
+    //
+    // NEGATIVE CONTROL (P3-W4 T6 Step 4) — WITH A CORRECTION TO THE PLAN.
+    //
+    // The plan says "shrink `max_response_bytes` to 255 and it must fail".
+    // THAT CONTROL IS VACUOUS AND WAS OBSERVED TO PASS: the largest response
+    // this test builds is exactly 63 bytes (upstream's own comment says the
+    // comptime max "was around 63 ... this leaves a ton of space"), so 255 is
+    // still ~4x the requirement and the encode succeeds unchanged. The real
+    // threshold is 63. Executed: `MAX_RESPONSE_BYTES = 255` -> PASSES (vacuous);
+    // `MAX_RESPONSE_BYTES = 62` -> FAILS with
+    // `called `Result::unwrap()` on an `Err` value: OutOfMemory`.
+    //
+    // What this test therefore guards is: (a) the exact byte-for-byte encoding
+    // of the widest SGR response, and (b) that the encoder REFUSES (rather than
+    // truncating) when the buffer cannot hold it.
+    #[test]
+    fn decrqss_largest_response_fits_fixed_buffer() {
+        use crate::sgr::Attribute;
+        let mut t = decrqss_test_terminal();
+
+        t.set_attribute(Attribute::Bold).unwrap();
+        t.set_attribute(Attribute::Faint).unwrap();
+        t.set_attribute(Attribute::Italic).unwrap();
+        t.set_attribute(Attribute::Underline(crate::sgr::Underline::Dashed))
+            .unwrap();
+        t.set_attribute(Attribute::Blink).unwrap();
+        t.set_attribute(Attribute::Inverse).unwrap();
+        t.set_attribute(Attribute::Invisible).unwrap();
+        t.set_attribute(Attribute::Strikethrough).unwrap();
+        t.set_attribute(Attribute::DirectColorFg(crate::color::RGB {
+            r: 255,
+            g: 255,
+            b: 255,
+        }))
+        .unwrap();
+        t.set_attribute(Attribute::DirectColorBg(crate::color::RGB {
+            r: 255,
+            g: 255,
+            b: 255,
+        }))
+        .unwrap();
+
+        let mut buf = [0u8; Decrqss::MAX_RESPONSE_BYTES];
+        let encoded = Decrqss::Sgr.encode(&mut t, &mut buf).unwrap();
+
+        let expected: &[u8] =
+            b"\x1BP1$r0;1;2;3;4:5;5;7;8;9;38:2::255:255:255;48:2::255:255:255m\x1B\\";
+        assert_eq!(expected, encoded);
+        assert!(encoded.len() <= Decrqss::MAX_RESPONSE_BYTES);
+
+        t.deinit(Global);
     }
 
     // test "tmux enter and implicit exit"

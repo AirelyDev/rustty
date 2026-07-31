@@ -45,8 +45,6 @@ use rustty_datastruct::blocking_queue::Timeout;
 use rustty_renderer::size::Size;
 use rustty_renderer::state::State;
 use rustty_renderer::thread as renderer_thread;
-use rustty_vt::cursor::Style as CursorStyle;
-use rustty_vt::screen::CursorStyle as ScreenCursorStyle;
 use rustty_vt::stream;
 use rustty_vt::terminal::Terminal;
 use rustty_vt::{ansi, color, csi, device_attributes, device_status, kitty, modes, osc};
@@ -116,15 +114,6 @@ pub struct StreamHandler<M: AppMailbox> {
     /// a repaint should happen.
     // renderer_wakeup: xev.Async,
     pub renderer_wakeup: xev::Async,
-
-    /// The default cursor state. This is used with CSI q. This is
-    /// set to true when we're currently in the default cursor state.
-    // default_cursor: bool = true,
-    pub default_cursor: bool,
-    // default_cursor_style: terminal.CursorStyle,
-    pub default_cursor_style: CursorStyle,
-    // default_cursor_blink: ?bool,
-    pub default_cursor_blink: Option<bool>,
 
     /// The response to use for ENQ requests. The memory is owned by
     /// whoever owns StreamHandler.
@@ -221,19 +210,16 @@ impl<M: AppMailbox> StreamHandler<M> {
         // self.enquiry_response = config.enquiry_response;
         // (PORT NOTE: owned copy — see the field's PORT NOTE.)
         self.enquiry_response = config.enquiry_response.clone();
-        self.default_cursor_style = config.cursor_style;
-        self.default_cursor_blink = config.cursor_blink;
-
-        // If our cursor is the default, then we update it immediately.
-        // if (self.default_cursor) self.setCursorStyle(.default) catch |err| {
-        //     log.warn("failed to set default cursor style: {}", .{err});
-        // };
-        if self.default_cursor {
-            let r = self.setCursorStyle(ansi::CursorStyle::Default);
-            if r.is_err() {
-                // log.warn("failed to set default cursor style: {}", .{err});
-            }
-        }
+        // self.terminal.setDefaultCursorStyle(config.cursor_style);
+        // self.terminal.setDefaultCursorBlink(config.cursor_blink);
+        //
+        // PORT NOTE (oracle c594031d5): the handler no longer owns the cursor
+        // defaults; `Terminal` does, and its setters apply them immediately
+        // when the cursor still follows the defaults.
+        let cursor_style = config.cursor_style;
+        let cursor_blink = config.cursor_blink;
+        self.term().set_default_cursor_style(cursor_style);
+        self.term().set_default_cursor_blink(cursor_blink);
 
         // The config could have changed any of our colors so update mode 2031
         // self.messageWriter(.{ .color_scheme_report = .{ .force = false } });
@@ -538,138 +524,30 @@ impl<M: AppMailbox> StreamHandler<M> {
             }
 
             // .decrqss => |decrqss| {
+            //     var response: [terminal.dcs.Command.DECRQSS.max_response_bytes]u8 = undefined;
+            //     const encoded = try decrqss.encode(self.terminal, &response);
+            //     const msg = try termio.Message.writeReq(self.alloc, encoded);
+            //     self.messageWriter(msg);
+            // },
+            //
+            // PORT NOTE (oracle 39ae85f04, area E11): the 60-line inline
+            // DECRQSS builder that used to live here — the Sgr/Decscusr/
+            // Decstbm/Decslrm arms with hand-rolled prefix-offset arithmetic —
+            // is DELETED. `dcs::Decrqss::encode` is now the single owner so the
+            // full termio path and the libghostty-vt terminal stream emit
+            // byte-identical replies.
             rustty_vt::dcs::Command::Decrqss(decrqss) => {
-                // var response: [128]u8 = undefined;
-                // var stream = std.io.fixedBufferStream(&response);
-                // const writer = stream.writer();
-                let mut response = [0u8; 128];
-
-                // Offset the stream position to just past the response prefix.
-                // We will write the "payload" (if any) below. If no payload is
-                // written then we send an invalid DECRPSS response.
-                // const prefix_fmt = "\x1bP{d}$r";
-                // const prefix_len = std.fmt.comptimePrint(prefix_fmt, .{0}).len;
-                // stream.pos = prefix_len;
-                let prefix_len = "\x1bP0$r".len();
-                let mut pos = prefix_len;
-
-                // switch (decrqss) {
-                match decrqss {
-                    // Invalid or unhandled request
-                    // .none => {},
-                    rustty_vt::dcs::Decrqss::None => {}
-
-                    // .sgr => {
-                    rustty_vt::dcs::Decrqss::Sgr => {
-                        // const buf = try self.terminal.printAttributes(stream.buffer[stream.pos..]);
-                        let buf_len = self
-                            .term()
-                            .print_attributes(&mut response[pos..])
-                            .map_err(|_| crate::Error)?
-                            .len();
-
-                        // printAttributes wrote into our buffer, so adjust the stream
-                        // position
-                        // stream.pos += buf.len;
-                        pos += buf_len;
-
-                        // try writer.writeByte('m');
-                        response[pos] = b'm';
-                        pos += 1;
-                    }
-
-                    // .decscusr => {
-                    rustty_vt::dcs::Decrqss::Decscusr => {
-                        // const blink = self.terminal.modes.get(.cursor_blinking);
-                        let blink = self.term().modes.get(modes::Mode::CursorBlinking);
-                        // const style: u8 = switch (self.terminal.screens.active.cursor.cursor_style) {
-                        let style: u8 = match self.term().active_mut().cursor.cursor_style {
-                            // .block => if (blink) 1 else 2,
-                            ScreenCursorStyle::Block => {
-                                if blink {
-                                    1
-                                } else {
-                                    2
-                                }
-                            }
-                            // .underline => if (blink) 3 else 4,
-                            ScreenCursorStyle::Underline => {
-                                if blink {
-                                    3
-                                } else {
-                                    4
-                                }
-                            }
-                            // .bar => if (blink) 5 else 6,
-                            ScreenCursorStyle::Bar => {
-                                if blink {
-                                    5
-                                } else {
-                                    6
-                                }
-                            }
-
-                            // Below here, the cursor styles aren't represented by
-                            // DECSCUSR so we map it to some other style.
-                            // .block_hollow => if (blink) 1 else 2,
-                            ScreenCursorStyle::BlockHollow => {
-                                if blink {
-                                    1
-                                } else {
-                                    2
-                                }
-                            }
-                        };
-                        // try writer.print("{d} q", .{style});
-                        pos += write_fixed(&mut response[pos..], format_args!("{style} q"))?;
-                    }
-
-                    // .decstbm => {
-                    rustty_vt::dcs::Decrqss::Decstbm => {
-                        // try writer.print("{d};{d}r", .{
-                        //     self.terminal.scrolling_region.top + 1,
-                        //     self.terminal.scrolling_region.bottom + 1,
-                        // });
-                        let top = self.term().scrolling_region.top + 1;
-                        let bottom = self.term().scrolling_region.bottom + 1;
-                        pos += write_fixed(&mut response[pos..], format_args!("{top};{bottom}r"))?;
-                    }
-
-                    // .decslrm => {
-                    rustty_vt::dcs::Decrqss::Decslrm => {
-                        // We only send a valid response when left and right
-                        // margin mode (DECLRMM) is enabled.
-                        // if (self.terminal.modes.get(.enable_left_and_right_margin)) {
-                        if self.term().modes.get(modes::Mode::EnableLeftAndRightMargin) {
-                            // try writer.print("{d};{d}s", .{
-                            //     self.terminal.scrolling_region.left + 1,
-                            //     self.terminal.scrolling_region.right + 1,
-                            // });
-                            let left = self.term().scrolling_region.left + 1;
-                            let right = self.term().scrolling_region.right + 1;
-                            pos +=
-                                write_fixed(&mut response[pos..], format_args!("{left};{right}s"))?;
-                        }
-                    }
-                }
-
-                // Our response is valid if we have a response payload
-                // const valid = stream.pos > prefix_len;
-                let valid = pos > prefix_len;
-
-                // Write the terminator
-                // try writer.writeAll("\x1b\\");
-                pos += write_fixed(&mut response[pos..], format_args!("\x1b\\"))?;
-
-                // Write the response prefix into the buffer
-                // _ = try std.fmt.bufPrint(response[0..prefix_len], prefix_fmt, .{@intFromBool(valid)});
-                let _ = write_fixed(
-                    &mut response[0..prefix_len],
-                    format_args!("\x1bP{}$r", u8::from(valid)),
-                )?;
-                // const msg = try termio.Message.writeReq(self.alloc, response[0..stream.pos]);
-                let msg = Message::writeReq(&response[0..pos]);
-                // self.messageWriter(msg);
+                let mut response = [0u8; rustty_vt::dcs::Decrqss::MAX_RESPONSE_BYTES];
+                let encoded_len = {
+                    let t: *mut Terminal = self.terminal;
+                    // SAFETY: `self.terminal` is the live Termio-owned terminal
+                    // (see `term()`); the deref is short-lived.
+                    let encoded = decrqss
+                        .encode(unsafe { &mut *t }, &mut response)
+                        .map_err(|_| crate::Error)?;
+                    encoded.len()
+                };
+                let msg = Message::writeReq(&response[0..encoded_len]);
                 self.messageWriter(msg);
             }
         }
@@ -931,11 +809,16 @@ impl<M: AppMailbox> StreamHandler<M> {
         // their shell config when they render prompts to ensure the
         // cursor is exactly as they request.
         // if (mode == .cursor_blinking and
-        //     self.default_cursor_blink != null)
+        //     self.terminal.cursor.default_blink != null)
         // {
         //     return;
         // }
-        if mode == modes::Mode::CursorBlinking && self.default_cursor_blink.is_some() {
+        //
+        // PORT NOTE (oracle c594031d5): this reads the field that MOVED onto
+        // `Terminal`. Forgetting to re-point it here silently breaks the
+        // "shell set an explicit blink, ignore mode 12 changes" rule; guarded
+        // by `stream_handler_mode_12_ignored_when_default_blink_is_explicit`.
+        if mode == modes::Mode::CursorBlinking && self.term().cursor.default_blink.is_some() {
             return Ok(());
         }
 
@@ -1025,15 +908,28 @@ impl<M: AppMailbox> StreamHandler<M> {
                 let grid_size = unsafe { *self.size }.grid();
                 // self.terminal.resize(
                 //     self.alloc,
-                //     grid_size.columns,
-                //     grid_size.rows,
+                //     .{
+                //         .cols = grid_size.columns,
+                //         .rows = grid_size.rows,
+                //     },
                 // ) catch |err| {
                 //     log.err("error updating terminal size: {}", .{err});
                 // };
+                //
+                // PORT NOTE (oracle 89b103dd5): no cell size here — this path
+                // only restores the grid dimensions, so the terminal's existing
+                // pixel geometry is left alone.
                 let alloc = self.alloc;
                 if self
                     .term()
-                    .resize(alloc, grid_size.columns, grid_size.rows)
+                    .resize(
+                        alloc,
+                        rustty_vt::terminal::Resize {
+                            cols: grid_size.columns,
+                            rows: grid_size.rows,
+                            cell_size_px: None,
+                        },
+                    )
                     .is_err()
                 {
                     // log.err("error updating terminal size: {}", .{err});
@@ -1084,6 +980,22 @@ impl<M: AppMailbox> StreamHandler<M> {
                     self.messageWriter(Message::SizeReport(
                         rustty_vt::size_report::Style::Mode2048,
                     ));
+                }
+            }
+
+            // .report_visibility => if (enabled) self.messageWriter(.{
+            //     .visibility_report = .{
+            //         .visible = self.terminal.flags.visible,
+            //         .force = true,
+            //     },
+            // }),
+            modes::Mode::ReportVisibility => {
+                if enabled {
+                    let visible = self.term().flags.visible;
+                    self.messageWriter(Message::VisibilityReport {
+                        visible,
+                        force: true,
+                    });
                 }
             }
 
@@ -1299,71 +1211,27 @@ impl<M: AppMailbox> StreamHandler<M> {
             device_status::Request::ColorScheme => {
                 self.messageWriter(Message::ColorSchemeReport { force: true });
             }
-        }
-        Ok(())
-    }
 
-    // pub fn setCursorStyle(
-    //     self: *StreamHandler,
-    //     style: terminal.CursorStyleReq,
-    // ) !void {
-    pub fn setCursorStyle(&mut self, style: ansi::CursorStyle) -> Result<(), crate::Error> {
-        // Assume we're setting to a non-default.
-        // self.default_cursor = false;
-        self.default_cursor = false;
-
-        match style {
-            // .default => {
-            ansi::CursorStyle::Default => {
-                self.default_cursor = true;
-                let default_style = self.default_cursor_style;
-                self.term().active_mut().cursor.cursor_style = default_style;
-                // self.terminal.modes.set(
-                //     .cursor_blinking,
-                //     self.default_cursor_blink orelse true,
-                // );
-                let blink = self.default_cursor_blink.unwrap_or(true);
-                self.term().modes.set(modes::Mode::CursorBlinking, blink);
-            }
-
-            // .blinking_block => {
-            ansi::CursorStyle::BlinkingBlock => {
-                self.term().active_mut().cursor.cursor_style = ScreenCursorStyle::Block;
-                self.term().modes.set(modes::Mode::CursorBlinking, true);
-            }
-
-            // .steady_block => {
-            ansi::CursorStyle::SteadyBlock => {
-                self.term().active_mut().cursor.cursor_style = ScreenCursorStyle::Block;
-                self.term().modes.set(modes::Mode::CursorBlinking, false);
-            }
-
-            // .blinking_underline => {
-            ansi::CursorStyle::BlinkingUnderline => {
-                self.term().active_mut().cursor.cursor_style = ScreenCursorStyle::Underline;
-                self.term().modes.set(modes::Mode::CursorBlinking, true);
-            }
-
-            // .steady_underline => {
-            ansi::CursorStyle::SteadyUnderline => {
-                self.term().active_mut().cursor.cursor_style = ScreenCursorStyle::Underline;
-                self.term().modes.set(modes::Mode::CursorBlinking, false);
-            }
-
-            // .blinking_bar => {
-            ansi::CursorStyle::BlinkingBar => {
-                self.term().active_mut().cursor.cursor_style = ScreenCursorStyle::Bar;
-                self.term().modes.set(modes::Mode::CursorBlinking, true);
-            }
-
-            // .steady_bar => {
-            ansi::CursorStyle::SteadyBar => {
-                self.term().active_mut().cursor.cursor_style = ScreenCursorStyle::Bar;
-                self.term().modes.set(modes::Mode::CursorBlinking, false);
+            // .visibility => self.messageWriter(.{ .visibility_report = .{
+            //     .visible = self.terminal.flags.visible,
+            //     .force = true,
+            // } }),
+            device_status::Request::Visibility => {
+                let visible = self.term().flags.visible;
+                self.messageWriter(Message::VisibilityReport {
+                    visible,
+                    force: true,
+                });
             }
         }
         Ok(())
     }
+
+    // pub fn setCursorStyle(...) !void { ... }
+    //
+    // PORT NOTE (oracle c594031d5): DELETED. The whole style/blink resolution
+    // moved onto `Terminal::set_cursor_style`; keeping a copy here would
+    // double-apply DECSCUSR and re-introduce a second owner of the defaults.
 
     // pub inline fn decaln(self: *StreamHandler) !void {
     #[inline]
@@ -2669,10 +2537,9 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
             .set_cursor_pos((y + 1).saturating_add(v.value) as usize, x as usize + 1);
     }
 
-    // .cursor_style => try self.setCursorStyle(value),
+    // .cursor_style => self.terminal.setCursorStyle(value),
     fn cursor_style(&mut self, v: ansi::CursorStyle) {
-        let r = self.setCursorStyle(v);
-        self.vt(r);
+        self.term().set_cursor_style(v);
     }
 
     // .erase_display_below => self.terminal.eraseDisplay(.below, value),
@@ -3259,5 +3126,237 @@ impl rustty_os::string_encoding::Writer for VecWriter {
     fn writeByte(&mut self, byte: u8) -> Result<(), Self::Error> {
         self.0.push(byte);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use allocator_api2::alloc::Global;
+
+    // A no-op `AppMailbox` double: the mode-12 guard returns before any mailbox
+    // is touched, so accepting every push is enough.
+    struct NullMailbox;
+
+    impl AppMailbox for NullMailbox {
+        type Surface = ();
+
+        #[allow(clippy::result_large_err)]
+        fn push_or_return(
+            &self,
+            _msg: rustty_apprt_api::surface::Message<'static>,
+            _timeout: Timeout,
+        ) -> Result<
+            rustty_datastruct::blocking_queue::Size,
+            rustty_apprt_api::surface::Message<'static>,
+        > {
+            Ok(1)
+        }
+    }
+
+    fn terminal_opts(default_cursor_blink: Option<bool>) -> rustty_vt::terminal::Options {
+        rustty_vt::terminal::Options {
+            cols: 10,
+            rows: 3,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
+            default_modes: rustty_vt::modes::ModePacked::default(),
+            default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+            default_cursor_blink,
+            colors: rustty_vt::terminal::Colors {
+                background: color::DynamicRGB::UNSET,
+                foreground: color::DynamicRGB::UNSET,
+                cursor: color::DynamicRGB::UNSET,
+                palette: color::DynamicPalette::default_palette(),
+            },
+            kitty_image_storage_limit: 0,
+            kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+        }
+    }
+
+    // A minimal StreamHandler over a caller-owned Terminal. Every field the
+    // mode-12 guard does not read is null / empty: the guard returns before the
+    // renderer state, mailboxes or size are touched.
+    fn handler_for(
+        terminal: *mut Terminal,
+        termio_mailbox: *mut Mailbox,
+        renderer_state: *mut State,
+    ) -> StreamHandler<NullMailbox> {
+        StreamHandler::<NullMailbox> {
+            alloc: Global,
+            size: std::ptr::null_mut(),
+            terminal,
+            termio_mailbox,
+            surface_mailbox: NullMailbox,
+            renderer_state,
+            renderer_mailbox: std::ptr::null_mut(),
+            renderer_wakeup: xev::Async::init().expect("Async::init"),
+            enquiry_response: Vec::new(),
+            osc_color_report_format: OSCColorReportFormat::Bit16,
+            clipboard_write: ClipboardAccess::Deny,
+            apc: rustty_vt::apc::Handler::default(),
+            dcs: rustty_vt::dcs::Handler::default(),
+            tmux_viewer: None,
+            termio_messaged: false,
+            seen_title: false,
+        }
+    }
+
+    // NEGATIVE CONTROL (P3-W4 T4 Step 4): `c594031d5` MOVES the field that this
+    // rule reads (`default_cursor_blink`) from the handler onto `Terminal`. A
+    // mechanical port that re-points it at the wrong thing — or hard-codes it —
+    // silently breaks the "the user configured an explicit blink, so ignore DEC
+    // mode 12" rule, and no existing KAT covers it.
+    #[test]
+    fn stream_handler_mode_12_ignored_when_default_blink_is_explicit() {
+        // (a) An EXPLICIT configured blink: DEC mode 12 must be ignored.
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        assert!(!term.modes.get(modes::Mode::CursorBlinking));
+        let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
+        h.setMode(modes::Mode::CursorBlinking, true).unwrap();
+        assert!(
+            !term.modes.get(modes::Mode::CursorBlinking),
+            "DEC mode 12 must be ignored while an explicit default blink is set"
+        );
+        h.renderer_wakeup.deinit();
+        term.deinit(Global);
+
+        // (b) NO configured blink (null = emulator default): mode 12 applies.
+        let mut term = Terminal::init(Global, terminal_opts(None)).unwrap();
+        // A null default resolves to the emulator default, which is blinking.
+        assert!(term.modes.get(modes::Mode::CursorBlinking));
+        let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
+        h.setMode(modes::Mode::CursorBlinking, false).unwrap();
+        assert!(
+            !term.modes.get(modes::Mode::CursorBlinking),
+            "DEC mode 12 must apply when no explicit default blink is configured"
+        );
+        h.renderer_wakeup.deinit();
+        term.deinit(Global);
+    }
+
+    // Pops one message from the SPSC termio mailbox (the queue the handler's
+    // `messageWriter` pushes into).
+    fn mailbox_pop(mailbox: *mut Mailbox) -> Option<Message<'static>> {
+        match unsafe { &*mailbox } {
+            Mailbox::Spsc { queue, .. } => queue.pop(),
+        }
+    }
+
+    // NEGATIVE CONTROL (P3-W4 T7 Step 5), termio half. `6c8c07981` adds TWO
+    // independently droppable termio arms: the mode-2033 ENABLE arm and the
+    // CSI ? 998 n DSR arm. Both must push a FORCED `VisibilityReport` carrying
+    // the terminal's current `flags.visible`. Dropping either is invisible to
+    // every existing termio KAT.
+    #[test]
+    fn stream_handler_visibility_report_arms_push_forced_messages() {
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        term.flags.visible = false;
+
+        let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+            crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+        ));
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+        let state: *mut State = Box::into_raw(Box::new(State {
+            mutex,
+            terminal: &raw mut term,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: rustty_renderer::state::Mouse::default(),
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }));
+        let mut h = handler_for(&raw mut term, mailbox, state);
+
+        // (a) Enabling mode 2033 pushes a forced report with the current state.
+        h.setMode(modes::Mode::ReportVisibility, true).unwrap();
+        match mailbox_pop(mailbox) {
+            Some(Message::VisibilityReport { visible, force }) => {
+                assert!(!visible, "the report must carry terminal.flags.visible");
+                assert!(force, "a mode-2033 enable is a FORCED report");
+            }
+            other => panic!("expected a VisibilityReport, got {:?}", other.is_some()),
+        }
+
+        // (b) DISABLING pushes nothing.
+        h.setMode(modes::Mode::ReportVisibility, false).unwrap();
+        assert!(
+            mailbox_pop(mailbox).is_none(),
+            "disabling mode 2033 must not push a report"
+        );
+
+        // (c) An explicit CSI ? 998 n query pushes a forced report too.
+        term.flags.visible = true;
+        h.deviceStatusReport(rustty_vt::device_status::Request::Visibility)
+            .unwrap();
+        match mailbox_pop(mailbox) {
+            Some(Message::VisibilityReport { visible, force }) => {
+                assert!(visible);
+                assert!(force, "an explicit query is answered unconditionally");
+            }
+            other => panic!("expected a VisibilityReport, got {:?}", other.is_some()),
+        }
+
+        h.renderer_wakeup.deinit();
+        unsafe {
+            drop(Box::from_raw(state));
+            drop(Box::from_raw(mutex));
+            drop(Box::from_raw(mailbox));
+        }
+        term.deinit(Global);
+    }
+
+    // The `changeConfig` half of the same move: the handler no longer owns the
+    // defaults, so a config change must reach `Terminal`'s setters (and must
+    // apply immediately only while the cursor still follows its defaults).
+    #[test]
+    fn stream_handler_change_config_routes_cursor_defaults_to_the_terminal() {
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        // `changeConfig` ends with a `messageWriter` (the mode-2031 color-scheme
+        // report), so this handler needs a real termio mailbox.
+        let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+            crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+        ));
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+        let state: *mut State = Box::into_raw(Box::new(State {
+            mutex,
+            terminal: &raw mut term,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: rustty_renderer::state::Mouse::default(),
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }));
+        let mut h = handler_for(&raw mut term, mailbox, state);
+
+        let mut cfg = DerivedConfig::init(&rustty_config::Config::default());
+        cfg.cursor_style = rustty_vt::screen::CursorStyle::Underline;
+        cfg.cursor_blink = Some(true);
+        h.changeConfig(&mut cfg);
+
+        assert_eq!(
+            rustty_vt::screen::CursorStyle::Underline,
+            term.cursor.default_style
+        );
+        assert_eq!(Some(true), term.cursor.default_blink);
+        assert!(term.cursor.is_default);
+        assert_eq!(rustty_vt::screen::CursorStyle::Underline, unsafe {
+            (*term.screens.active).cursor.cursor_style
+        });
+        assert!(term.modes.get(modes::Mode::CursorBlinking));
+
+        h.renderer_wakeup.deinit();
+        unsafe {
+            drop(Box::from_raw(state));
+            drop(Box::from_raw(mutex));
+            drop(Box::from_raw(mailbox));
+        }
+        term.deinit(Global);
     }
 }

@@ -1706,3 +1706,73 @@ mutter does advertise `xdg_toplevel.suspended` for minimised windows, so this is
 reproducible on the one head the VM has — **unlike V20b it needs no second
 monitor**, only a headed session.
 
+
+---
+
+## V21. `P3-W4 T7` Surface-level visibility KAT (dedup + report reaches the pty) — **OWNER: `P3-W11` Task 6** [2026-07-31]
+
+> **Re-owned at the `P3-W4` merge, 2026-07-31.** The row was filed naming
+> `P3-W4 T7`, and the filing lane flagged in its own report that this would
+> become a closed-workstream orphan the moment `merge: P3-W4` landed — the exact
+> shape of the two V19/V20 violations `G-P2` had just caught. It was re-owned in
+> the merge commit itself rather than after, so the orphan never existed.
+
+`6c8c07981`'s `Surface.occlusionCallback` change is **ported and compiling, but the
+Surface-level half is NOT behaviourally verified.**
+
+**Ported** (`crates/rustty-core/src/surface.rs` `occlusionCallback`): the
+`Surface.visible` field, the dedup early-return (`if self.visible == visible
+return`), the `terminal.flags.visible` write under the renderer lock, and the
+unforced `queueIo(.visibility_report)`.
+
+**Verified elsewhere** (both executed, both with an observed-failing mutation):
+- vt: `rustty-vt` `stream_terminal::tests::visibility_reports` — mode 2033
+  exists, an explicit `CSI ? 998 n` answers without enabling it, ENABLING always
+  emits (count assertion), DISABLING does not, and RIS PRESERVES
+  `flags.visible`. Removing the RIS exemption makes it fail.
+- termio: `rustty-termio`
+  `stream_handler::tests::stream_handler_visibility_report_arms_push_forced_messages`
+  — the mode-2033 enable arm and the `CSI ? 998 n` DSR arm each push a FORCED
+  `Message::VisibilityReport` carrying `terminal.flags.visible`; disabling
+  pushes nothing. Dropping the enable arm makes it fail.
+
+**NOT verified:** the two behaviours that live only in `occlusionCallback` —
+(a) the dedup (a repeat same-state callback must push NEITHER a renderer
+`Visible` message NOR a `VisibilityReport`; note this is an OBSERVABLE CHANGE to
+the renderer path, not an additive feature), and (b) the end-to-end path
+"enable mode 2033 -> `occlusionCallback(false)` -> the encoded
+`\x1B[?999;2n` reaches the pty write queue".
+
+**Why:** `rustty-core` has no `Surface` test fixture. A `Surface` owns a live
+`App`, a renderer thread, an io thread and a pty; there is no existing harness to
+extend and building one was out of scope for this workstream.
+
+**Recipe:** extend the `rustty-termio` `exec.rs` `TestTermio` fixture (a
+heap-pinned `Termio` with re-seated self-pointers, `crates/rustty-termio/src/exec.rs`)
+into a `rustty-core` `TestSurface`: heap-pin a `Surface` with a stub `App`, the
+same renderer `State` + guard-less mutex, a real termio mailbox and a real
+renderer mailbox. Then:
+
+```rust
+// (a) dedup
+surface.io.terminal.modes.set(Mode::ReportVisibility, true);
+surface.occlusionCallback(false).unwrap();
+assert_eq!(1, renderer_mailbox_len());          // one Visible message
+assert!(matches!(termio_mailbox_pop(), Some(Message::VisibilityReport { visible: false, force: false })));
+surface.occlusionCallback(false).unwrap();      // REPEAT, same state
+assert_eq!(1, renderer_mailbox_len());          // still one — nothing pushed
+assert!(termio_mailbox_pop().is_none());
+
+// (b) end to end: drain the termio mailbox through Thread::drainMailbox and
+//     assert the pty write queue contains "\x1B[?999;2n".
+```
+
+**Mutation that must fail once the KAT exists:** delete the
+`if self.visible == visible { return Ok(()); }` early-return — (a) must then see
+two renderer messages and two reports.
+
+**OWNERSHIP WARNING:** this row is owned by `P3-W4 T7`, which is OPEN only until
+its `merge: P3-W4` commit lands. G-P2 derives P3 workstream closure from those
+merge commits, so the moment `P3-W4` merges this row becomes an owner-in-a-closed-
+workstream violation — exactly the shape of the existing V19/V20 violations.
+**Re-own it to an open workstream (or close it) as part of the P3-W4 merge.**

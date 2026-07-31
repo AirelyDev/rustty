@@ -422,6 +422,11 @@ pub struct Surface<A: apprt::App + 'static> {
     // focused: bool = true,
     pub focused: bool,
 
+    /// Whether this surface may be visible. Unknown visibility is considered
+    /// visible so reporting remains conservative.
+    // visible: bool = true,
+    pub visible: bool,
+
     /// Used to determine whether to continuously scroll.
     // selection_scroll_active: bool = false,
     pub selection_scroll_active: bool,
@@ -1934,7 +1939,7 @@ where
         // uninitialized old values), in the reference literal order. The
         // fields the literal omits take their declaration defaults
         // (pressed_key=null, last_binding_trigger=0, inspector=null,
-        // child_exited=false, focused=true, selection_scroll_active=false,
+        // child_exited=false, focused=true, visible=true, selection_scroll_active=false,
         // readonly=false, command_timer=null, search=null,
         // last_bell_time=null) — written at the end of the block.
         unsafe {
@@ -2036,6 +2041,7 @@ where
             std::ptr::write(&raw mut (*self_).inspector, None);
             std::ptr::write(&raw mut (*self_).child_exited, false);
             std::ptr::write(&raw mut (*self_).focused, true);
+            std::ptr::write(&raw mut (*self_).visible, true);
             std::ptr::write(&raw mut (*self_).selection_scroll_active, false);
             std::ptr::write(&raw mut (*self_).readonly, false);
             std::ptr::write(&raw mut (*self_).command_timer, None);
@@ -7312,11 +7318,75 @@ where
         // ([ADV 6.1] — the Drop guard clears at every exit below.)
         let _thread_state = ThreadStateGuard;
 
+        // PORT NOTE (oracle 6c8c07981): this CHANGES EXISTING BEHAVIOUR, it is
+        // not additive. Before this commit every occlusion callback pushed a
+        // renderer `Visible` message and queued a render; now a callback whose
+        // state matches the last one returns early, so repeated same-state
+        // callbacks NO LONGER reach the renderer at all.
+        //
+        // VERIFICATION DEBT (P3-W4 T7 Step 5): the plan asks for a Surface-level
+        // KAT — enable mode 2033, drive `occlusionCallback(false)`, assert the
+        // encoded report reaches the pty write queue, and assert a REPEAT call
+        // emits nothing. rustty-core has NO `Surface` test fixture (a `Surface`
+        // owns a live `App`, a renderer thread, an io thread and a pty), and
+        // building one is out of scope for this workstream. The two halves that
+        // ARE reachable are covered:
+        //   - the RIS exemption and the vt-side report/mode arms by
+        //     `rustty-vt` `stream_terminal::tests::visibility_reports`;
+        //   - the termio mode-2033 + DSR arms by `rustty-termio`
+        //     `stream_handler::tests::stream_handler_visibility_report_arms_push_forced_messages`.
+        // The UNCOVERED half is exactly this function: the dedup early-return
+        // and the `flags.visible` write under the renderer lock.
+        // RECIPE to close it: extend the `rustty-termio` `exec.rs` `TestTermio`
+        // fixture into a `rustty-core` `TestSurface` (heap-pinned `Surface` with
+        // a stub `App` + the same re-seated self-pointers), then assert
+        // (a) `occlusionCallback(false)` pushes exactly one renderer `Visible`
+        // message and one termio `VisibilityReport`, and (b) a second
+        // `occlusionCallback(false)` pushes NEITHER.
+        //
+        // Avoid duplicate renderer and visibility reports.
+        // if (self.visible == visible) return;
+        // self.visible = visible;
+        if self.visible == visible {
+            return Ok(());
+        }
+        self.visible = visible;
+
+        // Update the terminal state for synchronous queries, then notify the IO
+        // thread so it can emit a mode 2033 report when enabled.
+        // self.renderer_state.mutex.lockUncancelable(global.io());
+        // self.io.terminal.flags.visible = visible;
+        // const report_visibility = self.io.terminal.modes.get(.report_visibility);
+        // self.renderer_state.mutex.unlock(global.io());
+        //
+        // SAFETY: `renderer_state.mutex` is the guard-less shared lock; `io` is
+        // the live Termio owned by this Surface.
+        unsafe { (*self.renderer_state.mutex).lock() };
+        let report_visibility = unsafe {
+            let t = &raw mut self.io.terminal;
+            (*t).flags.visible = visible;
+            (*t).modes.get(rustty_vt::modes::Mode::ReportVisibility)
+        };
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        // if (report_visibility) {
+        //     self.queueIo(.{ .visibility_report = .{ .visible = visible, .force = false } }, .unlocked);
+        // }
+        if report_visibility {
+            self.queueIo(
+                termio::Message::VisibilityReport {
+                    visible,
+                    force: false,
+                },
+                termio::termio_impl::MutexState::Unlocked,
+            );
+        }
+
         // _ = self.renderer_thread.mailbox.push(.{
         //     .visible = visible,
         // }, .{ .forever = {} });
         let _ = unsafe { &*self.renderer_thread.mailbox }
             .push(rendererpkg::Message::Visible(visible), Timeout::Forever);
+
         // try self.queueRender();
         self.queueRender()?;
         Ok(())

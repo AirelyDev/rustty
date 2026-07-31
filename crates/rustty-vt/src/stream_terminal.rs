@@ -53,7 +53,6 @@ use crate::device_status;
 use crate::kitty;
 use crate::modes;
 use crate::osc;
-use crate::screen::CursorStyle;
 use crate::sgr;
 use crate::size_report;
 use crate::stream;
@@ -98,6 +97,21 @@ pub struct Handler<'a> {
     // in the method bodies (vt-12b-7).
     pub terminal: *mut Terminal,
 
+    /// True after an error prevented a terminal-owned semantic update.
+    ///
+    /// When an error happens during terminal processing, streams continue
+    /// forward and remain best-effort. A terminal can't really stop in
+    /// the middle it must go on. But this is flagged to true to let
+    /// consumers know some sort of unhandle-able error state happened
+    /// (e.g. an allocation failure).
+    ///
+    /// Only non-handled outcomes set this. Gracefully handled outcomes
+    /// that don't meaningfully negatively impact the terminal state
+    /// such as hitting Kitty image limits, failure to write a response,
+    /// do not flag this.
+    // semantic_failure: bool = false,
+    pub semantic_failure: bool,
+
     /// Callbacks for certain effects that handlers may have. These
     /// may or may not fully replace internal handling of certain effects,
     /// but they allow for the handler to trigger or query external
@@ -110,10 +124,9 @@ pub struct Handler<'a> {
     /// the kitty graphics protocol.
     pub apc_handler: ApcHandler,
 
-    /// Default cursor style used by DECSCUSR reset (CSI 0 q).
-    pub default_cursor: bool,
-    pub default_cursor_style: CursorStyle,
-    pub default_cursor_blink: bool,
+    /// The DCS command handler maintains state for DCS queries.
+    // dcs_handler: dcs.Handler = .{},
+    pub dcs_handler: crate::dcs::Handler,
 
     // PORT NOTE: ties the `'a` effect-callback lifetime to the handler without a
     // stored borrow; the actual aliased `Terminal` is held as a raw pointer.
@@ -238,6 +251,45 @@ impl<'a> Default for Effects<'a> {
     }
 }
 
+// PORT NOTE (P3-W4 T5): a fault-injection seam for `do_color_operation`. See
+// the PORT FINDING inside that function: rustty's response writer cannot fail,
+// so without this the "graceful arms do not set `semantic_failure`" control
+// would pass whether or not the re-partition was ported. Same
+// `#[cfg(test)] thread_local!` idiom as the crate's other tripwire modules.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ColorOperationFp {
+    Respond,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COLOR_OPERATION_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<ColorOperationFp, crate::pagelist::OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn color_operation_tw_check(point: ColorOperationFp) -> Result<(), crate::pagelist::OutOfMemory> {
+    COLOR_OPERATION_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+#[cfg(test)]
+pub(crate) fn color_operation_tw_error_always(point: ColorOperationFp) {
+    COLOR_OPERATION_TW.with(|tw| {
+        tw.borrow_mut()
+            .errorAlways(point, crate::pagelist::OutOfMemory)
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn color_operation_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    COLOR_OPERATION_TW.with(|tw| tw.borrow_mut().end(mode))
+}
+
 impl<'a> Handler<'a> {
     // pub fn init(terminal: *Terminal) Handler {
     //     return .{ .terminal = terminal };
@@ -245,14 +297,79 @@ impl<'a> Handler<'a> {
     pub fn init(terminal: *mut Terminal) -> Handler<'a> {
         Handler {
             terminal,
+            semantic_failure: false,
             effects: Effects::READONLY,
             // apc_handler: .{} (the reference field default)
             apc_handler: ApcHandler::default(),
-            default_cursor: true,
-            default_cursor_style: CursorStyle::Block,
-            default_cursor_blink: false,
+            // dcs_handler: .{} (the reference field default)
+            dcs_handler: crate::dcs::Handler::default(),
             _phantom: PhantomData,
         }
+    }
+
+    /// Resize the terminal and apply any side effects (if supported)
+    /// as a result of that.
+    ///
+    /// This is different than a direct `Terminal.resize` operation
+    /// because it also handles the side effects like mode 2048 in-band
+    /// size reports if write_pty is set.
+    //
+    // PORT NOTE (area D §6.5): this stays on `stream_terminal::Handler`. It
+    // touches only `Terminal` + `Effects`, both already in `rustty-vt`; moving
+    // it up a tier would force a `rustty-vt` -> apprt edge (R4).
+    pub fn resize(
+        &mut self,
+        value: crate::terminal::Resize,
+    ) -> Result<(), crate::terminal::ResizeError> {
+        // try self.terminal.resize(self.terminal.gpa(), value);
+        let gpa = self.term().gpa();
+        self.term().resize(gpa, value)?;
+
+        // Mode 2048 reports require complete, current cell pixel geometry.
+        // const cell_size = value.cell_size_px orelse return;
+        let Some(cell_size) = value.cell_size_px else {
+            return Ok(());
+        };
+
+        // If we have no in-band size reports enabled then do nothing.
+        if !self.term().modes.get(modes::Mode::InBandSizeReports) {
+            return Ok(());
+        }
+
+        // If we have no write_pty effect, do nothing.
+        if self.effects.write_pty.is_none() {
+            return Ok(());
+        }
+
+        // The maximum mode-2048 response is covered by size_report's maximum
+        // value test. Reserve the final byte for the callback's sentinel.
+        //
+        // PORT NOTE: the reference reserves `buf[writer.end]` for the Zig
+        // `[:0]const u8` sentinel the callback takes. rustty's `write_pty`
+        // callback takes a plain `&[u8]` (see the `Effects::write_pty` PORT
+        // NOTE), so the reserved byte is kept — the encoder still only gets
+        // `buf.len() - 1` bytes, so the capacity budget is identical — but no
+        // NUL is appended.
+        let mut buf = [0u8; 128];
+        let end = {
+            let mut writer = crate::fixed_writer::FixedWriter::new(&mut buf[..127]);
+            // size_report.encode(...) catch unreachable;
+            size_report::encode(
+                &mut writer,
+                size_report::Style::Mode2048,
+                size_report::Size {
+                    rows: value.rows,
+                    columns: value.cols,
+                    cell_width: cell_size.width,
+                    cell_height: cell_size.height,
+                },
+            )
+            .expect("mode 2048 report always fits in 127 bytes");
+            writer.end
+        };
+        self.write_pty(&buf[..end]);
+
+        Ok(())
     }
 
     // PORT NOTE: the reference's `vt`/`vtFallible` comptime dispatcher (a single
@@ -284,8 +401,26 @@ impl<'a> Handler<'a> {
     where
         F: FnOnce(&mut Terminal) -> Result<(), crate::pagelist::OutOfMemory>,
     {
-        if f(self.term()).is_err() {
-            // log.warn("error handling VT action action={} err={}", ...);
+        let r = f(self.term());
+        self.vt_catch(r);
+    }
+
+    // The body of the reference's single `vtFallible(...) catch |err| { ... }`:
+    //
+    //     self.semantic_failure = true;
+    //     log.warn("error handling VT action action={} err={}", .{ action, err });
+    //
+    // PORT NOTE: because the dispatch is distributed across the trait-method
+    // arms, this is the shared catch every FALLIBLE arm funnels its `Result`
+    // through. Arms the reference deliberately keeps GRACEFUL
+    // (`color_operation`, `kitty_color_report`, `clipboard_contents`) must NOT
+    // route through here — they log and continue without setting the flag.
+    #[inline]
+    fn vt_catch(&mut self, r: Result<(), crate::pagelist::OutOfMemory>) {
+        if r.is_err() {
+            // self.semantic_failure = true;
+            self.semantic_failure = true;
+            // log.warn("error handling VT action action={} err={}", .{ action, err });
         }
     }
 
@@ -318,6 +453,97 @@ impl<'a> Handler<'a> {
             return;
         };
         func(self, data);
+    }
+
+    // fn dcsHook(self: *Handler, value: Action.Value(.dcs_hook)) !void {
+    //     var cmd = self.dcs_handler.hook(self.terminal.gpa(), value) orelse return;
+    //     defer cmd.deinit();
+    //     try self.dcsCommand(&cmd);
+    // }
+    fn do_dcs_hook(&mut self, dcs: crate::parser::DCS) -> Result<(), crate::pagelist::OutOfMemory> {
+        let gpa = self.term().gpa();
+        // (PORT NOTE: the trait hands the parser's owned DCS; the dcs Handler
+        // takes the borrowed view — the same coercion Zig's `terminal.DCS` does.)
+        let mut cmd = match self.dcs_handler.hook(
+            gpa,
+            crate::dcs::DCS {
+                intermediates: &dcs.intermediates,
+                params: &dcs.params,
+                final_: dcs.final_,
+            },
+        ) {
+            Some(cmd) => cmd,
+            None => return Ok(()),
+        };
+        // defer cmd.deinit();
+        let result = self.do_dcs_command(&mut cmd);
+        cmd.deinit();
+        result
+    }
+
+    // fn dcsPut(self: *Handler, value: u8) !void { ... }
+    fn do_dcs_put(&mut self, value: u8) -> Result<(), crate::pagelist::OutOfMemory> {
+        let mut cmd = match self.dcs_handler.put(value) {
+            Some(cmd) => cmd,
+            None => return Ok(()),
+        };
+        let result = self.do_dcs_command(&mut cmd);
+        cmd.deinit();
+        result
+    }
+
+    // fn dcsUnhook(self: *Handler) !void { ... }
+    fn do_dcs_unhook(&mut self) -> Result<(), crate::pagelist::OutOfMemory> {
+        let mut cmd = match self.dcs_handler.unhook() {
+            Some(cmd) => cmd,
+            None => return Ok(()),
+        };
+        let result = self.do_dcs_command(&mut cmd);
+        cmd.deinit();
+        result
+    }
+
+    // fn dcsCommand(self: *Handler, cmd: *dcs.Command) !void {
+    fn do_dcs_command(
+        &mut self,
+        cmd: &mut crate::dcs::Command,
+    ) -> Result<(), crate::pagelist::OutOfMemory> {
+        match cmd {
+            // .decrqss => |request| { ... }
+            crate::dcs::Command::Decrqss(request) => {
+                // var response: [max_response_bytes + 1]u8 = undefined;
+                // const encoded = try request.encode(self.terminal, response[0 .. response.len - 1]);
+                // response[encoded.len] = 0;
+                // self.writePty(response[0..encoded.len :0]);
+                //
+                // PORT NOTE: the reference reserves the final byte for the Zig
+                // `[:0]const u8` sentinel the callback takes. rustty's
+                // `write_pty` callback takes a plain `&[u8]`, so the reserved
+                // byte is kept (identical capacity budget) but no NUL is
+                // appended.
+                let request = *request;
+                let mut response = [0u8; crate::dcs::Decrqss::MAX_RESPONSE_BYTES + 1];
+                let last = response.len() - 1;
+                let encoded_len = {
+                    let t: *mut Terminal = self.terminal;
+                    // SAFETY: `self.terminal` aliases the Terminal that created
+                    // this Handler (see `term()`); the deref is short-lived and
+                    // does not overlap another live `&mut Terminal`.
+                    // (PORT NOTE: `dcs::OutOfMemory` and `pagelist::OutOfMemory`
+                    // are both the reference's single `Allocator.Error`; the
+                    // crate has no `From` between them, so map explicitly.)
+                    let encoded = request
+                        .encode(unsafe { &mut *t }, &mut response[..last])
+                        .map_err(|_| crate::pagelist::OutOfMemory)?;
+                    encoded.len()
+                };
+                self.write_pty(&response[..encoded_len]);
+                Ok(())
+            }
+
+            // .tmux, .xtgettcap => {},
+            crate::dcs::Command::Tmux(_) | crate::dcs::Command::Xtgettcap(_) => Ok(()),
+        }
     }
 
     // fn bell(self: *Handler) void {
@@ -457,6 +683,13 @@ impl<'a> Handler<'a> {
             | modes::Mode::InBandSizeReports
             | modes::Mode::FocusEvent => {}
 
+            // .report_visibility => if (enabled) self.sendVisibilityReport(),
+            modes::Mode::ReportVisibility => {
+                if enabled {
+                    self.send_visibility_report();
+                }
+            }
+
             // .mouse_event_x10 => {
             //     if (enabled) {
             //         self.terminal.flags.mouse_event = .x10;
@@ -574,7 +807,23 @@ impl<'a> Handler<'a> {
         // var response: std.Io.Writer.Allocating = .init(alloc);
         // defer response.deinit();
         // const writer = &response.writer;
+        //
+        // PORT FINDING (P3-W4 T5): in the reference, EVERY `writer.print` below
+        // is fallible (an allocating writer), which is what makes
+        // `colorOperation` a `!void` the caller can `catch |err| log.warn(...)`.
+        // In rustty the writer is a `Vec<u8>` that ABORTS on OOM (the crate's
+        // DG5 policy), so this function has NO reachable error path at all —
+        // every `return` below is `Ok(())`. That makes the `439d35e27`
+        // re-partition ("color_operation stays graceful") IMPOSSIBLE to
+        // exercise by feeding a real failure, and any test that tries is
+        // VACUOUS. The fail point below is the injectable stand-in for the
+        // reference's fallible `writer.print`; it exists ONLY so the
+        // "a color-operation failure must NOT set `semantic_failure`" control
+        // is a real control. See `COLOR_OPERATION_TW`.
         let mut response = Vec::new();
+
+        #[cfg(test)]
+        color_operation_tw_check(ColorOperationFp::Respond)?;
 
         // var it = requests.constIterator(0);
         // while (it.next()) |req| {
@@ -993,7 +1242,38 @@ impl<'a> Handler<'a> {
                 device_status::encode_color_scheme_report(&mut resp, scheme);
                 self.write_pty(&resp);
             }
+
+            // .visibility => self.sendVisibilityReport(),
+            device_status::Request::Visibility => self.send_visibility_report(),
         }
+    }
+
+    // fn sendVisibilityReport(self: *Handler) void {
+    //     const write_pty = self.effects.write_pty orelse return;
+    //     var buf: [device_status.max_visibility_report_encode_size + 1]u8 = undefined;
+    //     var writer: std.Io.Writer = .fixed(buf[0..device_status.max_visibility_report_encode_size]);
+    //     device_status.encodeVisibilityReport(&writer, ...) catch return;
+    //     buf[writer.end] = 0;
+    //     write_pty(self, buf[0..writer.end :0]);
+    // }
+    //
+    // PORT NOTE: rustty's `encode_visibility_report` appends to a `Vec<u8>` (the
+    // established seam shared with `encode_color_scheme_report`) and cannot
+    // fail, so the reference's `catch return` has no reachable arm. The
+    // sentinel byte the reference reserves is a Zig `[:0]const u8` encoding
+    // detail; rustty's `write_pty` callback takes a plain `&[u8]`.
+    fn send_visibility_report(&mut self) {
+        if self.effects.write_pty.is_none() {
+            return;
+        }
+        let visibility = if self.term().flags.visible {
+            device_status::Visibility::PotentiallyVisible
+        } else {
+            device_status::Visibility::NotVisible
+        };
+        let mut buf = Vec::with_capacity(device_status::MAX_VISIBILITY_REPORT_ENCODE_SIZE);
+        device_status::encode_visibility_report(&mut buf, visibility);
+        self.write_pty(&buf);
     }
 
     // fn reportEnquiry(self: *Handler) void {
@@ -1139,8 +1419,8 @@ impl<'a> Handler<'a> {
         self.write_pty(aw.as_bytes());
     }
 
-    // fn windowTitle(self: *Handler, title_raw: []const u8) void { ... }
-    fn do_window_title(&mut self, title_raw: &[u8]) {
+    // fn windowTitle(self: *Handler, title_raw: []const u8) !void { ... }
+    fn do_window_title(&mut self, title_raw: &[u8]) -> Result<(), crate::pagelist::OutOfMemory> {
         // Prevent DoS attacks by limiting title length.
         // const max_title_len = 1024;
         // const title = if (title_raw.len > max_title_len) title: {
@@ -1155,25 +1435,25 @@ impl<'a> Handler<'a> {
             title_raw
         };
 
-        // self.terminal.setTitle(title) catch |err| {
-        //     log.warn("error setting title err={}", .{err});
-        //     return;
-        // };
-        if self.term().set_title(title).is_err() {
-            // log.warn("error setting title err={}", .{err});
-            return;
-        }
+        // try self.terminal.setTitle(title);
+        //
+        // PORT NOTE (oracle 439d35e27): PROMOTED from swallow-and-log to
+        // propagating. The title is terminal-owned semantic state, so a failure
+        // to set it must reach the shared `vt_catch` and raise
+        // `semantic_failure`.
+        self.term().set_title(title)?;
 
         // const func = self.effects.title_changed orelse return;
         // func(self);
         let Some(func) = self.effects.title_changed else {
-            return;
+            return Ok(());
         };
         func(self);
+        Ok(())
     }
 
-    // fn reportPwd(self: *Handler, url_raw: []const u8) void { ... }
-    fn do_report_pwd(&mut self, url_raw: &[u8]) {
+    // fn reportPwd(self: *Handler, url_raw: []const u8) !void { ... }
+    fn do_report_pwd(&mut self, url_raw: &[u8]) -> Result<(), crate::pagelist::OutOfMemory> {
         // Prevent DoS attacks by limiting url length. Headroom for
         // Linux PATH_MAX (4096) plus URI scheme/host and percent-encoding.
         // const max_url_len = 4096;
@@ -1191,21 +1471,19 @@ impl<'a> Handler<'a> {
 
         // We store the raw payload unparsed. Embedders read it via
         // getPwd() and are responsible for decoding any URI scheme.
-        // self.terminal.setPwd(url) catch |err| {
-        //     log.warn("error setting pwd err={}", .{err});
-        //     return;
-        // };
-        if self.term().set_pwd(url).is_err() {
-            // log.warn("error setting pwd err={}", .{err});
-            return;
-        }
+        // try self.terminal.setPwd(url);
+        //
+        // PORT NOTE (oracle 439d35e27): PROMOTED from swallow-and-log to
+        // propagating; see `do_window_title`.
+        self.term().set_pwd(url)?;
 
         // const func = self.effects.pwd_changed orelse return;
         // func(self);
         let Some(func) = self.effects.pwd_changed else {
-            return;
+            return Ok(());
         };
         func(self);
+        Ok(())
     }
 
     // fn requestMode(self: *Handler, mode: modes.Mode) void {
@@ -1402,9 +1680,13 @@ impl<'a> Handler<'a> {
 // vt-12b-7b. The APC end + kitty/glyph arms remain stubbed (font-blocked,
 // deferred past vt-12; see DEFERRALS.md).
 impl<'a> stream::Handler for Handler<'a> {
-    // pub fn deinit(self: *Handler) void { self.apc_handler.deinit(); }
+    // pub fn deinit(self: *Handler) void {
+    //     self.apc_handler.deinit();
+    //     self.dcs_handler.deinit();
+    // }
     fn deinit(&mut self) {
         self.apc_handler.deinit();
+        self.dcs_handler.deinit();
     }
 
     // PORT NOTE: the reference has no `vtRaw` declared on this handler, so the
@@ -1535,49 +1817,13 @@ impl<'a> stream::Handler for Handler<'a> {
         self.term().set_cursor_pos(v.row as usize, v.col as usize);
     }
 
-    // .cursor_style => { ... }
+    // .cursor_style => self.terminal.setCursorStyle(value),
+    //
+    // PORT NOTE (oracle c594031d5): the DECSCUSR style/blink resolution and the
+    // `default_cursor*` fields it read moved onto `Terminal` itself. Do NOT
+    // re-add them here: two owners would double-apply DECSCUSR.
     fn cursor_style(&mut self, v: ansi::CursorStyle) {
-        // self.default_cursor = false;
-        self.default_cursor = false;
-
-        // const blink = switch (value) {
-        //     .default => self.default_cursor_blink,
-        //     .steady_block, .steady_bar, .steady_underline => false,
-        //     .blinking_block, .blinking_bar, .blinking_underline => true,
-        // };
-        let blink = match v {
-            ansi::CursorStyle::Default => self.default_cursor_blink,
-            ansi::CursorStyle::SteadyBlock
-            | ansi::CursorStyle::SteadyBar
-            | ansi::CursorStyle::SteadyUnderline => false,
-            ansi::CursorStyle::BlinkingBlock
-            | ansi::CursorStyle::BlinkingBar
-            | ansi::CursorStyle::BlinkingUnderline => true,
-        };
-        // const style: Screen.CursorStyle = switch (value) {
-        //     .default => style: {
-        //         self.default_cursor = true;
-        //         break :style self.default_cursor_style;
-        //     },
-        //     .blinking_block, .steady_block => .block,
-        //     .blinking_bar, .steady_bar => .bar,
-        //     .blinking_underline, .steady_underline => .underline,
-        // };
-        let style: CursorStyle = match v {
-            ansi::CursorStyle::Default => {
-                self.default_cursor = true;
-                self.default_cursor_style
-            }
-            ansi::CursorStyle::BlinkingBlock | ansi::CursorStyle::SteadyBlock => CursorStyle::Block,
-            ansi::CursorStyle::BlinkingBar | ansi::CursorStyle::SteadyBar => CursorStyle::Bar,
-            ansi::CursorStyle::BlinkingUnderline | ansi::CursorStyle::SteadyUnderline => {
-                CursorStyle::Underline
-            }
-        };
-        // self.terminal.modes.set(.cursor_blinking, blink);
-        self.term().modes.set(modes::Mode::CursorBlinking, blink);
-        // self.terminal.screens.active.cursor.cursor_style = style;
-        self.term().active_mut().cursor.cursor_style = style;
+        self.term().set_cursor_style(v);
     }
 
     // .erase_display_below => self.terminal.eraseDisplay(.below, value),
@@ -1705,19 +1951,12 @@ impl<'a> stream::Handler for Handler<'a> {
         self.term().reverse_index();
     }
 
-    // .full_reset => {
-    //     self.terminal.fullReset();
-    //     self.default_cursor = true;
-    //     self.terminal.modes.set(.cursor_blinking, self.default_cursor_blink);
-    //     self.terminal.screens.active.cursor.cursor_style = self.default_cursor_style;
-    // },
+    // .full_reset => self.terminal.fullReset(),
+    //
+    // PORT NOTE (oracle c594031d5): `Terminal::full_reset` now performs the
+    // cursor-default restore itself (`setCursorStyle(.default)`).
     fn full_reset(&mut self) {
         self.term().full_reset();
-        self.default_cursor = true;
-        let blink = self.default_cursor_blink;
-        self.term().modes.set(modes::Mode::CursorBlinking, blink);
-        let style = self.default_cursor_style;
-        self.term().active_mut().cursor.cursor_style = style;
     }
 
     // .set_mode => try self.setMode(value.mode, true),
@@ -1897,14 +2136,23 @@ impl<'a> stream::Handler for Handler<'a> {
             .set(kitty::key::SetMode::Not, v.flags);
     }
 
-    // .dcs_hook, .dcs_put, .dcs_unhook => {},
-    // No supported DCS commands have any terminal-modifying effects, but they
-    // may in the future. For now we just ignore it.
-    fn dcs_hook(&mut self, dcs: crate::parser::DCS) {}
+    // .dcs_hook => try self.dcsHook(value),
+    fn dcs_hook(&mut self, dcs: crate::parser::DCS) {
+        let r = self.do_dcs_hook(dcs);
+        self.vt_catch(r);
+    }
 
-    fn dcs_put(&mut self, code: u8) {}
+    // .dcs_put => try self.dcsPut(value),
+    fn dcs_put(&mut self, code: u8) {
+        let r = self.do_dcs_put(code);
+        self.vt_catch(r);
+    }
 
-    fn dcs_unhook(&mut self) {}
+    // .dcs_unhook => try self.dcsUnhook(),
+    fn dcs_unhook(&mut self) {
+        let r = self.do_dcs_unhook();
+        self.vt_catch(r);
+    }
 
     // .apc_start => self.apc_handler.start(),
     fn apc_start(&mut self) {
@@ -1948,14 +2196,16 @@ impl<'a> stream::Handler for Handler<'a> {
         self.vt(|t| t.decaln());
     }
 
-    // .window_title => self.windowTitle(value.title),
+    // .window_title => try self.windowTitle(value.title),
     fn window_title(&mut self, v: stream::WindowTitle) {
-        self.do_window_title(v.title);
+        let r = self.do_window_title(v.title);
+        self.vt_catch(r);
     }
 
-    // .report_pwd => self.reportPwd(value.url),
+    // .report_pwd => try self.reportPwd(value.url),
     fn report_pwd(&mut self, v: stream::ReportPwd) {
-        self.do_report_pwd(v.url);
+        let r = self.do_report_pwd(v.url);
+        self.vt_catch(r);
     }
 
     // .show_desktop_notification => self.desktopNotification(value),
@@ -2073,25 +2323,47 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .set_attribute => switch (value) {
     //     .unknown => {},
-    //     else => self.terminal.setAttribute(value) catch {},
+    //     else => try self.terminal.setAttribute(value),
     // },
+    //
+    // PORT NOTE (oracle 439d35e27): PROMOTED from `catch {}` to propagating —
+    // the cursor pen is terminal-owned semantic state.
     fn set_attribute(&mut self, attr: sgr::Attribute) {
         match attr {
             sgr::Attribute::Unknown { .. } => {}
             _ => {
-                let _ = self.term().set_attribute(attr);
+                let r = self
+                    .term()
+                    .set_attribute(attr)
+                    .map_err(|_| crate::pagelist::OutOfMemory);
+                self.vt_catch(r);
             }
         }
     }
 
-    // .kitty_color_report => try self.kittyColorOperation(value),
+    // .kitty_color_report => self.kittyColorOperation(value) catch |err| {
+    //     log.warn("error reporting Kitty colors err={}", .{err});
+    // },
+    //
+    // PORT NOTE (oracle 439d35e27): stays GRACEFUL. A failure here is a query
+    // RESPONSE failure, not a divergence of terminal-owned state, so it must
+    // NOT route through `vt_catch` / set `semantic_failure`.
     fn kitty_color_report(&mut self, v: kitty::color::OSC) {
-        let _ = self.do_kitty_color_operation(v);
+        if self.do_kitty_color_operation(v).is_err() {
+            // log.warn("error reporting Kitty colors err={}", .{err});
+        }
     }
 
-    // .color_operation => try self.colorOperation(&value.requests, value.terminator),
+    // .color_operation => self.colorOperation(
+    //     &value.requests,
+    //     value.terminator,
+    // ) catch |err| log.warn("error reporting OSC color err={}", .{err}),
+    //
+    // PORT NOTE (oracle 439d35e27): stays GRACEFUL; see `kitty_color_report`.
     fn color_operation(&mut self, v: stream::ColorOperation) {
-        let _ = self.do_color_operation(&v.requests, v.terminator);
+        if self.do_color_operation(&v.requests, v.terminator).is_err() {
+            // log.warn("error reporting OSC color err={}", .{err});
+        }
     }
 
     // .semantic_prompt => try self.terminal.semanticPrompt(value),
@@ -2128,10 +2400,257 @@ mod tests {
                 palette: DynamicPalette::default_palette(),
             },
             default_modes: modespkg::ModePacked::default(),
+            default_cursor_style: crate::screen::CursorStyle::Block,
+            default_cursor_blink: Some(false),
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }
     }
+
+    // -- Handler.resize tests (oracle 89b103dd5) ------------------------------
+    //
+    // PORT NOTE: the reference tests hang a `var` on a local `S` struct to count
+    // / capture `writePty` calls. Rust's `write_pty` is a bare `fn` pointer, so
+    // the counters live in thread-locals (same idiom as `CAPTURE`/`cap_*`).
+    thread_local! {
+        static WRITE_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    fn calls_reset() {
+        WRITE_CALLS.with(|c| c.set(0));
+        CAPTURE.with(|c| *c.borrow_mut() = None);
+    }
+
+    fn calls_get() -> usize {
+        WRITE_CALLS.with(|c| c.get())
+    }
+
+    fn count_write_pty(_: &mut Handler, data: &[u8]) {
+        WRITE_CALLS.with(|c| c.set(c.get() + 1));
+        CAPTURE.with(|c| *c.borrow_mut() = Some(data.to_vec()));
+    }
+
+    fn cell_9x18() -> crate::terminal::ResizeCellSize {
+        crate::terminal::ResizeCellSize {
+            width: 9,
+            height: 18,
+        }
+    }
+
+    // test "resize clears synchronized output on unchanged cell dimensions"
+    #[test]
+    fn resize_clears_synchronized_output_on_unchanged_cell_dimensions() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        t.modes.set(modespkg::Mode::SynchronizedOutput, true);
+        {
+            let mut s = t.vt_stream();
+            s.handler
+                .resize(crate::terminal::Resize {
+                    cols: 80,
+                    rows: 24,
+                    cell_size_px: Some(cell_9x18()),
+                })
+                .unwrap();
+        }
+
+        assert!(!t.modes.get(modespkg::Mode::SynchronizedOutput));
+        assert_eq!(720_u32, t.width_px);
+        assert_eq!(432_u32, t.height_px);
+
+        t.deinit(Global);
+    }
+
+    // test "resize reports mode 2048 geometry"
+    #[test]
+    fn resize_reports_mode_2048_geometry() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        calls_reset();
+
+        t.modes.set(modespkg::Mode::InBandSizeReports, true);
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+            s.handler
+                .resize(crate::terminal::Resize {
+                    cols: 100,
+                    rows: 40,
+                    cell_size_px: Some(cell_9x18()),
+                })
+                .unwrap();
+        }
+
+        assert_eq!(
+            b"\x1B[48;40;100;720;900t".as_slice(),
+            cap_take().unwrap().as_slice()
+        );
+
+        t.deinit(Global);
+    }
+
+    // test "resize suppresses mode 2048 reports"
+    #[test]
+    fn resize_suppresses_mode_2048_reports() {
+        calls_reset();
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // Disabled mode suppresses a report even with pixels and a callback.
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+            s.handler
+                .resize(crate::terminal::Resize {
+                    cols: 80,
+                    rows: 24,
+                    cell_size_px: Some(cell_9x18()),
+                })
+                .unwrap();
+        }
+        assert_eq!(0_usize, calls_get());
+
+        // Missing pixel geometry suppresses a report even with the mode enabled.
+        t.modes.set(modespkg::Mode::InBandSizeReports, true);
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+            s.handler
+                .resize(crate::terminal::Resize {
+                    cols: 80,
+                    rows: 24,
+                    cell_size_px: None,
+                })
+                .unwrap();
+        }
+        assert_eq!(0_usize, calls_get());
+
+        // A read-only stream has no write effect and remains successful.
+        let mut readonly_terminal = Terminal::init(Global, opts(80, 24)).unwrap();
+        readonly_terminal
+            .modes
+            .set(modespkg::Mode::InBandSizeReports, true);
+        {
+            let mut readonly_stream = readonly_terminal.vt_stream();
+            readonly_stream
+                .handler
+                .resize(crate::terminal::Resize {
+                    cols: 80,
+                    rows: 24,
+                    cell_size_px: Some(cell_9x18()),
+                })
+                .unwrap();
+        }
+        assert_eq!(0_usize, calls_get());
+
+        readonly_terminal.deinit(Global);
+        t.deinit(Global);
+    }
+
+    // test "resize failure preserves terminal state and does not write"
+    //
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn resize_failure_preserves_terminal_state_and_does_not_write() {
+        calls_reset();
+
+        let mut t = Terminal::init(Global, opts(10, 1)).unwrap();
+
+        t.modes.set(modespkg::Mode::SynchronizedOutput, true);
+        t.modes.set(modespkg::Mode::InBandSizeReports, true);
+
+        // PORT NOTE: the reference swaps in a `testing.FailingAllocator`. This
+        // port's seam is the `Tabstops::resize` tripwire, whose only fail point
+        // (`DynamicAlloc`) sits at the dynamic-stops allocation that
+        // `Tabstops::init` reaches from `Terminal::resize`. 513 columns is past
+        // `PREALLOC_COLUMNS`, so the allocation IS attempted.
+        crate::tabstops::resize_tw_error_always(crate::tabstops::ResizeFp::DynamicAlloc);
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+            assert_eq!(
+                Err(crate::terminal::ResizeError::OutOfMemory),
+                s.handler.resize(crate::terminal::Resize {
+                    cols: 513,
+                    rows: 1,
+                    cell_size_px: Some(cell_9x18()),
+                })
+            );
+        }
+        crate::tabstops::resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+        // oracle a3c1caba5: the failed resize now ROLLS BACK, so
+        // synchronized output stays as it was and the pixel geometry is
+        // untouched (it was never set on this terminal).
+        assert!(t.modes.get(modespkg::Mode::SynchronizedOutput));
+        assert_eq!(0_usize, calls_get());
+        assert_eq!(10 as size::CellCountInt, t.cols);
+        assert_eq!(0_u32, t.width_px);
+        assert_eq!(0_u32, t.height_px);
+
+        t.deinit(Global);
+    }
+
+    // test "resize effects do not change canonical terminal state"
+    #[test]
+    fn resize_effects_do_not_change_canonical_terminal_state() {
+        let mut authoritative = Terminal::init(Global, opts(10, 5)).unwrap();
+        let mut readonly = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        authoritative
+            .modes
+            .set(modespkg::Mode::InBandSizeReports, true);
+        readonly.modes.set(modespkg::Mode::InBandSizeReports, true);
+
+        let value = crate::terminal::Resize {
+            cols: 20,
+            rows: 10,
+            cell_size_px: Some(cell_9x18()),
+        };
+        {
+            let mut authoritative_stream = authoritative.vt_stream();
+            authoritative_stream.handler.effects.write_pty = Some(noop_write_pty);
+            authoritative_stream.handler.resize(value).unwrap();
+        }
+        {
+            let mut readonly_stream = readonly.vt_stream();
+            readonly_stream.handler.resize(value).unwrap();
+        }
+
+        assert_eq!(authoritative.cols, readonly.cols);
+        assert_eq!(authoritative.rows, readonly.rows);
+        assert_eq!(authoritative.width_px, readonly.width_px);
+        assert_eq!(authoritative.height_px, readonly.height_px);
+        // std.meta.eql(authoritative.modes, readonly.modes)
+        assert_eq!(authoritative.modes.values, readonly.modes.values);
+        assert_eq!(authoritative.modes.saved, readonly.modes.saved);
+        assert_eq!(authoritative.modes.default, readonly.modes.default);
+        assert_eq!(
+            authoritative.scrolling_region.top,
+            readonly.scrolling_region.top
+        );
+        assert_eq!(
+            authoritative.scrolling_region.bottom,
+            readonly.scrolling_region.bottom
+        );
+        assert_eq!(
+            authoritative.scrolling_region.left,
+            readonly.scrolling_region.left
+        );
+        assert_eq!(
+            authoritative.scrolling_region.right,
+            readonly.scrolling_region.right
+        );
+
+        readonly.deinit(Global);
+        authoritative.deinit(Global);
+    }
+
+    fn noop_write_pty(_: &mut Handler, _: &[u8]) {}
 
     // test "basic print"
     #[test]
@@ -2149,6 +2668,176 @@ mod tests {
         let str = t.plain_string(Global).unwrap();
         assert_eq!(str.as_slice(), b"Hello");
 
+        t.deinit(Global);
+    }
+
+    // test "semantic failure is sticky while processing continues"
+    //
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point (the port's stand-in for the reference's
+    // `std.testing.FailingAllocator` — see the `SET_STRING_TW` PORT NOTE in
+    // terminal.rs), and `tripwire::Module::enabled()` is `cfg!(debug_assertions)`.
+    // Without `debug_assertions` the fail point never trips, so the test can only
+    // run in debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn semantic_failure_is_sticky_while_processing_continues() {
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            assert!(!s.handler.semantic_failure);
+
+            // Setting the title is a terminal-owned semantic update. Force its
+            // allocation to fail at the central vtFallible boundary.
+            crate::terminal::set_string_tw_error_always(crate::terminal::SetStringFp::Reserve);
+            s.next_slice(b"\x1B]2;unavailable\x1B\\");
+            crate::terminal::set_string_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            assert!(s.handler.semantic_failure);
+
+            // Later input and RIS remain best-effort and never clear the
+            // diagnostic.
+            s.next_slice(b"ignored");
+            s.next_slice(b"\x1Bc");
+            s.next_slice(b"OK");
+            assert!(s.handler.semantic_failure);
+        }
+
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(b"OK".as_slice(), str.as_slice());
+
+        // A new execution root starts without inheriting the diagnostic.
+        let fresh = Handler::init(&raw mut t);
+        assert!(!fresh.semantic_failure);
+
+        t.deinit(Global);
+    }
+
+    // NEGATIVE CONTROL (P3-W4 T5 Step 3): a `color_operation` failure must
+    // leave the flag FALSE. This is the assertion that proves the error
+    // RE-PARTITION was ported, rather than a blanket "any handler error sets
+    // the flag" — which is what a mechanical port of the `vt()` catch alone
+    // would produce, and which every other assertion in this file would still
+    // pass with.
+    //
+    // WS18 release lane: tripwire fail point; see the SET_STRING_TW PORT NOTE.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn semantic_failure_is_not_set_by_a_color_operation_failure() {
+        // (a) Baseline: the arm IS reached and DOES produce a response, so the
+        //     failure injected in (b) is landing on a live code path. (Without
+        //     this the whole control could be passing because the input never
+        //     reaches `colorOperation` at all.)
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        cap_reset();
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(cap_write_pty);
+            s.next_slice(b"\x1B]4;0;?\x1B\\");
+            assert!(
+                cap_take().is_some(),
+                "colorOperation must be reached for this control to mean anything"
+            );
+            assert!(!s.handler.semantic_failure);
+        }
+        t.deinit(Global);
+
+        // (b) The same input with `do_color_operation` FORCED to fail. The
+        //     response must not be produced (proving the failure was injected
+        //     on the live path) and `semantic_failure` must stay FALSE — that
+        //     is the re-partition assertion. Routing this arm through
+        //     `vt_catch` (the mechanical "any error sets the flag" port) makes
+        //     this fail.
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        cap_reset();
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(cap_write_pty);
+            color_operation_tw_error_always(ColorOperationFp::Respond);
+            s.next_slice(b"\x1B]4;0;?\x1B\\");
+            color_operation_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            assert!(
+                cap_take().is_none(),
+                "the injected failure must actually abort the response"
+            );
+            assert!(
+                !s.handler.semantic_failure,
+                "a color-operation failure is GRACEFUL and must not set semantic_failure"
+            );
+        }
+        t.deinit(Global);
+    }
+
+    // test "DECRQSS responses"
+    #[test]
+    fn decrqss_responses() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        calls_reset();
+
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+
+            // SGR
+            s.next_slice(b"\x1B[1m\x1BP$qm\x1B\\");
+            assert_eq!(1_usize, calls_get());
+            assert_eq!(
+                b"\x1BP1$r0;1m\x1B\\".as_slice(),
+                cap_take().unwrap().as_slice()
+            );
+            calls_reset();
+
+            // Requests larger than the parser's fixed request buffer are
+            // ignored, and the next DCS command must still be processed
+            // normally.
+            s.next_slice(b"\x1BP$qfoo\x1B\\");
+            assert_eq!(0_usize, calls_get());
+            assert!(!s.handler.semantic_failure);
+            s.next_slice(b"\x1BP$qm\x1B\\");
+            assert_eq!(1_usize, calls_get());
+            assert_eq!(
+                b"\x1BP1$r0;1m\x1B\\".as_slice(),
+                cap_take().unwrap().as_slice()
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "DECRQSS without write effect is ignored"
+    #[test]
+    fn decrqss_without_write_effect_is_ignored() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1BP$qm\x1B\\");
+            assert!(!s.handler.semantic_failure);
+        }
+        t.deinit(Global);
+    }
+
+    // test "DCS command memory is released"
+    //
+    // PORT NOTE: the reference relies on `testing.allocator` to detect a leak.
+    // rustty has no leak-detecting test allocator here; the value of the test in
+    // this port is that `dcsCommand` releases a COMPLETED unsupported command
+    // and `Handler::deinit` releases an INCOMPLETE one — both exercised below
+    // and both observable under Miri / a leak checker.
+    #[test]
+    fn dcs_command_memory_is_released() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+
+            // A completed, unsupported command transfers its allocation to
+            // Command; dcsCommand must release it even though stream_terminal
+            // ignores it.
+            s.next_slice(b"\x1BP+q536D756C78\x1B\\");
+
+            // An incomplete command remains owned by the handler and must be
+            // released when the stream is deinitialized.
+            s.next_slice(b"\x1BP+q536D756C78");
+        }
         t.deinit(Global);
     }
 
@@ -3035,6 +3724,14 @@ mod tests {
             s.next_slice(b"\x1B[6n"); // Cursor position report
             s.next_slice(b"\x1B]4;0;?\x1B\\"); // OSC color query
             s.next_slice(b"\x1B]21;foreground=?\x1B\\"); // Kitty color query
+            s.next_slice(b"\x1B]52;c;%%%invalid-base64%%%\x1B\\");
+            s.next_slice(b"\x1B_Ga=p,i=999\x1B\\"); // Missing Kitty image
+            s.next_slice(b"\x1B_25a1;r;cp=41;%%%invalid%%%\x1B\\"); // Rejected glyph
+
+            // Query, malformed input, protocol failure responses, and
+            // external-effect failures do not imply that terminal-owned
+            // semantic state diverged.
+            assert!(!s.handler.semantic_failure);
 
             // Terminal should still be functional
             s.next_slice(b"Test");
@@ -3969,6 +4666,60 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "visibility reports"
+    //
+    // NEGATIVE CONTROL (P3-W4 T7 Step 5), vt half. Three independently
+    // droppable behaviours, three assertions:
+    //   (1) mode 2033 exists and an explicit CSI ? 998 n query answers without
+    //       enabling it,
+    //   (2) ENABLING always sends an immediate report, even when already
+    //       enabled (and DISABLING sends nothing) — a count assertion, because
+    //       a value assertion cannot tell "sent again" from "still the old
+    //       value",
+    //   (3) RIS PRESERVES `flags.visible` (the exemption). Removing the
+    //       exemption makes the final assertion fail.
+    #[test]
+    fn visibility_reports() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        calls_reset();
+
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(count_write_pty);
+
+            // Mode 2033 is supported and initially disabled.
+            s.next_slice(b"\x1B[?2033$p");
+            assert_eq!(b"\x1B[?2033;2$y".as_slice(), cap_take().unwrap().as_slice());
+
+            // A one-shot query reports the current state without enabling the
+            // mode.
+            s.next_slice(b"\x1B[?998n");
+            assert_eq!(b"\x1B[?999;1n".as_slice(), cap_take().unwrap().as_slice());
+            assert!(!s.handler.term().modes.get(modespkg::Mode::ReportVisibility));
+
+            // Enabling always sends an immediate report, even when already
+            // enabled.
+            s.handler.term().flags.visible = false;
+            s.next_slice(b"\x1B[?2033h");
+            assert_eq!(b"\x1B[?999;2n".as_slice(), cap_take().unwrap().as_slice());
+            let count = calls_get();
+            s.next_slice(b"\x1B[?2033h");
+            assert_eq!(count + 1, calls_get());
+
+            // Disabling sends no report.
+            s.next_slice(b"\x1B[?2033l");
+            assert_eq!(count + 1, calls_get());
+
+            // A terminal reset preserves the view's externally owned
+            // visibility.
+            s.next_slice(b"\x1Bc");
+            s.next_slice(b"\x1B[?998n");
+            assert_eq!(b"\x1B[?999;2n".as_slice(), cap_take().unwrap().as_slice());
+        }
+
+        t.deinit(Global);
+    }
+
     // test "device status: readonly ignores all"
     #[test]
     fn device_status_readonly_ignores_all() {
@@ -3980,6 +4731,7 @@ mod tests {
             s.next_slice(b"\x1B[5n");
             s.next_slice(b"\x1B[6n");
             s.next_slice(b"\x1B[?996n");
+            s.next_slice(b"\x1B[?998n");
 
             // Terminal should still be functional
             s.next_slice(b"Test");

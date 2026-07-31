@@ -534,6 +534,10 @@ impl<M: AppMailbox> Termio<M> {
                 max_scrollback_bytes: scrollback_limits(opts.full_config).0,
                 max_scrollback_lines: scrollback_limits(opts.full_config).1,
                 default_modes,
+                // .default_cursor_style = opts.config.cursor_style,
+                // .default_cursor_blink = opts.config.cursor_blink,
+                default_cursor_style: opts.config.cursor_style,
+                default_cursor_blink: opts.config.cursor_blink,
                 colors: rustty_vt::terminal::Colors {
                     // .background = .init(opts.config.background.toTerminalRGB()),
                     background: color::DynamicRGB::init(opts.config.background.to_terminal_rgb()),
@@ -569,12 +573,11 @@ impl<M: AppMailbox> Termio<M> {
         // write into `*self_`; on error we return before writing, so no
         // partial-init cleanup is needed — the errdefer collapses.)
 
-        // Set our default cursor style
-        // term.screens.active.cursor.cursor_style = opts.config.cursor_style;
-        //
-        // SAFETY: `term.screens.active` is the live active-screen pointer just
-        // returned by `Terminal::init`.
-        unsafe { (*term.screens.active).cursor.cursor_style = opts.config.cursor_style };
+        // PORT NOTE (oracle c594031d5): the "Set our default cursor style"
+        // poke at `term.screens.active.cursor.cursor_style` that used to live
+        // here is DELETED. The defaults are passed into `Terminal::init` above
+        // (`default_cursor_style` / `default_cursor_blink`) and `init` applies
+        // them via `setCursorStyle(.default)`.
 
         // Setup our terminal size in pixels for certain requests.
         // term.width_px = term.cols * opts.size.cell.width;
@@ -596,8 +599,6 @@ impl<M: AppMailbox> Termio<M> {
         let handler_osc = opts.config.osc_color_report_format;
         let handler_clipboard_write = opts.config.clipboard_write;
         let handler_enquiry_response = opts.config.enquiry_response.clone();
-        let handler_cursor_style = opts.config.cursor_style;
-        let handler_cursor_blink = opts.config.cursor_blink;
 
         // (PORT NOTE: `opts.surface_mailbox`/`opts.renderer_wakeup`/`opts.renderer_state`
         // /`opts.renderer_mailbox`/`alloc` are all `Copy` — the reference uses each
@@ -668,14 +669,9 @@ impl<M: AppMailbox> Termio<M> {
             clipboard_write: handler_clipboard_write,
             // .enquiry_response = opts.config.enquiry_response,
             enquiry_response: handler_enquiry_response,
-            // .default_cursor_style = opts.config.cursor_style,
-            default_cursor_style: handler_cursor_style,
-            // .default_cursor_blink = opts.config.cursor_blink,
-            default_cursor_blink: handler_cursor_blink,
             // (reference field defaults for the handler fields not in the literal:
-            // `default_cursor = true`, `apc = .{}`, `dcs = .{}`,
-            // `tmux_viewer = null`, `termio_messaged = false`, `seen_title = false`.)
-            default_cursor: true,
+            // `apc = .{}`, `dcs = .{}`, `tmux_viewer = null`,
+            // `termio_messaged = false`, `seen_title = false`.)
             apc: rustty_vt::apc::Handler::default(),
             dcs: rustty_vt::dcs::Handler::default(),
             tmux_viewer: None,
@@ -1080,25 +1076,39 @@ impl<M: AppMailbox> Termio<M> {
         unsafe { (*(*self.renderer_state).mutex).lock() };
         let locked: Result<(), Error> = 'locked: {
             // Update the size of our terminal state
-            // try self.terminal.resize(self.alloc, grid_size.columns, grid_size.rows);
+            // try self.terminal.resize(self.alloc, .{
+            //     .cols = grid_size.columns,
+            //     .rows = grid_size.rows,
+            //     .cell_size_px = .{
+            //         .width = self.size.cell.width,
+            //         .height = self.size.cell.height,
+            //     },
+            // });
+            //
+            // PORT NOTE (oracle 89b103dd5, area E8): the pixel-geometry
+            // assignment and the `modes.set(.synchronized_output, false)` that
+            // used to live HERE both moved INTO `Terminal::resize`. Do not
+            // re-add them: `Terminal::resize` applies the geometry even when the
+            // grid dimensions are unchanged, and the clear must happen exactly
+            // once (guarded by `modes::sync_output_clear_count`).
+            let cell_size = rustty_vt::terminal::ResizeCellSize {
+                width: self.size.cell.width,
+                height: self.size.cell.height,
+            };
             if self
                 .terminal
-                .resize(self.alloc, grid_size.columns, grid_size.rows)
+                .resize(
+                    self.alloc,
+                    rustty_vt::terminal::Resize {
+                        cols: grid_size.columns,
+                        rows: grid_size.rows,
+                        cell_size_px: Some(cell_size),
+                    },
+                )
                 .is_err()
             {
                 break 'locked Err(Error);
             }
-
-            // Update our pixel sizes
-            // self.terminal.width_px = grid_size.columns * self.size.cell.width;
-            self.terminal.width_px = u32::from(grid_size.columns) * self.size.cell.width;
-            // self.terminal.height_px = grid_size.rows * self.size.cell.height;
-            self.terminal.height_px = u32::from(grid_size.rows) * self.size.cell.height;
-
-            // Disable synchronized output mode so that we show changes
-            // immediately for a resize. This is allowed by the spec.
-            // self.terminal.modes.set(.synchronized_output, false);
-            self.terminal.modes.set(Mode::SynchronizedOutput, false);
 
             // If we have size reporting enabled we need to send a report.
             // if (self.terminal.modes.get(.in_band_size_reports)) {
@@ -1681,10 +1691,73 @@ impl<M: AppMailbox> Termio<M> {
             conditional::Theme::Light => device_status::ColorScheme::Light,
             conditional::Theme::Dark => device_status::ColorScheme::Dark,
         };
-        let mut output = Vec::new();
+        // PORT NOTE (oracle f00e90694, T7 Step 6): this call site ALREADY
+        // routed through the shared `encode_color_scheme_report` rather than
+        // hand-writing "\x1B[?997;1n"/";2n"; the only delta was that the buffer
+        // did not name the encoder's advertised maximum. It does now, so the
+        // constant and its call site cannot drift apart silently.
+        let mut output = Vec::with_capacity(device_status::MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE);
         device_status::encode_color_scheme_report(&mut output, scheme);
         // try self.queueWrite(td, output, false);
         self.queueWrite(td, &output, false)
+    }
+
+    /// Sends a visibility report to the pty. Unforced reports are only sent
+    /// while DEC mode 2033 is enabled.
+    // pub fn visibilityReport(self: *Termio, td: *ThreadData, visible: bool, force: bool) !void {
+    pub fn visibilityReport(
+        &mut self,
+        td: &mut ThreadData<M>,
+        visible: bool,
+        force: bool,
+    ) -> Result<(), Error> {
+        // self.renderer_state.mutex.lockUncancelable(global.io());
+        // defer self.renderer_state.mutex.unlock(global.io());
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `colorSchemeReport`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        let result = self.visibilityReportLocked(td, visible, force);
+        // (the deferred renderer-state unlock — fires on the `try` error too.)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        result
+    }
+
+    // (The body of `visibilityReport` inside its lock; split out so the
+    // guard-less unlock above is the single `defer`.)
+    fn visibilityReportLocked(
+        &mut self,
+        td: &mut ThreadData<M>,
+        visible: bool,
+        force: bool,
+    ) -> Result<(), Error> {
+        // if (!force and !self.renderer_state.terminal.modes.get(.report_visibility)) return;
+        //
+        // SAFETY: `renderer_state.terminal` is the live shared terminal pointer;
+        // the read happens under the caller-held lock.
+        if !force
+            && !unsafe {
+                (*(*self.renderer_state).terminal)
+                    .modes
+                    .get(Mode::ReportVisibility)
+            }
+        {
+            return Ok(());
+        }
+
+        // var buf: [max_visibility_report_encode_size]u8 = undefined;
+        // var writer: std.Io.Writer = .fixed(&buf);
+        // try device_status.encodeVisibilityReport(&writer, ...);
+        // try self.queueWrite(td, writer.buffered(), false);
+        let mut buf = Vec::with_capacity(device_status::MAX_VISIBILITY_REPORT_ENCODE_SIZE);
+        device_status::encode_visibility_report(
+            &mut buf,
+            if visible {
+                device_status::Visibility::PotentiallyVisible
+            } else {
+                device_status::Visibility::NotVisible
+            },
+        );
+        self.queueWrite(td, &buf, false)
     }
 
     /// Get information about the process(es) attached to the backend. Returns
@@ -1861,6 +1934,8 @@ mod scrollback_limit_handoff_tests {
                     palette: rustty_vt::color::DynamicPalette::default_palette(),
                 },
                 default_modes: rustty_vt::modes::ModePacked::default(),
+                default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+                default_cursor_blink: Some(false),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
