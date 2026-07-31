@@ -43,6 +43,7 @@ use crate::sprite::draw::{
 };
 use crate::sprite::{Canvas, Sprite};
 use allocator_api2::alloc::Allocator;
+use rustty_z2d as z2d;
 use rustty_z2d::painter::{FillError, StrokeError};
 use rustty_z2d::path;
 
@@ -82,6 +83,13 @@ pub enum DrawFnError {
     Path(path::Error),
     Fill(FillError),
     Stroke(StrokeError),
+    /// PORT NOTE (P3-W8 T3, oracle `d0e72a3ab`): `innerStrokePath` now returns
+    /// `z2d.Path.OffsetError`, whose Zig spelling
+    /// (`InputSet.FromNodesError || OutputSet.ToNodesError ||
+    /// Allocator.Error`) carries z2d's `InternalError` in addition to the sets
+    /// `DrawFnError` already names. Zig grows the reference's inferred error
+    /// set implicitly at the `try` site; rustty's concrete enum has to name it.
+    Internal(z2d::internal::error::InternalError),
     /// Something went wrong while doing math.
     #[allow(dead_code)]
     MathError,
@@ -115,7 +123,7 @@ impl From<crate::sprite::canvas::InnerStrokeError> for DrawFnError {
     fn from(e: crate::sprite::canvas::InnerStrokeError) -> DrawFnError {
         match e {
             crate::sprite::canvas::InnerStrokeError::Stroke(s) => DrawFnError::Stroke(s),
-            crate::sprite::canvas::InnerStrokeError::Fill(f) => DrawFnError::Fill(f),
+            crate::sprite::canvas::InnerStrokeError::Offset(i) => DrawFnError::Internal(i),
         }
     }
 }

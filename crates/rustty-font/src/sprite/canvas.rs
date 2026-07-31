@@ -20,12 +20,11 @@ use crate::atlas::{self, Atlas, Format, Region};
 use allocator_api2::alloc::Allocator;
 use rustty_util::quirks::inlineAssert as assert;
 use rustty_z2d as z2d;
-use z2d::compositor::Operator;
+use z2d::internal::error::InternalError;
 use z2d::options::CapMode;
 use z2d::painter::{self, FillError, FillOptions, StrokeError, StrokeOptions};
 use z2d::pattern::{OpaquePattern, Pattern};
 use z2d::pixel::{Alpha8, Pixel};
-use z2d::surface::SurfaceType;
 use z2d::{Context, Path, StaticPath, Surface, Transformation};
 
 // pub fn Point(comptime T: type) type {
@@ -706,148 +705,35 @@ impl Canvas {
         )
     }
 
-    /// Do an inner stroke on a z2d path, right now this involves a pretty
-    /// heavy workaround that uses two extra surfaces; in the future, z2d
-    /// should add inner and outer strokes natively.
+    /// Do an inner stroke using a 1/2 stroke width inset of the supplied
+    /// `path`.
+    ///
+    /// PORT NOTE (P3-W8 T3, oracle `d0e72a3ab`): this replaced a 60-line
+    /// two-surface fill x double-stroke mask workaround once z2d 0.12.1 grew
+    /// `Path.offset` (back-ported into `rustty-z2d`'s
+    /// `internal/path_fx/`). rustty reproduces 5 of the 6 goldens that
+    /// `d0e72a3ab` regolded pixel-for-pixel against the oracle's own files; the
+    /// sixth (`U+2500...U+25FF-9x17+1.png`) differs at exactly 1 pixel of
+    /// 83,200 (delta 16/255) for a reason proven to be downstream of `offset`
+    /// itself. The full 4-criterion record, including the isolated shape and
+    /// the bit-identical node dump, is `.port/phase-3/NON_PORTS.md` row **F1**.
     // pub fn innerStrokePath(
     //     self: *Canvas,
     //     path: z2d.Path,
     //     opts: z2d.painter.StrokeOptions,
     //     color: Color,
-    // ) (z2d.painter.StrokeError || z2d.painter.FillError)!void {
+    // ) (z2d.Path.OffsetError || z2d.painter.StrokeError)!void {
     pub fn innerStrokePath(
         &mut self,
         path: &Path,
         opts: StrokeOptions,
         color: Color,
     ) -> Result<(), InnerStrokeError> {
-        // On one surface we fill the shape, this will be a mask we
-        // multiply with the double-width stroke so that only the
-        // part inside is used.
-        // var fill_sfc: z2d.Surface = try .init(
-        //     .image_surface_alpha8,
-        //     self.alloc,
-        //     self.sfc.getWidth(),
-        //     self.sfc.getHeight(),
-        // );
-        // defer fill_sfc.deinit(self.alloc);
-        let mut fill_sfc: Surface = Surface::init(
-            SurfaceType::ImageSurfaceAlpha8,
-            self.sfc.get_width(),
-            self.sfc.get_height(),
-        )
-        .map_err(StrokeError::Surface)?;
-
-        // On the other we'll do the double width stroke.
-        // var stroke_sfc: z2d.Surface = try .init(
-        //     .image_surface_alpha8,
-        //     self.alloc,
-        //     self.sfc.getWidth(),
-        //     self.sfc.getHeight(),
-        // );
-        // defer stroke_sfc.deinit(self.alloc);
-        let mut stroke_sfc: Surface = Surface::init(
-            SurfaceType::ImageSurfaceAlpha8,
-            self.sfc.get_width(),
-            self.sfc.get_height(),
-        )
-        .map_err(StrokeError::Surface)?;
-
-        // Make a closed version of the path for our fill, so
-        // that we can support open paths for inner stroke.
-        // var closed_path = path;
-        // closed_path.nodes = try path.nodes.clone(self.alloc);
-        // defer closed_path.deinit(self.alloc);
-        // try closed_path.close(self.alloc);
-        //
-        // PORT NOTE: the reference copies the path struct and then REPLACES its
-        // node list with a heap clone (`closed_path.nodes = try
-        // path.nodes.clone(self.alloc)`) — a GROWABLE list, so the subsequent
-        // `close` can append two nodes even when the source `path` came from a
-        // fixed-capacity `StaticPath`. rustty-z2d's `Path::clone` would carry the
-        // source's static capacity limit (panicking on `close`), so we rebuild a
-        // growable path from `Path::empty()` with the cloned nodes and drawing
-        // state, matching the reference's growable-clone semantics. `close` is
-        // infallible and needs no allocator; the cloned path frees on drop.
-        let mut closed_path = Path::empty();
-        closed_path.nodes = path.nodes.clone();
-        closed_path.initial_point = path.initial_point;
-        closed_path.current_point = path.current_point;
-        closed_path.tolerance = path.tolerance;
-        closed_path.transformation = path.transformation;
-        closed_path.close();
-
-        // Fill the shape in white to the fill surface, we use
-        // white because this is a mask that we'll multiply with
-        // the stroke, we want everything inside to be the stroke
-        // color.
-        // try z2d.painter.fill(
-        //     self.alloc,
-        //     &fill_sfc,
-        //     &.{ .opaque_pattern = .{
-        //         .pixel = .{ .alpha8 = .{ .a = 255 } },
-        //     } },
-        //     closed_path.nodes.items,
-        //     .{},
-        // );
-        painter::fill(
-            &mut fill_sfc,
-            &Pattern::OpaquePattern(OpaquePattern {
-                pixel: Pixel::Alpha8(Alpha8 { a: 255 }),
-            }),
-            &closed_path.nodes,
-            FillOptions::default(),
-        )?;
-
-        // Stroke the shape with double the desired width.
-        // var mut_opts = opts;
-        // mut_opts.line_width *= 2;
-        let mut mut_opts = opts;
-        mut_opts.line_width *= 2.0;
-        // try z2d.painter.stroke(
-        //     self.alloc,
-        //     &stroke_sfc,
-        //     &.{ .opaque_pattern = .{
-        //         .pixel = .{ .alpha8 = .{ .a = @intFromEnum(color) } },
-        //     } },
-        //     path.nodes.items,
-        //     mut_opts,
-        // );
-        painter::stroke(
-            &mut stroke_sfc,
-            &Pattern::OpaquePattern(OpaquePattern {
-                pixel: Pixel::Alpha8(Alpha8 { a: color.0 }),
-            }),
-            &path.nodes,
-            mut_opts,
-        )?;
-
-        // We multiply the stroke sfc on to the fill surface.
-        // The z2d composite operation doesn't seem to work for
-        // this with alpha8 surfaces, so we have to do it manually.
-        // for (
-        //     std.mem.sliceAsBytes(fill_sfc.image_surface_alpha8.buf),
-        //     std.mem.sliceAsBytes(stroke_sfc.image_surface_alpha8.buf),
-        // ) |*d, s| {
-        //     d.* = @intFromFloat(@round(
-        //         255.0 *
-        //             (@as(f64, @floatFromInt(s)) / 255.0) *
-        //             (@as(f64, @floatFromInt(d.*)) / 255.0),
-        //     ));
-        // }
-        {
-            let stroke_buf = stroke_sfc.alpha8_buf().to_vec();
-            let fill_buf = fill_sfc.alpha8_buf_mut();
-            for (d, s) in fill_buf.iter_mut().zip(stroke_buf.iter()) {
-                d.a = (255.0 * (s.a as f64 / 255.0) * (d.a as f64 / 255.0)).round() as u8;
-            }
-        }
-
-        // Then we composite the result on to the main surface.
-        // self.sfc.composite(&fill_sfc, .src_over, 0, 0, .{});
-        self.sfc.composite(&fill_sfc, Operator::SrcOver, 0, 0);
-
-        Ok(())
+        // var inset_path = try path.offset(self.alloc, -opts.line_width / 2.0);
+        // defer inset_path.deinit(self.alloc);
+        // return self.strokePath(inset_path, opts, color);
+        let inset_path = path.offset(-opts.line_width / 2.0)?;
+        Ok(self.strokePath(&inset_path, opts, color)?)
     }
 
     /// Fill a z2d path.
@@ -951,13 +837,17 @@ impl Canvas {
 }
 
 /// The combined error set for `innerStrokePath`, mirroring the reference's
-/// `(z2d.painter.StrokeError || z2d.painter.FillError)` return. The surface
-/// allocation error (`Surface.init`) is folded into `StrokeError::Surface`, as
-/// the reference's `try .init(...)` merges it into the same inferred set.
+/// `(z2d.Path.OffsetError || z2d.painter.StrokeError)` return.
+///
+/// PORT NOTE (P3-W8 T3, oracle `d0e72a3ab`): before z2d 0.12.1 this was
+/// `(StrokeError || FillError)`, because the inner stroke was emulated with a
+/// fill mask on a second surface. The native `Path::offset` path neither fills
+/// nor allocates a scratch surface, so the `Fill` arm is gone and an `Offset`
+/// arm takes its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InnerStrokeError {
+    Offset(InternalError),
     Stroke(StrokeError),
-    Fill(FillError),
 }
 
 impl From<StrokeError> for InnerStrokeError {
@@ -966,9 +856,9 @@ impl From<StrokeError> for InnerStrokeError {
     }
 }
 
-impl From<FillError> for InnerStrokeError {
-    fn from(e: FillError) -> InnerStrokeError {
-        InnerStrokeError::Fill(e)
+impl From<InternalError> for InnerStrokeError {
+    fn from(e: InternalError) -> InnerStrokeError {
+        InnerStrokeError::Offset(e)
     }
 }
 

@@ -2727,16 +2727,40 @@ impl Surface {
         self.notify("mapped");
     }
 
-    /// PORTS: `surface.zig:3321-3326` `updateOcclusion`.
-    fn update_occlusion(&self, visible: bool) {
+    /// Update the core surface visibility based on both GTK widget and
+    /// toplevel state. This is public so the window can call it when its
+    /// suspended state changes.
+    ///
+    /// PORTS: `surface.zig:3344-3358` `updateOcclusion` (oracle `2f3814ca5`,
+    /// P3-W8 T5). Before that commit this took the visibility as an argument
+    /// and was private; it now derives visibility from `mapped` AND the
+    /// Wayland `xdg_toplevel` suspended state, so a mapped surface on an
+    /// inactive workspace (or fully covered) stops producing frames.
+    pub fn update_occlusion(&self) {
         let Some(core) = self.core() else {
             return;
         };
+        let visible = self.imp().mapped.get() && !self.window_suspended();
         // SAFETY: `core` is the widget's boxed, initialized core surface; called
-        // on the app thread from map/unmap.
+        // on the app thread from map/unmap or from the window's
+        // `notify::suspended` handler.
         if unsafe { &mut *core }.occlusionCallback(visible).is_err() {
             eprintln!("warn(gtk): error in occlusion callback");
         }
+    }
+
+    /// PORTS: `surface.zig:3360-3364` `windowSuspended` (oracle `2f3814ca5`).
+    fn window_suspended(&self) -> bool {
+        // const native = self.as(gtk.Widget).getNative() orelse return false;
+        // const window = gobject.ext.cast(gtk.Window, native) orelse return false;
+        // return window.isSuspended() != 0;
+        let Some(native) = self.native() else {
+            return false;
+        };
+        let Ok(window) = native.downcast::<gtk4::Window>() else {
+            return false;
+        };
+        window.is_suspended()
     }
 
     /// PORTS: `surface.zig:3491-3520` `resizeOverlaySchedule`. Sets the overlay
@@ -3560,14 +3584,14 @@ impl Surface {
     #[template_callback]
     fn gl_map(&self, _area: &gtk4::GLArea) {
         self.update_mapped(true);
-        self.update_occlusion(true);
+        self.update_occlusion();
     }
 
     /// PORTS: `surface.zig:3307-3313` `glareaUnmap`.
     #[template_callback]
     fn gl_unmap(&self, _area: &gtk4::GLArea) {
         self.update_mapped(false);
-        self.update_occlusion(false);
+        self.update_occlusion();
     }
 
     /// PORTS: `surface.zig:3328-3344` `glareaRender`. The app/main-thread draw

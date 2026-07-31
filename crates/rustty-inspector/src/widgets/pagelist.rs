@@ -2709,6 +2709,102 @@ mod ws7_tests {
         pages.deinit();
     }
 
+    /// The pagelist widget's REAL draw path, run headlessly against a PageList
+    /// with compressed pages, must not restore a single one.
+    ///
+    /// The three guards above are SOURCE guards: they read this file's own text
+    /// and would happily pass if `draw` were rewritten to restore pages through
+    /// a spelling they do not enumerate. This one calls
+    /// `Inspector::draw(&mut pages)` for real, inside a headless Dear ImGui
+    /// frame (no backend, no window, no GPU), and compares
+    /// `memory_stats().compressed_pages` across the call. That is the invariant
+    /// stated in this module's own header (`WS7 (compression)`), previously
+    /// unenforced for the draw path itself.
+    ///
+    /// PORT NOTE (P3-W8 T8 Step 1, oracle `6d5dda40d`): the oracle's page-tree
+    /// half is already ported; this supplies the assertion the port shipped
+    /// without.
+    #[test]
+    fn pagelist_widget_draw_path_never_restores() {
+        use rustty_vt::pagelist::compress::CompressionMode;
+        use rustty_vt::PageList;
+
+        assert!(
+            rustty_vt::compression_enabled(),
+            "this target cannot reclaim page memory, so the draw path cannot be \
+             exercised against compressed pages here"
+        );
+
+        // A private ImGui context, created and destroyed inside this test. The
+        // ImGui context is a process-global (`ImGui_SetCurrentContext`), so this
+        // test serialises with any other context user in the binary via
+        // `IMGUI_LOCK` (memory: parallel-cargo-test-exposes-c-init-races).
+        let _guard = IMGUI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut pages = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+        while pages.total_pages() < 6 {
+            let _ = pages.grow().unwrap();
+        }
+        let _ = pages.compress(CompressionMode::Drain);
+        let before = pages.memory_stats();
+        assert!(
+            before.compressed_pages > 0,
+            "the fixture must actually have compressed pages, else this test is \
+             vacuous"
+        );
+
+        // SAFETY: a fresh context owned solely by this test; destroyed below.
+        let ctx = unsafe { dcimgui_sys::ImGui_CreateContext(core::ptr::null_mut()) };
+        assert!(!ctx.is_null());
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(ctx) };
+        // A display size and a delta time are all `NewFrame` needs without a
+        // backend; the font atlas builds lazily on first use.
+        unsafe {
+            let io = dcimgui_sys::ImGui_GetIO();
+            (*io).DisplaySize = dcimgui_sys::ImVec2 {
+                x: 1280.0,
+                y: 720.0,
+            };
+            (*io).DeltaTime = 1.0 / 60.0;
+            (*io).BackendPlatformName = c"rustty_headless_test".as_ptr();
+            // No renderer backend here, so tell ImGui this "backend" owns
+            // texture management; otherwise `NewFrame` asserts that the font
+            // atlas was built by a backend's own NewFrame.
+            (*io).BackendFlags |=
+                dcimgui_sys::ImGuiBackendFlags__ImGuiBackendFlags_RendererHasTextures
+                    as dcimgui_sys::ImGuiBackendFlags;
+            dcimgui_sys::ImGui_NewFrame();
+        }
+
+        let widget = super::Inspector {};
+        widget.draw(&mut pages);
+
+        // SAFETY: the frame opened above is closed and the context destroyed
+        // exactly once, on this path.
+        unsafe {
+            dcimgui_sys::ImGui_EndFrame();
+            dcimgui_sys::ImGui_DestroyContext(ctx);
+            dcimgui_sys::ImGui_SetCurrentContext(core::ptr::null_mut());
+        }
+
+        let after = pages.memory_stats();
+        assert_eq!(
+            before.compressed_pages,
+            after.compressed_pages,
+            "drawing the pagelist widget restored {} compressed page(s)",
+            before
+                .compressed_pages
+                .saturating_sub(after.compressed_pages),
+        );
+        assert_eq!(before.resident_pages, after.resident_pages);
+
+        pages.deinit();
+    }
+
+    /// Serialises every test in this binary that makes a Dear ImGui context
+    /// current: the context is a process-global.
+    static IMGUI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// `formatBytes` unit boundaries (oracle `formatBytes`).
     #[test]
     fn format_bytes_matches_oracle_units() {

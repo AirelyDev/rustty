@@ -1424,3 +1424,149 @@ output AND against the other's, and say which).
 **Not a deferral.** The implementation is complete and behaviourally tested (see
 the two commits above). Only the oracle-anchored NUMBER is outstanding, and only
 because of the toolchain gap V15 describes.
+
+---
+
+## V19. macOS 27 AppKit workarounds + the synchronous-`deinit` free assertion — **OWNER: `P3-W8 T2`** [2026-07-30]
+
+Four items from `P3-W8 T2` are **ported and compiling, but NOT verified**. They are
+listed here rather than being claimed green.
+
+### V19a. macOS-27-only view-hierarchy / pointer-style workarounds — "ported, unverified on macOS 27"
+
+| Oracle | rustty site | What it does |
+|---|---|---|
+| `2104e0749` | `macos/Sources/Features/Terminal/Window Styles/HiddenTitlebarTerminalWindow.swift` `reapplyHiddenStyle()` | `if #available(macOS 27, *)` hide the `NSScrollPocket` descendant of the theme frame |
+| `632aa6756` | `macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift` | accept `NSTitlebarAccessoryContainerView` as well as `…ClipView` when finding the clip view |
+| `fa3802a70` | `macos/Sources/Helpers/Backport.swift` `BackportPointerStyle.official` | `frameResize(position:directions:)` → `columnResize(directions:)` / `rowResize(directions:)` |
+
+This host is **macOS 26.5 (Darwin 25.5.0, Xcode 26.5)**. `2104e0749` and `632aa6756`
+are guarded by / only reachable on macOS 27 view hierarchies, and `fa3802a70` is a
+purely visual cursor change. `xcodebuild test` compiles all three and is green, which
+proves **compilation and availability-annotation correctness only** — it proves nothing
+about the behaviour.
+
+**Recipe (needs a macOS 27 beta host or VM):**
+
+1. `bash macos/build-rustty.sh`, launch `Rustty.app`.
+2. `2104e0749`: set `macos-titlebar-style = hidden`, open a window, screenshot. The
+   terminal content must reach the top of the window with no translucent "pocket"
+   strip overlaying it (ghostty issue #13390).
+3. `632aa6756`: set `macos-titlebar-style = tabs`, open ≥2 tabs, screenshot. The tab
+   bar must be vertically centred in the titlebar and not stretched — on macOS 27
+   beta 2 without this change `firstSuperview(withClassName:)` returns nil and the
+   whole layout pass early-returns.
+4. `fa3802a70`: hover a split divider; the pointer must be the HIG column/row-resize
+   cursor (double-headed bar), not the frame-resize cursor.
+
+### V19b. `a6edca2d7` synchronous surface free on the main thread — no counting double
+
+**Ported:** `macos/Sources/RusttyKit/Rustty.Surface.swift` `deinit` now has the
+`guard !Thread.isMainThread else { rustty_surface_free(surface); return }` fast path.
+
+**Not verified, and deliberately NOT faked.** The plan asked for "a test double
+counting `rustty_surface_free` calls, asserting the free happens before `deinit`
+returns". There is no non-divergent way to do that from `RusttyTests`:
+
+* `rustty_surface_free` is a C symbol in `rustty.debug.dylib`; Swift cannot interpose
+  it without `DYLD_INSERT_LIBRARIES` and a purpose-built shim dylib.
+* `crates/rustty-apprt-c/src/lib.rs:1178` dereferences `(*ptr).app` immediately, so a
+  synthetic/`nil` `rustty_surface_t` cannot be passed — the double must be a *real*
+  surface.
+* Injecting a `freeHook` closure into `deinit` would be an R1 divergence in the
+  production teardown path, invented purely for the test.
+
+**A mirror class in the test file that reproduces the `deinit` shape would be a
+VACUOUS control** — it would pass whether or not `Rustty.Surface.deinit` is correct —
+so none was written. Recorded here instead.
+
+**Recipe (runnable, ~half a day):** `crates/rustty-apprt-c/tests/macos_window_host.rs`
+already stands up a real `rustty_app_t` + `rustty_surface_t` headlessly from Rust.
+Port that bring-up into a Swift test helper in `macos/Tests/`, wrap the resulting
+`rustty_surface_t` in `Rustty.Surface`, drop the last reference **on the main thread**
+inside an `autoreleasepool`, and assert — immediately after the pool exits, with no
+run-loop turn — that the app's surface registry no longer contains the pointer
+(`rustty_app_surface_count` or equivalent). Under the pre-`a6edca2d7` detached-`Task`
+path that assertion fails, because the free is still queued.
+
+
+---
+
+## V20. `P3-W8 T5` apprt/GTK: occlusion-on-suspend and the monitor clamp are ported but not behaviourally verified — **OWNER: `P3-W8` follow-up** [2026-07-30]
+
+Both items **compile and their headless assertions pass on the Fedora VM**
+(`cargo check`/`cargo test -p rustty-apprt --features gtk,wayland,x11`). Neither
+has been observed doing the thing it exists for. Recorded here rather than
+claimed green.
+
+### V20a. `2f3814ca5` honor suspended window state — **the headed control was NOT run**
+
+**Ported:** `crates/rustty-apprt/src/gtk/class/surface.rs`
+`Surface::update_occlusion()` (now no-argument, `pub`, deriving
+`mapped && !window_suspended()`) + `window_suspended()` via
+`gtk::Window::is_suspended`; `crates/rustty-apprt/src/gtk/class/window.rs`
+`realize()` connects `notify::suspended` → `prop_suspended()` → every surface of
+the selected tab's tree.
+
+**Not run:** the plan's `P3-W8 T5 Step 4` control — run headed on the VM,
+minimise (or fully cover) the window, and assert the occlusion callback fires
+**and frame production stops**. It was not executed in the P3-W8 lane; there is
+no unit-level substitute, because the whole content of the change is that a live
+compositor's `xdg_toplevel.suspended` reaches the core surface, and a test of the
+`mapped && !suspended` conjunction on its own would be vacuous.
+
+**Recipe (VM, `ssh gael@192.168.64.4`):**
+
+```sh
+export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
+cd ~/projects/rustty
+# BUILD FIRST, TO COMPLETION — never build concurrently with headed compositor
+# work on this VM (that combination preceded three crashes).
+cargo build -p rustty --features gtk,wayland
+RUSTTY_LOG=debug ./target/debug/rustty 2>&1 | tee /tmp/occl.log &
+# then, in the GNOME session: minimise the window, wait ~2s, restore it.
+```
+
+Assert in `/tmp/occl.log`: the occlusion path runs on minimise with
+`visible=false` and again with `visible=true` on restore, and that no frames are
+produced in between (the renderer thread's frame counter / draw log line).
+mutter does advertise `xdg_toplevel.suspended` for minimised windows, so this is
+reproducible on the one head the VM has — **unlike V20b it needs no second
+monitor**, only a headed session.
+
+### V20b. `004c88e41` clamp the max window size to the current monitor — **"logic reviewed + guard conditions unit tested, geometry effect unverified"**
+
+**Ported:** `crates/rustty-apprt/src/gtk/class/window.rs`
+`imp::compute_size_decision` (the pure predicate) + `imp::toplevel_compute_size`
+(the GDK wrapper) + a `G_CONNECT_AFTER` `compute-size` connection on the
+realized `gdk::Toplevel`.
+
+**Binding question closed (assessment F §6 open question 4):** `gdk4` **0.11.4**
+does have `ToplevelExtManual::connect_compute_size`, `ToplevelSize::bounds()` and
+`ToplevelSize::set_size()` — verified by reading
+`~/.cargo/registry/src/index.crates.io-*/gdk4-0.11.4/src/toplevel.rs` and
+`src/toplevel_size.rs` on the VM. The cost therefore stays **M**, no manual
+`gdk_toplevel_size_*` FFI needed for the accessors. One divergence: gtk4-rs's
+`connect_compute_size` hard-codes `after = false`, and the reference needs
+`.{ .after = true }`, so the trampoline is connected directly with
+`g_signal_connect_data(..., G_CONNECT_AFTER)`.
+
+**Verified:** `compute_size_decision_guards`
+(`crates/rustty-apprt/src/gtk/class/window.rs`) covers the zero-size,
+zero-bounds, within-bounds and exceeds-bounds arms. Two independent negative
+controls were **run on the VM and observed to fail**:
+deleting `if w <= bounds_w && h <= bounds_h { return false; }` →
+`assertion failed: !imp::compute_size_decision(800, 600, 800, 600)`; deleting
+`if bounds_w <= 0 || bounds_h <= 0 { return false; }` →
+`assertion failed: !imp::compute_size_decision(1000, 800, 0, 600)`.
+
+**NOT verified:** the geometry effect. Reproducing it needs the window to move to
+a **larger** monitor, i.e. two heads; the VM has one. Also unexercised: the
+maximized / fullscreen / quick-terminal early returns and the
+"no GdkSurface yet" return, which need a live toplevel.
+
+**Recipe:** a second head. Either a physical dual-monitor host, or GNOME's
+`--virtual-monitor` / a second `wayland-headless` output if the session supports
+it. Move a window from the smaller to the larger monitor and confirm it can then
+be resized past the smaller monitor's dimensions.
+

@@ -14,6 +14,8 @@
 //! Path is the "path builder" type, and contains a set of sub-paths used for
 //! filling or stroking operations.
 
+use crate::internal::error::InternalError;
+use crate::internal::path_fx;
 use crate::internal::path_nodes::{PathClose, PathCurveTo, PathLineTo, PathMoveTo, PathNode};
 use crate::internal::point::Point;
 use crate::options;
@@ -433,6 +435,67 @@ impl Path {
     /// Returns `true` if all subpaths in the path set are currently closed.
     pub fn is_closed(&self) -> bool {
         PathNode::is_closed_node_set(&self.nodes)
+    }
+
+    /// Returns a new `Path` with all paths offset by the supplied `value`
+    /// (negative is inset, positive is outset). All closed paths will also be
+    /// aligned to their first leftmost convex point.
+    ///
+    /// The direction of the offset is determined by the direction of the
+    /// starting join. This assumes that all supplied paths have no
+    /// self-intersections. Paths with self-intersections will still be
+    /// processed but will produce undesirable results; consider using
+    /// `simplify` first to remove the self-intersections.
+    ///
+    /// All single-segment paths are considered clockwise for the purposes of
+    /// offsetting.
+    ///
+    /// PORT NOTE (rustty, P3-W8 T3): back-ported from z2d **0.12.1**
+    /// (`Path.offset`, added after the 0.10.0 baseline the rest of this crate
+    /// tracks) because ghostty `d0e72a3ab` rewrites
+    /// `src/font/sprite/canvas.zig`'s `innerStrokePath` in terms of it. z2d's
+    /// `simplify` (the sibling `Path` method sharing `path_fx`'s error set) is
+    /// deliberately NOT back-ported — see
+    /// `crates/rustty-z2d/src/internal/path_fx/mod.rs`.
+    pub fn offset(&self, value: f64) -> Result<Path, InternalError> {
+        let result_nodes = path_fx::offset::run(&self.nodes, self.tolerance, value)?;
+        let mut result = Path {
+            nodes: result_nodes,
+            initial_point: None,
+            current_point: None,
+            tolerance: self.tolerance,
+            transformation: self.transformation,
+            cap_limit: None,
+        };
+        result.fix_state();
+        Ok(result)
+    }
+
+    /// "Replays" the path so that `initial_point` and `current_point` are
+    /// correctly set when a path is initialized from existing nodes.
+    ///
+    /// Asserts a well-formed path (move_to before anything else particularly).
+    fn fix_state(&mut self) {
+        for node in &self.nodes {
+            match node {
+                PathNode::MoveTo(n) => {
+                    self.initial_point = Some(n.point);
+                    self.current_point = Some(n.point);
+                }
+                PathNode::LineTo(n) => {
+                    debug_assert!(self.initial_point.is_some());
+                    self.current_point = Some(n.point);
+                }
+                PathNode::CurveTo(n) => {
+                    debug_assert!(self.initial_point.is_some());
+                    self.current_point = Some(n.p3);
+                }
+                PathNode::ClosePath(_) => {
+                    debug_assert!(self.initial_point.is_some());
+                    self.current_point = self.initial_point;
+                }
+            }
+        }
     }
 }
 

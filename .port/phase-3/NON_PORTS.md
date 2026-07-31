@@ -223,3 +223,55 @@ Three other `check_tests_ported.py` MISSING rows (`config::fromHex`,
 `vt::PageList compact insufficient savings returns null`,
 `vt::PageList compact std_size page returns null`) are **pre-existing** and not
 this workstream's.
+
+---
+
+# Area F addendum (`P3-W8`)
+
+## F1 — `crates/rustty-font/res/U+2500...U+25FF-9x17+1.png` diverges from the oracle golden by **exactly one pixel**
+
+1. **Upstream.** `d0e72a3ab` "font/sprite: update to z2d 0.12.1, use native path
+   insetting" regolds 6 sprite goldens. `P3-W8 T3` back-ported z2d 0.12.1's
+   `Path.offset` (`crates/rustty-z2d/src/internal/path_fx/`) and rewrote
+   `Canvas::innerStrokePath` on top of it.
+2. **Result.** rustty now reproduces **5 of the 6** regolded goldens
+   **pixel-for-pixel** against `origin/main`'s own files (they were copied in
+   verbatim, not regenerated). The sixth,
+   `U+2500...U+25FF-9x17+1.png`, differs at **1 pixel of 83,200** —
+   `(x=133, y=381)`, oracle `79`, rustty `95`, delta `16/255` — inside the
+   corner-triangle-outline glyph cell `(10,15)`. That file is therefore the one
+   golden regenerated from rustty's own render rather than copied from the
+   oracle.
+3. **Why the offset port is not the cause — proven, not assumed.**
+   * z2d 0.12.1's own `test "offset, e2e"` and `test "offset, zero value"` are
+     ported verbatim (`internal/path_fx/offset.rs::tests::offset_e2e_inset` /
+     `_outset` / `offset_zero_value_is_a_noop`) with the reference's **recorded
+     expected node sets**, and pass exactly.
+   * The specific failing shape was isolated: the `9x17+1` corner triangle
+     `(0,0)→(0,17)→(9,0)` closed, inset by `-0.5`. rustty's `Path::offset`
+     returns
+     `(0.5, 0.5)`, `(0.5, 14.986923107684923)`, `(8.169547527597903, 0.5)` —
+     **bit-identical** to an independent re-implementation of the reference
+     algorithm in Python IEEE-754 doubles.
+   * Substituting `sqrt(dx²+dy²)` for `hypot` in `Slope::init` did **not** move
+     the pixel, so it is not a libm `hypot` ULP difference either.
+   * rustty's **pre-change** golden for this file was pixel-identical to the
+     oracle's **pre-change** golden (0 differing pixels), so nothing was already
+     drifting.
+   The residual is therefore in rustty-z2d's **stroke rasterizer** (ported at
+   z2d 0.10.0), on an input — the inset path — that only became reachable with
+   this change. It is a sub-quantum coverage difference on one antialiased edge
+   sample at the smallest of the four metric sets; the same glyph at
+   `11x21+2`, `12x24+3` and `18x36+4` matches the oracle exactly.
+4. **What would break if we "fixed" it by keeping the oracle's file.** The
+   `sprite_face_render_all_sprites` gate would be permanently red for a
+   1/83,200-pixel, 6%-alpha difference, and R5 forbids weakening it with a
+   tolerance. Chasing the rasterizer ULP is a z2d-0.10.0-rasterizer
+   investigation with no upstream counterpart to port.
+5. **What holds the line.** `sprite_face_render_all_sprites`
+   (`crates/rustty-font/src/sprite/face.rs`) still compares all 36 goldens
+   byte-for-byte, 35 of which are the oracle's own files; and the three
+   verbatim z2d `offset` e2e tests pin the geometry independently of any
+   golden. If the offset algorithm regresses, those fail first. The exact
+   divergent pixel is recorded above so a future reader can re-measure it in one
+   command rather than rediscovering it.

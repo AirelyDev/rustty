@@ -186,4 +186,51 @@ mod tests {
         assert_eq!(11482, svg.end_glyph_id);
         assert!(svg.has_glyph(11482));
     }
+
+    // test "SVG document list offset past end"
+    //
+    // VACUOUS-CONTROL WARNING (P3-W8 T4, recorded after actually running the
+    // control): deleting the `if offset > data.len()` guard that `b988efcfe`
+    // added does **NOT** make this test fail in rustty. It was run and observed
+    // to still pass. The reason is structural: the reference sets
+    // `reader.seek = offset` and only faults later, whereas rustty's
+    // `read_be_u16`/`read_be_u32` use `slice::get(pos..pos + n)`, which already
+    // returns `None` — hence `InitError::EndOfStream` — for **any** `pos` past
+    // the end. The ported guard is therefore R1-faithful but observably
+    // redundant in rustty, and this test pins the *behaviour* (which is what
+    // upstream's test pins too), NOT that specific line. Do not read a green
+    // run here as evidence that the guard line exists.
+    //
+    // The sibling `svg_document_list_record_count_past_end` below is NOT
+    // vacuous: removing its guard was run and observed to fail with
+    // `left: Some(EndOfStream)` / `right: None`.
+    #[test]
+    fn svg_document_list_offset_past_end() {
+        let table = [
+            0, 0, // Version
+            0, 0, 0, 7, // Document list offset, one byte past end
+        ];
+
+        assert_eq!(Some(InitError::EndOfStream), SVG::init(&table).err());
+    }
+
+    // PORT NOTE (P3-W8 T4): rustty's guard is strictly STRONGER than the
+    // reference's. `b988efcfe` only added the document-list *offset* bounds
+    // check ported above; rustty additionally rejects a record *count* that
+    // overruns the table (`len > (data.len() - pos) / 12`, documented as R6
+    // UB-avoidance at the call site), because rustty materialises the records
+    // as a real `&[[u8; 12]]` slice where the reference keeps a many-item
+    // pointer and would only fault on a later out-of-bounds read. Upstream has
+    // no test for this arm; this one pins it so the stronger behaviour cannot
+    // be silently relaxed back to the reference's.
+    #[test]
+    fn svg_document_list_record_count_past_end() {
+        let table = [
+            0, 0, // Version
+            0, 0, 0, 6, // Document list offset: the very next byte
+            0, 2, // numEntries = 2, but only 0 bytes of records follow
+        ];
+
+        assert_eq!(Some(InitError::EndOfStream), SVG::init(&table).err());
+    }
 }
