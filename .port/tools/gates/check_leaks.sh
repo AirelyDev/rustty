@@ -285,7 +285,7 @@ run_g6c() {
   echo "=== G6c [$G6C_PKG] :: Miri, -C debug-assertions=off ==="
   echo "    $G6C_MIN_PASSED test(s), derived from the cfg_attr(all(miri, debug_assertions)) annotations"
   echo "    (measured GREEN in 3092s serial on an M4 Pro, 2026-07-30; set G6C_FILTERS to narrow)"
-  local out; out="$(mktemp -t g6c)"
+  local out; out="$(mktemp "${TMPDIR:-/tmp}/g6c.XXXXXX")"
   local t0=$SECONDS
   g6c_lane "" "$out"
   local dur=$((SECONDS - t0))
@@ -304,7 +304,7 @@ run_g6c_selftest() {
   echo "=== G6c --self-test arm 1: FLAG-LOSS (the vacuity arm, on the REAL crate) ==="
   echo "    re-runs the real lane with '-C debug-assertions=on' appended, which is"
   echo "    what a dropped RUSTFLAGS looks like; the family then reports 'ignored'."
-  out="$(mktemp -t g6cst1)"
+  out="$(mktemp "${TMPDIR:-/tmp}/g6cst1.XXXXXX")"
   g6c_lane "-C debug-assertions=on" "$out"
   if g6c_verdict "$out"; then
     echo "  self-test FAIL: the lane stayed GREEN with debug assertions back ON —"
@@ -327,7 +327,7 @@ run_g6c_selftest() {
       echo '  let v = [0u8; 3]; let p = v.as_ptr(); let _x = unsafe { *p.add(9) };'
       echo '}'
       echo '} }'; } > src/lib.rs )
-  out="$(mktemp -t g6cst2)"
+  out="$(mktemp "${TMPDIR:-/tmp}/g6cst2.XXXXXX")"
   ( G6C_PKG=g6cscratch G6C_DIR="$D" G6C_FILTERS="pagelist::tests::pagelist_compress_page" \
     G6C_MIN_PASSED=4 G6C_BOUND_SEC=300
     g6c_lane "" "$out"
