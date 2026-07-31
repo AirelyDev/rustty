@@ -38,7 +38,10 @@ use allocator_api2::alloc::Global as Allocator;
 /// lives in the same page.
 pub struct ViewportSearch {
     pub window: SlidingWindow,
-    pub fingerprint: Option<Fingerprint>,
+    // PORT NOTE (oracle `9659167ec`): `fingerprint: Fingerprint = .{}` — no
+    // longer optional. The empty fingerprint IS the "never searched" state, and
+    // its storage survives `reset()` so the next update reuses it.
+    pub fingerprint: Fingerprint,
 
     /// If this is null, then active dirty tracking is disabled and if the
     /// viewport overlaps the active area we always re-search. If this is
@@ -61,22 +64,19 @@ impl ViewportSearch {
         let window: SlidingWindow = SlidingWindow::init(alloc, Direction::Forward, needle_unowned)?;
         // return .{
         //     .window = window,
-        //     .fingerprint = null,
         //     .active_dirty = null,
         // };
         Ok(ViewportSearch {
             window,
-            fingerprint: None,
+            fingerprint: Fingerprint::default(),
             active_dirty: None,
         })
     }
 
     // pub fn deinit(self: *ViewportSearch) void {
     pub fn deinit(&mut self) {
-        // if (self.fingerprint) |*fp| fp.deinit(self.window.alloc);
-        if let Some(fp) = self.fingerprint.as_mut() {
-            fp.deinit(self.window.alloc);
-        }
+        // self.fingerprint.deinit(self.window.alloc);
+        self.fingerprint.deinit(self.window.alloc);
         // self.window.deinit();
         self.window.deinit();
     }
@@ -85,12 +85,12 @@ impl ViewportSearch {
     /// always re-search.
     // pub fn reset(self: *ViewportSearch) void {
     pub fn reset(&mut self) {
-        // if (self.fingerprint) |*fp| fp.deinit(self.window.alloc);
-        if let Some(fp) = self.fingerprint.as_mut() {
-            fp.deinit(self.window.alloc);
-        }
-        // self.fingerprint = null;
-        self.fingerprint = None;
+        // self.fingerprint.clearAndRetainCapacity();
+        //
+        // PORT NOTE (oracle `9659167ec`): reset no longer FREES the fingerprint;
+        // it keeps the buffer so the next update reuses the capacity. That is
+        // the entire point of the commit.
+        self.fingerprint.clear_and_retain_capacity();
         // self.window.clearAndRetainCapacity();
         self.window.clear_and_retain_capacity();
     }
@@ -118,98 +118,80 @@ impl ViewportSearch {
     //     list: *PageList,
     // ) Allocator.Error!bool {
     pub fn update(&mut self, list: &PageList) -> Result<bool, OutOfMemory> {
-        // See if our viewport changed
-        // var fingerprint: Fingerprint = try .init(self.window.alloc, list);
-        let mut fingerprint: Fingerprint = Fingerprint::init(self.window.alloc, list)?;
-        // if (self.fingerprint) |*old| {
-        if let Some(old) = self.fingerprint.as_mut() {
-            // if (old.eql(fingerprint)) match: {
+        // See if our viewport changed. We retain the fingerprint buffer so
+        // unchanged viewports don't allocate and changed viewports usually
+        // reuse the previous capacity.
+        // const fingerprint = &self.fingerprint;
+        // if (!try fingerprint.update(self.window.alloc, list)) match: {
+        //
+        // PORT NOTE (oracle `9659167ec`, area D §4.3 UB HAZARD): upstream binds
+        // `const fingerprint = &self.fingerprint` and then, inside the same
+        // scope, calls `self.window.append*` — two disjoint fields of `self`.
+        // rustty does NOT take that alias: `self.fingerprint` is re-borrowed at
+        // each use site so no borrow of it is ever live across a `&mut
+        // self.window` call. See `.port/phase-3/mirihar-fingerprint-update` for
+        // why the analogous snapshot is UB in Rust.
+        let alloc = self.window.alloc;
+        let changed = self.fingerprint.update(alloc, list)?;
+        if !changed {
             'match_blk: {
-                if old.eql(&fingerprint) {
-                    // Determine if we need to check if we overlap the active
-                    // area. If we have dirty tracking on we also set it to
-                    // false here.
-                    // const check_active: bool = active: {
-                    //     const dirty = self.active_dirty orelse break :active true;
-                    //     if (!dirty) break :active false;
-                    //     self.active_dirty = false;
-                    //     break :active true;
-                    // };
-                    let check_active: bool = 'active: {
-                        let dirty = match self.active_dirty {
-                            Some(d) => d,
-                            None => break 'active true,
-                        };
-                        if !dirty {
-                            break 'active false;
-                        }
-                        self.active_dirty = Some(false);
-                        true
+                // Determine if we need to check if we overlap the active area.
+                // If we have dirty tracking on we also set it to false here.
+                // const check_active: bool = active: {
+                //     const dirty = self.active_dirty orelse break :active true;
+                //     if (!dirty) break :active false;
+                //     self.active_dirty = false;
+                //     break :active true;
+                // };
+                let check_active: bool = 'active: {
+                    let dirty = match self.active_dirty {
+                        Some(d) => d,
+                        None => break 'active true,
                     };
+                    if !dirty {
+                        break 'active false;
+                    }
+                    self.active_dirty = Some(false);
+                    true
+                };
 
-                    // if (check_active) {
-                    if check_active {
-                        // If our fingerprint contains the active area, then we always
-                        // re-search since the active area is mutable.
-                        // const active_tl = list.getTopLeft(.active);
-                        let active_tl = list.get_top_left(point::Tag::Active);
-                        // const active_br = list.getBottomRight(.active).?;
-                        let active_br = list.get_bottom_right(point::Tag::Active).unwrap();
+                // if (check_active) {
+                if check_active {
+                    // If our fingerprint contains the active area, then we always
+                    // re-search since the active area is mutable.
+                    // const active_tl = list.getTopLeft(.active);
+                    let active_tl = list.get_top_left(point::Tag::Active);
+                    // const active_br = list.getBottomRight(.active).?;
+                    let active_br = list.get_bottom_right(point::Tag::Active).unwrap();
 
-                        // If our viewport contains the start or end of the active area,
-                        // we are in the active area. We purposely do this first
-                        // because our viewport is always larger than the active area.
-                        // for (old.entries) |entry| {
-                        //     if (entry.node == active_tl.node) break :match;
-                        //     if (entry.node == active_br.node) break :match;
-                        // }
-                        for node in old.entries.iter().map(|e| e.node) {
-                            if core::ptr::eq(node, active_tl.node) {
-                                break 'match_blk;
-                            }
-                            if core::ptr::eq(node, active_br.node) {
-                                break 'match_blk;
-                            }
+                    // If our viewport contains the start or end of the active area,
+                    // we are in the active area. We purposely do this first
+                    // because our viewport is always larger than the active area.
+                    // for (fingerprint.entries.items) |entry| {
+                    //     if (entry.node == active_tl.node) break :match;
+                    //     if (entry.node == active_br.node) break :match;
+                    // }
+                    for node in self.fingerprint.entries.iter().map(|e| e.node) {
+                        if core::ptr::eq(node, active_tl.node) {
+                            break 'match_blk;
+                        }
+                        if core::ptr::eq(node, active_br.node) {
+                            break 'match_blk;
                         }
                     }
-
-                    // No change
-                    // fingerprint.deinit(self.window.alloc);
-                    // return false;
-                    fingerprint.deinit(self.window.alloc);
-                    return Ok(false);
                 }
+
+                // No change
+                // return false;
+                return Ok(false);
             }
-
-            // old.deinit(self.window.alloc);
-            // self.fingerprint = null;
-            old.deinit(self.window.alloc);
-            self.fingerprint = None;
         }
-        // assert(self.fingerprint == null);
-        assert!(self.fingerprint.is_none());
-        // self.fingerprint = fingerprint;
-        // errdefer {
-        //     fingerprint.deinit(self.window.alloc);
-        //     self.fingerprint = null;
-        // }
-        //
-        // PORT NOTE: the reference stores `fingerprint` into `self.fingerprint`
-        // and keeps a separate `errdefer` that deinits it on any later error.
-        // We store it now and route the fallible-step errors through an explicit
-        // cleanup closure (`fail` below) so the moved-out value is still freed.
-        self.fingerprint = Some(fingerprint);
 
-        // Helper mirroring the reference `errdefer { fingerprint.deinit(...); self.fingerprint = null; }`.
-        macro_rules! fail {
-            ($e:expr) => {{
-                if let Some(fp) = self.fingerprint.as_mut() {
-                    fp.deinit(self.window.alloc);
-                }
-                self.fingerprint = None;
-                return Err($e);
-            }};
-        }
+        // PORT NOTE: `9659167ec` DELETED the `errdefer { fingerprint.deinit();
+        // self.fingerprint = null; }`. The fingerprint is now permanent storage
+        // owned by `ViewportSearch`, so a later failure inside this function
+        // must NOT free it — it is simply left holding the new viewport. The
+        // `fail!` macro this replaces is gone with it.
 
         // If our active area was set as dirty, we always unset it here
         // because we're re-searching now.
@@ -222,17 +204,21 @@ impl ViewportSearch {
         // self.window.clearAndRetainCapacity();
         self.window.clear_and_retain_capacity();
 
-        // PORT NOTE: re-borrow the stored fingerprint's entries. We snapshot the
-        // node pointers into a local so we can mutate `self.window` (also a field
-        // of `self`) without aliasing the borrow of `self.fingerprint`.
-        let fp_nodes: Vec<*mut Node> = self
-            .fingerprint
-            .as_ref()
-            .unwrap()
-            .entries
-            .iter()
-            .map(|e| e.node)
-            .collect();
+        // const entries = fingerprint.entries.items;
+        //
+        // PORT NOTE (oracle `9659167ec` Step 2 / area D §4.3): upstream binds
+        // the items slice ONCE and iterates it while `self.window.append*`
+        // mutates a sibling field. The previous rustty shape snapshotted the
+        // node pointers into an owned `Vec<*mut Node>` — sound, but it
+        // allocates on every changed update, which is precisely the allocation
+        // this commit exists to remove. We instead re-index
+        // `self.fingerprint.entries` on each access: every borrow of the
+        // fingerprint ends before the next `&mut self.window` call, so the two
+        // disjoint fields are never borrowed simultaneously and no snapshot
+        // exists to be invalidated. `.port/phase-3/mirihar-fingerprint-update`
+        // shows a held `&[Entry]` snapshot is UB under both Stacked and Tree
+        // Borrows.
+        let entries_len = self.fingerprint.entries.len();
 
         // const overlap_len = self.window.needle.len -| 1;
         //
@@ -252,9 +238,9 @@ impl ViewportSearch {
         // Add enough overlap to cover needle.len - 1 bytes (if it
         // exists) so we can cover the overlap. We only do this for the
         // soft-wrapped prior pages.
-        // var node_ = fingerprint.entries[0].node.prev;
+        // var node_ = entries[0].node.prev;
         // var added: usize = 0;
-        let mut node_: *mut Node = unsafe { (*fp_nodes[0]).prev };
+        let mut node_: *mut Node = unsafe { (*self.fingerprint.entries[0].node).prev };
         let mut added: usize = 0;
         // while (node_) |node| : (node_ = node.prev) {
         while !node_.is_null() {
@@ -268,10 +254,9 @@ impl ViewportSearch {
             // const appended = try self.window.appendIfWrapped(node) orelse break;
             // added += appended.content_len;
             // if (added >= self.window.needle.len - 1) break;
-            let appended = match self.window.append_if_wrapped(node) {
-                Ok(Some(v)) => v,
-                Ok(None) => break,
-                Err(e) => fail!(e),
+            let appended = match self.window.append_if_wrapped(node)? {
+                Some(v) => v,
+                None => break,
             };
             added += appended.content_len;
             if added >= overlap_len {
@@ -291,19 +276,18 @@ impl ViewportSearch {
             content_len: 0,
             last_row_wrapped: false,
         };
-        for node in fp_nodes.iter().copied() {
-            end_append = match self.window.append(node) {
-                Ok(v) => v,
-                Err(e) => fail!(e),
-            };
+        for i in 0..entries_len {
+            // The fingerprint borrow ends on this line; the `&mut self.window`
+            // borrow below is a disjoint field. Re-indexed each iteration.
+            let node = self.fingerprint.entries[i].node;
+            end_append = self.window.append(node)?;
         }
 
         // Add any trailing overlap as well.
         // trailing: {
         'trailing: {
-            // const end: *PageList.List.Node =
-            //     fingerprint.entries[fingerprint.entries.len - 1].node;
-            let end: *mut Node = fp_nodes[fp_nodes.len() - 1];
+            // const end: *PageList.List.Node = entries[entries.len - 1].node;
+            let end: *mut Node = self.fingerprint.entries[entries_len - 1].node;
             // if (!end_append.last_row_wrapped) break :trailing;
             //
             // INSPECT, NOT RESTORE: the wrap flag is the COPY taken during the
@@ -322,10 +306,7 @@ impl ViewportSearch {
                 // const appended = try self.window.append(node);
                 // added += appended.content_len;
                 // if (added >= self.window.needle.len - 1) break;
-                let appended = match self.window.append(node) {
-                    Ok(v) => v,
-                    Err(e) => fail!(e),
-                };
+                let appended = self.window.append(node)?;
                 added += appended.content_len;
                 if added >= overlap_len {
                     break;
@@ -356,11 +337,12 @@ impl ViewportSearch {
 }
 
 /// Viewport fingerprint so we can detect when the viewport moves.
+#[derive(Default)]
 pub struct Fingerprint {
     /// The node addresses and generations that make up the viewport. We
     /// can't safely dereference cached node pointers because the nodes may
     /// be invalid, so equality only compares these captured values.
-    // entries: []const Entry,
+    // entries: std.ArrayListUnmanaged(Entry) = .empty,
     pub entries: Vec<Entry>,
 }
 
@@ -375,70 +357,115 @@ pub struct Entry {
 }
 
 impl Fingerprint {
-    // pub fn init(alloc: Allocator, pages: *PageList) Allocator.Error!Fingerprint {
-    pub fn init(_alloc: Allocator, pages: &PageList) -> Result<Fingerprint, OutOfMemory> {
-        // var list: std.ArrayList(Entry) = .empty;
-        // defer list.deinit(alloc);
-        let mut list: Vec<Entry> = Vec::new();
-
-        // Get our viewport area. Bottom right of a viewport can never
-        // fail.
-        // const tl = pages.getTopLeft(.viewport);
-        let tl = pages.get_top_left(point::Tag::Viewport);
-        // const br = pages.getBottomRight(.viewport).?;
-        let br = pages.get_bottom_right(point::Tag::Viewport).unwrap();
-
-        // var it = tl.pageIterator(.right_down, br);
-        // while (it.next()) |chunk| try list.append(alloc, .{
-        //     .node = chunk.node,
-        //     .serial = chunk.node.serial,
-        // });
-        //
-        // INSPECT, NOT RESTORE: only the node's generation stamp is read, which
-        // lives in the pagelist Node itself (never in the page mapping), so a
-        // compressed page must NOT be restored to fingerprint the viewport.
-        let mut it = tl.page_iterator(IterDirection::RightDown, Some(br));
-        while let Some(chunk) = it.next() {
-            list.push(Entry {
-                node: chunk.node,
-                serial: unsafe { (*chunk.node).serial },
-            });
-        }
-        // return .{ .entries = try list.toOwnedSlice(alloc) };
-        Ok(Fingerprint { entries: list })
-    }
-
     // pub fn deinit(self: *Fingerprint, alloc: Allocator) void {
-    //     alloc.free(self.nodes);
+    //     self.entries.deinit(alloc);
     // }
     //
-    // PORT NOTE: the reference frees the owned `entries` slice; the Rust `Vec`
-    // frees on drop, so this clears it (kept for API parity with the explicit
-    // `deinit` callers above).
+    // PORT NOTE: the reference frees the `ArrayListUnmanaged`'s storage; the
+    // Rust `Vec` frees on drop, so this drops it (kept for API parity with the
+    // explicit `deinit` callers above).
     pub fn deinit(&mut self, _alloc: Allocator) {
         self.entries = Vec::new();
     }
 
-    // pub fn eql(self: Fingerprint, other: Fingerprint) bool {
-    pub fn eql(&self, other: &Fingerprint) -> bool {
-        // if (self.entries.len != other.entries.len) return false;
-        if self.entries.len() != other.entries.len() {
-            return false;
+    // pub fn clearAndRetainCapacity(self: *Fingerprint) void {
+    //     self.entries.clearRetainingCapacity();
+    // }
+    pub fn clear_and_retain_capacity(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Update this fingerprint to match the current viewport.
+    ///
+    /// Returns true if the viewport changed. The viewport can have at
+    /// most one entry per visible row, so we reserve that upper bound
+    /// before mutating the retained buffer. This lets us rebuild in one
+    /// pass while still preserving the old fingerprint if allocation
+    /// fails.
+    // pub fn update(self: *Fingerprint, alloc: Allocator, pages: *PageList) Allocator.Error!bool {
+    //
+    // PORT NOTE (oracle `9659167ec` then `bc8bb6c0f`): this is `bc8bb6c0f`'s
+    // shape, NOT `9659167ec`'s. `9659167ec` snapshotted `const old =
+    // self.entries.items`, called `clearRetainingCapacity`, and then read
+    // `old[i]` while `appendAssumeCapacity` wrote into the same storage;
+    // `bc8bb6c0f` reverted that as UB. The Rust translation of that snapshot is
+    // UB too — but only if you translate it faithfully as a REFERENCE. See
+    // `.port/phase-3/mirihar-fingerprint-update`: the obvious raw-pointer
+    // translation is Miri-CLEAN under both Stacked and Tree Borrows and would
+    // have made the control vacuous.
+    pub fn update(&mut self, alloc: Allocator, pages: &PageList) -> Result<bool, OutOfMemory> {
+        // try self.entries.ensureTotalCapacity(alloc, pages.rows);
+        //
+        // MUST STAY FIRST. Reserving before any mutation is what makes an
+        // allocation failure preserve the OLD fingerprint; moving it after the
+        // first write silently breaks that contract.
+        let _ = &alloc;
+        let rows = pages.rows as usize;
+        if self
+            .entries
+            .try_reserve(rows.saturating_sub(self.entries.len()))
+            .is_err()
+        {
+            return Err(OutOfMemory);
         }
-        // for (self.entries, other.entries) |a, b| {
-        //     if (a.node != b.node) return false;
-        //     if (a.serial != b.serial) return false;
-        // }
-        for (a, b) in self.entries.iter().zip(other.entries.iter()) {
-            if !core::ptr::eq(a.node, b.node) {
-                return false;
+
+        // const old_len = self.entries.items.len;
+        let old_len = self.entries.len();
+        // var changed = false;
+        let mut changed = false;
+
+        // var i: usize = 0;
+        // var it = pages.pageIterator(.right_down, .{ .viewport = .{} }, null);
+        // while (it.next()) |chunk| : (i += 1) { ... }
+        //
+        // INSPECT, NOT RESTORE: only the node's generation stamp is read, which
+        // lives in the pagelist Node itself (never in the page mapping), so a
+        // compressed page must NOT be restored to fingerprint the viewport.
+        let mut i: usize = 0;
+        let mut it = pages.page_iterator(
+            IterDirection::RightDown,
+            point::Point::Viewport(point::Coordinate::default()),
+            None,
+        );
+        while let Some(chunk) = it.next() {
+            // const entry: Entry = .{ .node = chunk.node, .serial = chunk.node.serial };
+            let entry = Entry {
+                node: chunk.node,
+                serial: unsafe { (*chunk.node).serial },
+            };
+            // if (!changed) {
+            //     changed = i >= old_len or
+            //         self.entries.items[i].node != entry.node or
+            //         self.entries.items[i].serial != entry.serial;
+            // }
+            if !changed {
+                changed = i >= old_len
+                    || !core::ptr::eq(self.entries[i].node, entry.node)
+                    || self.entries[i].serial != entry.serial;
             }
-            if a.serial != b.serial {
-                return false;
+
+            // if (i < self.entries.items.len) {
+            //     self.entries.items[i] = entry;
+            // } else {
+            //     self.entries.appendAssumeCapacity(entry);
+            // }
+            if i < self.entries.len() {
+                self.entries[i] = entry;
+            } else {
+                // `appendAssumeCapacity`: the `try_reserve` above guarantees
+                // room for `pages.rows` entries and the viewport can have at
+                // most one entry per visible row, so this never reallocates.
+                debug_assert!(self.entries.len() < self.entries.capacity());
+                self.entries.push(entry);
             }
+
+            i += 1;
         }
-        // return true;
-        true
+
+        // self.entries.shrinkRetainingCapacity(i);
+        // return changed or i != old_len;
+        self.entries.truncate(i);
+        Ok(changed || i != old_len)
     }
 }
 
@@ -585,8 +612,8 @@ mod tests {
         assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
         assert!(!search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
-        // const old_entry = search.fingerprint.?.entries[0];
-        let old_entry = search.fingerprint.as_ref().unwrap().entries[0];
+        // const old_entry = search.fingerprint.entries.items[0];
+        let old_entry = search.fingerprint.entries[0];
         // const node = t.screens.active.pages.pages.first.?;
         let node: *mut Node = unsafe { (*active_ptr).pages.pages.first };
         // try testing.expectEqual(node, old_entry.node);
@@ -601,8 +628,8 @@ mod tests {
         // changed, so the cached window must be rebuilt.
         // try testing.expect(try search.update(&t.screens.active.pages));
         assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
-        // const new_entry = search.fingerprint.?.entries[0];
-        let new_entry = search.fingerprint.as_ref().unwrap().entries[0];
+        // const new_entry = search.fingerprint.entries.items[0];
+        let new_entry = search.fingerprint.entries[0];
         // try testing.expectEqual(old_entry.node, new_entry.node);
         assert!(core::ptr::eq(old_entry.node, new_entry.node));
         // try testing.expect(old_entry.serial != new_entry.serial);
