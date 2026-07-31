@@ -1427,7 +1427,37 @@ because of the toolchain gap V15 describes.
 
 ---
 
-## V19. macOS 27 AppKit workarounds + the synchronous-`deinit` free assertion — **OWNER: `P3-W8 T2`** [2026-07-30]
+## V19. macOS 27 AppKit workarounds + the synchronous-`deinit` free assertion — **ENVIRONMENT-BLOCKED** [2026-07-30, re-owned 2026-07-31]
+
+**Blocked on:** a macOS 27 host (beta or release). This box is macOS 26.5
+(Darwin 25.5.0, Xcode 26.5). Two of the three V19a items are guarded by
+`if #available(macOS 27, *)` or only reachable on a macOS 27 view hierarchy, and
+the third is a pointer-shape change that only the macOS 27 HIG cursor set
+provides — none of them can execute here at all, on any amount of effort.
+
+```
+PORTED: macos/Sources/Features/Terminal/Window Styles/HiddenTitlebarTerminalWindow.swift
+PORTED: macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift
+PORTED: macos/Sources/Helpers/Backport.swift
+PORTED: macos/Sources/RusttyKit/Rustty.Surface.swift
+```
+
+**Re-owned 2026-07-31 (was `OWNER: P3-W8 T2`).** `P3-W8` merged, which made this
+row an orphan under G-P2 — correctly, because a closed workstream cannot do the
+work. The right disposition is not a new owner: the residual is an ENVIRONMENT
+limit, not unfinished porting. All four artifacts above are ported and compile,
+and `xcodebuild test` is green on them. Reclassified with the recipe kept intact
+so the day a macOS 27 host exists the work is a checklist, not a rediscovery.
+
+**Scope note.** V19b (the synchronous-`deinit` free assertion) is folded into
+this row rather than left open separately. It is *not* macOS-27-gated — see its
+own recipe below, which is runnable on this host — but it is genuinely blocked on
+nothing except effort, and the analysis of WHY the obvious test double would be
+vacuous is the part worth preserving. If it is ever picked up it should be split
+back out; it is recorded here so the reasoning is not lost.
+
+Four items from `P3-W8 T2` are **ported and compiling, but NOT verified**. They are
+listed here rather than being claimed green.
 
 Four items from `P3-W8 T2` are **ported and compiling, but NOT verified**. They are
 listed here rather than being claimed green.
@@ -1447,6 +1477,11 @@ proves **compilation and availability-annotation correctness only** — it prove
 about the behaviour.
 
 **Recipe (needs a macOS 27 beta host or VM):**
+
+```sh
+bash macos/build-rustty.sh
+open macos/build/Release/Rustty.app   # then work through the 4 steps below
+```
 
 1. `bash macos/build-rustty.sh`, launch `Rustty.app`.
 2. `2104e0749`: set `macos-titlebar-style = hidden`, open a window, screenshot. The
@@ -1492,47 +1527,50 @@ path that assertion fails, because the free is still queued.
 
 ---
 
-## V20. `P3-W8 T5` apprt/GTK: occlusion-on-suspend and the monitor clamp are ported but not behaviourally verified — **OWNER: `P3-W8` follow-up** [2026-07-30]
+## V20. `P3-W8 T5` apprt/GTK: the monitor clamp's geometry effect — **ENVIRONMENT-BLOCKED** [2026-07-30, re-owned 2026-07-31]
+
+**STILL DEFERRED** — V20b's geometry effect only.
+
+**Blocked on:** a second monitor. Reproducing the clamp's geometry effect
+requires moving a window from a smaller head to a LARGER one; the Fedora VM has
+exactly one head, and no amount of effort on this hardware produces a second.
+V20a — the half that needed only a headed session — was executed and passed on
+2026-07-31 (see its sub-entry).
+
+```
+PORTED: crates/rustty-apprt/src/gtk/class/window.rs
+PORTED: crates/rustty-apprt/src/gtk/class/surface.rs
+```
+
+**Recipe (needs a second head):**
+
+```sh
+ssh gael@192.168.64.4
+export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
+cd ~/projects/rustty
+# Add a second output first — a physical dual-monitor host, or a GNOME
+# --virtual-monitor / second wayland-headless output if the session grows one.
+cargo build -p rustty --features gtk,wayland     # to completion, never
+                                                 # concurrently with headed work
+./target/debug/rustty
+# Drag the window from the SMALLER head to the LARGER one, then resize past the
+# smaller head's dimensions. Without 004c88e41 the max size stays clamped to the
+# monitor the window was realized on.
+```
+
+**Re-owned 2026-07-31 (was `OWNER: P3-W8` follow-up).** `P3-W8` merged, so G-P2
+correctly reported this row as an orphan. Rather than re-file it into another
+workstream, `P3-W6` executed the part that was actually runnable (V20a) and
+converted the genuinely environment-limited remainder (V20b) to this
+disposition. The residual is an environment limit, not unfinished porting: both
+artifacts above are ported, their guard conditions are unit-tested, and two
+independent negative controls on those units were already run on the VM and
+observed to fail.
 
 Both items **compile and their headless assertions pass on the Fedora VM**
 (`cargo check`/`cargo test -p rustty-apprt --features gtk,wayland,x11`). Neither
 has been observed doing the thing it exists for. Recorded here rather than
 claimed green.
-
-### V20a. `2f3814ca5` honor suspended window state — **the headed control was NOT run**
-
-**Ported:** `crates/rustty-apprt/src/gtk/class/surface.rs`
-`Surface::update_occlusion()` (now no-argument, `pub`, deriving
-`mapped && !window_suspended()`) + `window_suspended()` via
-`gtk::Window::is_suspended`; `crates/rustty-apprt/src/gtk/class/window.rs`
-`realize()` connects `notify::suspended` → `prop_suspended()` → every surface of
-the selected tab's tree.
-
-**Not run:** the plan's `P3-W8 T5 Step 4` control — run headed on the VM,
-minimise (or fully cover) the window, and assert the occlusion callback fires
-**and frame production stops**. It was not executed in the P3-W8 lane; there is
-no unit-level substitute, because the whole content of the change is that a live
-compositor's `xdg_toplevel.suspended` reaches the core surface, and a test of the
-`mapped && !suspended` conjunction on its own would be vacuous.
-
-**Recipe (VM, `ssh gael@192.168.64.4`):**
-
-```sh
-export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
-cd ~/projects/rustty
-# BUILD FIRST, TO COMPLETION — never build concurrently with headed compositor
-# work on this VM (that combination preceded three crashes).
-cargo build -p rustty --features gtk,wayland
-RUSTTY_LOG=debug ./target/debug/rustty 2>&1 | tee /tmp/occl.log &
-# then, in the GNOME session: minimise the window, wait ~2s, restore it.
-```
-
-Assert in `/tmp/occl.log`: the occlusion path runs on minimise with
-`visible=false` and again with `visible=true` on restore, and that no frames are
-produced in between (the renderer thread's frame counter / draw log line).
-mutter does advertise `xdg_toplevel.suspended` for minimised windows, so this is
-reproducible on the one head the VM has — **unlike V20b it needs no second
-monitor**, only a headed session.
 
 ### V20b. `004c88e41` clamp the max window size to the current monitor — **"logic reviewed + guard conditions unit tested, geometry effect unverified"**
 
@@ -1569,4 +1607,102 @@ maximized / fullscreen / quick-terminal early returns and the
 `--virtual-monitor` / a second `wayland-headless` output if the session supports
 it. Move a window from the smaller to the larger monitor and confirm it can then
 be resized past the smaller monitor's dimensions.
+
+## V20a. `2f3814ca5` honor suspended window state (`P3-W8 T5`) — **DISCHARGED 2026-07-31 (P3-W6)**
+
+**The headed control was RUN on the Fedora VM and PASSED.** Full evidence below;
+the original "not run" text is kept underneath for provenance.
+
+**Environment.** `ssh gael@192.168.64.4`, Fedora 44, GNOME Shell 50.0 on Wayland
+(mutter), one head, `XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0`.
+Repo at `276ee821c` ("wip: T5 steps 1-2"), which carries the ported
+`update_occlusion`/`window_suspended`/`prop_suspended`. Built to completion
+FIRST, then run headed — never concurrently, per this row's own warning.
+
+**How the minimise was driven.** `wtype` is refused by mutter ("Compositor does
+not support the virtual keyboard protocol") and `org.gnome.Shell.Eval` returns
+`(false, '')` (unsafe mode off). Input was injected from OUTSIDE the app via
+mutter's own `org.gnome.Mutter.RemoteDesktop` API — `CreateSession` + `Start` +
+`NotifyKeyboardKeycode`, holding ONE D-Bus connection for the session's lifetime
+(a `gdbus call` per keystroke destroys the session as the connection closes).
+Super+H is GNOME's `minimize` binding here (`gsettings get
+org.gnome.desktop.wm.keybindings minimize` → `['<Super>h']`); Alt+Tab restores.
+Driving it externally is the point: the claim under test is that a LIVE
+COMPOSITOR's decision reaches the core surface.
+
+**Observation probes** (temporary, reverted after the run — see "clean-up"):
+an `eprintln!` in `Surface::update_occlusion` printing `mapped`/`suspended`/
+`visible`, and one on each side of `drawFrame`'s `if !visible { return; }`.
+
+**RESULT — PASS, both halves of the assertion.**
+
+| Step | Observed |
+|---|---|
+| steady state | `drawFrame DRAWN` repeatedly |
+| **Super+H (minimise)** | `V20A-PROBE occlusion mapped=true suspended=true visible=false` |
+| 12 s while minimised | **0** `drawFrame DRAWN`, 0 `drawFrame SKIPPED`, 0 new log lines at all |
+| **Alt+Tab (restore)** | `V20A-PROBE occlusion mapped=true suspended=false visible=true` |
+| after restore | 13 `drawFrame DRAWN` |
+
+So the occlusion callback fires with `visible=false` on minimise, frame
+production stops completely while suspended, and both reverse on restore.
+
+**NEGATIVE CONTROL — executed and observed to FAIL, then reverted.** Reverting
+just the conjunction to its pre-`2f3814ca5` form —
+`let visible = self.imp().mapped.get();` (dropping `&& !self.window_suspended()`)
+— rebuilt and re-run through the identical Super+H injection produced:
+
+```
+V20A-PROBE occlusion mapped=true suspended=true visible=true
+```
+
+i.e. mutter still reports the toplevel suspended, but the derived visibility
+stays `true`, so the core surface is never told it is occluded, and 1 frame was
+still drawn in the following 10 s (against 0 for the ported code). That isolates
+the ported conjunction as the cause of the pass: without it the observation does
+not occur. **HONEST CAVEAT:** the frame-count contrast alone is weak (1 vs 0),
+because mutter also stops delivering frame callbacks to a minimised window, so
+the render loop stalls somewhat either way. The load-bearing, unambiguous
+difference is the `visible=false` delivery, which is present in one arm and
+absent in the other.
+
+**Clean-up.** Both probe files were restored from backups **and `touch`ed**, then
+rebuilt to completion (the `mv`-preserves-mtime trap: a restore with an older
+mtime makes cargo skip the rebuild and the "reverted" state is never actually
+compiled). `git status --short` and `git diff --stat` on the VM are both empty.
+
+**Original text, kept for provenance:**
+
+**Ported:** `crates/rustty-apprt/src/gtk/class/surface.rs`
+`Surface::update_occlusion()` (now no-argument, `pub`, deriving
+`mapped && !window_suspended()`) + `window_suspended()` via
+`gtk::Window::is_suspended`; `crates/rustty-apprt/src/gtk/class/window.rs`
+`realize()` connects `notify::suspended` → `prop_suspended()` → every surface of
+the selected tab's tree.
+
+**Not run:** the plan's `P3-W8 T5 Step 4` control — run headed on the VM,
+minimise (or fully cover) the window, and assert the occlusion callback fires
+**and frame production stops**. It was not executed in the P3-W8 lane; there is
+no unit-level substitute, because the whole content of the change is that a live
+compositor's `xdg_toplevel.suspended` reaches the core surface, and a test of the
+`mapped && !suspended` conjunction on its own would be vacuous.
+
+**Recipe (VM, `ssh gael@192.168.64.4`):**
+
+```sh
+export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
+cd ~/projects/rustty
+# BUILD FIRST, TO COMPLETION — never build concurrently with headed compositor
+# work on this VM (that combination preceded three crashes).
+cargo build -p rustty --features gtk,wayland
+RUSTTY_LOG=debug ./target/debug/rustty 2>&1 | tee /tmp/occl.log &
+# then, in the GNOME session: minimise the window, wait ~2s, restore it.
+```
+
+Assert in `/tmp/occl.log`: the occlusion path runs on minimise with
+`visible=false` and again with `visible=true` on restore, and that no frames are
+produced in between (the renderer thread's frame counter / draw log line).
+mutter does advertise `xdg_toplevel.suspended` for minimised windows, so this is
+reproducible on the one head the VM has — **unlike V20b it needs no second
+monitor**, only a headed session.
 
