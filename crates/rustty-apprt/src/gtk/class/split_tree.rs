@@ -1086,6 +1086,15 @@ impl SplitTreeSplit {
         obj
     }
 
+    // This is a hack, it relies on the timing of property notifcations.
+    // From looking at the GTK source code, it should not be possible that
+    // we interpret a position change from a resize as a manual update.
+    // When a gtk.Paned is resized, internally the gtk_paned_calc_position
+    // function will change both max-position and position and synchronously
+    // call our propMaxPosition and propPosition functions. I.e. when the
+    // widget is resized, it should not be possible for onIdle to run before
+    // we have been notified of both property changes.
+    //
     /// PORTS: `split_tree.zig:1182-1277` `onIdle`.
     fn on_idle(&self) {
         let imp = self.imp();

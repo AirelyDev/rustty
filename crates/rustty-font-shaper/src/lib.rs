@@ -129,6 +129,10 @@ pub use rustty_font::sprite::Sprite;
 /// Build options
 // pub const options: struct { backend: Backend } = .{ .backend = ... };
 //
+// TODO: we need to modify the build config for wasm builds. the issue
+// is we're sharing the build config options between all exes in build.zig.
+// We need to construct it per target.
+//
 // PORT NOTE: the reference `options` is an anonymous struct with one `backend`
 // field, set from `build_config.font_backend` (or `.web_canvas` for wasm). Here
 // it is a module holding the `BACKEND` const, resolved from `cfg` via

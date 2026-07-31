@@ -300,15 +300,21 @@ fn initThread() -> Result<(), InitThreadError> {
         // a more idiomatic macOS application. But if XDG env vars are set
         // we will respect them.
         // if (comptime builtin.os.tag == .macos) macos: {
-        //     if (std.posix.getenv("XDG_CACHE_HOME") != null) break :macos;
+        //     if (global.environ().containsUnemptyConstant("XDG_CACHE_HOME")) break :macos;
         //     break :cache_dir try internal_os.macos.cacheDir(
         //         alloc,
         //         "sentry",
         //     );
         // }
+        //
+        // PORT NOTE: `containsUnemptyConstant`, NOT a bare presence check —
+        // upstream treats `XDG_CACHE_HOME=""` as UNSET and still prefers
+        // `NSCachesDirectory`. And it reads the CAPTURED global environ so an
+        // embedder-supplied block (`global.init(.{ .c = ... })`) is honored,
+        // which is also what the `xdg.cache` arm below uses via `environMap`.
         #[cfg(target_os = "macos")]
         {
-            if std::env::var_os("XDG_CACHE_HOME").is_none() {
+            if !rustty_global::environ::environ().contains_unempty_constant(b"XDG_CACHE_HOME") {
                 break 'cache_dir internal_os::macos::cacheDir("sentry")
                     .map_err(InitThreadError::AppleApi)?;
             }

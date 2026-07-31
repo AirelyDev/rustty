@@ -5437,15 +5437,22 @@ fn probable_cli_environment() -> bool {
         }
     }
 
-    // If we have TERM_PROGRAM set to a non-empty value, we assume
-    // a graphical terminal environment.
-    // if (std.posix.getenv("TERM_PROGRAM")) |v| {
-    //     if (v.len > 0) return true;
-    // }
-    if let Ok(v) = std::env::var("TERM_PROGRAM") {
-        if !v.is_empty() {
-            return true;
-        }
+    // If we have TERM_PROGRAM set to a non-empty value, we assume a graphical
+    // terminal environment.
+    //
+    // TODO: This is not available on WASI without libc due to the memory
+    // allocation requirement. This restricts this function to said platforms.
+    // To be fair, the legacy getenv path had more restrictive issues (no WASI
+    // period, or Windows for that matter).
+    //
+    // if (global.environ().containsUnemptyConstant("TERM_PROGRAM")) return true;
+    //
+    // PORT NOTE: this read MUST go through the captured global environ, not
+    // `std::env`. The `.c` arm of `global.init` installs a caller-supplied
+    // block (`rustty_global::environ::set_environ`), and libghostty embedders
+    // rely on the heuristic seeing THAT block rather than the host process's.
+    if rustty_global::environ::environ().contains_unempty_constant(b"TERM_PROGRAM") {
+        return true;
     }
 
     // CLI arguments makes things probable
@@ -7101,13 +7108,29 @@ impl Config {
                                 break 'shell_env;
                             }
 
-                            // if (std.process.getEnvVarOwned(alloc, "SHELL")) |value| {
-                            if let Ok(value) = std::env::var("SHELL") {
+                            // const value = global.environ().getAlloc(alloc, "SHELL")
+                            //     catch |err| switch (err) {
+                            //         error.EnvironmentVariableMissing => break :shell_env,
+                            //         else => return err,
+                            //     };
+                            //
+                            // PORT NOTE: through the captured global environ (see
+                            // `env_is_probably_cli`'s note), and as RAW BYTES —
+                            // `SHELL` is a `[]u8` upstream and `std::env::var`
+                            // would drop a non-UTF-8 shell path on the floor.
+                            let Some(value) = rustty_global::environ::environ().get_alloc(b"SHELL")
+                            else {
+                                break 'shell_env;
+                            };
+                            {
                                 // log.info("default shell source=env value={s}", .{value});
-                                log_info(format!("default shell source=env value={value}"));
+                                log_info(format!(
+                                    "default shell source=env value={}",
+                                    String::from_utf8_lossy(&value)
+                                ));
                                 // const copy = try alloc.dupeZ(u8, value);
                                 // self.command = .{ .shell = copy };
-                                self.command = Some(Command::Shell(value.into_bytes()));
+                                self.command = Some(Command::Shell(value));
                                 // If we don't need the working directory, then we can exit now.
                                 // if (wd != .home) break :command;
                                 if wd != WorkingDirectory::Home {

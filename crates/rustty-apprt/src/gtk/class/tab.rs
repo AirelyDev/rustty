@@ -187,6 +187,9 @@ impl Tab {
                     title: overrides.title,
                 },
             )
+            // TODO: We should make our "no surfaces" state more aesthetically
+            // pleasing and show something like an "Oops, something went wrong"
+            // message. For now, this is incredibly unlikely.
             .expect("oom creating initial surface");
 
         tab

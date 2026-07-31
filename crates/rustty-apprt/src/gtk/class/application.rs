@@ -4147,6 +4147,7 @@ mod action {
                 false
             }
             Target::Surface(v) => {
+                // TODO: pass surface ID when we have that
                 let Some(w) = widget(v) else { return false };
                 let Some(tree) = ext::ancestor::<SplitTree>(&w) else {
                     eprintln!(
@@ -4223,6 +4224,8 @@ mod action {
             Target::App => false,
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
+                // TODO: pass the surface with the action (`surface.zig:881`)
+                //
                 // `surface.rt_surface.gobj().toggleCommandPalette()` →
                 // `activateAction("win.toggle-command-palette", null)`.
                 w.activate_action("win.toggle-command-palette", None)

@@ -312,7 +312,10 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     ///
     /// PORT NOTE (E16): the `.c` arm's
     /// `return error.UnsupportedOSForCApi` on Windows is carried by
-    /// `rustty-apprt-c`'s `rustty_init`, which owns the argc/argv seam.
+    /// `rustty-apprt-c`'s `rustty_init`, which owns the argc/argv seam —
+    /// a `#[cfg(target_os = "windows")]` early `return 1` reproducing the
+    /// reference's logged init failure, with the reference's UNICODE_STRING
+    /// TODO quoted at that site.
     pub fn new_with_environ(
         alloc: seam::Allocator,
         resources_dir: ResourcesDir,

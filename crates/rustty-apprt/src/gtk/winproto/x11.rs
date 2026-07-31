@@ -666,6 +666,8 @@ impl Window {
     /// reference's `error.PropertyNotFound` (the caller treats it as "use
     /// defaults"). The `XFree` of the returned buffer mirrors `x11.zig:378`.
     fn get_motif_hints(&self) -> Result<Option<MotifWmHints>, Error> {
+        // FIXME: Maybe we should switch to libxcb one day.
+        // Sounds like a much better idea than whatever this is
         let mut actual_type: xlib::Atom = 0;
         let mut actual_format: c_int = 0;
         let mut nitems: c_ulong = 0;
