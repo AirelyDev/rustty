@@ -82,7 +82,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `a804e3ac7` | terminal: invalidate partially erased page refs | missing BL-1 | — |
 | `f1a5fab45` | terminal: keep page serial floor conservative | missing BL-1 | — |
 | `8c523ed03` | terminal: vectorize APC payload scanning | missing BL-4 | stream.rs APC fast path |
-| `9b466e9c5` | terminal: fix count-limited page iteration | pending-small BL-3 | `pagelist/iter.rs` (81/17 diff, has tests; pin-era iterator) |
+| `9b466e9c5` | terminal: fix count-limited page iteration | **PORTED** (P3-W1) | `pagelist/iter.rs` forward + reverse `Limit::Count` arms + 2 tests (T2) |
 | `73ac36fa5` | terminal/search: discard destroyed screen state | missing BL-1 | search/thread.rs + screen.rs |
 | `86e1f7b8b` | terminal/search: reject replaced result pages | missing BL-1 | — |
 | `5d8eb78b7` | terminal/search: reset pins while feeding | missing BL-1 | — |
@@ -95,28 +95,28 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `fdd255c78` | terminal: reserve title terminator atomically | ported (WS8 T7) | terminal.rs title NUL sentinel |
 | `1d5b6f90e` | terminal: reserve pwd terminator atomically | ported (WS8 T7) | terminal.rs pwd NUL sentinel |
 | `04810273a` | terminal: wrap implicit hyperlink identifiers | ported (WS8 T6) | screen.rs implicit hyperlink id wrap |
-| `b287f6d1a` | terminal: handle stored grapheme boundaries | pending-small BL-3 | terminal.rs print grapheme path (23/8) |
-| `e727a3658` | terminal: clear rows using stored page width | pending-small BL-3 | screen.rs clearRows (28/8) |
+| `b287f6d1a` | terminal: handle stored grapheme boundaries | **PORTED** (P3-W1) | debug_assert!(!brk) deleted, `grapheme_break` call kept; ported test + an end-to-end `Stream` drive; the `erase_display` workaround in the print-slice differential is removed as upstream does (T4) |
+| `e727a3658` | terminal: clear rows using stored page width | **PORTED** (P3-W1) | `clear_rows` takes cells via `page.get_cells(row)`; `clear_cells` compares against `page.size.cols` (3 sites) + 2 tests (T4) |
 | `b6f34be44` | terminal: clamp mirrored selection corners | ported (WS8 T9) | selection.rs top_left/bottom_right mirrored arms |
 | `607160657` | terminal: clamp cloned selections to page width | ported (WS8 T10) | screen.rs clone fallback pins |
 | `08e376f23` | terminal: bound selection drag geometry | ported (WS8 T11) | pt.2 fixed (empty-geometry reject + saturating pixel span); pt.1 (`pixelFromFloat`) is a VERIFIED NON-ISSUE in Rust — `f64 as u32` is saturating and NaN-safe by RFC 2884 — ported as a regression test only |
-| `a55850c98` | terminal: use previous page width for cursor cells | pending-small BL-3 | screen.rs resize cursor cells (22/1) |
+| `a55850c98` | terminal: use previous page width for cursor cells | **PORTED** (P3-W1) | `cursor_cell_end_of_prev` uses `page_pin.node.cols() - 1` + test (T4) |
 | `a9f5b7eba` | terminal: clamp selection rows to page width | ported (WS8 T9) | selection.rs contained_row_cached |
 | `fa8cae88b` | terminal: use destination width for line selection | ported (WS8 T10) | screen.rs select_line end pin |
 | `3d08161b5` | terminal: handle empty tabstop ranges | **PORTED** | tabstops.rs:315 + test (§1) |
 | `8f1c2fe95` | terminal: handle backwards selection timestamps | **PORTED** | selection_gesture.rs:790 + test (§1) |
 | `0cb004734` | terminal: ignore empty cell clears | **PORTED** | screen.rs:2017 + test (§1) |
-| `d6e24d985` | terminal: make pin traversal width-aware | pending-small BL-3 | pagelist/pin.rs traversal (120/39 — medium) |
-| `30b42f42a` | terminal: reject unrepresentable pin coordinates | pending-small BL-3 | pagelist/pin.rs (49/3) |
-| `e6e4a9fdc` | terminal: widen cell screen coordinates | pending-small BL-3 | pagelist coordinates (42/1) |
-| `afbf5ba15` | terminal: handle minimum prompt scroll delta | pending-small BL-3 | pagelist/scroll.rs scroll_prompt (11/1) |
-| `c753fe4a4` | terminal: handle minimum row scroll delta | pending-small BL-3 | pagelist/scroll.rs DeltaRow (22/6) |
+| `d6e24d985` | terminal: make pin traversal width-aware | **PORTED** (P3-W1) | end state of the `0ff4e41b2` -> `d6e24d985` pair; `pagelist/pin.rs` pin/left_wrap/right_wrap/up_overflow/down_overflow + 7 tests (T1) |
+| `30b42f42a` | terminal: reject unrepresentable pin coordinates | **PORTED** (P3-W1) | `pagelist/pin.rs` `point_from_pin` checked adds + test (T3) |
+| `e6e4a9fdc` | terminal: widen cell screen coordinates | **PORTED** (P3-W1) | `pagelist/access.rs` `screen_point` u32 accumulator + test (T3) |
+| `afbf5ba15` | terminal: handle minimum prompt scroll delta | **PORTED** (P3-W1) | `pagelist/scroll.rs` `scroll_prompt` `delta.unsigned_abs()` + test (T3) |
+| `c753fe4a4` | terminal: handle minimum row scroll delta | **PORTED** (P3-W1) | `pagelist/scroll.rs` `amount = n.unsigned_abs()` + test (T3) |
 | `6236d3859` | Misc runtime safety fixes (#13275) | n/a-merge | constituents above/below |
 | `0aaedf436` | terminal: saturate origin cursor offsets | **PORTED** | terminal.rs:2495 + test (§1) |
-| `0ff4e41b2` | terminal: fix pin wrapping at row boundaries | pending-small BL-3 | pagelist/pin.rs wrapping (58/6) |
-| `5bc6588e4` | terminal/search: ignore empty search needles | pending-small BL-3 | search/{active,sliding_window,viewport}.rs (31/2; pin-era search) — WS7 Phase C review (M2): confirmed pre-existing (not introduced by WS7), `needle.len() - 1` in `search/viewport.rs:262,315` and `search/active.rs:132` should become the oracle's saturating `overlap_len = needle.len -\| 1`; fix belongs to this row, not WS7 |
+| `0ff4e41b2` | terminal: fix pin wrapping at row boundaries | **PORTED** (P3-W1) | superseded by `d6e24d985` in the same functions; its 4 regression tests are ported and pass against that end state (T1) |
+| `5bc6588e4` | terminal/search: ignore empty search needles | **PORTED** (P3-W1) | empty-needle early returns in `SlidingWindow::next` and `ActiveSearch::update`; saturating `overlap_len` in `search/viewport.rs` (the oracle does NOT saturate `search/active.rs:132` — its early return covers it, so the WS7 Phase C M2 note over-specified by one site); the `sliding_window.rs` PORT NOTE claiming Zig returns null for an empty needle was the bug, not the code (REACHABILITY row 8) (T5) |
 | `a23d90c89` | search: reset cached results after resize (#13274) | n/a-merge | constituent below |
-| `627518447` | terminal/search: reset cached results after resize | pending-small BL-3 | search/screen.rs (73/22 — medium; pin-era search) |
+| `627518447` | terminal/search: reset cached results after resize | **PORTED** (P3-W1) | `reset_if_dimensions_changed` extracted; called from `feed`, first in `reload_active` (early return), first in `select` + 2 tests (T5) |
 | `f6f79acce` | terminal: dispatch APC string bytes in bulk slices | missing BL-4 | stream/apc/kitty + bench/synthetic surface (12 files) |
 | `7e02af879` | scrollback page compression (#13264) | n/a-merge | constituents = BL-1 |
 | `4f53b846b` | renderer: move State declaration to top of file | n/a | pure Zig decl reordering, no semantic content; Rust module layout differs |
@@ -142,9 +142,9 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `9c9cf3e82` | renderer: avoid allocating when no active links | missing BL-4 | `crates/rustty-renderer/src/link.rs` exists; perf change (82/14) |
 | `60121a039` | Revert "termio: bound POSIX read-ahead on non-Darwin" | n/a | reverts `bed47168c`; net-zero pair |
 | `896aca499` | terminal: return free-listed page memory to the OS | ported (WS8 T12/T13) | pagelist pool decommit; Miri exception registered (MIRI_EXCEPTIONS.md Category 2); verified by `examples/rss_probe.rs` on macOS (9.0 MiB returned vs 0.0 control). Linux arm not yet run |
-| `c442eb4b3` | terminal: document the pool reuse zeroing invariant | pending-small BL-3 | comments + asserts over pagelist/screen/page (34/6) |
+| `c442eb4b3` | terminal: document the pool reuse zeroing invariant | **PORTED** (P3-W1) | `const _` size_of Row >= size_of usize next to `Row`, `assert!(cap.rows > 0)` in `init_buf`, layout/pool comments, stale doc fixes (T4) |
 | `e44f5cb0f` | terminal: guard RefCountedSet zero-capacity lookups | **PORTED** | ref_counted_set.rs:825 + style.rs test (§1) |
-| `8307349ec` | terminal: fix increaseCapacity growth from zero-capacity dimensions | pending-small BL-3 | pagelist/grow.rs + screen.rs (112/15 — medium, has tests) |
+| `8307349ec` | terminal: fix increaseCapacity growth from zero-capacity dimensions | **PORTED** (P3-W1) | `grow.rs` `adjust_field!` jumps to `Capacity::default()` from 0 + 3 tests incl. a bounded-retry control (T4) |
 | `16e4b5e98` | terminal: track page ownership explicitly on pagelist nodes | missing BL-1 | compression-prep restructure (209/72) |
 | `b953bb346` | terminal: fix bitmap allocator chunk region sizing | **PORTED** | bitmap_allocator.rs:335 + 2 tests (§1) |
 | `3ff6d08fa` | lib-vt: report OSC and Kitty color queries (#13239) | n/a-merge | constituents below |
@@ -156,13 +156,13 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `cabbdee32` | Fix adjust-cursor-height regression (#13225) | n/a-merge | constituents `dac341cad`+`e8f3f6c43` — PORTED |
 | `446f80f4e` | terminal: render state update optimizations | **PORTED** | WS10 T19 (`56dba9c`): `page::Mask` + `begin_update`/`end_update` + `pending_styles` + chunked update in render.rs; `rustty_render_state_{begin,end}_update` in vt-c + `include/rustty/vt/render.h`; renderer two-phase; three `screen-clone` render modes. Measured lock-hold 2.88x-11.19x. The `Terminal.zig` hunk is a refactor of T16's `printSliceFill`, which does not exist in rustty yet — `Mask` is landed for it; adoption is T16's. |
 | `b5053153f` | terminal: log unsupported-input messages once per distinct value | missing BL-4 | stream.rs logging dedup (85/10) |
-| `8d663a76e` | terminal: release style refs per run in clearCells | pending-small BL-3 | screen.rs clear_cells style-ref batching (15/3) |
+| `8d663a76e` | terminal: release style refs per run in clearCells | **PORTED** (P3-W1) | `clear_cells` groups same-style runs and calls `release_multiple` once per run, ids read through the raw `*mut Cell`; ref-count-to-exactly-zero tests (T6) |
 | `cb2d78587` | terminal: fill style-only cell runs in bulk in printSliceFill | missing BL-4 | terminal.rs print slice fill (BL-4 fast-path family) |
 | `300f42c7a` | terminal: handle CSI entry bytes inline in consumeUntilGround | missing BL-4 | stream.rs |
 | `083d9709b` | terminal: decode ASCII inline in SIMD scan for ESC | missing BL-4 | rustty-simd (src/simd/vt.cpp analogue) |
 | `e8f3f6c43` | font/sprite: regression test for cursor-height metric | **PORTED** | face.rs test (§1) |
 | `dac341cad` | font/sprite: cursor height respects adjust-cursor-height | **PORTED** | face.rs:704-716 (§1) |
-| `cb4c49fbf` | terminal: scalar UTF-8 decode consumes partial sequences cut by ESC | missing BL-4 | rustty-simd vt scalar path (90/4, has tests) |
+| `cb4c49fbf` | terminal: scalar UTF-8 decode consumes partial sequences cut by ESC | **PORTED** (verified P3-W1) | ALREADY present on `main` -- the ESC-boundary guard, both named byte sequences, and the 10k SIMD-vs-scalar differential. Re-proven by mutation; the P3-W1 plan text claiming it was absent is stale (T6) |
 | `4c5b1d5d5` | bench: terminal-stream reads 64KiB chunks | pending-small BL-3 | rustty-bench terminal_stream (5/2) |
 | `cee35cabf` | terminal: skip style map update when SGR unchanged | **PORTED** | screen.rs:2752 (§1) |
 | `253e4f9c3` | terminal: bulk-parse CSI parameter bytes at slice level | missing BL-4 | stream.rs (76/0, has tests) |
@@ -263,6 +263,18 @@ NOT APPLICABLE — each checked against the rustty source, not assumed:
   lockfiles.
 
 ---
+
+## 3c. Beyond-pin rows ported/verified by `P3-W1` (2026-07-30)
+
+Two `P3-W1` commits have no §3 row because they postdate that table's window.
+Recorded here so the ledger is complete. As in §3b, the fidelity target is the
+named commit read with `git -C ../ghostty show`; the oracle pin
+(`.port/ORACLE_SYNC.md`) is UNCHANGED — advancing it is `P3-W10`.
+
+| upstream | subject | status | notes |
+|---|---|---|---|
+| `cb2fef390` | terminal: preserve underline style in DECRQSS | **PORTED** (P3-W1 T6) | `terminal.rs` `print_attributes` emits `;4:{n}` for non-Single underline; 5-case table test that retains the `Single` case so it cannot pass with the branch taken unconditionally |
+| `5caf20e3e` | terminal: avoid reallocating tabstop storage | **PORTED** (verified P3-W1 T6) | ALREADY present on `main`: `tabstops.rs` reads `size <= self.dynamic_stops.len()` and `tabstops_resize_to_existing_capacity_does_not_allocate` exists and asserts an ALLOCATION COUNT, not merely success. Re-proven by mutation. The `P3-W1` plan text claiming both were absent is stale |
 
 ## 4. Standing ritual (R12)
 
