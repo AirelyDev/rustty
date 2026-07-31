@@ -651,3 +651,43 @@ that is ported.
      gate.
    * `check-apple-libghostty-vt.nu` is N/A **with a precondition**, recorded in
      G7 above rather than here.
+
+---
+
+## G14 — `P3-W9`'s G3b beyond-pin attribution (gate artifact, not a non-port)
+
+`.port/tools/gates/README.md`'s G3b section requires each lane to record its own
+beyond-pin `missing` delta — "which file, which sentence, and the upstream
+commit that deleted it" — so the residual is attributable rather than merely
+tolerated, and so that a rise with NO attribution can be treated as a real
+regression. This is `P3-W9`'s record.
+
+```
+G3b [config]:    distinctive ref comments=2777  missing=28  review=13   (was 9)
+G3b [cli]:       591 / 2 / 2      (unchanged)
+G3b [synthetic]: 95 / 0 / 0       (unchanged)
+G3b [vt]:        9609 / 81 / 48   (unchanged by this lane)
+G3b [vt-c]:      334 / 0 / 0      (unchanged)
+```
+
+All **28** config entries are pin artifacts. Every one is a sentence the ORACLE
+ITSELF DELETED beyond the pin, which rustty correctly no longer has; they exist
+on the reference side only because `GHOSTTY_SRC` is the working tree at
+`4749c4e93`. Attribution, all 28:
+
+| # | Deleted by | Sentences (lowercased as the gate prints them) |
+|---|---|---|
+| 15 | **`2da02f4d2`** (background-blur rewrite, `P3-W9 T2` step 1) | `* kde plasma (wayland and x11)` · `supported on macos and on some linux desktop environments, including:` · `this setting to either \`true\` or any positive blur intensity value would` · `achieve the same effect. the reason is that kwin, the window compositor` · `powering plasma, only has one global blur setting and does not allow` · `applications to specify individual blur settings.` · `to configure kwin's global blur setting, open system settings and go to` · `"apps & windows" > "window management" > "desktop effects" and select the` · `"blur" plugin. if disabled, enable it by ticking the checkbox to the left.` · `then click on the "configure" button and there will be two sliders that` · `allow you to set background blur and noise intensities for all apps,` · `all other linux desktop environments are as of now unsupported. users may` · `need to set environment-specific settings and/or install third-party plugins` · `in order to support background blur, as there isn't a unified interface for` |
+| 5 | **`d71695550`** (keybind `global:` rewrite, `P3-W9 T2` step 2) | `on linux, you need a desktop environment that implements the` · `protocol as a part of its xdg desktop protocol implementation.` · `(important: [\`xdg-desktop-portal-hyprland\`](…))` · `- notably, global shortcuts have not been implemented on wlroots-based` |
+| 4 | `65c48213b` (scrollback-limit doc rewrite) — **pre-existing**, not this lane | `allocated lazily up to this limit, so if you set this to a very large` · `larger this value, the larger potential memory usage. scrollback is` · `scrollback currently exists completely in memory. this means that the` · `value, it will not immediately consume a lot of memory.` |
+| 5 | `2970e9a2a` (`Color.fromHex` + `Palette.parseCLI` deletions) — **pre-existing** | `fromhex parses a color from a hex value such as #rrggbb. the "#"` · `expand short hex values to full hex values` · `parse the color part (color.parsecli will handle whitespace)` · `parse the key part (trim whitespace)` · `trim any whitespace before processing` |
+
+So `P3-W9` added **+19** (15 background-blur + 4 keybind); the other 9 were
+already there before this lane and belong to `P3-W3 T4` and to the already-landed
+`2970e9a2a` port. The plan predicted ~+27 (~15 and ~12) for a total of ~39; the
+measured total is **28**, because the gate counts *distinctive* comments (>= 5
+word-tokens after normalization), which is fewer than the raw deleted lines.
+
+**`P3-W10 T3` must bring the config row to 0.** If any of these 28 survives the
+pin advance, it is a REAL drop and must be triaged individually — that is the
+entire value of listing them here rather than reporting a number.
