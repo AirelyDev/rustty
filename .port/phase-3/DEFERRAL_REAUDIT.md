@@ -73,18 +73,103 @@ structural finding of this audit.
 
 Ordered by size. Nothing here is half-done; each is recorded precisely.
 
-### Small (XS/S) — 8 (**2 closed 2026-07-31 by the `fix-freetype-tmux` lane — rows 1 and 2; 6 remain**)
+> **LIVE STATUS (2026-07-31).** Items **1, 2, 3, 4, 6 and 7 are CLOSED** — rows 1
+> and 2 by the `fix-freetype-tmux` lane, rows 3, 4, 6 and 7 by the
+> `small-deferrals` lane (see the strikethroughs below and §C.7-ADDENDUM). Items 3
+> (wayland) and 6 (iOS) are code-complete but **could not be compiled on this host**
+> (no gtk4/wayland; no iOS rustup target) and carry that caveat explicitly. Item 5
+> is deliberately not fixed (the oracle behaves identically — fixing it would
+> CREATE a divergence). Item 8 is discharged by the Miri re-audit.
+
+### Small (XS/S) — 8 (**7 closed 2026-07-31; item 5 is a deliberate non-fix**)
 
 | # | Item | Evidence / what is missing | Size |
 |---|---|---|---|
 | ~~1~~ | ~~**`freetype-load-flags` config is silently ignored**~~ **CLOSED 2026-07-31 (`fix-freetype-tmux`)** | `crates/rustty-core/src/surface.rs` now assigns `derived_freetype_load_flags(&config.freetype_load_flags)` — the exact `if (font.face.FreetypeLoadFlags != void) config.@"freetype-load-flags" else {}` selector (oracle `SharedGridSet.zig:528`) — over a field-for-field DI bridge `freetype_load_flags_from_config`. **Second, unreported half of the same bug:** `shared_grid_set.rs Key::hash` skipped the field, so two configs differing ONLY in `freetype-load-flags` collided on one cached grid; it is now hashed (`FreetypeLoadFlags` derives `Hash`; the `()` arm hashes nothing, matching `autoHash` of `void`). **This row's "three more stubbed sites" were wrong:** `rustty-renderer/src/generic.rs:6204,6332` and `generic/linux_impl.rs:3899` are *test* font-grid fixtures with no config in scope — the default is correct there and they were left alone. 4 tests + a macOS compile-time zero-size assert on the `void` arm. Residual: the KAT at the literal bug site is `cfg(not(any(macos, wasm32)))` and has never been compiled (no Linux target on the dev host); on macOS the oracle itself takes the `void` arm, so there is nothing to thread. | S |
 | ~~2~~ | ~~**termio `dcsCommand` tmux arm is a silent no-op**~~ **CLOSED 2026-07-31 (`fix-freetype-tmux`)** | Confirmed exactly as described, and ported 1:1 from oracle `src/termio/stream_handler.zig:381-455`: `.enter` allocates the viewer, the fallthrough drives `viewer.next(.{ .tmux = tmux })` and pushes every `.command` action through `messageWriter`, `.exit` tears the viewer down, `.windows` stays the oracle's `// TODO`. Three Rust-only seams recorded at the site: a labeled block for `tmux: {}`, a `mem::replace` move-out of the now-owned `ControlNotification` (safe: `dcs::Command::deinit`'s Tmux arm is a no-op), and take/restore of the `Box<Viewer>` around the `&mut self` mailbox writes. One oracle-vs-port divergence noted, not silently dropped: the oracle's `Viewer.init(global.io(), alloc)` passes a `std.Io`; the vt port's `Viewer::init` takes only the allocator. KAT `stream_handler_dcs_tmux_arm_drives_the_viewer` asserts BOTH build configurations; a new default-off `rustty-termio/oniguruma` feature makes the live half runnable (`cargo test -p rustty-termio --features oniguruma`). | S–M |
-| 3 | **wayland `bind_global` map shape diverges** | rustty keys `names: HashMap<u32, Tag>` name→tag (`crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs:149`). The oracle's map is **Tag-keyed with the name in the value** (`Globals.zig:165-175`) and on re-advertisement calls `onGlobalRemoved(tag)` + `old.proxy.destroy()`. rustty does neither → stale `name→tag` entry **and** a leaked superseded proxy. The "pathological input" divergence basis is false: criterion 2 misdescribes the oracle. | S |
-| 4 | **`os_signpost` Instruments interval still a no-op** | `crates/rustty-bench/src/benchmark.rs:115-118` `#[cfg(target_os="macos")] { /* no-op */ }`, reference body preserved as comments `:93-114`. Its permanence basis was "the log-facade tier is deferred tree-wide" — **that is no longer true**: `macos.os.Log` is ported (`crates/rustty-os/src/macos.rs:220-262`). Sole hold-out. Oracle: `src/benchmark/Benchmark.zig:45-66` + `pkg/macos/os/signpost.zig`. | S |
+| 3 | ~~**wayland `bind_global` map shape diverges**~~ **✅ CLOSED 2026-07-31 (small-deferrals lane)** — `names` is now `HashMap<Tag, u32>` (`Globals.zig:17` `EnumMap(Tag, Binding)` minus the type-erased proxy); `bind_global` routes every arm through `record_binding(tag, name, superseded)` which runs `on_global_removed(tag)` + destroys the superseded proxy on re-advertisement (`Globals.zig:161-172`), and `remove_global(name)` iterates the Tag-keyed map comparing `Binding.name` (`Globals.zig:182-183`). `proxy.destroy()` maps to `Connection::backend().destroy_object(&ObjectId)` (a plain Rust drop leaves the object in the backend's object map — the leak). **NOT COMPILED HERE: no gtk4/wayland on this macOS host**, so `cargo check --workspace` never builds the module; verified only by `rustfmt --check` parse + an isolated `wayland-client`-only type-check of `Proxy::id()`/`destroy_object`/the `Hash` Tag key. Original finding: rustty keyed `names: HashMap<u32, Tag>` name→tag (`crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs:149`). The oracle's map is **Tag-keyed with the name in the value** (`Globals.zig:165-175`) and on re-advertisement calls `onGlobalRemoved(tag)` + `old.proxy.destroy()`. rustty does neither → stale `name→tag` entry **and** a leaked superseded proxy. The "pathological input" divergence basis is false: criterion 2 misdescribes the oracle. | S |
+| 4 | ~~**`os_signpost` Instruments interval still a no-op**~~ **✅ CLOSED 2026-07-31 (small-deferrals lane)** — `pkg/macos/os/signpost.zig` ported in full as `rustty_os::macos::signpost` (init/enabled/emit_event/interval_begin/interval_end/emit_with_name/Id/Type/category) over the real libSystem symbols; `Benchmark::run` opens + closes the interval with a drop-guard declared after `_teardown` (LIFO `defer` order). 5 new KATs green on macOS/arm64; mutation-proved twice (null `__dso_handle` → `rustty-bench benchmark::benchmark` RED; `Id::NULL` from `for_pointer` → `generate_id_for_pointer` RED). Original finding: | `crates/rustty-bench/src/benchmark.rs:115-118` `#[cfg(target_os="macos")] { /* no-op */ }`, reference body preserved as comments `:93-114`. Its permanence basis was "the log-facade tier is deferred tree-wide" — **that is no longer true**: `macos.os.Log` is ported (`crates/rustty-os/src/macos.rs:220-262`). Sole hold-out. Oracle: `src/benchmark/Benchmark.zig:45-66` + `pkg/macos/os/signpost.zig`. | S |
 | 5 | **`setNonblock(fd)` failure arm skips the drain** | `crates/rustty-termio/src/exec.rs:4129-4132` returns without `drain_pty_master_once` (helper exists at `:3395`), after `threadEnter` returned success and before the gather thread exists — the same wedge the 6 `threadEnter` arms were fixed for. **Deliberately not fixed here**: the oracle also just returns (`Exec.zig:1428`), so this extends an existing approved R1-DIVERGENCE rather than porting anything, and I have no test for the path. See §E. | XS |
-| 6 | **iOS Darwin export gating** | `grep target_os = "ios"` in `crates/rustty-apprt-c/src/lib.rs` → 0 hits. The oracle gates on `isDarwin()` (macOS **or** iOS) and ships `macos/Sources/.../iOSApp.swift` + iOS arms in `apprt/embedded.zig`. `INTEGRATION_PARITY.md:394` calls the attach path "a separate deferred tier" with no owner. | S–M |
-| 7 | **`renderer/Thread.zig` G3b comment drift** | Scoped G3b now reports **11 dropped oracle comments** vs `crates/rustty-core/src/renderer_seam.rs` (oracle `Thread.zig:27,560,617,641,647,680`, …). Newly *visible* only because this audit fixed the gate — see §D. | XS |
+| 6 | ~~**iOS Darwin export gating**~~ **✅ CLOSED 2026-07-31 (small-deferrals lane)** — the six Darwin exports in `crates/rustty-apprt-c/src/lib.rs` are now `#[cfg(any(target_os = "macos", target_os = "ios"))]` (== `isDarwin()`), matching `rustty-apprt/src/embedded.rs:730,747`. The `CGS*` externs + `rustty_set_window_background_blur`'s body correctly KEEP `target_os = "macos"` (the reference guards that body with `!= .macos`, not `isDarwin()`). `iOSApp.swift` was ALREADY ported at `macos/Sources/App/iOS/iOSApp.swift` — that half of the row was wrong. **NOT VERIFIED BY BUILD: no iOS rustup target installed**, so the ios arm compiles nowhere here. Original finding: | `grep target_os = "ios"` in `crates/rustty-apprt-c/src/lib.rs` → 0 hits. The oracle gates on `isDarwin()` (macOS **or** iOS) and ships `macos/Sources/.../iOSApp.swift` + iOS arms in `apprt/embedded.zig`. `INTEGRATION_PARITY.md:394` calls the attach path "a separate deferred tier" with no owner. | S–M |
+| 7 | ~~**`renderer/Thread.zig` G3b comment drift**~~ **✅ CLOSED 2026-07-31 (small-deferrals lane)** — see §C.7-ADDENDUM below for the fix AND the crate-coverage answer this raised. Original finding: | Scoped G3b now reports **11 dropped oracle comments** vs `crates/rustty-core/src/renderer_seam.rs` (oracle `Thread.zig:27,560,617,641,647,680`, …). Newly *visible* only because this audit fixed the gate — see §D. | XS |
 | 8 | **`MIRI_EXCEPTIONS.md` inventory incomplete** | 64 plain `cfg_attr(miri, ignore)` repo-wide; **12 in `rustty-cli`** (`list_themes.rs:2548`, `ssh_cache/disk_cache.rs:910,922,950`, …) and **3 in `rustty-extra`** (`mdgen.rs:228,299`, `webgen.rs:249`) have inline reasons but **no ledger entry**, which that file's own four-criterion rule (`:17`) requires. | XS |
+
+### §C.7-ADDENDUM — the `renderer/Thread.zig` fix, and what the G3b crate map actually covers [small-deferrals lane, 2026-07-31]
+
+**The comment drift is closed.** Scoped run
+`check_comment_coverage.py --crate core --ref-files renderer/Thread.zig --port-glob
+'crates/rustty-core/src/renderer_seam.rs'` went from **missing=19** to **missing=3**.
+Restored in `renderer_seam.rs`: the `must_draw_from_app_thread` doc pair
+(`Thread.zig:22-27`), `"In the future, we should expose this on the thread struct."`
+(`:219`), the OpenGL thread-local half of the `threadEnter` note (`:251`), the
+DisplayLink/forced-updates paragraph and `"as important as when we're focused"` in
+`setQosClass` (`:291-293,298`), `"If our config says to always animate, we do so."`
+(`:319`), the five-line "not stopping any cursor timers" note (`:394-399`),
+`"Mailbox producers should wake up our thread after publishing."` (`:560`), the three
+`"This shouldn't happen so we log it."` callbacks (`:617,641,680`), the `.visible`
+mailbox sentence (`:647`), and the dead `prepFrameCallback` libuv block (`:725-729`).
+
+The **3 residual** rows are the `Mailbox` doc triple (`Thread.zig:34-36`). They are a
+SCOPE artifact, not a drop: `renderer/Thread.zig` is split across TWO port files, and
+those three lines live verbatim in `crates/rustty-renderer/src/thread.rs:19-21`. A run
+with `--port-glob crates/rustty-renderer/src/thread.rs` does not report them.
+Union coverage over both files is **148/148**. Mutation-proved: deleting the restored
+`:560` sentence takes the scoped run 3 → 4 missing; reverted in place → 3.
+
+**Why `renderer` is absent from `w10/g3b_delta_table.txt` — the crate map is NOT the
+cause.** `_gatelib.crate_map()` (from `.port/phase-0/inventory/tests-summary.json`,
+the PORT_PLAN file→crate partition) has **30 crates / 512 oracle files**, and
+`renderer` IS one of them (35 files, incl. `renderer/Thread.zig`).
+`G.workspace_crates()` drops only `xtask` (no `crates/rustty-xtask/`), leaving **29**.
+
+The 22 in the delta table are the crates that pass `G.is_claimed_done(crate)`. Without
+`--strict` / `--crate` / a scope override the gate **`continue`s past every crate whose
+`PORT STATUS:` is not in {done, complete, parity, ported, final}** — silently, with no
+line printed. The seven skipped:
+
+| crate | declared `PORT STATUS` | oracle files |
+|---|---|---|
+| `apprt` | `in-progress` | 57 |
+| `apprt-api` | `in progress` | 5 |
+| `bin` (`crates/rustty`) | `c6` | 7 |
+| `cfg-fmt` | `stub` | 2 |
+| `font` | `in progress` | 50 |
+| `input` | `stub` | 13 |
+| `renderer` | `in progress` | 35 |
+
+That is **169 of 512 oracle files (33%) invisible to the default G3b run** — including
+`renderer/Thread.zig`, whose 19 dropped comments the crate-level gate would never have
+printed even after the `--ref-files` vacuity fix.
+
+Two further structural holes worth recording (NOT fixed here — reported first, per the
+lane's instructions):
+
+1. **The default skip is silent.** `check_comment_coverage.py` prints
+   `"G3b [crate]: no ported Rust yet (progress)"` when a crate has zero `.rs` files, but
+   prints *nothing at all* for a crate skipped by the not-done predicate. A reader of
+   `g3b_delta_table.txt` cannot tell a covered crate from an unexamined one. A one-line
+   `"G3b [renderer]: SKIPPED (status 'in progress')"` would make the 22-vs-29 gap
+   self-evident. Cheap, and it changes no verdict.
+2. **The crate map partitions oracle files, so a cross-crate port placement is
+   structurally invisible.** `renderer/Thread.zig` is assigned to `renderer`, but most
+   of it is ported into `crates/rustty-core/src/renderer_seam.rs`. Even when `renderer`
+   graduates to done, its whole-crate run will compare `renderer/*.zig` against
+   `crates/rustty-renderer/src/**` only, and `renderer_seam.rs` will never count — so
+   those 148 reference comments would report as mass drops while the ported comments sit
+   one crate away, unseen. The same shape applies anywhere the port relocated a file
+   across the crate boundary. Fixing this needs a file→port-path map, not a
+   file→crate map; the gate's crate map cannot express it. **I did not expand the crate
+   map** — the honest fix is a different index, and it is a bigger change than this lane
+   should land unilaterally.
+
+**Coverage NOT claimed by the crate map at all.** It indexes ghostty's `src/**` only:
+every prefix in it is a `src/` path. Ports of ghostty's `pkg/**` vendored-Zig trees and
+the rustty-only crates have no G3b rows whatsoever — `rustty-font-shaper`,
+`rustty-oniguruma`, `rustty-xev` (libxev), `rustty-vaxis`, `rustty-zf`, `rustty-z2d`,
+`rustty-zigimg`, `rustty-wuffs`, `rustty-zigstd`, `rustty-helpgen`, `rustty-identity`,
+`rustty-apprt-c`, `rustty-web-canvas`, `rustty-wasm`. That is by construction (the map
+is the `src/**` partition), but it means "G3b GREEN" has never said anything about
+those crates' comment fidelity.
 
 ### Medium (M) — 6
 

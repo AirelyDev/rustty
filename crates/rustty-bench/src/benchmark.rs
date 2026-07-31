@@ -10,6 +10,9 @@
 use core::ffi::c_void;
 use std::time::Instant;
 
+#[cfg(target_os = "macos")]
+use rustty_os::macos::{signpost, Log};
+
 /// `*const fn(ptr: *anyopaque) Error!void` — a benchmark step/setup fn pointer.
 type StepFn = unsafe fn(*mut c_void) -> Result<(), Error>;
 /// `*const fn(ptr: *anyopaque) void` — a benchmark teardown fn pointer.
@@ -82,14 +85,6 @@ impl Benchmark {
         // the results in Instruments. There's a lot of nasty comptime stuff
         // here but its just to ensure this does nothing on other platforms.
         //
-        // DEFERRED-SEAM (§5, DEFERRALS.md): rustty has no `os_signpost` binding
-        // today. The macOS Instruments interval is ported as a no-op, with the
-        // entire reference body preserved verbatim below; it awaits the macOS
-        // binding tier (`build_config.bundle_id` + `macos.os.signpost.*` +
-        // `macos.os.Log`). On non-Darwin the reference `void` else-branch is
-        // nothing, and the `defer intervalEnd + log.release()` is the same empty
-        // drop-guard. This is the ONE platform-gated seam in the runner.
-        //
         //     const signpost_name = "ghostty";
         //     const signpost: if (builtin.target.os.tag.isDarwin()) struct {
         //         log: *macos.os.Log,
@@ -112,10 +107,31 @@ impl Benchmark {
         //         );
         //         signpost.log.release();
         //     };
+        //
+        // PORT NOTE: the reference's `comptime builtin.target.os.tag.isDarwin()`
+        // switch is `#[cfg(target_os = "macos")]` here — the non-Darwin arms are
+        // a `void` binding and an empty `defer`, i.e. literally nothing, which is
+        // exactly an absent binding + absent guard. The `defer` becomes a
+        // drop-guard declared AFTER `_teardown`, so it runs FIRST, matching
+        // Zig's LIFO `defer` order.
+        //
+        // R2: the signpost name is the product name (`"ghostty"` upstream).
         #[cfg(target_os = "macos")]
-        {
-            // no-op today (see DEFERRED-SEAM above).
-        }
+        let _signpost = {
+            let signpost_name = std::ffi::CString::new(rustty_identity::APP_NAME)
+                .expect("APP_NAME is NUL-free by construction");
+            let bundle_id = std::ffi::CString::new(rustty_build_config::BUNDLE_ID)
+                .expect("BUNDLE_ID is NUL-free by construction");
+            signpost::init();
+            let log = Log::create(&bundle_id, signpost::category::POINTS_OF_INTEREST);
+            let id = signpost::Id::for_pointer(&log, self.ptr);
+            signpost::interval_begin(&log, id, &signpost_name);
+            SignpostGuard {
+                log: Some(log),
+                id,
+                name: signpost_name,
+            }
+        };
 
         // const start = std.time.Instant.now() catch return error.BenchmarkFailed;
         //
@@ -161,6 +177,27 @@ impl Benchmark {
         //
         // PORT NOTE: the `loop {}` above only exits via `return`, so this point
         // is unreachable — Rust proves it (the loop has no `break`).
+    }
+}
+
+/// The faithful `defer if (comptime isDarwin()) { intervalEnd(...); release(); }`
+/// — the closing half of the Instruments interval opened in [`Benchmark::run`].
+/// It owns the `CString` name because the reference's `signpost_name` is a
+/// comptime literal that outlives the whole function.
+#[cfg(target_os = "macos")]
+struct SignpostGuard {
+    log: Option<Log>,
+    id: signpost::Id,
+    name: std::ffi::CString,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for SignpostGuard {
+    fn drop(&mut self) {
+        // `Log::release` consumes the handle, so it must be moved out.
+        let Some(log) = self.log.take() else { return };
+        signpost::interval_end(&log, self.id, &self.name);
+        log.release();
     }
 }
 

@@ -32,9 +32,18 @@ path = "src/main_bench.rs"
 identity-oracle = ["rustty-identity/identity-oracle"]
 
 [dependencies]
-# Pulled in solely so `identity-oracle` (above) has a string-identity crate to flip;
-# this crate's own logic reads no identity values today.
+# `identity-oracle` (above) flips this crate's string identity; `benchmark.rs`'s
+# macOS signpost interval reads `APP_NAME` for the R2 signpost name (upstream's
+# comptime `const signpost_name = "ghostty"`).
 rustty-identity = { workspace = true }
+# `build_config.bundle_id` — the os_log subsystem of the macOS Instruments
+# signpost interval (`Benchmark.zig:50`). Member 2, strictly-earlier than
+# rustty-bench (28) — acyclic (R4).
+rustty-build-config = { workspace = true }
+# `macos.os.Log` + `macos.os.signpost.*` — the Instruments interval in
+# `Benchmark.run` (`Benchmark.zig:45-66`). Member 10, strictly-earlier than
+# rustty-bench (28) — acyclic (R4).
+rustty-os = { workspace = true }
 # PERF(port): `simd` restores the reference bench binary's build configuration —
 # ghostty-bench is built with `build_options.simd = true` (src/build/Config.zig:34,
 # the default everywhere but wasm), so its terminal-stream bench runs the SIMD

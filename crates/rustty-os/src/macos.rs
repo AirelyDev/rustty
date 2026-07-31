@@ -251,6 +251,14 @@ mod oslog {
             Log(unsafe { os_log_create(subsystem.as_ptr(), category.as_ptr()) })
         }
 
+        /// The raw `os_log_t`. The reference's `Log` is a Zig `opaque {}`, so
+        /// every signpost call site simply writes `@ptrCast(log)`
+        /// (`pkg/macos/os/signpost.zig:64,113`); Rust needs an explicit
+        /// accessor. Crate-internal: the handle is not part of the public API.
+        pub(super) fn as_raw(&self) -> *mut c_void {
+            self.0
+        }
+
         // pub fn release(self: *Log) void { c.os_release(self); }
         pub fn release(self) {
             // SAFETY: self.0 came from os_log_create and is released once
@@ -293,6 +301,340 @@ mod oslog {
         Debug = 0x02,   // OS_LOG_TYPE_DEBUG
         Err = 0x10,     // OS_LOG_TYPE_ERROR
         Fault = 0x11,   // OS_LOG_TYPE_FAULT
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PORTS: ghostty pkg/macos/os/signpost.zig — the `os_signpost` (Instruments)
+// binding layered on the `os_log` handle above. R3: binds the SAME libSystem
+// API the reference binds (`os_signpost_enabled`,
+// `os_signpost_id_{generate,make_with_pointer}`,
+// `_os_signpost_emit_with_name_impl`), all of which are real exported functions
+// (`<os/signpost.h>`), so no C shim is needed.
+// ---------------------------------------------------------------------------
+pub mod signpost {
+    use std::ffi::{c_void, CStr};
+    use std::mem::MaybeUninit;
+    use std::os::raw::{c_char, c_int};
+    use std::sync::atomic::{AtomicPtr, Ordering};
+
+    use super::Log;
+
+    extern "C" {
+        // extern "c" fn dladdr(addr: ?*const anyopaque, info: *DlInfo) c_int;
+        fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int;
+        // bool os_signpost_enabled(os_log_t log);
+        fn os_signpost_enabled(log: *mut c_void) -> bool;
+        // os_signpost_id_t os_signpost_id_generate(os_log_t log);
+        fn os_signpost_id_generate(log: *mut c_void) -> u64;
+        // os_signpost_id_t os_signpost_id_make_with_pointer(os_log_t, const void *);
+        fn os_signpost_id_make_with_pointer(log: *mut c_void, ptr: *const c_void) -> u64;
+        // void _os_signpost_emit_with_name_impl(void *dso, os_log_t log,
+        //     os_signpost_type_t type, os_signpost_id_t spid, const char *name,
+        //     const char *format, uint8_t *buf, uint32_t size);
+        fn _os_signpost_emit_with_name_impl(
+            dso: *mut c_void,
+            log: *mut c_void,
+            typ: u8,
+            spid: u64,
+            name: *const c_char,
+            format: *const c_char,
+            buf: *mut u8,
+            size: u32,
+        );
+    }
+
+    // const DlInfo = extern struct { ... };
+    #[repr(C)]
+    struct DlInfo {
+        /// Pathname of shared object
+        dli_fname: *const c_char,
+        /// Base address of shared object
+        dli_fbase: *mut c_void,
+        /// Name of nearest symbol
+        dli_sname: *const c_char,
+        /// Address of nearest symbol
+        dli_saddr: *mut c_void,
+    }
+
+    /// PORTS: `signpost.zig:44` `var __dso_handle: ?*c.mach_header = null`.
+    ///
+    /// Note this is NOT the linker-provided `__dso_handle` symbol — the
+    /// reference deliberately shadows it with a module-private variable it
+    /// populates itself (its comment: "This should REALLY be an extern var that
+    /// is populated by the linker, but there is a Zig bug"). The port keeps the
+    /// same self-populated shape rather than depending on the linker symbol, so
+    /// the handle is correct whether the caller is an executable, a `cdylib` or
+    /// a test binary. `AtomicPtr` because Zig's global is reachable from any
+    /// thread and Rust has no `static mut` without `unsafe`.
+    static DSO_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+    /// PORTS: `signpost.zig:12-41` `init`. This should be called once at the
+    /// start of the program to initialize some required state for signpost
+    /// logging. Idempotent (the reference's `if (__dso_handle != null) return`).
+    pub fn init() {
+        // if (__dso_handle != null) return;
+        if !DSO_HANDLE.load(Ordering::Acquire).is_null() {
+            return;
+        }
+
+        // The reference resolves the root module's `main` (or, in a library, the
+        // first function declared in the root module) purely to have SOME symbol
+        // that lives inside our own image; its own comment says "I actually
+        // don't know if this is all required". Rust has no root-module
+        // reflection, and does not need it: `init` itself is such a symbol, and
+        // it is in the same image by construction.
+        let sym = init as *const () as *const c_void;
+
+        // var info: DlInfo = undefined;
+        let mut info: MaybeUninit<DlInfo> = MaybeUninit::uninit();
+        // const result = dladdr(sym, &info);
+        // SAFETY: `sym` is a live code address in this image and `info` is a
+        // properly aligned, writable `DlInfo`. `dladdr` only writes `info` on
+        // success (nonzero return), which the assert below requires.
+        let result = unsafe { dladdr(sym, info.as_mut_ptr()) };
+        // assert(result != 0);
+        assert!(result != 0);
+        // SAFETY: `dladdr` returned nonzero, so it filled `info`.
+        let info = unsafe { info.assume_init() };
+
+        // __dso_handle = @ptrCast(@alignCast(info.dli_fbase));
+        DSO_HANDLE.store(info.dli_fbase, Ordering::Release);
+    }
+
+    /// PORTS: `signpost.zig:63-65` `enabled`. Checks whether signpost logging is
+    /// enabled for the given log handle. Returns true if signposts will be
+    /// recorded for this log, false otherwise. This can be used to avoid
+    /// expensive operations when signpost logging is disabled.
+    ///
+    /// <https://developer.apple.com/documentation/os/os_signpost_enabled?language=objc>
+    pub fn enabled(log: &Log) -> bool {
+        // SAFETY: `log` is a live `os_log_t` from `os_log_create`.
+        unsafe { os_signpost_enabled(log.as_raw()) }
+    }
+
+    /// PORTS: `signpost.zig:73-79` `emitEvent`. Emits a signpost event — a
+    /// single point in time marker. Events are useful for marking when specific
+    /// actions occur, such as user interactions, state changes, or other
+    /// discrete occurrences. The event will appear as a vertical line in
+    /// Instruments.
+    ///
+    /// <https://developer.apple.com/documentation/os/os_signpost_event_emit?language=objc>
+    pub fn emit_event(log: &Log, id: Id, name: &CStr) {
+        emit_with_name(log, id, Type::Event, name);
+    }
+
+    /// PORTS: `signpost.zig:88-90` `intervalBegin`. Marks the beginning of a
+    /// time interval. Use this with [`interval_end`] to measure the duration of
+    /// operations. The same ID must be used for both the begin and end calls.
+    /// Intervals appear as horizontal bars in the Instruments timeline.
+    ///
+    /// <https://developer.apple.com/documentation/os/os_signpost_interval_begin?language=objc>
+    pub fn interval_begin(log: &Log, id: Id, name: &CStr) {
+        emit_with_name(log, id, Type::IntervalBegin, name);
+    }
+
+    /// PORTS: `signpost.zig:98-100` `intervalEnd`. Marks the end of a time
+    /// interval. Must be paired with a prior [`interval_begin`] call using the
+    /// same ID. The name should match the name used in `interval_begin`.
+    /// Instruments will calculate and display the duration between begin and
+    /// end.
+    ///
+    /// <https://developer.apple.com/documentation/os/os_signpost_interval_end?language=objc>
+    pub fn interval_end(log: &Log, id: Id, name: &CStr) {
+        emit_with_name(log, id, Type::IntervalEnd, name);
+    }
+
+    /// PORTS: `signpost.zig:103-124` `emitWithName`. The internal function to
+    /// emit a signpost with a specific name.
+    fn emit_with_name(log: &Log, id: Id, typ: Type, name: &CStr) {
+        // Init must be called by this point.
+        // assert(__dso_handle != null);
+        let dso = DSO_HANDLE.load(Ordering::Acquire);
+        assert!(!dso.is_null());
+
+        // var buf: [2]u8 = @splat(0);
+        let mut buf: [u8; 2] = [0; 2];
+        // SAFETY: `dso` is this image's mach header (asserted non-null), `log`
+        // is a live `os_log_t`, `name` and the empty format string are valid
+        // NUL-terminated C strings for the call, and `buf` is a writable
+        // 2-byte scratch buffer whose length is passed alongside it — exactly
+        // the reference's argument shape.
+        unsafe {
+            _os_signpost_emit_with_name_impl(
+                dso,
+                log.as_raw(),
+                typ as u8,
+                id.0,
+                name.as_ptr(),
+                c"".as_ptr(),
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+            );
+        }
+    }
+
+    /// PORTS: `signpost.zig:127-165` `Id`.
+    ///
+    /// <https://developer.apple.com/documentation/os/os_signpost_id_t?language=objc>
+    ///
+    /// The reference is a non-exhaustive `enum(u64)` (the trailing `_`), i.e. any
+    /// `u64` is a valid value; a Rust `enum` cannot model that, so this is the
+    /// equivalent newtype with the three named values as associated constants.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Id(pub u64);
+
+    impl Id {
+        /// `null = 0` — `OS_SIGNPOST_ID_NULL`.
+        pub const NULL: Id = Id(0);
+        /// `invalid = 0xFFFFFFFFFFFFFFFF` — `OS_SIGNPOST_ID_INVALID`.
+        pub const INVALID: Id = Id(0xFFFF_FFFF_FFFF_FFFF);
+        /// `exclusive = 0xEEEEB0B5B2B2EEEE` — `OS_SIGNPOST_ID_EXCLUSIVE`.
+        pub const EXCLUSIVE: Id = Id(0xEEEE_B0B5_B2B2_EEEE);
+
+        /// PORTS: `signpost.zig:137-139` `generate`. Generates a new signpost ID
+        /// for use with signpost operations. The ID is unique for the given log
+        /// handle and can be used to track asynchronous operations or mark
+        /// specific points of interest in the code.
+        ///
+        /// <https://developer.apple.com/documentation/os/os_signpost_id_generate?language=objc>
+        pub fn generate(log: &Log) -> Id {
+            // SAFETY: `log` is a live `os_log_t`.
+            Id(unsafe { os_signpost_id_generate(log.as_raw()) })
+        }
+
+        /// PORTS: `signpost.zig:148-153` `forPointer`. Creates a signpost ID
+        /// based on a pointer value. This is useful for tracking operations
+        /// associated with a specific object or memory location. The same
+        /// pointer will always generate the same ID for a given log handle,
+        /// allowing correlation of signpost events. Pass null to get the null
+        /// signpost ID.
+        ///
+        /// <https://developer.apple.com/documentation/os/os_signpost_id_for_pointer?language=objc>
+        // The reference is a SAFE fn taking `?*anyopaque`, and rightly so:
+        // `os_signpost_id_make_with_pointer` only hashes the address into an id,
+        // it never dereferences it (null is explicitly allowed and yields the
+        // null id). Clippy cannot see through the FFI boundary, so it assumes
+        // the worst; marking this `unsafe` would be a false contract.
+        #[allow(clippy::not_unsafe_ptr_arg_deref)]
+        pub fn for_pointer(log: &Log, ptr: *const c_void) -> Id {
+            // SAFETY: `log` is a live `os_log_t`; `ptr` is only hashed, never
+            // dereferenced (it may be null, as the reference's `?*anyopaque`
+            // allows).
+            Id(unsafe { os_signpost_id_make_with_pointer(log.as_raw(), ptr) })
+        }
+    }
+
+    /// PORTS: `signpost.zig:168-175` `Type`.
+    ///
+    /// <https://developer.apple.com/documentation/os/ossignposttype?language=objc>
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    pub enum Type {
+        Event = 0,         // OS_SIGNPOST_EVENT
+        IntervalBegin = 1, // OS_SIGNPOST_INTERVAL_BEGIN
+        IntervalEnd = 2,   // OS_SIGNPOST_INTERVAL_END
+    }
+
+    impl Type {
+        /// `pub const mask: u8 = 0x03;` — `OS_SIGNPOST_TYPE_MASK`.
+        pub const MASK: u8 = 0x03;
+    }
+
+    /// PORTS: `signpost.zig:177-195` `Category`. Special `os_log` category values
+    /// that surface in Instruments and other tooling.
+    pub mod category {
+        use std::ffi::CStr;
+
+        /// Points of Interest appear as a dedicated track in Instruments.
+        /// Use this for high-level application events that help understand
+        /// the flow of your application.
+        pub const POINTS_OF_INTEREST: &CStr = c"PointsOfInterest";
+
+        /// Dynamic Tracing category enables runtime-configurable logging.
+        /// Signposts in this category can be enabled/disabled dynamically
+        /// without recompiling.
+        pub const DYNAMIC_TRACING: &CStr = c"DynamicTracing";
+
+        /// Dynamic Stack Tracing category captures call stacks at signpost
+        /// events. This provides deeper debugging information but has higher
+        /// performance overhead.
+        pub const DYNAMIC_STACK_TRACING: &CStr = c"DynamicStackTracing";
+    }
+
+    // test { _ = Id; } / test enabled / test "intervals" (signpost.zig:197-215)
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::macos::Log;
+
+        // R2: the reference's literal subsystem is "com.mitchellh.ghostty"; the
+        // KAT uses rustty's bundle id, exactly as the sibling `log_tests` does.
+        const SUBSYSTEM: &CStr = c"io.airely.rustty";
+
+        // test "generate ID"
+        #[test]
+        #[cfg_attr(miri, ignore)] // ffi: real libSystem os_signpost calls
+        fn generate_id() {
+            // We can't really test the return value because it may return null
+            // if signposts are disabled.
+            let log = Log::create(SUBSYSTEM, c"test");
+            let id = Id::generate(&log);
+            assert_ne!(id, Id::INVALID);
+        }
+
+        // test "generate ID for pointer"
+        #[test]
+        #[cfg_attr(miri, ignore)] // ffi: real libSystem os_signpost calls
+        fn generate_id_for_pointer() {
+            let foo: usize = 0x1234;
+            let log = Log::create(SUBSYSTEM, c"test");
+            let id = Id::for_pointer(&log, std::ptr::addr_of!(foo).cast());
+            assert_ne!(id, Id::NULL);
+        }
+
+        // test enabled
+        #[test]
+        #[cfg_attr(miri, ignore)] // ffi: real libSystem os_signpost calls
+        fn enabled_smoke() {
+            let _ = enabled(&Log::create(SUBSYSTEM, c"test"));
+        }
+
+        // test "intervals"
+        #[test]
+        #[cfg_attr(miri, ignore)] // ffi: real libSystem os_signpost calls
+        fn intervals() {
+            init();
+            // `init` populated the image handle; without it `emit_with_name`
+            // would assert (and the reference would too).
+            assert!(!DSO_HANDLE.load(Ordering::Acquire).is_null());
+
+            let log = Log::create(SUBSYSTEM, category::POINTS_OF_INTEREST);
+
+            // Test that we can begin and end an interval.
+            let id = Id::generate(&log);
+            interval_begin(&log, id, c"Test Interval");
+            // The reference's test stops at `intervalBegin`; closing the
+            // interval and emitting an event exercises the other two arms of
+            // `emitWithName` over the same live handle.
+            emit_event(&log, id, c"Test Event");
+            interval_end(&log, id, c"Test Interval");
+
+            log.release();
+        }
+
+        // `init` is idempotent (`signpost.zig:13`) and safe to call from any
+        // order relative to the other tests, which cargo runs in parallel
+        // threads.
+        #[test]
+        #[cfg_attr(miri, ignore)] // ffi: real libSystem os_signpost calls
+        fn init_is_idempotent() {
+            init();
+            let first = DSO_HANDLE.load(Ordering::Acquire);
+            assert!(!first.is_null());
+            init();
+            assert_eq!(first, DSO_HANDLE.load(Ordering::Acquire));
+        }
     }
 }
 

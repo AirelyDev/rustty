@@ -88,6 +88,10 @@ const DRAW_INTERVAL: u64 = 8; // 120 FPS
 const CURSOR_BLINK_INTERVAL: u64 = 600;
 
 // PORT NOTE (Thread.zig:22-30):
+//   /// Whether calls to `drawFrame` must be done from the app thread.
+//   ///
+//   /// If this is `true` then we send a `redraw_surface` message to the apprt
+//   /// whenever we need to draw instead of calling `drawFrame` directly.
 //   const must_draw_from_app_thread =
 //       if (@hasDecl(apprt.App, "must_draw_from_app_thread"))
 //           apprt.App.must_draw_from_app_thread
@@ -956,10 +960,12 @@ where
     pub unsafe fn threadMain(self_: *mut Thread<A>) {
         // Call child function so we can use errors...
         // self.threadMain_() catch |err| {
+        //     // In the future, we should expose this on the thread struct.
         //     log.warn("error in renderer err={}", .{err});
         // };
         if let Err(_err) = unsafe { Self::threadMain_(self_) } {
             let _ = &_err;
+            // In the future, we should expose this on the thread struct.
             // log.warn("error in renderer err={}", .{err});
         }
     }
@@ -1014,7 +1020,8 @@ where
         let _loop_exit = LoopExitGuard(unsafe { (*self_).renderer });
 
         // Run our thread start/end callbacks. This is important because some
-        // renderers have to do per-thread setup.
+        // renderers have to do per-thread setup. For example, OpenGL has to set
+        // some thread-local state since that is how it works.
         // try self.renderer.threadEnter(self.surface);
         // defer self.renderer.threadExit();
         unsafe { (*(*self_).renderer).0.thread_enter((*self_).surface) }?;
@@ -1083,12 +1090,17 @@ where
                 // If we aren't visible (our view is fully occluded) then we
                 // always drop our rendering priority down because it's just
                 // mostly wasted work.
+                //
+                // The renderer itself should be doing this as well (for example
+                // Metal will stop our DisplayLink) but this also helps with
+                // general forced updates and CPU usage i.e. a rebuild cells call.
                 // if (!self.flags.visible) break :class .utility;
                 if !unsafe { (*self_).flags.visible } {
                     internal_os::macos::QosClass::utility
                 }
                 // If we're not focused, but we're visible, then we set a higher
-                // than default priority because framerates still matter.
+                // than default priority because framerates still matter but it
+                // isn't as important as when we're focused.
                 // if (!self.flags.focused) break :class .user_initiated;
                 else if !unsafe { (*self_).flags.focused } {
                     internal_os::macos::QosClass::user_initiated
@@ -1121,6 +1133,7 @@ where
             // if (@hasDecl(rendererpkg.Renderer, "hasAnimations") and
             //     self.renderer.hasAnimations())  (@hasDecl TRUE for Metal)
             if unsafe { (*(*self_).renderer).0.has_animations() } {
+                // If our config says to always animate, we do so.
                 // switch (self.config.custom_shader_animation) {
                 match unsafe { (*self_).config.custom_shader_animation } {
                     // .always => break :skip,
@@ -1241,9 +1254,12 @@ where
                     // self.renderer.setVisible(v);
                     unsafe { (*(*self_).renderer).0.set_visible(v) };
 
-                    // Note that we're explicitly today not stopping any cursor
-                    // timers, draw timers, etc. ... check the visible state
-                    // themselves to control their behavior.
+                    // Note that we're explicitly today not stopping any
+                    // cursor timers, draw timers, etc. These things have very
+                    // little resource cost and properly maintaining their active
+                    // state across different transitions is going to be bug-prone,
+                    // so its easier to just let them keep firing and have them
+                    // check the visible state themselves to control their behavior.
                 }
 
                 // .focus => |v| focus: {
@@ -1513,7 +1529,8 @@ where
 
         // const t = self_.?;  (non-null by construction)
 
-        // When we wake up, we check the mailbox.
+        // When we wake up, we check the mailbox. Mailbox producers should
+        // wake up our thread after publishing.
         // t.drainMailbox() catch |err| log.err("error draining mailbox err={}", .{err});
         if let Err(_err) = Self::drainMailbox(self_) {
             // log.err("error draining mailbox err={}", .{err});
@@ -1580,7 +1597,11 @@ where
         if r.is_err() {
             unreachable!()
         }
-        // const t: *Thread = self_ orelse { log.warn(...); return .disarm; };
+        // const t: *Thread = self_ orelse {
+        //     // This shouldn't happen so we log it.
+        //     log.warn("render callback fired without data set", .{});
+        //     return .disarm;
+        // };
         // (non-null by construction)
 
         // Draw
@@ -1619,9 +1640,14 @@ where
         if r.is_err() {
             unreachable!()
         }
-        // const t: *Thread = self_ orelse { log.warn(...); return .disarm; };
+        // const t: *Thread = self_ orelse {
+        //     // This shouldn't happen so we log it.
+        //     log.warn("render callback fired without data set", .{});
+        //     return .disarm;
+        // };
 
-        // If we're not visible there's no point spending CPU rebuilding cells.
+        // If we're not visible there's no point spending CPU rebuilding cells —
+        // we'll catch up when the .visible mailbox message flips us back on.
         // if (!t.flags.visible) return .disarm;
         if !unsafe { (*self_).flags.visible } {
             return xev::CallbackAction::Disarm;
@@ -1672,7 +1698,11 @@ where
             }
         }
 
-        // const t: *Thread = self_ orelse { log.warn(...); return .disarm; };
+        // const t: *Thread = self_ orelse {
+        //     // This shouldn't happen so we log it.
+        //     log.warn("render callback fired without data set", .{});
+        //     return .disarm;
+        // };
 
         // t.flags.cursor_blink_visible = !t.flags.cursor_blink_visible;
         unsafe { (*self_).flags.cursor_blink_visible = !(*self_).flags.cursor_blink_visible };
@@ -1722,6 +1752,16 @@ where
         // return .disarm;
         xev::CallbackAction::Disarm
     }
+
+    // The reference keeps a commented-out libuv-era callback here
+    // (`Thread.zig:725-729`), preserved verbatim (R1) — it is dead in the
+    // reference too, so there is nothing to port beyond the text:
+    //
+    // fn prepFrameCallback(h: *libuv.Prepare) void {
+    //     _ = h;
+    //
+    //     tracy.frameMark();
+    // }
 
     // fn stopCallback(self_: ?*Thread, _: *xev.Loop, _: *xev.Completion,
     //     r: xev.Async.WaitError!void) xev.CallbackAction {

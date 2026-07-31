@@ -2750,6 +2750,28 @@ E5). NOTE the reference gate is `isDarwin()` (macOS OR iOS); rustty uses `target
 71 == 71 completeness therefore holds on a Darwin (macOS) build, matching the reference
 (which likewise emits all 71 only on Darwin).
 
+> **✅ CORRECTED — small-deferrals lane, 2026-07-31** (re-audit §C item 6, "iOS
+> Darwin export gating"). The narrower `target_os = "macos"` gate was wrong: iOS is a
+> first-class host of this C API in BOTH trees. The reference ships
+> `macos/Sources/App/iOS/iOSApp.swift`, which rustty already ports at the same path
+> (`Rustty_iOSApp` calling `rustty_init` and driving `Rustty.Terminal`), and the
+> standing scope rule is "everything is in scope if ghostty supports it". All six
+> Darwin exports are now `#[cfg(any(target_os = "macos", target_os = "ios"))]`,
+> matching `isDarwin()` and the gating already used for `Platform`/`MacOS`/`IOS` in
+> `crates/rustty-apprt/src/embedded.rs:730,747`. None of the six bodies is
+> macOS-exclusive (CoreText, dcimgui's Metal backend and the renderer mailbox all
+> exist on iOS). The private `CGS*` window-blur externs and
+> `rustty_set_window_background_blur`'s body KEEP the narrower `target_os = "macos"`
+> gate — faithfully, since the reference guards that body with
+> `builtin.target.os.tag != .macos`, not with `isDarwin()`, and the Rust
+> `#[link(name = "CoreGraphics", kind = "framework")]` directive is macOS-only.
+> **NOT VERIFIED BY BUILD:** no iOS target is installed
+> (`rustup target list --installed` → aarch64-apple-darwin, wasm32-unknown-unknown,
+> wasm32-wasip1, x86_64-pc-windows-msvc), so the `target_os = "ios"` arm is
+> compiled by nothing in this repo. The macOS arm is unchanged and fully green
+> (`cargo test -p rustty-apprt-c`: 14 passed incl. the C-ABI smoke + the six Darwin
+> export KATs). iOS codegen is verification debt.
+
 **Gate deltas (E10):** NO new `rustty-apprt-c` Cargo dep — E10's `App`/`Surface`/
 `Inspector`/`Text` are all already imported (E6/E7/E9). `apprt_embedded` MAP row
 unchanged (embedded.zig 0-test; the exports land under the existing `{RSAPPRTC}/**/*.rs`
@@ -6753,6 +6775,27 @@ exclusion.**
 > superseded proxy. Fix: invert the map to `Tag -> {name, proxy}`.
 > **STILL OPEN, size S.**
 > See `.port/phase-3/DEFERRAL_REAUDIT.md` §C/§D.
+>
+> **✅ CLOSED — small-deferrals lane, 2026-07-31.** The oracle's map shape is now
+> ported. `names` is `HashMap<Tag, u32>` (`Globals.zig:17` `EnumMap(Tag, Binding)`
+> minus the type-erased `Binding.proxy`, which lives in the typed `Option<…>`
+> field; `Binding.name` is the value). `bind_global` routes every arm through a new
+> `record_binding(tag, name, superseded)` that, when the tag was ALREADY bound,
+> runs `on_global_removed(tag)` and destroys the superseded proxy — the reference's
+> `Globals.zig:161-172`. `remove_global(name)` now iterates the Tag-keyed map
+> comparing `Binding.name` (`Globals.zig:182-183`), matching the reference exactly.
+> `proxy.destroy()` (`wl_proxy_destroy`, a client-side free with no protocol
+> request) maps to `Connection::backend().destroy_object(&ObjectId)` — merely
+> dropping the Rust handle leaves the object registered in the backend's object
+> map, which is the leak the old PORT NOTE wrongly claimed was equivalent.
+> **NOT COMPILED HERE:** this host has no gtk4/wayland (`pkg-config` absent,
+> `brew --prefix gtk4` unset), so `cargo check --workspace` never builds this
+> module and the wayland lane's tests do not run on macOS. What WAS verified:
+> `rustfmt --check` parses the file clean, and the three wayland-rs APIs the
+> rework depends on (`Proxy::id()`, `Connection::backend().destroy_object`, the
+> `Hash`-derived Tag key) were type-checked in an isolated
+> `wayland-client 0.31`-only crate. Full compile + the fake-compositor KATs are
+> Linux-CI debt.
 
 
 **[RECLASSIFIED — WS19 T9, 2026-07-29, audit row O8.]** Previously filed as an open
@@ -7039,6 +7082,29 @@ executed code.
 > `src/benchmark/Benchmark.zig:45-66` + `pkg/macos/os/signpost.zig`.
 > **STILL OPEN, size S.**
 > See `.port/phase-3/DEFERRAL_REAUDIT.md` §C/§D.
+>
+> **✅ CLOSED — small-deferrals lane, 2026-07-31.** `pkg/macos/os/signpost.zig` is
+> ported in full as `rustty_os::macos::signpost` (`crates/rustty-os/src/macos.rs`):
+> `init` (the self-populated `__dso_handle` via `dladdr`), `enabled`, `emit_event`,
+> `interval_begin`, `interval_end`, `emit_with_name`, `Id` (+ `generate` /
+> `for_pointer` / the three named ids), `Type` (+ `MASK`) and `category`. R3: it
+> binds the same libSystem symbols the reference binds
+> (`os_signpost_enabled`, `os_signpost_id_generate`,
+> `os_signpost_id_make_with_pointer`, `_os_signpost_emit_with_name_impl`), all real
+> exported functions in `<os/signpost.h>` — no C shim needed. `Benchmark::run`
+> (`crates/rustty-bench/src/benchmark.rs`) now opens the real interval and closes
+> it with a `SignpostGuard` drop-guard declared AFTER `_teardown`, so it runs FIRST,
+> matching Zig's LIFO `defer` order. Subsystem = `build_config.bundle_id`; the
+> signpost name is `rustty_identity::APP_NAME` (R2 for the reference's comptime
+> `"ghostty"`). rustty-bench gains deps on `rustty-build-config` (member 2) and
+> `rustty-os` (member 10) — both strictly earlier than rustty-bench (28), acyclic.
+> **Verified on macOS/arm64:** 5 new signpost KATs (the reference's `test {_ = Id}`
+> / `test enabled` / `test "intervals"` plus an idempotency KAT) pass, and
+> `cargo test -p rustty-bench` is 19/19 green. **Mutation-proved twice:** storing a
+> null `__dso_handle` in `init` turns `rustty-bench`'s `benchmark::benchmark` RED
+> (`assertion failed: !dso.is_null()`), proving the bench wiring is live, not dead
+> code; returning `Id::NULL` from `for_pointer` turns `generate_id_for_pointer` RED.
+> Both reverted in place.
 
 
 **What diverges.** `Benchmark.zig:44-65` opens an `os_signpost` interval so a benchmark
@@ -7585,12 +7651,22 @@ The three still-live instances are reopened above.
 
 ## Still open — summary (full detail in the re-audit report §C)
 
-* **S/XS:** ~~`freetype-load-flags` silently ignored~~ and ~~termio `dcsCommand`
-  tmux arm is a no-op~~ — **both CLOSED 2026-07-31 (`fix-freetype-tmux`)**, see
-  their rows above;
-  wayland `bind_global` map shape + leaked proxy; `os_signpost` no-op;
-  `setNonblock` drain arm; iOS Darwin export gating; `renderer/Thread.zig` G3b
-  comment drift (11); `MIRI_EXCEPTIONS.md` missing 15 annotations.
+* **S/XS:** ~~`freetype-load-flags` silently ignored~~ (CLOSED 2026-07-31,
+  `fix-freetype-tmux` — and a second, unreported half: `Key::hash` omitted the
+  field, so two configs differing only in it shared one cached grid);
+  ~~termio `dcsCommand` tmux arm is a no-op~~ (CLOSED 2026-07-31,
+  `fix-freetype-tmux`);
+  ~~wayland `bind_global` map shape + leaked proxy~~ (CLOSED 2026-07-31,
+  `small-deferrals` — code-complete, NOT compiled on this host: no gtk4/wayland);
+  ~~`os_signpost` no-op~~ (CLOSED 2026-07-31, `small-deferrals`, mutation-proved);
+  `setNonblock` drain arm — **deliberately NOT fixed**: the oracle behaves
+  identically, so a fix would CREATE a divergence rather than discharge one;
+  ~~iOS Darwin export gating~~ (CLOSED 2026-07-31, `small-deferrals` — code-complete,
+  NOT compiled: no iOS rustup target);
+  ~~`renderer/Thread.zig` G3b comment drift~~ (CLOSED 2026-07-31, `small-deferrals`
+  — 19 restored, union coverage 148/148; the 3 residuals are a scope artifact of
+  the file being split across two port files);
+  ~~`MIRI_EXCEPTIONS.md` missing annotations~~ (discharged by the Miri re-audit).
 * **M:** `stream.zig` `Action` C-ABI union; `vt -> xev` fake module
   (`rustty-vt/src/search/thread.rs:1740`); macOS `xev.File`/`TCP`/`UDP`; libxev
   `c_api.zig`; uucode bump (G1); Windows termio spawn arms.

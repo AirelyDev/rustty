@@ -1277,9 +1277,11 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "rustty-args",
+ "rustty-build-config",
  "rustty-datastruct",
  "rustty-identity",
  "rustty-lib",
+ "rustty-os",
  "rustty-simd",
  "rustty-unicode",
  "rustty-vt",

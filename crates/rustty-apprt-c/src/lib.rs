@@ -31,7 +31,8 @@
 //! E8/E9 need a live surface (and the per-inspector sinks a live inspector, whose
 //! dcimgui `Inspector::init` is LIVE as of WS6). E10
 //! lands the misc + Darwin-gated tail — `rustty_set_window_background_blur` (a macOS
-//! objc/CGS leaf; non-macOS no-op) plus the six `#[cfg(target_os = "macos")]` Darwin
+//! objc/CGS leaf; non-macOS no-op) plus the six isDarwin-gated
+//! (`#[cfg(any(target_os = "macos", target_os = "ios"))]`) Darwin
 //! exports (`_surface_set_display_id`/`_quicklook_font`/`_quicklook_word`/
 //! `_inspector_metal_init`/`_metal_render`/`_metal_shutdown`): renderer/xev/coretext/
 //! objc/Metal seams (the metal trio delegate to the E4 backend, LIVE as of WS6). With
@@ -2698,13 +2699,28 @@ extern "C" {
 // (embedded.zig:1390-1396) so its `export fn`s are pulled into the C API only on
 // Darwin. That comptime force-reference has no runtime analogue (ported as a
 // comment note in `capi.rs`, E5): in rustty the six Darwin exports are plain
-// `#[cfg(target_os = "macos")]`-gated free functions the compiler includes
-// automatically when targeting Darwin. Each is a Phase-3 leaf per its subsystem
-// (renderer/xev for `set_display_id`, coretext for `quicklook_font`,
-// renderer_state/terminal for `quicklook_word`, objc/Metal for the three
-// `metal_*`). NOTE the reference gate is `isDarwin()` (macOS OR iOS); the rustty
-// gate is `target_os = "macos"` (the blueprint §3/§7 + E5 `capi.rs` decision —
-// the objc/Metal/coretext seams these reach are macOS-only in practice).
+// `#[cfg(any(target_os = "macos", target_os = "ios"))]`-gated free functions the
+// compiler includes automatically when targeting Darwin. Each is a Phase-3 leaf
+// per its subsystem (renderer/xev for `set_display_id`, coretext for
+// `quicklook_font`, renderer_state/terminal for `quicklook_word`, objc/Metal for
+// the three `metal_*`).
+//
+// The gate is `isDarwin()` — macOS **OR** iOS — exactly as the reference's
+// `builtin.target.os.tag.isDarwin()`, matching the isDarwin gating already used
+// for `Platform`/`MacOS`/`IOS` in `rustty-apprt/src/embedded.rs:730,747` and the
+// `rustty-os` `file.rs` precedent. iOS is a first-class host of this C API: the
+// reference ships `macos/Sources/App/iOS/iOSApp.swift`, ported at the same path
+// here, which calls `rustty_init` and drives `Rustty.Terminal` through the very
+// same exports. None of the six bodies is macOS-exclusive (CoreText, dcimgui's
+// Metal backend and the renderer mailbox all exist on iOS); the ONE genuinely
+// macOS-only symbol pair, the private `CGS*` window-blur calls above, keeps its
+// narrower `target_os = "macos"` gate — matching the reference, whose
+// `ghostty_set_window_background_blur` body is guarded by
+// `builtin.target.os.tag != .macos`, not by `isDarwin()`.
+//
+// NOT VERIFIED BY BUILD: this repo has no iOS toolchain target installed, so the
+// `target_os = "ios"` arm is not compiled by any gate in the suite. The gate
+// shape is what is under review here, not iOS codegen.
 
 /// C: rustty_surface_set_display_id
 ///
@@ -2720,7 +2736,7 @@ extern "C" {
 // `renderer_thread.wakeup: xev::Async`), and the drain side is live
 // (`renderer_seam.rs` `Message::MacosDisplayId(v) => set_macos_display_id(v)?`).
 // Body preserved verbatim above the realized code.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, display_id: u32) {
     // const surface = &ptr.core_surface;
@@ -2765,7 +2781,7 @@ pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, displa
 // CFRelease (I16). The reference non-CoreText early return (`return null`) is
 // elided: this export is Darwin-gated and the coretext backend is the Darwin
 // default, so there is never a non-CoreText grid here. Body ported faithfully.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mut c_void {
     // The shared-grid + CoreText symbols are macOS-only; scope the imports to the
@@ -2902,7 +2918,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
 // the live-surface renderer_state seam. It is objc-FREE: every step is core/vt
 // (renderer_state.mutex, Screen::select_word, readTextLocked) already ported in
 // rustty, so it functions the moment a live surface exists. Body ported 1:1.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_quicklook_word(
     ptr: *mut Surface,
@@ -3020,7 +3036,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
 // wraps the raw objc id in an `objc.Object`; rustty's `initMetal` takes the
 // opaque `*mut c_void` directly (the id crosses the C ABI untyped) and releases
 // the host's +1 retain on every exit path via its `Defer` guard.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 #[no_mangle]
 pub unsafe extern "C" fn rustty_inspector_metal_init(
     ptr: *mut Inspector,
@@ -3046,7 +3062,7 @@ pub unsafe extern "C" fn rustty_inspector_metal_init(
 // `ImGui_ImplMetal_RenderDrawData`. Catches + logs its error exactly as the
 // reference `catch |err| { log.err(...); return; }`. The two `.fromId(...)`
 // objc-id wraps → opaque `*mut c_void`.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 #[no_mangle]
 pub unsafe extern "C" fn rustty_inspector_metal_render(
     ptr: *mut Inspector,
@@ -3082,7 +3098,7 @@ pub unsafe extern "C" fn rustty_inspector_metal_render(
 // `embedded.zig`'s `export fn` returns `void`; `include/rustty-embed.h` mirrors
 // that discrepancy verbatim rather than "fixing" it. The Swift host never calls
 // this export, so nothing reads the return.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 #[no_mangle]
 pub unsafe extern "C" fn rustty_inspector_metal_shutdown(ptr: *mut Inspector) {
     // if (ptr.backend) |v| {
