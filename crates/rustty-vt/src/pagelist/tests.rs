@@ -2107,6 +2107,51 @@ fn fill_last_page_for_test(s: &mut PageList) {
     }
 }
 
+/// Grow until at least `count` pages sit BEFORE the active area's top-left node,
+/// i.e. are cold history and therefore compression candidates.
+///
+/// PORTS: oracle@main PageList.zig `growColdPagesForTest` (9156ada16).
+fn grow_cold_pages_for_test(s: &mut PageList, count: usize) {
+    loop {
+        let active_node = s.get_top_left(point::Tag::Active).node;
+        let mut cold_count: usize = 0;
+        let mut current = s.pages.first;
+        while !current.is_null() {
+            if current == active_node {
+                break;
+            }
+            cold_count += 1;
+            current = unsafe { (*current).next };
+        }
+        if cold_count >= count {
+            return;
+        }
+        let _ = s.grow().unwrap();
+    }
+}
+
+/// Fill a node's whole page mapping with deterministic pseudo-random bytes, so
+/// that LZ4 cannot shrink it past the break-even point.
+///
+/// The oracle uses `std.Random.DefaultPrng`; reproducing its exact stream is not
+/// required (nothing asserts specific bytes — only that the page is
+/// incompressible), so this uses the xorshift64* already established for the
+/// same purpose in `compress/lz4.rs`'s incompressible-input tests.
+fn fill_incompressible(node: *mut super::Node, seed: u64) {
+    let mut state = seed;
+    let (ptr, len) = unsafe {
+        let p = super::Node::page(node);
+        ((*p).memory_ptr() as *mut u8, (*p).memory_len())
+    };
+    let mem = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+    for b in mem.iter_mut() {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 32) as u8;
+    }
+}
+
 /// Verify every live page belongs to the current validity epoch, has an
 /// allocated generation below the next serial, and validates through the same
 /// pointer-plus-generation lookup used by external references.
@@ -2406,6 +2451,73 @@ fn pagelist_compress_page_round_trips_a_cold_history_page() {
     miri,
     ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
 )]
+/// PORTS: oracle@main PageList.zig `test "PageList cold compression continues
+/// after an incompressible page"` (9156ada16).
+///
+/// The point is the CONTINUE, not the skip: a page that fails to compress must
+/// not abort the pass, and must stay a candidate for later passes while the page
+/// that did compress is skipped. `compress_page`'s two `return false` arms leave
+/// the node untouched, which is what makes both halves true — but nothing
+/// asserted it, so a change that aborted the pass on first failure would have
+/// been invisible to the other eight compression tests.
+#[test]
+fn pagelist_cold_compression_continues_after_an_incompressible_page() {
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    assert!(!second.is_null(), "need two cold pages");
+    fill_incompressible(first, 0x434F_4C44_5041_4745);
+
+    let page_size = s.page_size;
+    let _ = s.compress(CompressionMode::Full);
+    let memory = s.memory_stats();
+
+    assert_eq!(1, memory.compressed_pages);
+    assert!(!unsafe { super::Node::is_compressed(first) });
+    assert!(unsafe { super::Node::is_compressed(second) });
+    assert!(
+        memory.encoded_bytes < memory.decommitted_raw_bytes,
+        "the compressed page must be smaller than the mapping it replaced"
+    );
+    assert_eq!(page_size, s.page_size);
+
+    // Failed resident candidates are retried on later passes, while the
+    // successful page stays compressed and is skipped — so a second full pass
+    // must change nothing at all.
+    let _ = s.compress(CompressionMode::Full);
+    assert_eq!(memory, s.memory_stats());
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList compression leaves
+/// incompressible pages resident"` (9156ada16).
+///
+/// The single-page counterpart of the test above: `compress_page` returns false
+/// and leaves the node resident, rather than decommitting a mapping it cannot
+/// shrink. `page_size` is asserted unchanged because a failed candidate must not
+/// be accounted as if it had been compressed.
+#[test]
+fn pagelist_compression_leaves_incompressible_pages_resident() {
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
+
+    let node = s.pages.first;
+    fill_incompressible(node, 0x5041_4745_4C49_5354);
+    let page_size = s.page_size;
+
+    assert!(!s.compress_page(node));
+    assert!(!unsafe { super::Node::is_compressed(node) });
+    assert_eq!(page_size, s.page_size);
+}
+
 #[test]
 fn pagelist_compress_page_rejects_an_already_compressed_node() {
     let mut s = PageList::init(Options {
