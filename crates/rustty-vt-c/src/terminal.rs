@@ -1593,7 +1593,15 @@ pub union ScrollViewportCValue {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScrollViewportC {
-    pub tag: ScrollViewportTag,
+    /// D11 (P3-W6 T2): held as the C integer, NOT as `ScrollViewportTag`.
+    /// `rustty_terminal_scroll_viewport` takes this struct BY VALUE, so a
+    /// `ScrollViewportTag`-typed field is materialized by the callee prologue
+    /// and an undeclared value is instant UB there, before the `match` below can
+    /// run. `include/rustty/vt/terminal.h` itself declares
+    /// `RUSTTY_TERMINAL_SCROLL_VIEWPORT_MAX_VALUE`, so a conforming C caller can
+    /// write one. This is the IN-RANGE member of the D11 population: oracle
+    /// `3a2e28329` added `Row = 3` to this very enum.
+    pub tag: c_int,
     pub value: ScrollViewportCValue,
 }
 
@@ -1601,7 +1609,23 @@ pub struct ScrollViewportC {
 // and the `c_int`-width tag. Drift here fails the build.
 const _: () = assert!(size_of::<ScrollViewportCValue>() == size_of::<[u64; 2]>());
 const _: () = assert!(align_of::<ScrollViewportCValue>() == 8);
+// KEEP (P3-W6 T2 Step 1): this assert is what proves the `tag: c_int` field
+// leaves the published ABI provably unchanged.
 const _: () = assert!(size_of::<ScrollViewportTag>() == size_of::<c_int>());
+
+impl ScrollViewportTag {
+    /// Narrow an inbound C integer to a `ScrollViewportTag`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    pub fn from_c_int(v: c_int) -> Option<ScrollViewportTag> {
+        match v {
+            0 => Some(ScrollViewportTag::Top),
+            1 => Some(ScrollViewportTag::Bottom),
+            2 => Some(ScrollViewportTag::Delta),
+            3 => Some(ScrollViewportTag::Row),
+            _ => None,
+        }
+    }
+}
 
 // pub fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) ... {
 //     const t: *ZigTerminal = (terminal_ orelse return).terminal;
@@ -1621,7 +1645,16 @@ pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
     // SAFETY: `terminal_` is a live wrapper; `terminal` is its owned heap
     // terminal.
     let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
-    let zig_behavior = match behavior.tag {
+    // D11 (P3-W6 T2): the narrowing point for `behavior.tag`. Exactly the shape
+    // `compress` uses for its `mode_` (`:960`): an explicit `match` on the
+    // incoming C integer, the sound analog of `std.meta.intToEnum`. This export
+    // returns `void` — as the reference's does — so an undeclared tag takes the
+    // same early return as a null terminal handle above.
+    let zig_behavior = match ScrollViewportTag::from_c_int(behavior.tag) {
+        Some(t) => t,
+        None => return,
+    };
+    let zig_behavior = match zig_behavior {
         ScrollViewportTag::Top => ZigScrollViewport::Top,
         ScrollViewportTag::Bottom => ZigScrollViewport::Bottom,
         // SAFETY: the `delta` tag selects the `delta` union member (C ABI
@@ -2282,7 +2315,11 @@ pub unsafe fn grid_ref(terminal_: Terminal, pt: PointC, out_ref: *mut CGridRef) 
     let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
     let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
     // const zig_pt: point.Point = .fromC(pt);
-    let zig_pt = pt.from_c();
+    // D11 (P3-W6 T2): `pt.tag` is the raw C integer; `from_c` narrows it.
+    let zig_pt = match pt.from_c() {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
     // const p = t.screens.active.pages.pin(zig_pt) orelse return .invalid_value;
     let p = match unsafe { (*active).pages.pin(zig_pt) } {
         Some(p) => p,
@@ -2340,7 +2377,12 @@ pub unsafe fn grid_ref_track(
     let list: *mut rustty_vt::pagelist::PageList =
         unsafe { core::ptr::addr_of_mut!((*active).pages) };
     // const p = list.pin(.fromC(pt)) orelse return .invalid_value;
-    let p = match unsafe { (*list).pin(pt.from_c()) } {
+    // D11 (P3-W6 T2): `pt.tag` is the raw C integer; `from_c` narrows it.
+    let zig_pt = match pt.from_c() {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
+    let p = match unsafe { (*list).pin(zig_pt) } {
         Some(p) => p,
         None => return Result::InvalidValue,
     };
@@ -2762,7 +2804,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Top,
+                        tag: ScrollViewportTag::Top as c_int,
                         value: ScrollViewportCValue { _padding: [0; 2] },
                     },
                 )
@@ -2782,7 +2824,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Bottom,
+                        tag: ScrollViewportTag::Bottom as c_int,
                         value: ScrollViewportCValue { _padding: [0; 2] },
                     },
                 )
@@ -2802,7 +2844,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Delta,
+                        tag: ScrollViewportTag::Delta as c_int,
                         value: ScrollViewportCValue { delta: -3 },
                     },
                 )
@@ -2828,7 +2870,7 @@ mod tests {
             scroll_viewport(
                 std::ptr::null_mut(),
                 ScrollViewportC {
-                    tag: ScrollViewportTag::Top,
+                    tag: ScrollViewportTag::Top as c_int,
                     value: ScrollViewportCValue { _padding: [0; 2] },
                 },
             )
@@ -2861,7 +2903,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 0 },
                     },
                 )
@@ -2882,7 +2924,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 1 },
                     },
                 )
@@ -2910,7 +2952,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 9999 },
                     },
                 )
@@ -2962,7 +3004,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 0 },
                     },
                 )
@@ -2979,7 +3021,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 9999 },
                     },
                 )
@@ -3750,7 +3792,7 @@ mod tests {
     // active/viewport/screen tags used by the ported tests.
     fn pt_active(x: size::CellCountInt, y: u32) -> PointC {
         PointC {
-            tag: crate::point::TagC::Active,
+            tag: crate::point::TagC::Active as c_int,
             value: crate::point::PointCValue {
                 active: Coordinate { x, y },
             },
@@ -3758,7 +3800,7 @@ mod tests {
     }
     fn pt_viewport(x: size::CellCountInt, y: u32) -> PointC {
         PointC {
-            tag: crate::point::TagC::Viewport,
+            tag: crate::point::TagC::Viewport as c_int,
             value: crate::point::PointCValue {
                 viewport: Coordinate { x, y },
             },
@@ -3766,7 +3808,7 @@ mod tests {
     }
     fn pt_screen(x: size::CellCountInt, y: u32) -> PointC {
         PointC {
-            tag: crate::point::TagC::Screen,
+            tag: crate::point::TagC::Screen as c_int,
             value: crate::point::PointCValue {
                 screen: Coordinate { x, y },
             },

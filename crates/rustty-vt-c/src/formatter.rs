@@ -25,6 +25,7 @@ use rustty_lib::allocator::{Alignment, Allocator as CAllocator};
 use rustty_vt::formatter as formatterpkg;
 use rustty_vt::terminal::Terminal as ZigTerminal;
 use std::mem::size_of;
+use std::os::raw::c_int;
 
 use crate::cwrap::{create, destroy};
 
@@ -177,7 +178,20 @@ impl ScreenOptionsExtra {
 #[derive(Clone, Copy)]
 pub struct TerminalOptions {
     pub size: usize,
-    pub emit: Format,
+    /// D11 (P3-W6 T2): held as the C integer, NOT as `Format`.
+    /// `rustty_formatter_terminal_new` takes this struct BY VALUE, so a
+    /// `Format`-typed field is materialized by the callee prologue exactly as a
+    /// bare closed-enum parameter would be — an out-of-range value is UB before
+    /// anything can check it. Narrowed in `terminal_new_impl`.
+    ///
+    /// The ORACLE has no `intToEnum` guard here and needs none: `lib.Enum` emits
+    /// a NON-EXHAUSTIVE `enum(c_int) { …, _ }` for the `.c` target, so every
+    /// `c_int` is a representable value in Zig. Rust has no non-exhaustive
+    /// `#[repr(C)]` enum, which is precisely why the check must exist on this
+    /// side. It is a soundness requirement of the Rust representation, not a
+    /// behavioural divergence: a conforming caller passing a declared
+    /// enumerator sees identical behaviour.
+    pub emit: c_int,
     pub unwrap: bool,
     pub trim: bool,
     pub extra: TerminalOptionsExtra,
@@ -254,7 +268,7 @@ impl Default for TerminalOptions {
     fn default() -> Self {
         TerminalOptions {
             size: size_of::<TerminalOptions>(),
-            emit: Format::Plain,
+            emit: Format::Plain as c_int,
             unwrap: false,
             trim: true,
             extra: TerminalOptionsExtra::default(),
@@ -360,9 +374,15 @@ unsafe fn terminal_new_(
     // PORT NOTE: the rebuild inputs are stored (see wrapper PORT NOTE) rather than
     // a live formatter. The `emit/unwrap/trim/extra/content` are exactly what the
     // reference's `formatter` carries after `init` + the field assignments above.
+    // D11 (P3-W6 T2): the narrowing point for `opts.emit`. See the field doc.
+    let emit = match Format::from_c_int(opts.emit) {
+        Some(f) => f.to_zig(),
+        None => return Err(NewError::InvalidValue),
+    };
+
     let inputs = TerminalInputs {
         terminal: t,
-        emit: opts.emit.to_zig(),
+        emit,
         unwrap: opts.unwrap,
         trim: opts.trim,
         extra: opts.extra.to_zig(),
@@ -566,7 +586,7 @@ mod tests {
         selection: *const CSelection,
     ) -> TerminalOptions {
         TerminalOptions {
-            emit,
+            emit: emit as c_int,
             unwrap,
             trim,
             extra,
@@ -948,7 +968,7 @@ mod tests {
                 terminal_c::grid_ref(
                     t,
                     PointC {
-                        tag: TagC::Active,
+                        tag: TagC::Active as c_int,
                         value: PointCValue {
                             active: Coordinate { x: 6, y: 0 },
                         },
@@ -963,7 +983,7 @@ mod tests {
                 terminal_c::grid_ref(
                     t,
                     PointC {
-                        tag: TagC::Active,
+                        tag: TagC::Active as c_int,
                         value: PointCValue {
                             active: Coordinate { x: 10, y: 0 },
                         },

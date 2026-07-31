@@ -276,11 +276,16 @@ pub unsafe extern "C" fn rustty_color_scheme_report_encode(
 /// must be a valid, writable pointer to `usize`.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_focus_encode(
-    event: focus::FocusEvent,
+    // D11: inbound as the C integer, narrowed below. See `FocusEvent::from_c_int`.
+    event: c_int,
     out: *mut u8,
     out_len: usize,
     out_written: *mut usize,
 ) -> c_int {
+    let event = match focus::FocusEvent::from_c_int(event) {
+        Some(e) => e,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: `out`/`out_written` validity is the caller's contract.
     unsafe { focus::encode(event.to_vt(), out, out_len, out_written) }.to_c_int()
 }
@@ -345,12 +350,22 @@ pub unsafe extern "C" fn rustty_free(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_sys_log_stderr(
     userdata: *mut std::ffi::c_void,
-    level: sys::LogLevel,
+    // D11: inbound as the C integer, narrowed below. See `LogLevel::from_c_int`.
+    level: c_int,
     scope_ptr: *const u8,
     scope_len: usize,
     message_ptr: *const u8,
     message_len: usize,
 ) {
+    // This export returns `void`, so there is no error channel to report an
+    // out-of-range level on. Dropping the record is the same disposition the
+    // `key_event` setters already use for an out-of-range `intToEnum` on this
+    // boundary (see the PORT NOTE above `rustty_key_event_new`), and it is
+    // strictly better than the alternative it replaces, which was UB.
+    let level = match sys::LogLevel::from_c_int(level) {
+        Some(l) => l,
+        None => return,
+    };
     // SAFETY: `scope_ptr`/`message_ptr` validity is the caller's contract.
     unsafe {
         sys::log_stderr(
@@ -451,12 +466,17 @@ pub unsafe extern "C" fn rustty_unicode_grapheme_width(
 /// must be a valid, writable pointer to `usize`.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_size_report_encode(
-    style: size_report::Style,
+    // D11: inbound as the C integer, narrowed below. See `Style::from_c_int`.
+    style: c_int,
     size: size_report::Size,
     out: *mut u8,
     out_len: usize,
     out_written: *mut usize,
 ) -> c_int {
+    let style = match size_report::Style::from_c_int(style) {
+        Some(s) => s,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: `out`/`out_written` validity is the caller's contract.
     unsafe { size_report::encode(style, size, out, out_len, out_written) }.to_c_int()
 }
@@ -1314,7 +1334,7 @@ pub unsafe extern "C" fn rustty_sgr_unknown_partial(
 // pub const sgr_attribute_tag = sgr.attribute_tag;  (ghostty_sgr_attribute_tag)
 /// C: rustty_sgr_attribute_tag
 #[no_mangle]
-pub extern "C" fn rustty_sgr_attribute_tag(attr: sgr::AttributeC) -> sgr::Tag {
+pub extern "C" fn rustty_sgr_attribute_tag(attr: sgr::AttributeC) -> c_int {
     sgr::attribute_tag(attr)
 }
 
@@ -1587,9 +1607,14 @@ mod wasm_alloc_exports {
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_get(
     graphics: kitty_graphics::KittyGraphics,
-    data: kitty_graphics::Data,
+    // D11: inbound as the C integer, narrowed below. See `Data::from_c_int`.
+    data: c_int,
     out: *mut std::ffi::c_void,
 ) -> c_int {
+    let data = match kitty_graphics::Data::from_c_int(data) {
+        Some(d) => d,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: `graphics`/`out` validity is the caller's contract.
     unsafe { kitty_graphics::get(graphics, data, out) }.to_c_int()
 }
@@ -1617,9 +1642,14 @@ pub unsafe extern "C" fn rustty_kitty_graphics_image(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_image_get(
     image: kitty_graphics::ImageHandle,
-    data: kitty_graphics::ImageData,
+    // D11: inbound as the C integer, narrowed below. See `ImageData::from_c_int`.
+    data: c_int,
     out: *mut std::ffi::c_void,
 ) -> c_int {
+    let data = match kitty_graphics::ImageData::from_c_int(data) {
+        Some(d) => d,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: `image`/`out` validity is the caller's contract.
     unsafe { kitty_graphics::image_get(image, data, out) }.to_c_int()
 }
@@ -1714,9 +1744,14 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_next(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_get(
     iter: kitty_graphics::PlacementIterator,
-    data: kitty_graphics::PlacementData,
+    // D11: inbound as the C integer, narrowed below. See `PlacementData::from_c_int`.
+    data: c_int,
     out: *mut std::ffi::c_void,
 ) -> c_int {
+    let data = match kitty_graphics::PlacementData::from_c_int(data) {
+        Some(d) => d,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: `iter`/`out` validity is the caller's contract.
     unsafe { kitty_graphics::placement_get(iter, data, out) }.to_c_int()
 }
@@ -2770,8 +2805,13 @@ pub unsafe extern "C" fn rustty_terminal_selection_format_alloc(
 pub unsafe extern "C" fn rustty_terminal_selection_adjust(
     terminal: terminal::Terminal,
     selection: *mut selection::CSelection,
-    adjustment: selection::Adjustment,
+    // D11: inbound as the C integer, narrowed below. See `Adjustment::from_c_int`.
+    adjustment: c_int,
 ) -> c_int {
+    let adjustment = match selection::Adjustment::from_c_int(adjustment) {
+        Some(a) => a,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: pointer validity is the caller's contract.
     unsafe { selection::adjust(terminal, selection, adjustment) }.to_c_int()
 }
@@ -2802,9 +2842,14 @@ pub unsafe extern "C" fn rustty_terminal_selection_order(
 pub unsafe extern "C" fn rustty_terminal_selection_ordered(
     terminal: terminal::Terminal,
     selection: *const selection::CSelection,
-    desired: selection::Order,
+    // D11: inbound as the C integer, narrowed below. See `Order::from_c_int`.
+    desired: c_int,
     out_selection: *mut selection::CSelection,
 ) -> c_int {
+    let desired = match selection::Order::from_c_int(desired) {
+        Some(o) => o,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: pointer validity is the caller's contract.
     unsafe { selection::ordered(terminal, selection, desired, out_selection) }.to_c_int()
 }
@@ -2887,11 +2932,16 @@ pub unsafe extern "C" fn rustty_terminal_grid_ref_track(
 pub unsafe extern "C" fn rustty_terminal_point_from_grid_ref(
     terminal: terminal::Terminal,
     ref_: *const grid_ref::CGridRef,
-    tag: point::TagC,
+    // D11: inbound as the C integer, narrowed below. See `TagC::from_c_int`.
+    tag: c_int,
     out: *mut rustty_vt::point::Coordinate,
 ) -> c_int {
     // PORT NOTE: `tag: point.Tag` crosses the C ABI as its `enum(c_int)`
     // projection (`point::TagC`); bridge to the pure-VT `point::Tag`.
+    let tag = match point::TagC::from_c_int(tag) {
+        Some(t) => t,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: pointer validity is the caller's contract.
     unsafe { terminal::point_from_grid_ref(terminal, ref_, tag.to_tag(), out) }.to_c_int()
 }
@@ -3021,10 +3071,15 @@ pub unsafe extern "C" fn rustty_tracked_grid_ref_has_value(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_tracked_grid_ref_point(
     ref_: grid_ref_tracked::CTrackedGridRef,
-    tag: point::TagC,
+    // D11: inbound as the C integer, narrowed below. See `TagC::from_c_int`.
+    tag: c_int,
     out: *mut rustty_vt::point::Coordinate,
 ) -> c_int {
     // PORT NOTE: `tag: point.Tag` crosses as `point::TagC`; bridge to `point::Tag`.
+    let tag = match point::TagC::from_c_int(tag) {
+        Some(t) => t,
+        None => return result::Result::InvalidValue.to_c_int(),
+    };
     // SAFETY: pointer validity is the caller's contract.
     unsafe { grid_ref_tracked::tracked_grid_ref_point(ref_, tag.to_tag(), out) }.to_c_int()
 }

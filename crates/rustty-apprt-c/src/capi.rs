@@ -56,7 +56,12 @@ use rustty_apprt_api::surface::NewSurfaceContext;
 #[derive(Clone, Copy)]
 pub struct KeyEvent {
     // action: input.Action,
-    pub action: key::Action,
+    /// D11 (P3-W6 T2): held as the C integer, NOT as `key::Action`. `KeyEvent`
+    /// is taken BY VALUE by `rustty_app_key`, `rustty_surface_key`,
+    /// `rustty_surface_key_is_binding` and `rustty_config_key_is_binding`, so an
+    /// `Action`-typed field would be materialized by the callee prologue and an
+    /// out-of-range value is UB there. Narrowed in [`KeyEvent::keyEvent`].
+    pub action: c_int,
     // mods: c_int,
     pub mods: c_int,
     // consumed_mods: c_int,
@@ -98,10 +103,15 @@ impl KeyEvent {
     // `rustty_apprt::embedded::KeyEvent<'a>` borrows its `text` from the C string
     // `self.text` points to (the reference `std.mem.sliceTo(ptr, 0)`), which is
     // owned by the caller and outlives the call — hence the caller-chosen `'a`.
-    pub unsafe fn keyEvent<'a>(self) -> embedded::KeyEvent<'a> {
-        embedded::KeyEvent {
+    //
+    // D11 (P3-W6 T2): returns `Option`, because `self.action` is the raw C
+    // integer and an undeclared value has no `input.Action` to map to. This is
+    // the narrowing point; every caller takes its existing
+    // "error processing key event" path on `None`.
+    pub unsafe fn keyEvent<'a>(self) -> Option<embedded::KeyEvent<'a>> {
+        Some(embedded::KeyEvent {
             // .action = self.action,
-            action: self.action,
+            action: key::Action::from_c_int(self.action)?,
             // .mods = @bitCast(@as(input.Mods.Backing, @truncate(@as(c_uint, @bitCast(self.mods))))),
             //
             // PORT NOTE: reinterpret the signed `c_int` as unsigned (`@bitCast` ->
@@ -125,7 +135,7 @@ impl KeyEvent {
             unshifted_codepoint: self.unshifted_codepoint,
             // .composing = self.composing,
             composing: self.composing,
-        }
+        })
     }
 }
 
@@ -236,9 +246,16 @@ impl Text {
 #[derive(Clone, Copy)]
 pub struct Point {
     // tag: Tag,
-    pub tag: PointTag,
+    /// D11 (P3-W6 T2): held as the C integer, NOT as `PointTag`. `Point` is
+    /// reached BY VALUE by `rustty_surface_read_text` (twice, as
+    /// `sel.tl`/`sel.br`), so a `PointTag`-typed field is materialized by the
+    /// callee prologue and an undeclared value is UB there. Narrowed in
+    /// [`Point::pin`], which is already `Option`-returning, so the undeclared
+    /// case takes the SAME `None` path an unresolvable point takes.
+    pub tag: c_int,
     // coord_tag: CoordTag,
-    pub coord_tag: PointCoordTag,
+    /// D11 (P3-W6 T2): see `tag`. Same struct, same by-value path.
+    pub coord_tag: c_int,
     // x: u32,
     pub x: u32,
     // y: u32,
@@ -275,8 +292,39 @@ pub enum PointCoordTag {
 // tag enums are `enum(c_int)` -> c_int-width.
 const _: () = assert!(size_of::<Point>() == 16);
 const _: () = assert!(align_of::<Point>() == 4);
+// KEEP (D11, P3-W6 T2): these two asserts are what prove the `c_int`-typed
+// `tag`/`coord_tag` fields leave the published ABI provably unchanged.
 const _: () = assert!(size_of::<PointTag>() == size_of::<c_int>());
 const _: () = assert!(size_of::<PointCoordTag>() == size_of::<c_int>());
+
+impl PointTag {
+    /// Narrow an inbound C integer to a `PointTag`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    /// D11 (P3-W6 T2). PRE-EXISTING; not in the Phase 3 range.
+    pub fn from_c_int(v: c_int) -> Option<PointTag> {
+        match v {
+            0 => Some(PointTag::Active),
+            1 => Some(PointTag::Viewport),
+            2 => Some(PointTag::Screen),
+            3 => Some(PointTag::History),
+            _ => None,
+        }
+    }
+}
+
+impl PointCoordTag {
+    /// Narrow an inbound C integer to a `PointCoordTag`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    /// D11 (P3-W6 T2). PRE-EXISTING.
+    pub fn from_c_int(v: c_int) -> Option<PointCoordTag> {
+        match v {
+            0 => Some(PointCoordTag::Exact),
+            1 => Some(PointCoordTag::TopLeft),
+            2 => Some(PointCoordTag::BottomRight),
+            _ => None,
+        }
+    }
+}
 
 impl Point {
     // fn pin(self: Point, screen: *const terminal.Screen) ?terminal.Pin
@@ -290,7 +338,11 @@ impl Point {
         //
         // PORT NOTE: the reference's `@field(..., @tagName(tag))` reflection maps the
         // C `Tag` to the same-named core `point.Tag`; ported as an explicit match.
-        let tag: point::Tag = match self.tag {
+        //
+        // D11 (P3-W6 T2): `self.tag`/`self.coord_tag` are the raw C integers;
+        // this is their narrowing point. An undeclared value returns `None`,
+        // the same result an unresolvable point already produces.
+        let tag: point::Tag = match PointTag::from_c_int(self.tag)? {
             PointTag::Active => point::Tag::Active,
             PointTag::Viewport => point::Tag::Viewport,
             PointTag::Screen => point::Tag::Screen,
@@ -303,7 +355,7 @@ impl Point {
         // const clamped_y = @min(self.y, screen.pages.rows -| 1);
         let clamped_y: u32 = self.y.min(screen.pages.rows.saturating_sub(1) as u32);
 
-        match self.coord_tag {
+        match PointCoordTag::from_c_int(self.coord_tag)? {
             // Exact coordinates require a specific pin.
             // .exact => exact: {
             PointCoordTag::Exact => {

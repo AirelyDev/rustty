@@ -43,6 +43,27 @@ pub enum TagC {
 }
 
 impl TagC {
+    /// Narrow an inbound C integer to a `TagC`, mirroring `std.meta.intToEnum`;
+    /// `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): `TagC` is received across the C ABI both as a bare
+    /// parameter (`rustty_terminal_point_from_grid_ref`,
+    /// `rustty_tracked_grid_ref_point`) and as the `tag` FIELD of a by-value
+    /// `PointC` (`rustty_terminal_grid_ref`, `_grid_ref_track`,
+    /// `rustty_terminal_selection_contains`, `rustty_tracked_grid_ref_set`).
+    /// Both forms are materialized by the callee prologue, so both take the C
+    /// integer and narrow here. See `focus.rs`'s `FocusEvent::from_c_int` for
+    /// the full rationale. PRE-EXISTING; not in the Phase 3 range.
+    pub fn from_c_int(v: c_int) -> Option<TagC> {
+        match v {
+            0 => Some(TagC::Active),
+            1 => Some(TagC::Viewport),
+            2 => Some(TagC::Screen),
+            3 => Some(TagC::History),
+            _ => None,
+        }
+    }
+
     // PORT NOTE: bridge to/from the pure-VT `point::Tag`. The discriminants are
     // identical by construction (same key order).
     pub fn from_tag(tag: Tag) -> TagC {
@@ -84,7 +105,11 @@ pub union PointCValue {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PointC {
-    pub tag: TagC,
+    /// D11 (P3-W6 T2): held as the C integer, NOT as `TagC`. `PointC` is taken
+    /// BY VALUE by four exports, so a `TagC`-typed field would be materialized
+    /// by the callee prologue — the same UB a bare closed-enum parameter has,
+    /// one level down. Narrowed by `PointC::tag()` / `PointC::from_c()`.
+    pub tag: c_int,
     pub value: PointCValue,
 }
 
@@ -115,24 +140,40 @@ impl PointC {
             TagC::Screen => PointCValue { screen: coord },
             TagC::History => PointCValue { history: coord },
         };
-        PointC { tag, value }
+        PointC {
+            tag: tag as c_int,
+            value,
+        }
+    }
+
+    /// The narrowed `tag`, or `None` if the C caller wrote an undeclared value.
+    /// D11 (P3-W6 T2): the single narrowing point for the `tag` field.
+    #[inline]
+    pub fn tag(self) -> Option<TagC> {
+        TagC::from_c_int(self.tag)
     }
 
     /// Convert this C ABI tagged union back into a native `Point`
     /// (`Point.fromC`).
     // PORT NOTE: `point.Point.fromC(pt)` reads `pt.tag` and the matching
     // `pt.value.<tag>` payload, dispatching to `rustty_vt::point::Point::from_c`.
-    pub fn from_c(self) -> rustty_vt::point::Point {
+    ///
+    /// D11 (P3-W6 T2): now returns `Option`, because `tag` is the raw C integer
+    /// and an undeclared value has no `Point` to map to. Every caller returns
+    /// `.invalid_value` on `None`, which is the disposition the reference's
+    /// `intToEnum` guards use on this boundary.
+    pub fn from_c(self) -> Option<rustty_vt::point::Point> {
+        let tag = self.tag()?;
         // PORT NOTE: read the union member selected by `tag`. Every member is a
         // `Coordinate` at offset 0, so the read is the same bytes regardless of
         // tag; the dispatch keeps the C-ABI contract explicit. SAFETY: the
         // selected member is the one written by `cval`/the C caller per `tag`.
-        let value = match self.tag {
+        let value = match tag {
             TagC::Active => unsafe { self.value.active },
             TagC::Viewport => unsafe { self.value.viewport },
             TagC::Screen => unsafe { self.value.screen },
             TagC::History => unsafe { self.value.history },
         };
-        rustty_vt::point::Point::from_c(self.tag.to_tag(), value)
+        Some(rustty_vt::point::Point::from_c(tag.to_tag(), value))
     }
 }

@@ -132,6 +132,28 @@ pub enum Action {
     Repeat,
 }
 
+impl Action {
+    /// Narrow an inbound C integer to an `Action`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): this enum is received across the C ABI as the `action`
+    /// FIELD of a by-value `capi::KeyEvent` (`rustty_app_key`,
+    /// `rustty_surface_key`, `rustty_surface_key_is_binding`,
+    /// `rustty_config_key_is_binding`) and as a bare parameter of
+    /// `rustty_inspector_key`. Both forms are materialized by the callee
+    /// PROLOGUE, so declaring the Rust enum as the C type makes an out-of-range
+    /// tag UB before any check can run. The C side takes `c_int` and narrows
+    /// here. PRE-EXISTING; not attributable to the Phase 3 resync range.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<Action> {
+        match v {
+            0 => Some(Action::Release),
+            1 => Some(Action::Press),
+            2 => Some(Action::Repeat),
+            _ => None,
+        }
+    }
+}
+
 /// PORT NOTE: Zig `u21` codepoint type. Rust has no native 21-bit integer; we
 /// model the value range with `u32`, matching the codepoint storage used
 /// elsewhere in this crate.
@@ -545,6 +567,29 @@ const TAG_NAMES: &[(Key, &str)] = &[
 ];
 
 impl Key {
+    /// Narrow an inbound C integer to a `Key`, mirroring `std.meta.intToEnum`;
+    /// `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): `rustty_inspector_key` receives a key by value across
+    /// the C ABI, so it takes `c_int` and narrows here rather than declaring
+    /// `Key` as the C parameter type (which materializes an out-of-range tag in
+    /// the callee prologue — instant UB). `include/rustty-embed.h` declares
+    /// `rustty_input_key_e` with a `_MAX_VALUE` enumerator, so the value is
+    /// reachable from conforming C. PRE-EXISTING; not in the Phase 3 range.
+    ///
+    /// PORT NOTE: driven off `TAG_NAMES` rather than a 130-arm hand-written
+    /// match. `TAG_NAMES` is the same table `tag_index`/`tag_name`/
+    /// `string_to_enum` already use and it lists every variant exactly once, so
+    /// this cannot drift out of sync with the enum the way a duplicated match
+    /// would; the `key: every tag has a name` test already pins the table
+    /// against the variant set.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<Key> {
+        TAG_NAMES
+            .iter()
+            .find(|(k, _)| *k as std::os::raw::c_int == v)
+            .map(|(k, _)| *k)
+    }
+
     /// PORT NOTE: the reference `@tagName(self)` for the snake_case tag name.
     pub fn tag_name(self) -> &'static str {
         TAG_NAMES[self.tag_index()].1

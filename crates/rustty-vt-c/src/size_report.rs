@@ -33,7 +33,31 @@ pub enum Style {
     Csi18T = 3,
 }
 
+// D11 (P3-W6 T2): proves taking this value as a `c_int` in the exported
+// signature leaves the ABI unchanged.
+const _: () = assert!(std::mem::size_of::<Style>() == std::mem::size_of::<std::os::raw::c_int>());
+
 impl Style {
+    /// Narrow an inbound C integer to a `Style`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): `rustty_size_report_encode` takes the style as a plain
+    /// `c_int` and narrows it HERE — a `#[repr(C)]` enum parameter would be
+    /// materialized in the callee prologue, which is UB for an out-of-range
+    /// tag, and `include/rustty/vt/size_report.h` itself declares
+    /// `RUSTTY_SIZE_REPORT_STYLE_MAX_VALUE`. See `modes.rs:19`.
+    ///
+    /// PRE-EXISTING: this defect predates the Phase 3 resync range.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<Style> {
+        match v {
+            0 => Some(Style::Mode2048),
+            1 => Some(Style::Csi14T),
+            2 => Some(Style::Csi16T),
+            3 => Some(Style::Csi18T),
+            _ => None,
+        }
+    }
+
     /// Project the C-ABI style onto the rustty-vt source-of-truth `Style`.
     pub fn to_vt(self) -> terminal_size_report::Style {
         match self {
