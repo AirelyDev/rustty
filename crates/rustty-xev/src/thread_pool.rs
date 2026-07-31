@@ -51,13 +51,21 @@
 // concurrently with the owner. The sound Rust translation is `&self` methods over
 // interior-mutable state (atomics + one `UnsafeCell` for the queue cache): a
 // concurrently-running worker holding a raw `*mut ThreadPool` would make any
-// `&mut self` uniqueness claim UB. `schedule`/`notify`/`wait`/`register`/
-// `unregister`/`join`/`shutdown` therefore take `&self`. `deinit` takes `&mut self`
-// (it is called after `join()` returns, i.e. once every worker has exited and the
-// pool is uniquely owned again). `shutdown` is `&self` rather than the brief's
-// nominal `&mut` for exactly this reason (it is designed to be called while
-// workers run); a `&mut` receiver would be unsound. No caller is affected — a
-// caller holding `&mut ThreadPool` can still call a `&self` method.
+// `&mut self` uniqueness claim UB.
+// `schedule`/`notify`/`wait`/`register`/`join`/`shutdown`/`deinit` therefore take
+// `&self`. `shutdown` is `&self` rather than the brief's nominal `&mut` for exactly
+// this reason (it is designed to be called while workers run); a `&mut` receiver
+// would be unsound. No caller is affected — a caller holding `&mut ThreadPool` can
+// still call a `&self` method.
+//
+// UPDATE (WS-XEV-UB): `deinit` USED to take `&mut self` on the theory that
+// "join() means every worker has exited"; Miri proved that false and it was real
+// Stacked-Borrows UB — see the PORT NOTE on `deinit`. It is now `&self`.
+// `unregister` goes further and takes a RAW `*const ThreadPool`, because its frame
+// deliberately outlives the pool — see the PORT NOTE on `unregister`. Both are
+// instances of the same rule: a reference argument is strongly protected for its
+// whole call frame, so any pool method whose frame can overlap another thread's
+// use of the pool (or the pool's own invalidation) must not take one.
 
 #![allow(dead_code)]
 
@@ -196,7 +204,31 @@ impl ThreadPool {
     }
 
     /// Wait for a thread to call shutdown() on the thread pool and kill the worker threads.
-    pub fn deinit(&mut self) {
+    //
+    // PORT NOTE (`&self`, WS-XEV-UB — same reason as `shutdown` above, see the
+    // module header): this was `&mut self`, and that was genuine Stacked-Borrows
+    // UB, caught by Miri on `multi_worker_quiesce_then_join_50x`:
+    //
+    //   error: Undefined Behavior: not granting access to tag <N> because that
+    //   would remove [SharedReadOnly for <M>] which is strongly protected
+    //     --> thread_pool.rs:199  pub fn deinit(&mut self)
+    //   help: <M> is this argument --> fn unregister(&self, ...)
+    //
+    // `deinit`'s whole job is to `join()` — i.e. it is BY CONSTRUCTION called
+    // while worker threads are still running and still touching the pool (the
+    // last worker's `unregister` is what wakes the joiner). A `&mut self`
+    // retag at `deinit`'s frame entry claims unique access to the pool at
+    // exactly the moment that is false: it invalidates every worker's
+    // `*mut ThreadPool` alias, and it cannot even be performed while a worker
+    // sits in a `&self` frame (which is strongly protected). `&self` +
+    // interior mutability is the only sound receiver, exactly as the module
+    // header argues for `shutdown`. Zig's `deinit(self: *ThreadPool)` is an
+    // unprotected shared pointer, so the oracle has no equivalent constraint.
+    // Behaviourally identical (the body is just `join()`; the oracle's
+    // `self.* = undefined` has no Rust counterpart — the pool is dropped by its
+    // owner), and source-compatible for every caller, which holds the pool by
+    // value or by `&mut`.
+    pub fn deinit(&self) {
         self.join();
         // self.* = undefined; — Rust has no `undefined`; the pool is dropped by
         // its owner. `join()` guarantees all workers have exited by this point.
@@ -302,7 +334,7 @@ impl ThreadPool {
                             Ok(handle) => {
                                 drop(handle);
                             }
-                            Err(_) => self.unregister(None),
+                            Err(_) => unsafe { Self::unregister(self as *const ThreadPool, None) },
                         }
                         return;
                     }
@@ -426,21 +458,46 @@ impl ThreadPool {
         }
     }
 
-    fn unregister(&self, maybe_thread: Option<*mut Thread>) {
+    // PORT NOTE (raw `pool` receiver, WS-XEV-UB): the oracle takes
+    // `self: *ThreadPool` and states the constraint explicitly a few lines down —
+    // "We have to do that without touching the thread pool itself since its
+    // memory is invalidated by now". A Rust `&self` receiver CANNOT express that:
+    // a reference argument is STRONGLY PROTECTED for the WHOLE call frame, and
+    // this frame deliberately outlives the pool — after `join_event.notify()`
+    // wakes the joiner, the thread parks in `(*thread).join_event.wait()` for the
+    // shutdown chain while the joiner is free to invalidate/free the pool. A live
+    // protected `&ThreadPool` over that window is UB (Miri: "not granting access
+    // ... would remove [SharedReadOnly] which is strongly protected", raised
+    // against `deinit`; and a deallocation would trip the protector too), even
+    // though the code never *touches* the pool there. So the pool travels as a
+    // raw `*const ThreadPool` — no protector, no aliasing claim — and every pool
+    // access below is a NARROW autoref of one field (`sync`, `join_event`) whose
+    // protector lives only for that single atomic op / call, all of which
+    // strictly precede the invalidation point. `maybe_thread`/`thread` stay raw
+    // for the same reason (memory `rust-mut-args-strongly-protected`).
+    //
+    /// # Safety
+    /// `pool` must point to a live `ThreadPool` at entry and remain live until
+    /// the `join_event.notify()` below; after that point the pool may be
+    /// invalidated by the joiner and is never touched again. `maybe_thread`, if
+    /// `Some`, must point to this worker's live `Thread`.
+    unsafe fn unregister(pool: *const ThreadPool, maybe_thread: Option<*mut Thread>) {
         // Un-spawn one thread, either due to a failed OS thread spawning or the thread is exitting.
         let one_spawned: u32 = Sync {
             spawned: 1,
             ..Sync::default()
         }
         .to_u32();
-        let sync = Sync::from_u32(self.sync.fetch_sub(one_spawned, Release));
+        let sync = Sync::from_u32(unsafe { (*pool).sync.fetch_sub(one_spawned, Release) });
         debug_assert!(sync.spawned > 0);
 
         // The last thread to exit must wake up the thread pool join()er
         // who will start the chain to shutdown all the threads.
         if sync.state == State::Shutdown && sync.spawned == 1 {
-            self.join_event.notify();
+            unsafe { (*pool).join_event.notify() };
         }
+        // ---- the pool's memory may be invalidated from HERE on (oracle note
+        // below); nothing past this line may name it. ----
 
         // If this is a thread pool thread, wait for a shutdown signal by the thread pool join()er.
         let thread = match maybe_thread {
@@ -462,7 +519,32 @@ impl ThreadPool {
     fn join(&self) {
         // Wait for the thread pool to be shutdown() then for all threads to enter a joinable state
         self.join_event.wait();
-        let sync = Sync::from_u32(self.sync.load(Relaxed));
+        // DELIBERATE DEVIATION (WS-XEV-UB): the oracle loads `.monotonic`
+        // (Relaxed) here — the value is only sanity-checked. It is ACQUIRE in
+        // this port, which is the ONLY happens-before edge that makes the
+        // shutdown chain below data-race-free, as Miri proved:
+        //
+        //   error: Undefined Behavior: Data race detected between (1) non-atomic
+        //   read on thread `unnamed-5` [`(*target).next` in `Thread::pop`'s
+        //   work-stealing traversal, i.e. one worker reading ANOTHER worker's
+        //   stack-allocated `Thread`] and (2) deallocation on thread `unnamed-7`
+        //   [that other worker's frame dying at the end of `Thread::run`]
+        //
+        // The chain is: every exiting worker publishes its accesses with the
+        // `Release` RMW in `unregister` (`sync.fetch_sub`); the LAST one then
+        // `join_event.notify()`s the joiner; the joiner walks `self.threads` and
+        // notifies the head worker, which notifies the next, and each notified
+        // worker then RETURNS — destroying the very `Thread` its peers were
+        // reading during work stealing. Without an acquire on `sync` the joiner
+        // inherits only the LAST worker's release, so the peers' earlier steal
+        // reads are unordered w.r.t. the frame teardowns the joiner sets in
+        // motion: a formal data race (benign on real hardware, real UB in the
+        // model). All writes to `sync` are RMWs, so one acquire load here
+        // synchronizes with EVERY worker's release via the release sequence, and
+        // that edge propagates down the notify chain. Strictly more ordering than
+        // the oracle: no behaviour, state or API changes, and it cannot introduce
+        // a hang (it is a load, not a CAS).
+        let sync = Sync::from_u32(self.sync.load(Acquire));
 
         debug_assert!(sync.state == State::Shutdown);
         debug_assert!(sync.spawned == 0);
@@ -598,7 +680,7 @@ impl Thread {
         }
 
         // the deferred unregister
-        unsafe { (*thread_pool).unregister(Some(self_ptr)) };
+        unsafe { ThreadPool::unregister(thread_pool, Some(self_ptr)) };
     }
 
     /// Try to dequeue a Node/Task from the ThreadPool.
@@ -854,7 +936,7 @@ impl Event {
 // dispatches to. The pool always waits WITHOUT a timeout (`Event::wait` calls
 // `Futex.wait(&self.state, WAITING)`), so the `timeout: ?u64` parameter is
 // monomorphized to `null` in every arm.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 fn futex_wait(atomic: &AtomicU32, expect: u32) {
     unsafe {
         libc::syscall(
@@ -867,7 +949,7 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 fn futex_wake(atomic: &AtomicU32, n: u32) {
     // PORT-FIDELITY FIX (root cause of the original 100%-reproducible teardown
     // wedge — see task-1-report.md): `std.Thread.Futex.wake` clamps the waiter
@@ -904,7 +986,7 @@ const UL_COMPARE_AND_WAIT: u32 = 1;
 #[cfg(target_os = "macos")]
 const ULF_WAKE_ALL: u32 = 0x0000_0100;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(miri)))]
 fn futex_wait(atomic: &AtomicU32, expect: u32) {
     unsafe {
         __ulock_wait(
@@ -916,7 +998,7 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(miri)))]
 fn futex_wake(atomic: &AtomicU32, n: u32) {
     let op = if n > 1 {
         UL_COMPARE_AND_WAIT | ULF_WAKE_ALL
@@ -966,7 +1048,7 @@ extern "system" {
     fn RtlWakeAddressAll(address: *const core::ffi::c_void);
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(miri)))]
 fn futex_wait(atomic: &AtomicU32, expect: u32) {
     // NTDLL functions work with time in units of 100 nanoseconds.
     // Positive values are absolute deadlines while negative values are relative
@@ -988,7 +1070,7 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
     debug_assert!(rc == 0, "RtlWaitOnAddress: unexpected NTSTATUS {rc:#x}");
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(miri)))]
 fn futex_wake(atomic: &AtomicU32, n: u32) {
     // assert(max_waiters != 0);
     debug_assert!(n != 0);
@@ -1013,7 +1095,7 @@ fn futex_wake(atomic: &AtomicU32, n: u32) {
 // reference comments preserved (R3).
 // ---------------------------------------------------------------------------
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(all(not(any(target_os = "linux", target_os = "macos", windows)), not(miri)))]
 fn futex_wait(atomic: &AtomicU32, expect: u32) {
     // if (ptr.raw != expect) return;
     if atomic.load(Relaxed) != expect {
@@ -1030,9 +1112,49 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
     unreachable!("deadlock detected");
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(all(not(any(target_os = "linux", target_os = "macos", windows)), not(miri)))]
 fn futex_wake(atomic: &AtomicU32, n: u32) {
     // There are no other threads to possibly wake up
+    let _ = atomic;
+    let _ = n;
+}
+
+// ---------------------------------------------------------------------------
+// MIRI-ONLY futex arm (WS-XEV-UB).
+//
+// Every real arm above bottoms out in a foreign function Miri cannot execute
+// (`__ulock_wait`/`__ulock_wake` on Darwin, the `futex(2)` syscall on Linux,
+// `ntdll.RtlWaitOnAddress` on Windows) — so under Miri the whole pool lifecycle
+// aborts with "unsupported operation: can't call foreign function" the first
+// time a worker parks or is woken, which is exactly what kept
+// `multi_worker_quiesce_then_join_50x` (the crate's only real multi-worker
+// Stacked-Borrows exercise) from ever completing a run under Miri.
+//
+// A futex is allowed to return spuriously — `std.Thread.Futex.wait`'s own
+// contract ("this function can spuriously wake up"), and every caller here is a
+// re-checking loop (`Event::wait` reloads `self.state` and re-CASes after every
+// `futex_wait`). So the sound Miri stand-in is a spin/yield: `futex_wait`
+// value-checks and yields (an immediate spurious wakeup), `futex_wake` is a
+// no-op. Correctness of the pool is unchanged — only its blocking behaviour
+// (busy-wait instead of park), which no test observes. This arm is
+// `cfg(miri)`-only and cannot affect ANY shipped build; the real arms are gated
+// `not(miri)`. It is a Miri accommodation, NOT a port deviation: the oracle's
+// semantics are preserved, spurious wakeups included.
+// ---------------------------------------------------------------------------
+
+#[cfg(miri)]
+fn futex_wait(atomic: &AtomicU32, expect: u32) {
+    // The value check the real futex does atomically at park time; the yield
+    // then models an immediate spurious wakeup.
+    if atomic.load(Relaxed) != expect {
+        return;
+    }
+    std::thread::yield_now();
+}
+
+#[cfg(miri)]
+fn futex_wake(atomic: &AtomicU32, n: u32) {
+    // Nothing is ever parked (waiters spin), so there is nothing to wake.
     let _ = atomic;
     let _ = n;
 }
@@ -1522,7 +1644,7 @@ mod tests {
         // Fresh counter each invocation (OnceLock may already be set by a prior test).
         *CTX.get().unwrap().ran.lock().unwrap() = 0;
 
-        let mut pool = ThreadPool::init(Config {
+        let pool = ThreadPool::init(Config {
             stack_size: 0,
             max_threads,
         });
@@ -1582,7 +1704,7 @@ mod tests {
     fn init_shutdown_deinit_without_tasks_joins_cleanly() {
         // With no scheduled work no worker is ever spawned; shutdown() must still
         // wake join() (spawned == 0 path) so deinit() returns without hanging.
-        let mut pool = ThreadPool::init(Config {
+        let pool = ThreadPool::init(Config {
             stack_size: 1024 * 1024,
             max_threads: 4,
         });
@@ -1630,6 +1752,27 @@ mod tests {
 
     // The task carrier: `task` MUST be recoverable from the callback's `*mut Task`
     // via offset_of, and it carries a raw handle to the shared lifecycle context.
+    //
+    // PORT NOTE (provenance contract of `schedule`, WS-XEV-UB): the pool routes
+    // `*mut Node` addresses through `usize` (Zap packs the HAS_CACHE/IS_CONSUMING
+    // bits into the stack word, so `NodeQueue::push` does `expose_provenance()`
+    // and `pop` does `with_exposed_provenance_mut`). The pointer the callback
+    // receives is therefore a WILDCARD pointer, checked by Stacked Borrows
+    // against the set of EXPOSED tags. A callback that recovers its enclosing
+    // carrier via `container_of` (`Task` -> `LifeJob` here; `Task` ->
+    // `Completion` in `kqueue.rs`/`epoll.rs`) reads bytes OUTSIDE the `Task`
+    // sub-range, so the tag that was exposed must span the WHOLE carrier
+    // allocation. Consequently the `*mut Task` handed to `Batch::from` must be
+    // derived from a raw pointer to the whole carrier
+    // (`addr_of_mut!((*job).task)`), NEVER from a `&mut job.task` field
+    // reference — a field reborrow retags a tag covering only the `Task` bytes,
+    // and the callback's `container_of` walk then has no suitable exposed tag.
+    // The two real callers already do this correctly (`epoll.rs:837`,
+    // `kqueue.rs:1375`); this test used to do the `&mut j.task` form and was
+    // genuine Stacked-Borrows UB ("attempting a read access using <wildcard> ...
+    // but no exposed tags have suitable permission"). Hence the carriers below
+    // are leaked with `Box::into_raw` and only ever touched through that raw
+    // pointer's own provenance; no `&mut LifeJob` is ever created.
     struct LifeJob {
         task: Task,
         ctx: *const LifeCtx,
@@ -1659,34 +1802,43 @@ mod tests {
     /// -> deinit (join). Returns the peak observed concurrency. NO schedule()
     /// happens after the quiesce point.
     fn run_one_multi_lifecycle(max_threads: u32, n: usize) -> usize {
-        let ctx = Box::new(LifeCtx {
+        // The context is leaked to a raw pointer as well: the workers reach it
+        // through `(*job).ctx`, so no `Box`-owned (`Unique`) reborrow may exist
+        // on the main thread while they run. It is reclaimed at the end, after
+        // `deinit()` has joined every worker.
+        let ctx_ptr: *const LifeCtx = Box::into_raw(Box::new(LifeCtx {
             ran: Mutex::new(0),
             cv: Condvar::new(),
             expected: n,
             active: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
-        });
-        let ctx_ptr: *const LifeCtx = &*ctx;
+        }));
+        let ctx: &LifeCtx = unsafe { &*ctx_ptr };
 
-        let mut pool = ThreadPool::init(Config {
+        let pool = ThreadPool::init(Config {
             stack_size: 0,
             max_threads,
         });
 
-        let mut jobs: Vec<Box<LifeJob>> = (0..n)
+        // `Box::into_raw` -> the raw pointer's provenance spans the WHOLE
+        // `LifeJob`, which is what `life_task`'s `container_of` walk needs (see
+        // the PORT NOTE on `LifeJob`).
+        let jobs: Vec<*mut LifeJob> = (0..n)
             .map(|_| {
-                Box::new(LifeJob {
+                Box::into_raw(Box::new(LifeJob {
                     task: Task {
                         node: Node::default(),
                         callback: life_task,
                     },
                     ctx: ctx_ptr,
-                })
+                }))
             })
             .collect();
 
-        for j in jobs.iter_mut() {
-            let tptr: *mut Task = &mut j.task;
+        for &jp in jobs.iter() {
+            // Field projection off the RAW pointer: keeps the whole-allocation
+            // provenance (a `&mut (*jp).task` reborrow would narrow it).
+            let tptr: *mut Task = unsafe { core::ptr::addr_of_mut!((*jp).task) };
             pool.schedule(Batch::from(tptr));
         }
 
@@ -1706,8 +1858,11 @@ mod tests {
 
         assert_eq!(*ctx.ran.lock().unwrap(), n, "not all callbacks ran");
         let peak = ctx.peak.load(Ordering::SeqCst);
-        // jobs + ctx dropped now — safe, deinit joined every worker.
-        drop(jobs);
+        // jobs + ctx reclaimed now — safe, deinit joined every worker.
+        for jp in jobs {
+            drop(unsafe { Box::from_raw(jp) });
+        }
+        drop(unsafe { Box::from_raw(ctx_ptr.cast_mut()) });
         peak
     }
 
@@ -1723,9 +1878,14 @@ mod tests {
     // wedging the suite.
     #[test]
     fn multi_worker_quiesce_then_join_50x() {
-        const LIFECYCLES: usize = 50;
+        // Under Miri the whole pool runs interpreted (and the futex is the
+        // spin/yield stand-in), so 50x64 would take hours. The shape under test
+        // — real >= 2-worker concurrency, quiesce, then shutdown+join — is fully
+        // exercised at the reduced counts; the NATIVE run keeps the full 50x64
+        // regression gate unchanged.
+        const LIFECYCLES: usize = if cfg!(miri) { 3 } else { 50 };
         const MAX_THREADS: u32 = 4;
-        const TASKS: usize = 64;
+        const TASKS: usize = if cfg!(miri) { 8 } else { 64 };
 
         // Watchdog: if the whole run wedges, abort LOUDLY so a deadlock fails the
         // suite instead of blocking it forever.
