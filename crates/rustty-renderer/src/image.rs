@@ -1744,6 +1744,79 @@ mod tests {
         assert!(!Id::z_less_than(Id::Overlay, Id::Overlay));
     }
 
+    /// A same-id image whose generation has NOT advanced must be treated as
+    /// identical and left alone; a same-id image with a NEW generation must
+    /// replace the stored one.
+    ///
+    /// PORT NOTE (P3-W8 T8 Step 2, oracle `bdc0b6c19`): the generation stamps
+    /// that replaced `transmit_time` are ported (`next_generation`, the
+    /// `ImageEntry.generation` field and `prep_image`'s early return) but had no
+    /// dedicated staleness test — the kitty renderer tests only ever exercise
+    /// the fresh path, so a `prep_image` with the comparison deleted would have
+    /// passed the whole suite.
+    #[test]
+    fn prep_image_ignores_a_stale_generation() {
+        let alloc = Global;
+        let mut s = State::empty();
+        let id = Id::Kitty(7);
+
+        // 2x1 RGBA.
+        let first = [0x11u8; 8];
+        let second = [0x22u8; 8];
+        let mk = |buf: &[u8; 8]| Pending {
+            width: 2,
+            height: 1,
+            pixel_format: PixelFormat::Rgba,
+            data: buf.as_ptr() as *mut u8,
+        };
+
+        s.prep_image(alloc, id, 1, mk(&first)).unwrap();
+        assert_eq!(s.images.get(&id).unwrap().generation, 1);
+        assert_eq!(
+            s.images
+                .get(&id)
+                .unwrap()
+                .image
+                .get_pending()
+                .unwrap()
+                .data_slice(),
+            &first[..]
+        );
+
+        // Same generation, different bytes: rejected as identical, the stored
+        // image keeps the FIRST payload.
+        s.prep_image(alloc, id, 1, mk(&second)).unwrap();
+        assert_eq!(s.images.get(&id).unwrap().generation, 1);
+        assert_eq!(
+            s.images
+                .get(&id)
+                .unwrap()
+                .image
+                .get_pending()
+                .unwrap()
+                .data_slice(),
+            &first[..],
+            "a stale (unchanged) generation must not replace the stored image"
+        );
+
+        // A new generation replaces it.
+        s.prep_image(alloc, id, 2, mk(&second)).unwrap();
+        assert_eq!(s.images.get(&id).unwrap().generation, 2);
+        assert_eq!(
+            s.images
+                .get(&id)
+                .unwrap()
+                .image
+                .get_pending()
+                .unwrap()
+                .data_slice(),
+            &second[..],
+            "a fresh generation must replace the stored image"
+        );
+
+        s.deinit(alloc);
+    }
+
     #[test]
     fn pixel_format_bpp() {
         assert_eq!(PixelFormat::Gray.bpp(), 1);
