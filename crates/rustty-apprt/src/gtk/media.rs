@@ -153,6 +153,33 @@ mod tests {
         assert!(is_for_path(&current, &path_b));
         assert!(!is_for_path(&current, &path_a));
 
+        // Deliberately leak the last handle instead of unref'ing it here (the
+        // oracle's trailing `current.unref()`, `media.zig:157`).
+        //
+        // WHY: `GtkMediaFile` is backed by `GstPlay`, which runs its own
+        // `gst_play_main` thread. Dropping the LAST reference within a few
+        // microseconds of construction races that thread's startup: the play
+        // thread is still inside `gst_play_set_uri_internal` /
+        // `on_error` -> `api_bus_post_message`, and the bus message it posts
+        // ends up holding the final `GstPlay` reference, so `gst_play_finalize`
+        // runs ON the play thread and calls `g_mutex_clear()` on a mutex that
+        // thread still holds. Measured on Fedora 44 / GStreamer 1.28.1: the
+        // unref'ing version of this test aborted (`g_mutex_clear() called on
+        // uninitialised or locked mutex`) or segfaulted
+        // (`gst_object_ref` on a freed object) in ~30% of runs, with and
+        // without a display, which made `cargo test --workspace` red at random.
+        // Calling `clear()` first only narrows the window (~3%); nothing in the
+        // GTK API closes it. This is an upstream `GstPlay` teardown bug, not a
+        // property of `bell_media_file`.
+        //
+        // Leaking is sound HERE and nowhere else: it is one `GstPlay` for the
+        // remaining lifetime of a test process that is about to exit, and it
+        // costs the test no coverage — every assertion above is about the reuse
+        // contract (`is_for_path` driving rebuild), never about the final
+        // teardown. `bell_media_file`'s own `drop` of a replaced handle is still
+        // exercised, on the line above.
+        std::mem::forget(current);
+
         let _ = std::fs::remove_file(&path_a);
         let _ = std::fs::remove_file(&path_b);
     }
