@@ -4,7 +4,18 @@
 set -e
 root=$(cd "$(dirname "$0")/../../.." && pwd); cd "$root"
 lib=target/release/librustty_vt_c.dylib
-[ -f "$lib" ] || cargo build -p rustty-vt-c --release >/dev/null 2>&1
+# P3-W6: UNCONDITIONAL, same reason as the wasm build below. This was
+# `[ -f "$lib" ] || cargo build …`, which is the SAME stale-artifact vacuity —
+# and it bit immediately: arm (c) reads the struct registry by running
+# `rustty_type_json()` OUT OF THIS DYLIB, so with a stale one present the gate
+# reported the pre-change registry and its verdict described a library that was
+# no longer the source tree. WS19 T16 made exactly this change to all 23
+# example/*/build.sh for the same reason; the gates had not been swept.
+if ! cargo build -p rustty-vt-c --release >/dev/null 2>&1; then
+  echo "A5: FAIL — \`cargo build -p rustty-vt-c --release\` does not build." >&2
+  cargo build -p rustty-vt-c --release 2>&1 | tail -40 >&2
+  exit 1
+fi
 # P3-W6 T1: this build is UNCONDITIONAL, and the failure is not swallowed.
 #
 # It used to be `[ -f …rustty_vt_c.wasm ] || cargo build …>/dev/null 2>&1`, which

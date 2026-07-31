@@ -181,7 +181,7 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
     use crate::selection_gesture::{Behaviors, Geometry};
     use crate::size_report::Size as SizeReportSize;
     use crate::style::{Color as StyleColor, Style};
-    use crate::terminal::{ScrollViewport, TerminalScrollbar};
+    use crate::terminal::{DesktopNotification, ProgressReport, ScrollViewport, TerminalScrollbar};
     use rustty_lib::types::{Buffer, String as LibString};
     use rustty_vt::point::Coordinate as PointCoordinate;
 
@@ -574,6 +574,35 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
         ),
         // (oracle 03d5fa268 REMOVED the `GhosttyTerminalOptions` row along with
         // the struct itself; `json_parses` asserts the name is absent.)
+        // .{ "GhosttyTerminalDesktopNotification", StructInfo.init(terminal.DesktopNotification) },
+        //   (oracle c3655ba25)
+        (
+            "RusttyTerminalDesktopNotification",
+            struct_info!(
+                DesktopNotification,
+                [
+                    ("size", usize, size, "u64"),
+                    // title/body: RusttyString (ptr+len over BORROWED BYTES)
+                    ("title", LibString, title, "struct"),
+                    ("body", LibString, body, "struct"),
+                ]
+            ),
+        ),
+        // .{ "GhosttyTerminalProgressReport", StructInfo.init(terminal.ProgressReport) },
+        //   (oracle 47d602c42; the shared enum is 628adaf30's)
+        (
+            "RusttyTerminalProgressReport",
+            struct_info!(
+                ProgressReport,
+                [
+                    ("size", usize, size, "u64"),
+                    // state: ProgressState (enum(c_int)) -> "enum"
+                    ("state", crate::terminal::ProgressState, state, "enum"),
+                    // progress: int8_t, -1 == omitted
+                    ("progress", i8, progress, "i8"),
+                ]
+            ),
+        ),
         // .{ "GhosttyTerminalScrollbar", StructInfo.init(terminal.TerminalScrollbar) },
         (
             "RusttyTerminalScrollbar",

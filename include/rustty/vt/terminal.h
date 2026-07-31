@@ -94,6 +94,8 @@ extern "C" {
  * | `RUSTTY_TERMINAL_OPT_COLOR_SCHEME`     | `RusttyTerminalColorSchemeFn`    | Color scheme query (CSI ? 996 n)          |
  * | `RUSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES`| `RusttyTerminalDeviceAttributesFn`| Device attributes query (CSI c / > c / = c)|
  * | `RUSTTY_TERMINAL_OPT_CLIPBOARD_WRITE`  | `RusttyTerminalClipboardWriteFn` | Clipboard write via OSC 52 / OSC 1337     |
+ * | `RUSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION`| `RusttyTerminalDesktopNotificationFn` | Desktop notification via OSC 9 / OSC 777 |
+ * | `RUSTTY_TERMINAL_OPT_PROGRESS_REPORT`  | `RusttyTerminalProgressReportFn` | Progress report via OSC 9;4               |
  *
  * ### Defining a write_pty callback
  * @snippet c-vt-effects/src/main.c effects-write-pty
@@ -446,6 +448,100 @@ typedef RusttyClipboardWriteResult (*RusttyTerminalClipboardWriteFn)(
     RusttyTerminal terminal,
     void* userdata,
     const RusttyClipboardWrite* write);
+
+/**
+ * A request to show a desktop notification.
+ *
+ * This is a sized struct. The callback must only access fields present in the
+ * size reported by `size`. Both strings are borrowed and valid only for the
+ * duration of the callback.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** Size of this struct in bytes. */
+  size_t size;
+
+  /** Notification title, or an empty string when the protocol omits it. */
+  RusttyString title;
+
+  /** Notification body. */
+  RusttyString body;
+} RusttyTerminalDesktopNotification;
+
+/**
+ * Callback function type for desktop notifications.
+ *
+ * Called synchronously when the terminal receives OSC 9 or OSC 777.
+ *
+ * @param terminal The terminal handle
+ * @param userdata The userdata pointer set via RUSTTY_TERMINAL_OPT_USERDATA
+ * @param notification Borrowed desktop notification request
+ *
+ * @ingroup terminal
+ */
+typedef void (*RusttyTerminalDesktopNotificationFn)(
+    RusttyTerminal terminal,
+    void* userdata,
+    const RusttyTerminalDesktopNotification* notification);
+
+/**
+ * State of a terminal progress report.
+ *
+ * @ingroup terminal
+ */
+typedef enum RUSTTY_ENUM_TYPED {
+  /** Remove any visible progress indication. */
+  RUSTTY_TERMINAL_PROGRESS_STATE_REMOVE = 0,
+
+  /** Show determinate progress. */
+  RUSTTY_TERMINAL_PROGRESS_STATE_SET = 1,
+
+  /** Show a failed progress state. */
+  RUSTTY_TERMINAL_PROGRESS_STATE_ERROR = 2,
+
+  /** Show indeterminate progress. */
+  RUSTTY_TERMINAL_PROGRESS_STATE_INDETERMINATE = 3,
+
+  /** Show paused progress. */
+  RUSTTY_TERMINAL_PROGRESS_STATE_PAUSE = 4,
+  RUSTTY_TERMINAL_PROGRESS_STATE_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
+} RusttyTerminalProgressState;
+
+/**
+ * A progress report emitted by the running program.
+ *
+ * This is a sized struct. The callback must only access fields present in the
+ * size reported by `size`.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** Size of this struct in bytes. */
+  size_t size;
+
+  /** Literal progress state reported by the running program. */
+  RusttyTerminalProgressState state;
+
+  /** Progress percentage from 0 through 100, or -1 when omitted. */
+  int8_t progress;
+} RusttyTerminalProgressReport;
+
+/**
+ * Callback function type for progress reports.
+ *
+ * Called synchronously when the terminal receives OSC 9;4.
+ *
+ * @param terminal The terminal handle
+ * @param userdata The userdata pointer set via RUSTTY_TERMINAL_OPT_USERDATA
+ * @param report Borrowed progress report
+ *
+ * @ingroup terminal
+ */
+typedef void (*RusttyTerminalProgressReportFn)(
+    RusttyTerminal terminal,
+    void* userdata,
+    const RusttyTerminalProgressReport* report);
 
 /**
  * Callback function type for color scheme queries (CSI ? 996 n).
@@ -888,6 +984,23 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Input type: size_t*
    */
   RUSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES = 28,
+
+  /**
+   * Callback invoked when the running program requests a desktop
+   * notification via OSC 9 or OSC 777. Set to NULL to ignore desktop
+   * notification requests.
+   *
+   * Input type: RusttyTerminalDesktopNotificationFn
+   */
+  RUSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION = 29,
+
+  /**
+   * Callback invoked when the running program reports progress via OSC 9;4.
+   * Set to NULL to ignore progress reports.
+   *
+   * Input type: RusttyTerminalProgressReportFn
+   */
+  RUSTTY_TERMINAL_OPT_PROGRESS_REPORT = 30,
   RUSTTY_TERMINAL_OPT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyTerminalOption;
 

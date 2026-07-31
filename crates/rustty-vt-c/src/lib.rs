@@ -1222,7 +1222,9 @@ fn terminal_data_from_c_int(v: c_int) -> Option<terminal::TerminalData> {
     }
 }
 
-const TERMINAL_OPTION_COUNT: c_int = 29; // contiguous 0..=28 (27/28 = scrollback max bytes/lines)
+// contiguous 0..=30 (27/28 = scrollback max bytes/lines; 29/30 = the
+// desktop-notification and progress-report effects, oracle c3655ba25 47d602c42)
+const TERMINAL_OPTION_COUNT: c_int = 31;
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
     if (0..TERMINAL_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
