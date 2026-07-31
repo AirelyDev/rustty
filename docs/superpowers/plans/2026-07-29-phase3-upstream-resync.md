@@ -3453,6 +3453,12 @@ appears to.
 
 ## `P3-W12` finale
 
-- [ ] V22 discharged with observed output for all four events, or the row updated
-      to state a tested limit rather than an assumed one.
-- [ ] `G-P2` green; `check_phase2_closure.py --self-test` green.
+- [x] V22 discharged with observed output for all four events, or the row updated
+      to state a tested limit rather than an assumed one. **DONE 2026-07-31**: the
+      harness lives in `hotkeys.rs` as the (no longer `#[ignore]`d)
+      `hotkeys_wire_path_bound_pressed_denied_revoked`; V22 carries the observed
+      output for `bind`/`bound`/`pressed`/`denied`/`revoked`, the mandatory
+      negative control (`Entry::fail` stops calling `emit_bind_failed`) watched go
+      red on BOTH failure arms, and the `REBUILD SENTINEL` that proves the control
+      was not a cargo no-op.
+- [x] `G-P2` green; `check_phase2_closure.py --self-test` green.
