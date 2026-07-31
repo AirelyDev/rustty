@@ -113,6 +113,19 @@ impl ViewportSearch {
     ///
     /// Returns true if the viewport changed and a re-search is needed.
     /// Returns false if the viewport is unchanged.
+    //
+    // PORT NOTE: the reference's `fingerprint only allocates on changes` test
+    // proves the no-allocation contract with a `testing.FailingAllocator`:
+    //
+    //   Fail the next allocation. An unchanged viewport with active dirty
+    //   tracking disabled should reuse the existing fingerprint and return
+    //   unchanged before rebuilding the search window, so this update should
+    //   succeed without reporting a viewport change.
+    //
+    // rustty has no fallible allocator seam here, so the port asserts the same
+    // property by counting global-allocator calls; it lives out-of-`src` in
+    // `crates/rustty-vt/tests/viewport_fingerprint_alloc.rs` because the
+    // counting global allocator must be installed process-wide.
     // pub fn update(
     //     self: *ViewportSearch,
     //     list: *PageList,

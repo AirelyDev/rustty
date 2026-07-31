@@ -91,6 +91,9 @@ fn build_color_keys() -> Vec<String> {
 }
 
 /// A single X11 color entry.
+///
+/// Color name. Null-terminated so it can be exposed through the C API
+/// without runtime allocation.
 // pub const Entry = struct { name: [:0]const u8, color: RGB };
 // PORT NOTE: the reference name is null-terminated for the C API. In rustty the
 // static C table (with its own null-terminated copies) is built in
@@ -103,7 +106,8 @@ pub struct Entry {
 
 /// All X11 colors in rgb.txt file order.
 ///
-/// This is kept separate from `map` because the C API needs stable file order.
+/// This is kept separate from `map` because the C API needs stable file order
+/// and null-terminated names. `ColorMap` keys do not provide that contract.
 // pub const entries: []const Entry = entriesArray();
 pub fn entries() -> &'static [Entry] {
     static ENTRIES: OnceLock<Vec<Entry>> = OnceLock::new();

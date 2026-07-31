@@ -38,15 +38,28 @@ use std::collections::HashMap;
 // const log = std.log.scoped(.kitty_gfx);
 
 /// Process-global counter backing all generation stamps (see
-/// [`ImageStorage::generation`] and [`Image::generation`]). This is global
-/// rather than per-storage so that stamps are unique across every storage in
-/// the process: two mutation events never produce the same value, even across
-/// separate screens (main vs. alt), storage resets, or separate terminals. This
-/// lets consumers use a generation value alone as a cache key without any
-/// ambiguity.
+/// ImageStorage.generation and Image.generation). This is global rather
+/// than per-storage so that stamps are unique across every storage in
+/// the process: two mutation events never produce the same value, even
+/// across separate screens (main vs. alt), storage resets, or separate
+/// terminals. This lets consumers use a generation value alone as a
+/// cache key without any ambiguity.
 ///
-/// Atomic because separate terminals may mutate their storages from different
-/// threads.
+/// Thread-safe because separate terminals may mutate their storages
+/// from different threads. On single-threaded targets this lowers to
+/// plain operations.
+//
+// The reference names the backing type `GenerationCounter` and documents it:
+//
+//   Backing implementation for the generation counter. We use a
+//   lock-free atomic counter where we can, but not all targets support
+//   64-bit atomic operations (e.g. 32-bit ARM Android), so we fall back
+//   to a mutex-protected counter on those. This is a cold path (only
+//   invoked on content mutations) so the mutex cost is irrelevant.
+//
+//   The pointer-width check is a conservative proxy for 64-bit atomic
+//   support: every 64-bit target supports 64-bit atomics, while 32-bit
+//   targets may not (per the compiler's atomic operand validation).
 //
 // PORT NOTE (8fe5913f7): upstream's comptime-selected mutex fallback for
 // targets without 64-bit atomics is not needed — every target in rustty's
@@ -96,16 +109,17 @@ pub struct ImageStorage {
     /// event.
     pub dirty: bool,
 
-    /// Generation stamp of the last content mutation to this storage: any image
-    /// transmit/replace, placement add, or delete of either. Zero means the
-    /// storage has never been mutated (and is therefore empty).
+    /// Generation stamp of the last content mutation to this storage:
+    /// any image transmit/replace, placement add, or delete of either.
+    /// Zero means the storage has never been mutated (and is therefore
+    /// empty).
     ///
-    /// Unlike `dirty`, this is NOT updated by scrolling/resizing, so an
-    /// unchanged generation means the placement set and all image data are
-    /// identical; only placement geometry (pins) may have moved. Values come
-    /// from a process-global monotonic counter, so a value observed from any
-    /// storage never recurs for different content, even across screen switches
-    /// or storage resets.
+    /// Unlike dirty, this is NOT updated by scrolling/resizing, so an
+    /// unchanged generation means the placement set and all image data
+    /// are identical; only placement geometry (pins) may have moved.
+    /// Values come from a process-global monotonic counter, so a value
+    /// observed from any storage never recurs for different content,
+    /// even across screen switches or storage resets.
     ///
     /// This field must only be written via `mark_mutated`.
     pub generation: u64,
@@ -393,10 +407,11 @@ impl ImageStorage {
     /// Delete placements, images.
     pub fn delete(&mut self, alloc: Allocator, t: &mut Terminal, cmd: command::Delete) {
         // Deletes only ever remove placements/images, so comparing counts
-        // before and after tells us whether anything actually changed. Only
-        // then do we mark a mutation. This matters because a delete-all runs on
-        // every screen clear (e.g. `ESC [ 2 J`), and we don't want empty clears
-        // to dirty the image state or bump the generation.
+        // before and after tells us whether anything actually changed.
+        // Only then do we mark a mutation. This matters because a
+        // delete-all runs on every screen clear (e.g. `ESC [ 2 J`), and
+        // we don't want empty clears to dirty the image state or bump
+        // the generation.
         //
         // PORT NOTE: Zig's `defer` runs on every return path; Rust has no
         // `defer`. To keep the trailing generation check unconditionally

@@ -2240,15 +2240,23 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // fn clipboardContents(self: *Handler, kind: u8, data: []const u8) !void
     //
-    // PORT NOTE: the reference is `!void` and its caller `try`s it, propagating
-    // an invalid-base64 decode error out of `nextSlice`. rustty's OSC dispatch
+    // PORT NOTE: the reference is `!void` and its dispatch arm swallows the
+    // error with `catch |err| { ... log.warn("error handling clipboard write
+    // err={}", .{err}); }` because:
+    //
+    //   Clipboard writes are external effects, not terminal state.
+    //
+    // rustty's OSC dispatch
     // arm is infallible, so a malformed payload is a silent no-op here — the net
     // observable behavior is identical (the callback is simply not invoked), and
     // the oracle stream test only asserts the un-invoked count. The reference's
     // fallible-allocator OOM path ("clipboard_write allocation failure is
     // ignored") has no rustty analog because the decode scratch is a `Vec` that
     // aborts on OOM (DG5 abort policy), so that oracle test is intentionally not
-    // ported.
+    // ported. What that test injects is:
+    //
+    //   Only the decoded scratch data uses the terminal allocator here. Swap in
+    //   an allocator that always fails, then restore it before terminal teardown.
     fn clipboard_contents(&mut self, v: stream::ClipboardContents) {
         let kind = v.kind;
         let data = v.data;

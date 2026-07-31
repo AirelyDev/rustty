@@ -200,12 +200,29 @@ unsafe fn print_slice_store_run(
 
     // Vectorized bulk of the run.
     if let Some(lanes) = CELL_LANES {
+        // The template and shift amount are loop-invariant, so
+        // broadcast them to every lane once up front.
+        //
+        // PORT NOTE: `template_bits`/`CP_SHIFT` are already scalar constants of
+        // the loop in this port, so the reference's explicit `@splat` of each
+        // into a `@Vector(lanes, ...)` has no separate spelling here — LLVM
+        // hoists and broadcasts them from the fixed-length window below.
         while idx + lanes <= to {
-            // Load `lanes` decoded codepoints, widen each to the u64 cell
-            // size, shift into the content field's bit position, merge with
-            // the template, and store contiguously. Written over a
-            // fixed-length window so LLVM emits the same vector stores the
-            // reference's `@Vector(lanes, u64)` does.
+            // Load `lanes` decoded codepoints...
+            //
+            // ...widen each u32 lane to the u64 cell size...
+            //
+            // ...shift each codepoint into the content field's bit
+            // position and merge with the template, producing
+            // `lanes` finished cells (coerced from vector to array
+            // so they can be bitcast for the store below)...
+            //
+            // ...and store them contiguously. Cell is a packed
+            // struct(u64) so an array of u64 bit patterns has
+            // identical layout to an array of cells.
+            //
+            // Written over a fixed-length window so LLVM emits the same vector
+            // stores the reference's `@Vector(lanes, u64)` does.
             for j in 0..lanes {
                 let cp = unsafe { *cps.add(idx + j) } as u64;
                 unsafe {
@@ -229,9 +246,12 @@ unsafe fn print_slice_store_run(
 }
 
 /// Store `(wide, spacer_tail)` cell pairs for `[from, to)` (which must be
-/// pair-aligned). Manually vectorized for the same reason as
-/// `print_slice_store_run`: build a vector of wide cells, interleave with
-/// spacer tails, and store pairs several at a time.
+/// pair-aligned).
+///
+/// Manually vectorized for the same reason as
+/// printSliceStoreRun: build a vector of wide cells,
+/// interleave with spacer tails, and store (wide,
+/// spacer) pairs several at a time.
 ///
 /// # Safety
 ///
@@ -1404,12 +1424,19 @@ impl Terminal {
         cps: &[u32],
         run_len: usize,
     ) -> Result<usize, OutOfMemory> {
+        // Our fast path can only handle "simple" cells. A simple cell is
+        // a codepoint cell (no grapheme data or bg-color tag), narrow, and
+        // not a hyperlink. The mask covers every field that must match
+        // the expected value (see printSliceCheckExpected) exactly.
         const SIMPLE_MASK: u64 = pagepkg::cell_field_mask(&[
             pagepkg::CellField::ContentTag,
             pagepkg::CellField::StyleId,
             pagepkg::CellField::Wide,
             pagepkg::CellField::Hyperlink,
         ]);
+
+        // The bit offset of the codepoint content within a Cell, used to
+        // construct cell values from a template without field assignments.
         const CP_SHIFT: u32 = pagepkg::CELL_CONTENT_SHIFT;
 
         // The number of cells each codepoint occupies.

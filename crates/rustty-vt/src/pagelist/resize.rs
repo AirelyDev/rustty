@@ -697,6 +697,11 @@ impl PageList {
                     // just update our rows and we're done. This effectively
                     // "pulls down" scrollback.
                     //
+                    // This traversal intentionally reads only node metadata. A
+                    // compressed history page pulled into the active area remains
+                    // compressed until a renderer or other content consumer goes
+                    // through `Node.page`, which restores it transparently.
+                    //
                     // If we don't have enough scrollback, we add the difference,
                     // to the active area.
                     let mut count: usize = 0;

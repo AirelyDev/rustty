@@ -93,8 +93,8 @@ pub trait HashMapContext<K> {
     fn eql(&self, a: K, b: K) -> bool;
 }
 
-/// The default preserves the original behavior of allowing every raw slot to
-/// be occupied. Callers can choose a lower value to bound probe lengths.
+/// The default allows every raw slot to be occupied. Callers whose maps see
+/// removal-heavy churn should choose a lower value to bound probe lengths.
 // `pub const default_max_load_percentage: u8 = 100;`
 pub const DEFAULT_MAX_LOAD_PERCENTAGE: u8 = 100;
 
@@ -128,9 +128,13 @@ impl<K> Default for AutoContext<K> {
 impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
     // PORT NOTE (`f2a7652ab`'s `hash_map.zig` hunk, WS10 T16): upstream replaced
     // `std.hash_map.getAutoHashFn` with an explicit body that force-inlines the
-    // hash for `hasUniqueRepresentation(K)` types, because "LLVM 21 (Zig 0.16)
-    // failed to inline this which resulted in a measurable almost 2x slowdown on
-    // our hyperlink map benchmark". This port's context is already an explicit
+    // hash for `hasUniqueRepresentation(K)` types, because:
+    //
+    // LLVM 21 (Zig 0.16) failed to inline this which resulted
+    // in a measurable almost 2x slowdown on our hyperlink map
+    // benchmark. So, force it.
+    //
+    // This port's context is already an explicit
     // body (see the note above), so the portable half of that change is the
     // inlining hint — `#[inline]` is the Rust spelling of
     // `@call(.always_inline, ...)` across the crate boundary. The
@@ -363,9 +367,9 @@ pub struct Layout {
 }
 
 /// Fork of stdlib.HashMap as of Zig 0.12 modified to use offsets for
-/// the key/values pointer. The metadata is still a pointer to limit
-/// the amount of arithmetic required to access it. See the file comment
-/// for full details.
+/// the key/values pointer, and backward-shift deletion in place of
+/// tombstones. The metadata is still a pointer to limit the amount of
+/// arithmetic required to access it. See the file comment for full details.
 pub struct HashMapUnmanaged<K, V, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8> {
     // This is actually a midway pointer to the single buffer containing
     // a `Header` field, the `Metadata`s and `Entry`s.
@@ -1148,6 +1152,10 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
 }
 
+/// Iterates the entries of the map. Any mutation of the map
+/// invalidates the iterator: removal may move entries across the
+/// iteration cursor.
+///
 /// `pub const Iterator = struct { hm, index };`
 pub struct Iterator<'a, K, V, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8> {
     hm: &'a HashMapUnmanaged<K, V, Context, MAX_LOAD_PERCENTAGE>,

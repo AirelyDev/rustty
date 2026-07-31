@@ -821,11 +821,12 @@ pub struct Image {
     /// Usage hints transmitted with the image (oracle `a65e11cc9`); see
     /// `command::Usage`. `transient` prioritises this image for eviction.
     pub usage: command::Usage,
-    /// Unique, monotonically increasing stamp assigned each time an image is
-    /// added to (or replaced in) an `ImageStorage`. A changed generation for a
-    /// given image ID means the image contents may have changed, even if the
-    /// dimensions and byte length are the same (e.g. a retransmission of the
-    /// same ID). Stamps order by transmission time. Zero means "never stored".
+    /// Unique, monotonically increasing stamp assigned each time an
+    /// image is added to (or replaced in) an ImageStorage. A changed
+    /// generation for a given image ID means the image contents may
+    /// have changed, even if the dimensions and byte length are the
+    /// same (e.g. a retransmission of the same ID). Stamps order by
+    /// transmission time. Zero means "never stored".
     //
     // PORT NOTE: replaces the pre-`bdc0b6c19` `transmit_time: std.time.Instant`.
     pub generation: u64,

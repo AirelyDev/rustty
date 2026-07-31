@@ -1129,13 +1129,13 @@ impl Default for Row {
     }
 }
 
-// The PageList memory pool requires that `Page::init_buf` overwrites at
+// The PageList memory pool requires that initBuf overwrites at
 // least the first pointer-size bytes of the backing buffer:
-// `MemoryPool` stores its free list node there when a page buffer is
-// returned to it, and pool reuse skips zeroing in release builds. This
-// holds because the rows array is at offset 0 (see `Page::layout`), a
-// page always has at least one row (asserted in `Page::init_buf`), and
-// `init_buf` fully rewrites every row.
+// std.heap.MemoryPool stores its free list node there when a
+// page buffer is returned to it, and pool reuse skips zeroing
+// in release builds. This holds because the rows array is at
+// offset 0 (see layout), a page always has at least one row,
+// and initBuf fully rewrites every row.
 //
 // PORT NOTE (oracle c442eb4b3, `P3-W1 T4`): the reference puts this in the
 // `comptime { ... }` block at the top of `Page`; rustty's `Page` lives in
@@ -1318,11 +1318,13 @@ impl Capacity {
 // Masked compares over the packed backing integers (446f80f4e, WS10 T19).
 // =============================================================================
 
-/// The backing integer of `Row`/`Cell`.
+/// The backing integer of this packed struct. Prefer this over
+/// hardcoding the integer type so that code is resilient to the
+/// size changing.
 ///
 /// PORT NOTE: the reference exposes this per type as
-/// `pub const Backing = @typeInfo(Row).@"struct".backing_integer.?` so that code
-/// is resilient to the size changing. Rust has no such reflection over a
+/// `pub const Backing = @typeInfo(Row).@"struct".backing_integer.?`.
+/// Rust has no such reflection over a
 /// hand-rolled bitfield, so the port names the type once here and both `Row` and
 /// `Cell` alias it as `Row::Backing`/`Cell::Backing` (the layout tests in
 /// `page_tests.rs` already assert both are 64 bits wide).
@@ -1393,11 +1395,13 @@ impl RowField {
     }
 }
 
-/// Returns a mask with all bits set for the given `(shift, bits)` field ranges,
-/// used for masked compares of raw backing-integer values.
+/// Returns a mask with all bits set for the given fields of the packed
+/// struct T, used for masked compares of raw backing-integer values
+/// (e.g. `Row.Backing`, `Cell.Backing`). This is an implementation
+/// detail of `Mask`, which is the public API built on top of this.
 ///
-/// PORT NOTE: reference `fn fieldMask(comptime T, comptime fields)` — an
-/// implementation detail of `Mask`, which is the public API built on top of it.
+/// PORT NOTE: reference `fn fieldMask(comptime T, comptime fields)`; the port
+/// takes the already-resolved `(shift, bits)` field ranges.
 pub const fn field_mask(fields: &[(u32, u32)]) -> Backing {
     let mut m: Backing = 0;
     let mut i = 0;
@@ -1482,40 +1486,48 @@ impl Packed for Row {
     }
 }
 
-/// A helper for classifying and comparing packed values (`Row`, `Cell`) in
-/// bulk, using masked compares of their raw backing integers.
+/// A comptime-generated helper for classifying and comparing packed
+/// struct values (e.g. Row, Cell) in bulk, using masked compares of
+/// their raw backing integers.
 ///
-/// Masked compares are the key to making bulk row/cell processing fast. Rows and
-/// cells are small packed structs specifically so that a single integer load
-/// observes every field at once. A masked compare can then answer a multi-field
-/// question with one AND and one compare, instead of extracting and branching on
-/// each field individually (each packed field access compiles to its own
-/// shift/mask). Just as importantly, the integer form vectorizes trivially:
-/// splat the mask and expected value, and whole groups of rows or cells can be
-/// classified with a few SIMD instructions.
+/// Masked compares are the key to making bulk row/cell processing fast.
+/// Rows and cells are small packed structs specifically so that a single
+/// integer load observes every field at once. A masked compare can then
+/// answer a multi-field question with one AND and one compare, instead
+/// of extracting and branching on each field individually (each packed
+/// field access compiles to its own shift/mask). Just as importantly,
+/// the integer form vectorizes trivially: `@splat` the mask and expected
+/// value, and whole groups of rows or cells can be classified with a
+/// few SIMD instructions.
 ///
 /// Some real examples of this in use:
 ///
-///   - Terminal print fast path: a cell can be overwritten by the simple/fast
-///     path only if its content tag is a plain codepoint, it has no style, isn't
-///     wide, and isn't a hyperlink. Masking with those fields and comparing
-///     against a template answers all four questions in one compare per cell.
+///   - Terminal print fast path: a cell can be overwritten by the
+///     simple/fast path only if its content tag is a plain codepoint,
+///     it has no style, isn't wide, and isn't a hyperlink. Masking
+///     with those fields and comparing against a template answers all
+///     four questions in one compare per cell.
 ///
-///   - Render state updates: a cell whose masked `{content_tag, style_id}` bits
-///     are zero is a plain cell that needs no managed-memory handling, so an
-///     OR-reduce can skip entire groups of plain cells at once. Similarly, cells
-///     whose masked bits equal the first cell's form a run sharing one style,
-///     letting the update record one style lookup per run rather than per cell.
+///   - Render state updates: a cell whose masked
+///     `{content_tag, style_id}` bits are zero is a plain cell that
+///     needs no managed-memory handling, so a vector OR-reduce can
+///     skip entire groups of plain cells at once. Similarly, cells
+///     whose masked bits equal the first cell's form a run sharing one
+///     style, letting the update record one style lookup per run
+///     rather than per cell.
 ///
-///   - Dirty scans: OR-reducing groups of rows against the `dirty` field mask
-///     finds whether any row in the group needs a rebuild without touching each
-///     row's flag individually.
+///   - Dirty scans: OR-reducing groups of rows against the `dirty`
+///     field mask finds whether any row in the group needs a rebuild
+///     without touching each row's flag individually.
 ///
-/// `T` is the packed type, `MASK` the covered field bits (build it with
-/// `cell_field_mask`/`row_field_mask`), and `GROUP_LEN` the number of values
-/// processed at once by the group operations. Callers typically scan a slice
-/// with the group operations and fall back to the scalar variants for the
-/// remainder and for pinpointing values within a matched group.
+/// T is the packed struct type, fields are the fields covered by the
+/// mask, and group_len is the number of values processed at once by
+/// the group (vectorized) operations. Callers typically scan a slice
+/// with the group operations and fall back to the scalar variants for
+/// the remainder and for pinpointing values within a matched group.
+///
+/// In this port `MASK` is the already-reduced field-bit set (build it with
+/// `cell_field_mask`/`row_field_mask`) and `GROUP_LEN` is `group_len`.
 ///
 /// PORT NOTE: the reference is `pub fn Mask(comptime T, comptime fields,
 /// comptime group_len) type` returning an anonymous struct; the Rust port is a
@@ -1555,26 +1567,27 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
         v.to_bits()
     }
 
-    /// Returns the masked bits of a single value: the bits of the masked fields
-    /// with all other fields zeroed. Use this to build the expected value for
-    /// the `eql` functions.
+    /// Returns the masked bits of a single value: the bits of the
+    /// masked fields with all other fields zeroed. Use this to
+    /// build the expected value for the eql functions.
     #[inline]
     pub fn pattern(v: T) -> Backing {
         v.to_bits() & MASK
     }
 
-    /// Returns the backing bits of a single value with the masked fields
-    /// zeroed: the complement of `pattern`. Use this to compare values while
-    /// ignoring the masked fields.
+    /// Returns the backing bits of a single value with the masked
+    /// fields zeroed: the complement of `pattern`. Use this to
+    /// compare values while ignoring the masked fields.
     #[inline]
     pub fn strip(v: T) -> Backing {
         v.to_bits() & !MASK
     }
 
-    /// Returns true if every value in the group of `GROUP_LEN` values starting
-    /// at index `i` matches, where a value matches when none of the masked
-    /// fields have any bits set: false for bools, zero for ints, the zero tag
-    /// for enums, and so on.
+    /// Returns true if every value in the group of group_len
+    /// values starting at index i matches, where a value matches
+    /// when none of the masked fields have any bits set: false
+    /// for bools, zero for ints, the zero tag for enums, and so
+    /// on. Asserts that at least group_len values are available.
     #[inline]
     pub fn match_group(values: &[T], i: usize) -> bool {
         let g = Self::load(values, i);
@@ -1593,15 +1606,16 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
         v.to_bits() & MASK == 0
     }
 
-    /// Returns true if the masked fields of every value in the group of
-    /// `GROUP_LEN` values starting at index `i` equal the expected pattern (see
-    /// `pattern`).
+    /// Returns true if the masked fields of every value in the
+    /// group of group_len values starting at index i equal the
+    /// expected pattern (see `pattern`).
     ///
-    /// This is a masked compare: fields outside the mask may vary freely. Use
-    /// this to detect runs of values that share the masked field contents while
-    /// other fields differ, e.g. a run of cells with the same style ID but
-    /// different codepoints. If the result you derive from a run depends on
-    /// fields outside the mask, use `eql_exact` instead.
+    /// This is a masked compare: fields outside the mask may vary
+    /// freely. Use this to detect runs of values that share the
+    /// masked field contents while other fields differ, e.g. a run
+    /// of cells with the same style ID but different codepoints.
+    /// If the result you derive from a run depends on fields
+    /// outside the mask, use `eqlExact` instead.
     #[inline]
     pub fn eql(values: &[T], i: usize, expected: Backing) -> bool {
         let g = Self::load(values, i);
@@ -1620,10 +1634,11 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
         Self::pattern(v) == expected
     }
 
-    /// Like `eql` but returns the number of leading values whose masked fields
-    /// equal the expected pattern, i.e. `GROUP_LEN` if the entire group matches.
-    /// This is useful for early-exit run scans that need to pinpoint exactly
-    /// where a run ends rather than only whether the whole group matches.
+    /// Like `eql` but returns the number of leading values whose
+    /// masked fields equal the expected pattern, i.e. group_len if
+    /// the entire group matches. This is useful for early-exit run
+    /// scans that need to pinpoint exactly where a run ends rather
+    /// than only whether the whole group matches.
     #[inline]
     pub fn eql_prefix(values: &[T], i: usize, expected: Backing) -> usize {
         let g = Self::load(values, i);
@@ -1636,11 +1651,12 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
             k += 1;
         }
 
-        // Test the whole group before extracting the prefix count: turning a
-        // vector compare into a scalar bitmask is expensive on some targets
-        // (e.g. NEON has no movemask instruction) and run scans overwhelmingly
-        // see fully matching groups, so we only pay for the extraction on the
-        // final group of a run.
+        // Test the whole group before extracting the prefix
+        // count: turning a vector compare into a scalar bitmask
+        // is expensive on some targets (e.g. NEON has no movemask
+        // instruction) and run scans overwhelmingly see fully
+        // matching groups, so we only pay for the extraction on
+        // the final group of a run.
         if all {
             return GROUP_LEN;
         }
@@ -1654,17 +1670,20 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
         GROUP_LEN
     }
 
-    /// Returns true if every value in the group of `GROUP_LEN` values starting
-    /// at index `i` is bit-identical to the expected value. Note: this compares
-    /// entire values; it is NOT affected by the field mask.
+    /// Returns true if every value in the group of group_len
+    /// values starting at index i is bit-identical to the expected
+    /// value. Note: this compares entire values; it is NOT
+    /// affected by the field mask.
     ///
-    /// This exists alongside `eql` for run detection where the derived result
-    /// depends on fields outside the mask, so a masked compare would incorrectly
-    /// extend the run. For example, the background color of a bg-color cell
-    /// lives in the content field: two such cells only share a background if
-    /// their content bits are identical, not merely their content tag. Values in
-    /// such runs are typically produced by bulk fills (e.g. erase with a pending
-    /// background) and are bit-identical in practice, so exact equality is both
+    /// This exists alongside `eql` for run detection where the
+    /// derived result depends on fields outside the mask, so a
+    /// masked compare would incorrectly extend the run. For
+    /// example, the background color of a bg-color cell lives in
+    /// the content field: two such cells only share a background
+    /// if their content bits are identical, not merely their
+    /// content tag. Values in such runs are typically produced by
+    /// bulk fills (e.g. erase with a pending background) and are
+    /// bit-identical in practice, so exact equality is both
     /// correct and cheap.
     #[inline]
     pub fn eql_exact(values: &[T], i: usize, expected: Backing) -> bool {

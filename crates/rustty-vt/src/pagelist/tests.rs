@@ -22,7 +22,11 @@
 // are reproduced verbatim.
 #![allow(clippy::while_immutable_condition)]
 
-use super::compress::{CompressionMode, IncrementalCompressionResult};
+use super::compress::{
+    CompressionIterator, CompressionMode, IncrementalCompressionFlags,
+    IncrementalCompressionResult, IncrementalCompressionState,
+    INCREMENTAL_COMPRESSION_MAX_INSPECTED,
+};
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
@@ -1560,6 +1564,10 @@ fn pagelist_only_reset_advances_the_serial_epoch() {
 }
 
 // ref: test "PageList reset invalidates stale untracked refs even if node memory is reused"
+//
+// Reset advances the epoch before rebuilding from the node pool. Reject
+// the stale generation before inspecting its pointer, even when that exact
+// address now belongs to a new live generation.
 #[test]
 fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
@@ -2107,8 +2115,9 @@ fn fill_last_page_for_test(s: &mut PageList) {
     }
 }
 
-/// Grow until at least `count` pages sit BEFORE the active area's top-left node,
-/// i.e. are cold history and therefore compression candidates.
+/// Grow a test PageList until it contains at least `count` complete history
+/// pages. The production cold-page boundary is intentionally reused here so
+/// tests do not duplicate the row-to-page arithmetic.
 ///
 /// PORTS: oracle@main PageList.zig `growColdPagesForTest` (9156ada16).
 fn grow_cold_pages_for_test(s: &mut PageList, count: usize) {
@@ -2998,7 +3007,10 @@ fn compressed_encoded_for_test(node: *const super::Node) -> Vec<u8> {
 /// injectable seam and is not ported. The first arm survives structurally and is
 /// asserted below: the resident case returns `PreservedPage::Borrowed` pointing
 /// at the live page, a variant that owns no buffer and therefore cannot have
-/// allocated or copied anything.
+/// allocated or copied anything. The reference's second arm reads:
+///
+///   Preserved-page allocation is opportunistic for callers. Failure leaves
+///   the node and its compressed representation untouched.
 #[cfg_attr(
     miri,
     ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — the cost is page-mapping/LZ4 volume, not assertion overhead, so the debug-assertions-off G6c lane does not rescue it either. Covered natively + by ASan."
@@ -3959,6 +3971,1020 @@ fn pagelist_oversized_page_is_heap_owned() {
     let compacted = s.compact(node).unwrap().unwrap();
     assert!(unsafe { (*super::Node::page(compacted)).memory_len() } < std_size());
     assert_eq!(unsafe { (*compacted).owned }, Owned::Heap);
+
+    s.deinit();
+}
+
+// =====================================================================
+// Incremental compression traversal (P3 G3b-vt lane)
+//
+// PORTS: the `9156ada16` / `70e788f06` / `181254d36` / `d0a26d146` /
+// `f8c217e55` incremental-compression test block of oracle
+// src/terminal/PageList.zig. The implementation was ported by WS7; these
+// blocks are the traversal-state and memory-accounting assertions that were
+// not carried over with it.
+// =====================================================================
+
+/// Overwrite a compressed node's encoded buffer so that decoding it must fail.
+///
+/// The oracle spells this `@memset(node.data.compressed.encoded, 0xFF)`.
+///
+/// # Panics
+/// Panics if the node is resident.
+fn corrupt_compressed_encoded_for_test(node: *mut super::Node) {
+    unsafe {
+        let data = core::ptr::addr_of_mut!((*node).data);
+        assert_eq!(NodeData::tag(data), NodeData::TAG_COMPRESSED);
+        let c = NodeData::compressed_payload(data) as *mut crate::compress::CompressedPage;
+        (*c).encoded.fill(0xFF);
+    }
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression skips visible history"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_skips_visible_history() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 3);
+
+    let initial_activity = s.page_compression.activity_serial;
+    assert!(initial_activity > 0);
+
+    s.scroll(Scroll::Top);
+    let top_activity = s.page_compression.activity_serial;
+    assert_ne!(top_activity, initial_activity);
+    assert_eq!(
+        IncrementalCompressionResult::Complete,
+        s.compress(CompressionMode::Drain)
+    );
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    assert_eq!(first, s.get_top_left(point::Tag::Viewport).node);
+    assert_eq!(
+        first,
+        s.get_bottom_right(point::Tag::Viewport).unwrap().node
+    );
+    assert!(!unsafe { super::Node::is_compressed(first) });
+
+    let mut eligible = CompressionIterator::init(&s);
+    let mut compressed_pages: usize = 0;
+    while let Some(node) = eligible.next() {
+        compressed_pages += 1;
+        assert!(unsafe { super::Node::is_compressed(node) });
+    }
+    assert!(compressed_pages > 0);
+
+    // Move the viewport to the start of the second page. Rendering it restores
+    // that page, while the first page which just left view becomes eligible.
+    s.scroll(Scroll::Row(unsafe { super::Node::rows(first) } as usize));
+    assert_eq!(second, s.get_top_left(point::Tag::Viewport).node);
+    let _ = unsafe { super::Node::page(second) };
+    assert!(!unsafe { super::Node::is_compressed(second) });
+    let _ = s.compress(CompressionMode::Drain);
+    assert!(unsafe { super::Node::is_compressed(first) });
+    assert!(!unsafe { super::Node::is_compressed(second) });
+
+    // Returning to the active area makes every complete historical page
+    // eligible again, including the page which was just visible.
+    s.scroll(Scroll::Active);
+    let _ = s.compress(CompressionMode::Drain);
+    assert!(unsafe { super::Node::is_compressed(second) });
+    assert!(!s.page_compression.flags.did_compress);
+    assert!(!s.page_compression.flags.verifying);
+    assert_eq!(None, s.page_compression.last_serial);
+    assert_eq!(0, s.page_compression.next_serial);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList owns incremental compression state"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_owns_incremental_compression_state() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let state = IncrementalCompressionState {
+        flags: IncrementalCompressionFlags {
+            did_compress: true,
+            verifying: true,
+        },
+        activity_serial: 42,
+        last_serial: Some(42),
+        next_serial: 43,
+    };
+
+    s.page_compression = state;
+    s.scroll(Scroll::Top);
+    assert_eq!(
+        IncrementalCompressionState {
+            activity_serial: 43,
+            ..Default::default()
+        },
+        s.page_compression
+    );
+
+    // Every scroll restarts traversal, even if clamping leaves the viewport in
+    // the same place. Missing an eligible page is worse than a no-op pass.
+    s.page_compression = state;
+    s.scroll(Scroll::Top);
+    assert_eq!(
+        IncrementalCompressionState {
+            activity_serial: 43,
+            ..Default::default()
+        },
+        s.page_compression
+    );
+
+    s.page_compression = state;
+    s.scroll(Scroll::Active);
+    assert_eq!(
+        IncrementalCompressionState {
+            activity_serial: 43,
+            ..Default::default()
+        },
+        s.page_compression
+    );
+
+    s.page_compression = state;
+    s.resize(Resize {
+        cols: Some(80),
+        rows: Some(24),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        IncrementalCompressionState {
+            activity_serial: 43,
+            ..Default::default()
+        },
+        s.page_compression
+    );
+
+    s.page_compression = state;
+    s.reset();
+    assert_eq!(
+        IncrementalCompressionState {
+            activity_serial: 42,
+            ..Default::default()
+        },
+        s.page_compression
+    );
+
+    s.page_compression = state;
+    assert_eq!(
+        IncrementalCompressionResult::Complete,
+        s.compress(CompressionMode::Full)
+    );
+    assert_eq!(
+        IncrementalCompressionState {
+            activity_serial: 42,
+            ..Default::default()
+        },
+        s.page_compression
+    );
+
+    s.page_compression = state;
+    let mut opts = super::access::Clone {
+        top: point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut cloned = s.clone(&mut opts).unwrap();
+    assert_eq!(
+        IncrementalCompressionState::default(),
+        cloned.page_compression
+    );
+
+    cloned.deinit();
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression bounds inspected pages"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_bounds_inspected_pages() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, INCREMENTAL_COMPRESSION_MAX_INSPECTED + 1);
+
+    // Precompress every candidate so the incremental pass exercises its
+    // metadata-only skip budget without stopping at a resident attempt.
+    let _ = s.compress(CompressionMode::Full);
+    s.page_compression.reset();
+    s.page_compression.mark_activity();
+    assert_eq!(
+        INCREMENTAL_COMPRESSION_MAX_INSPECTED + 1,
+        s.memory_stats().compressed_pages
+    );
+
+    let mut expected_last = s.pages.first;
+    for _ in 1..INCREMENTAL_COMPRESSION_MAX_INSPECTED {
+        expected_last = unsafe { (*expected_last).next };
+    }
+
+    let first = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, first);
+    assert_eq!(
+        unsafe { (*expected_last).serial },
+        s.page_compression.last_serial.unwrap()
+    );
+
+    let second = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, second);
+    assert!(s.page_compression.flags.verifying);
+    assert!(s.page_compression.last_serial.is_none());
+
+    // The verification pass is bounded independently, too.
+    assert_eq!(
+        IncrementalCompressionResult::Pending,
+        s.compress(CompressionMode::Incremental)
+    );
+    assert_eq!(
+        IncrementalCompressionResult::Complete,
+        s.compress(CompressionMode::Incremental)
+    );
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression advances after failure"`.
+///
+/// PORT NOTE: no `deinit`, matching the sibling
+/// `pagelist_compression_leaves_incompressible_pages_resident` — the first
+/// page's backing memory is deliberately filled with random bytes, so it is no
+/// longer a structurally valid page and `deinit`'s integrity assertions would
+/// fire on it. The oracle's `defer s.deinit()` is safe only because its
+/// equivalent assertions are compiled out in its test build.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_advances_after_failure() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+    fill_incompressible(first, 0x494E_4352_5041_5353);
+
+    let failed = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, failed);
+    assert!(!unsafe { super::Node::is_compressed(first) });
+
+    // The unsuccessful first page does not stall the pass. The next step
+    // continues at the following serial and compresses that page.
+    let continued = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, continued);
+    assert!(unsafe { super::Node::is_compressed(second) });
+}
+
+// NOT PORTED: oracle@main PageList.zig
+// `test "PageList incremental compression advances after allocation failure"`.
+//
+// The oracle wraps the whole PageList in a `testing.FailingAllocator` and fails
+// the allocator's very next request, which lands on `compressPage`'s
+// exact-sized encoded allocation: the candidate is rejected, the source page
+// stays resident, and the pass continues at the following serial.
+//
+// rustty has no equivalent seam. The encoded buffer is a `Vec<u8>` on the
+// infallible global allocator, so the "encoded allocation failed" branch does
+// not exist in the port at all — synthesizing a tripwire for it would be a test
+// of a branch that cannot occur. This is the same class as the not-ported
+// `FailingAllocator` arm documented on
+// `pagelist_preserved_page_keeps_compressed_storage` and in
+// `compress/page.rs`'s `compressed_page_rejects_a_representation_without_savings`.
+//
+// The behaviour under test — "a rejected candidate advances the pass rather
+// than stalling it" — IS covered, from the two failure sources rustty can
+// actually produce: `..._advances_after_failure` (incompressible page) and
+// `..._advances_after_decommit_failure` (strict reclamation refused). The
+// reference's two comments there read:
+//
+//   Pool preheating supplies compression scratch. Failing the allocator's
+//   next request therefore rejects the exact encoded allocation while the
+//   source page and pass remain valid.
+//
+//   Allow allocations again. The pass must continue with the following page
+//   rather than retrying the failed candidate.
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression advances after decommit failure"`.
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "tripwire failure injection is disabled without debug_assertions"
+)]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_advances_after_decommit_failure() {
+    use rustty_util::tripwire::ResetMode;
+
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+
+    super::compress::COMPRESS_PAGE_TW.with(|tw| {
+        tw.borrow_mut().errorAlways(
+            super::compress::CompressPageFp::Decommit,
+            super::compress::DecommitFailed,
+        )
+    });
+    let failed = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, failed);
+    assert!(!unsafe { super::Node::is_compressed(s.pages.first) });
+    super::compress::COMPRESS_PAGE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+    // The failed candidate remains resident and the pass continues at the
+    // next serial once reclamation is available again.
+    let continued = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, continued);
+    assert!(unsafe { super::Node::is_compressed((*s.pages.first).next) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression restarts after replacement"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_restarts_after_replacement() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let initial = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, initial);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    let old = s.pages.first;
+    let old_serial = unsafe { (*old).serial };
+    let mut replacement = old;
+    while unsafe { (*super::Node::page(replacement)).memory_len() } <= std_size() {
+        replacement = s
+            .increase_capacity(replacement, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+    assert_ne!(unsafe { (*replacement).serial }, old_serial);
+    assert!(unsafe { (*super::Node::page(replacement)).memory_len() } > std_size());
+    assert!(!unsafe { super::Node::is_compressed(replacement) });
+
+    // The exact continuation serial disappeared with the old node. The pass
+    // restarts at the first page and considers the oversized replacement.
+    let restarted = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, restarted);
+    assert!(unsafe { super::Node::is_compressed(replacement) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression restarts after reset"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_restarts_after_reset() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let initial = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, initial);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    // Reset replaces every page and clears the PageList-owned traversal.
+    s.reset();
+    grow_cold_pages_for_test(&mut s, 1);
+    let restarted = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, restarted);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression restarts after active boundary
+/// resize"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_restarts_after_active_boundary_resize() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let initial = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, initial);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    let first = s.pages.first;
+    let all_rows = s.total_rows as size::CellCountInt;
+    s.resize(Resize {
+        rows: Some(all_rows),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(first, s.get_top_left(point::Tag::Active).node);
+
+    // Restore the page while it is active. Resize reset the traversal, and
+    // active contents remain ineligible.
+    let _ = unsafe { super::Node::page(first) };
+    let active = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, active);
+    assert_eq!(
+        IncrementalCompressionResult::Complete,
+        s.compress(CompressionMode::Incremental)
+    );
+
+    // Shrinking the active area makes the page fully historical again. The
+    // resize reset the PageList-owned cursor, so the next step can reclaim it.
+    s.resize(Resize {
+        rows: Some(24),
+        ..Default::default()
+    })
+    .unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+    assert_eq!(
+        IncrementalCompressionResult::Pending,
+        s.compress(CompressionMode::Incremental)
+    );
+    assert!(unsafe { super::Node::is_compressed(first) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression restarts after prune reuse"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_restarts_after_prune_reuse() {
+    let mut s = PageList::init(Options {
+        max_size: Some(2 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let initial = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, initial);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+
+    let reused = s.pages.first;
+    let old_serial = unsafe { (*reused).serial };
+    while unsafe { super::Node::rows(s.pages.last) }
+        < unsafe { super::Node::capacity(s.pages.last) }.rows
+    {
+        let _ = s.grow().unwrap();
+    }
+    assert_eq!(reused, s.grow().unwrap().unwrap());
+    assert_ne!(unsafe { (*reused).serial }, old_serial);
+
+    // Make the remaining old page fully historical. The continuation serial
+    // disappeared when its node was recycled, so the pass safely restarts.
+    grow_cold_pages_for_test(&mut s, 1);
+    let _ = s.compress(CompressionMode::Incremental);
+    assert_eq!(1, s.memory_stats().compressed_pages);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression restarts after earlier replacement"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_restarts_after_earlier_replacement() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 3);
+
+    let _ = s.compress(CompressionMode::Incremental);
+    let _ = s.compress(CompressionMode::Incremental);
+    assert!(unsafe { super::Node::is_compressed(s.pages.first) });
+    assert!(unsafe { super::Node::is_compressed((*s.pages.first).next) });
+
+    // Replace a page before the still-valid continuation marker. The list's
+    // allocation serial changes even though the marker itself remains, so the
+    // next step must restart and inspect the replacement.
+    let old_first = s.pages.first;
+    let old_serial = unsafe { (*old_first).serial };
+    let replacement = s
+        .increase_capacity(old_first, Some(IncreaseCapacity::GraphemeBytes))
+        .unwrap();
+    assert_ne!(unsafe { (*replacement).serial }, old_serial);
+    assert!(!unsafe { super::Node::is_compressed(replacement) });
+
+    let _ = s.compress(CompressionMode::Incremental);
+    assert!(unsafe { super::Node::is_compressed(replacement) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression keeps progress after tail growth"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_incremental_compression_keeps_progress_after_tail_growth() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, INCREMENTAL_COMPRESSION_MAX_INSPECTED + 1);
+    let _ = s.compress(CompressionMode::Full);
+    s.page_compression.reset();
+    s.page_compression.mark_activity();
+
+    let mut expected_last = s.pages.first;
+    for _ in 1..INCREMENTAL_COMPRESSION_MAX_INSPECTED {
+        expected_last = unsafe { (*expected_last).next };
+    }
+
+    let first = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, first);
+    assert_eq!(
+        unsafe { (*expected_last).serial },
+        s.page_compression.last_serial.unwrap()
+    );
+
+    // Allocate a new page at the active tail between steps. It is after the
+    // continuation marker and must not restart progress through cold history.
+    let next_serial = s.page_serial;
+    while s.page_serial == next_serial {
+        let _ = s.grow().unwrap();
+    }
+    let continued = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, continued);
+    assert!(s.page_compression.flags.verifying);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList memory stats do not restore compressed pages"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_memory_stats_do_not_restore_compressed_pages() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+
+    let before = s.memory_stats();
+    assert_eq!(s.total_pages(), before.resident_pages);
+    assert_eq!(0, before.compressed_pages);
+    assert_eq!(s.page_size, before.raw_bytes);
+    assert_eq!(before.raw_bytes, before.resident_raw_bytes);
+    assert_eq!(0, before.decommitted_raw_bytes);
+    assert_eq!(s.page_size, before.resident_backing_bytes);
+    assert_eq!(0, before.encoded_bytes);
+    assert_eq!(
+        before.resident_backing_bytes,
+        before.estimated_resident_bytes()
+    );
+    assert_eq!(0, before.estimated_savings());
+
+    let _ = s.compress(CompressionMode::Full);
+    let first = s.pages.first;
+    assert_eq!(Storage::Compressed, unsafe { super::Node::storage(first) });
+    assert!(unsafe { super::Node::page_if_resident(first) }.is_null());
+
+    let after = s.memory_stats();
+    assert!(unsafe { super::Node::is_compressed(first) });
+    assert_eq!(
+        s.total_pages(),
+        after.resident_pages + after.compressed_pages
+    );
+    assert_eq!(2, after.compressed_pages);
+    assert_eq!(s.page_size, after.raw_bytes);
+    assert_eq!(
+        after.raw_bytes,
+        after.resident_raw_bytes + after.decommitted_raw_bytes
+    );
+    assert_eq!(
+        after.resident_backing_bytes + after.encoded_bytes,
+        after.estimated_resident_bytes()
+    );
+    assert_eq!(
+        after.decommitted_raw_bytes - after.encoded_bytes,
+        after.estimated_savings()
+    );
+
+    let first_raw_len = unsafe { (*super::Node::metadata(first)).memory_len() };
+    let first_encoded_len = compressed_encoded_for_test(first).len();
+    let _ = unsafe { super::Node::page(first) };
+    assert_eq!(Storage::Resident, unsafe { super::Node::storage(first) });
+    assert!(!unsafe { super::Node::page_if_resident(first) }.is_null());
+
+    let restored = s.memory_stats();
+    assert_eq!(after.resident_pages + 1, restored.resident_pages);
+    assert_eq!(after.compressed_pages - 1, restored.compressed_pages);
+    assert_eq!(after.raw_bytes, restored.raw_bytes);
+    assert_eq!(
+        after.resident_raw_bytes + first_raw_len,
+        restored.resident_raw_bytes
+    );
+    assert_eq!(
+        after.decommitted_raw_bytes - first_raw_len,
+        restored.decommitted_raw_bytes
+    );
+    assert_eq!(
+        after.resident_backing_bytes + first_raw_len,
+        restored.resident_backing_bytes
+    );
+    assert_eq!(
+        after.encoded_bytes - first_encoded_len,
+        restored.encoded_bytes
+    );
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList memory stats include unused pool backing"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_memory_stats_include_unused_pool_backing() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    // Pool allocation ownership is based on the requested layout fitting in a
+    // standard item. The Page itself exposes only the initialized prefix.
+    let node = s
+        .create_page(super::CreatePage::new(Capacity::new(1, 1)))
+        .unwrap();
+    assert_eq!(Owned::Pool, unsafe { (*node).owned });
+    assert!(unsafe { (*super::Node::page(node)).memory_len() } < std_size());
+    unsafe { (*super::Node::page(node)).size.rows = 1 };
+    unsafe { s.pages.append(node) };
+    s.total_rows += 1;
+
+    let raw_len = unsafe { (*super::Node::metadata(node)).memory_len() };
+    let before = s.memory_stats();
+    assert!(before.raw_bytes < s.page_size);
+    assert_eq!(before.raw_bytes, before.resident_raw_bytes);
+    assert_eq!(s.page_size, before.resident_backing_bytes);
+    assert_eq!(s.page_size, before.estimated_resident_bytes());
+
+    assert!(s.compress_page(node));
+    let encoded_len = compressed_encoded_for_test(node).len();
+    let compressed = s.memory_stats();
+    assert_eq!(before.raw_bytes, compressed.raw_bytes);
+    assert_eq!(
+        before.resident_raw_bytes - raw_len,
+        compressed.resident_raw_bytes
+    );
+    assert_eq!(raw_len, compressed.decommitted_raw_bytes);
+    assert_eq!(
+        before.resident_backing_bytes - raw_len,
+        compressed.resident_backing_bytes
+    );
+    assert_eq!(encoded_len, compressed.encoded_bytes);
+    assert_eq!(
+        before.estimated_resident_bytes() - raw_len + encoded_len,
+        compressed.estimated_resident_bytes()
+    );
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList does not compress the mixed history and active page"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_does_not_compress_the_mixed_history_and_active_page() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    // One additional row creates history, but the history and all active rows
+    // still share the first page. The active boundary therefore has a
+    // historical prefix and must remain resident as one indivisible mapping.
+    let _ = s.grow().unwrap();
+    let active = s.get_top_left(point::Tag::Active);
+    assert_eq!(s.pages.first, active.node);
+    assert!(active.y > 0);
+
+    let _ = s.compress(CompressionMode::Full);
+    assert!(!unsafe { super::Node::is_compressed(s.pages.first) });
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList lazily restores compressed history made active by resize"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_lazily_restores_compressed_history_made_active_by_resize() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 1);
+
+    let first = s.pages.first;
+    let (memory_ptr, memory_len) = unsafe {
+        let page = super::Node::page(first);
+        *(*page).get_row_and_cell(0, 0).cell = Cell::init('X' as u32);
+        ((*page).memory_ptr(), (*page).memory_len())
+    };
+    let page_size = s.page_size;
+
+    let _ = s.compress(CompressionMode::Full);
+    assert!(unsafe { super::Node::is_compressed(first) });
+
+    // Pull all scrollback into the active area by making the viewport as tall
+    // as the complete screen. A row-only resize needs only page metadata, so
+    // the newly active page can remain compressed until its contents are used.
+    let all_rows = s.total_rows as size::CellCountInt;
+    s.resize(Resize {
+        rows: Some(all_rows),
+        ..Default::default()
+    })
+    .unwrap();
+    let active = s.get_top_left(point::Tag::Active);
+    assert_eq!(first, active.node);
+    assert_eq!(0, active.y);
+    assert!(unsafe { super::Node::is_compressed(first) });
+    assert_eq!(page_size, s.page_size);
+
+    // The compression pass must not reconsider the node now that it is active.
+    // Content access follows the normal page boundary, which recommits and
+    // restores the retained mapping before returning the cell.
+    let _ = s.compress(CompressionMode::Full);
+    assert!(unsafe { super::Node::is_compressed(first) });
+    let cell = s
+        .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+    assert_eq!('X' as u32, unsafe { (*cell.cell).content_codepoint() });
+    assert!(!unsafe { super::Node::is_compressed(first) });
+    assert_eq!(memory_ptr, unsafe {
+        (*super::Node::page(first)).memory_ptr()
+    });
+    assert_eq!(memory_len, unsafe {
+        (*super::Node::page(first)).memory_len()
+    });
+    assert_eq!(page_size, s.page_size);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList full and incremental compression skip a spanning viewport"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_full_and_incremental_compression_skip_a_spanning_viewport() {
+    let mut full = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut full, 3);
+
+    let mut incremental = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut incremental, 3);
+
+    // Start near the end of the first page so the viewport intersects both
+    // the first and second historical page mappings.
+    let first = full.pages.first;
+    let overlap_rows = full.rows as usize / 2;
+    let viewport_row = unsafe { super::Node::rows(first) } as usize - overlap_rows;
+    full.scroll(Scroll::Row(viewport_row));
+    incremental.scroll(Scroll::Row(viewport_row));
+    assert_ne!(
+        full.get_top_left(point::Tag::Viewport).node,
+        full.get_bottom_right(point::Tag::Viewport).unwrap().node
+    );
+    let second = unsafe { (*first).next };
+    assert_eq!(first, full.get_top_left(point::Tag::Viewport).node);
+    assert_eq!(
+        second,
+        full.get_bottom_right(point::Tag::Viewport).unwrap().node
+    );
+
+    let _ = full.compress(CompressionMode::Full);
+    let _ = incremental.compress(CompressionMode::Drain);
+    assert_eq!(full.memory_stats(), incremental.memory_stats());
+    assert!(!unsafe { super::Node::is_compressed(first) });
+    assert!(!unsafe { super::Node::is_compressed(second) });
+
+    let full_active = full.get_top_left(point::Tag::Active).node;
+    let incremental_active = incremental.get_top_left(point::Tag::Active).node;
+    let mut full_node = full.pages.first;
+    let mut incremental_node = incremental.pages.first;
+    while !core::ptr::eq(full_node, full_active) {
+        assert_eq!(unsafe { super::Node::is_compressed(full_node) }, unsafe {
+            super::Node::is_compressed(incremental_node)
+        });
+
+        full_node = unsafe { (*full_node).next };
+        incremental_node = unsafe { (*incremental_node).next };
+    }
+    assert_eq!(incremental_active, incremental_node);
+
+    let mut eligible = CompressionIterator::init(&full);
+    let mut compressed_pages: usize = 0;
+    while let Some(node) = eligible.next() {
+        compressed_pages += 1;
+        assert!(unsafe { super::Node::is_compressed(node) });
+    }
+    assert!(compressed_pages > 0);
+
+    incremental.deinit();
+    full.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList compression restores through page access"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_compression_restores_through_page_access() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let node = s.pages.first;
+    let (memory_ptr, memory_len, expected) = unsafe {
+        let page = super::Node::page(node);
+        (*page).dirty = true;
+        *(*page).get_row_and_cell(3, 2).cell = Cell::init('X' as u32);
+        let ptr = (*page).memory_ptr();
+        let len = (*page).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+    let page_size = s.page_size;
+
+    assert!(s.compress_page(node));
+    assert!(unsafe { super::Node::is_compressed(node) });
+    assert_eq!(24, unsafe { super::Node::rows(node) });
+    assert_eq!(80, unsafe { super::Node::cols(node) });
+    assert_eq!(memory_ptr, unsafe {
+        (*super::Node::metadata(node)).memory_ptr()
+    });
+    assert_eq!(memory_len, unsafe {
+        (*super::Node::metadata(node)).memory_len()
+    });
+    assert_eq!(page_size, s.page_size);
+
+    // Pin access restores the page without changing its retained mapping.
+    let page_pin = Pin {
+        node,
+        x: 3,
+        y: 2,
+        garbage: false,
+    };
+    assert_eq!('X' as u32, unsafe {
+        (*page_pin.row_and_cell().cell).content_codepoint()
+    });
+    assert!(!unsafe { super::Node::is_compressed(node) });
+    assert_eq!(memory_ptr, unsafe {
+        (*super::Node::page(node)).memory_ptr()
+    });
+    assert_eq!(&expected[..], unsafe {
+        core::slice::from_raw_parts((*super::Node::page(node)).memory_ptr(), memory_len)
+    });
+    assert!(unsafe { (*super::Node::page(node)).dirty });
+
+    // Recompressing exercises reuse of the page-pool scratch item. Page
+    // iterator chunks also restore before exposing row memory.
+    assert!(s.compress_page(node));
+    let start_pin = Pin {
+        node,
+        x: 0,
+        y: 0,
+        garbage: false,
+    };
+    let mut page_it = start_pin.page_iterator(super::iter::Direction::RightDown, None);
+    let chunk = page_it.next().unwrap();
+    assert_eq!(
+        unsafe { super::Node::rows(node) } as usize,
+        chunk.rows().len()
+    );
+    assert!(!unsafe { super::Node::is_compressed(node) });
+    assert_eq!(&expected[..], unsafe {
+        core::slice::from_raw_parts((*super::Node::page(node)).memory_ptr(), memory_len)
+    });
+
+    // Read-only PageList operations restore through the same boundary.
+    assert!(s.compress_page(node));
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut cloned = s.clone(&mut opts).unwrap();
+    assert!(!unsafe { super::Node::is_compressed(node) });
+    assert_eq!('X' as u32, unsafe {
+        (*(*super::Node::page(cloned.pages.first))
+            .get_row_and_cell(3, 2)
+            .cell)
+            .content_codepoint()
+    });
+
+    cloned.deinit();
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList reset discards malformed compressed data"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_reset_discards_malformed_compressed_data() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let node = s.pages.first;
+    assert!(s.compress_page(node));
+    corrupt_compressed_encoded_for_test(node);
+
+    s.reset();
+    assert!(!unsafe { super::Node::is_compressed(s.pages.first) });
+    assert_eq!(1, s.total_pages());
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList deinit discards malformed compressed data"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_deinit_discards_malformed_compressed_data() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    let node = s.pages.first;
+    assert!(s.compress_page(node));
+    corrupt_compressed_encoded_for_test(node);
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList prune reuses malformed compressed page memory"`.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+)]
+#[test]
+fn pagelist_prune_reuses_malformed_compressed_page_memory() {
+    let mut s = PageList::init(Options {
+        max_size: Some(2 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
+
+    // Allocate the second page so the first one can be pruned and reused.
+    while core::ptr::eq(s.pages.first, s.pages.last) {
+        let _ = s.grow().unwrap();
+    }
+    let first = s.pages.first;
+    assert!(s.compress_page(first));
+    corrupt_compressed_encoded_for_test(first);
+
+    let mut reused = false;
+    let growth_limit = unsafe { super::Node::capacity(s.pages.last) }.rows as usize + 1;
+    for _ in 0..growth_limit {
+        if let Some(new_node) = s.grow().unwrap() {
+            if core::ptr::eq(new_node, first) {
+                reused = true;
+                break;
+            }
+        }
+    }
+
+    assert!(reused);
+    assert_eq!(first, s.pages.last);
+    assert!(!unsafe { super::Node::is_compressed(first) });
+    assert_eq!(1, unsafe { super::Node::rows(first) });
+    unsafe { (*super::Node::page(first)).assert_integrity() };
 
     s.deinit();
 }
@@ -14874,6 +15900,12 @@ fn pagelist_jump_minimum_prompt_delta() {
 
 // ref: test "PageList Cell screenPoint supports long scrollback"
 //
+// The reference's setup comment:
+//
+//   A modest number of full-size page nodes is enough to exceed the u16
+//   row range without allocating any page backing memory. screenPoint only
+//   reads the linked metadata while calculating the absolute coordinate.
+//
 // PORT NOTE: the reference builds a `[]Node` of 307 metadata-only nodes with
 // `.data = .{ .resident = undefined }`. rustty does NOT construct `undefined`
 // pages (see the `mixed_width_pin_list_for_test` note); instead this uses THREE
@@ -14943,6 +15975,11 @@ fn pagelist_Cell_screenPoint_supports_long_scrollback() {
 }
 
 // ref: test "PageList pointFromPin rejects overflowing screen coordinate"
+//
+// The reference's setup comment:
+//
+//   Use maximum-height metadata-only pages to model a valid scrollback just
+//   beyond the u32 coordinate range without allocating their backing cells.
 //
 // PORT NOTE: the reference allocates 65,539 metadata-only `Node`s so the
 // accumulated Y exceeds `u32`. That is ~16 MB of `undefined` page structs in
@@ -15317,14 +16354,20 @@ fn pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary() {
         }
     }
 
-    // Erase the first active row, bounded to the whole active area so
-    // the shift crosses the page boundary exactly as eraseRow does.
-    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 0 }), 10)
+    // Erase the first active row with a limit that extends into the
+    // second page (5 rows remain in the first page, so a limit of 6
+    // forces the cross-page path). The dense hyperlink row must cross
+    // the page boundary into the first page.
+    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 0 }), 6)
         .unwrap();
 
+    // Rows within the limit shifted up by one: the '0' marker row was
+    // erased, the dense row moved up across the page boundary to
+    // row 4, row 6 is the new blank row, and rows past the limit are
+    // unchanged.
     let expected: [u32; 10] = [
-        '1' as u32, '2' as u32, '3' as u32, '4' as u32, 'A' as u32, '6' as u32, '7' as u32,
-        '8' as u32, '9' as u32, 0,
+        '1' as u32, '2' as u32, '3' as u32, '4' as u32, 'A' as u32, '6' as u32, 0, '7' as u32,
+        '8' as u32, '9' as u32,
     ];
     for (y, cp) in expected.iter().enumerate() {
         let list_cell = s

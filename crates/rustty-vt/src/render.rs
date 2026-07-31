@@ -69,6 +69,31 @@ use allocator_api2::alloc::Global as Allocator;
 ///     state.update(alloc, &terminal);
 /// ```
 ///
+/// ## Two-Phase Updates
+///
+/// For callers that synchronize terminal access (e.g. a renderer thread
+/// sharing a lock with an IO thread), the update can be split into two
+/// phases to minimize the time the terminal must be held exclusively:
+/// `beginUpdate` requires terminal access, while `endUpdate` completes
+/// any deferred work using only memory owned by the render state.
+///
+/// ```text
+///     {
+///         mutex.lock();
+///         defer mutex.unlock();
+///         try state.beginUpdate(alloc, &terminal);
+///     }
+///
+///     // The IO thread is free to modify the terminal while we
+///     // complete the update.
+///     state.endUpdate();
+/// ```
+///
+/// The render state must be treated as incomplete between the two calls.
+/// `update` is a convenience that performs both phases in one call.
+///
+/// ## Memory
+///
 /// Note: the render state retains as much memory as possible between updates
 /// to prevent future allocations. If a very large frame is rendered once,
 /// the render state will retain that much memory until deinit. To avoid
@@ -119,21 +144,22 @@ pub struct RenderState {
     /// if possible.
     pub selection_cache: Option<SelectionCache>,
 
-    /// The pending style runs requiring an `end_update` call, in the order they
-    /// were recorded. If multiple begins happen without an `end_update` call,
-    /// runs accumulate; rows rebuilt more than once may then have superseded
-    /// (stale) runs in this list, which is harmless: newer runs are appended
-    /// later so they win, and cells not covered by newer runs have a default
-    /// style ID in their raw data so their style is undefined by contract
-    /// anyway. See `begin_update`.
+    /// The pending style runs requiring an endUpdate call, in the
+    /// order they were recorded. If multiple begins happen without an
+    /// endUpdate call, runs accumulate; rows rebuilt more than once
+    /// may then have superseded (stale) runs in this list, which is
+    /// harmless: newer runs are appended later so they win, and cells
+    /// not covered by newer runs have a default style ID in their raw
+    /// data so their style is undefined by contract anyway. See
+    /// beginUpdate.
     pub pending_styles: Vec<StyleRun>,
 }
 
-/// A run of cells within one row sharing one style, pending denormalization
-/// into the per-cell data. This is populated by `begin_update` and consumed by
-/// `end_update`. This exists so that the (potentially large) denormalization of
-/// styles into cells can happen outside of any terminal locks. See
-/// `begin_update`.
+/// A run of cells within one row sharing one style, pending
+/// denormalization into the per-cell data. This is populated by
+/// `beginUpdate` and consumed by `endUpdate`. This exists so that
+/// the (potentially large) denormalization of styles into cells
+/// can happen outside of any terminal locks. See `beginUpdate`.
 #[derive(Clone, Copy, Debug)]
 pub struct StyleRun {
     /// The viewport row.
@@ -212,6 +238,13 @@ pub struct Viewport {
 //     /// but retain cached MultiArrayList capacities since grid sizes don't
 //     /// change often.
 //     arena: ArenaAllocator.State,
+//
+// The rebuild loop's handling of that field is likewise dropped:
+//
+//     // Promote our arena. State is copied by value so we need to
+//     // restore it on all exit paths so we don't leak memory.
+//     var arena = b.arenas[vy].promote(b.alloc);
+//     defer b.arenas[vy] = arena.state;
 pub struct Row {
     /// The page pin. Its copied values may be compared, but its node must
     /// not be dereferenced unless the terminal state is protected from
@@ -553,11 +586,11 @@ impl RenderState {
 
     /// Update the render state to the latest terminal state.
     ///
-    /// This is a convenience function that performs a full update in one call,
-    /// equivalent to `begin_update` immediately followed by `end_update`.
-    /// Callers that hold a lock over the terminal state should prefer calling
-    /// the two phases directly so that the lock is only held for
-    /// `begin_update`.
+    /// This is a convenience function that performs a full update in
+    /// one call, equivalent to `beginUpdate` immediately followed by
+    /// `endUpdate`. Callers that hold a lock over the terminal state
+    /// should prefer calling the two phases directly so that the lock
+    /// is only held for `beginUpdate`.
     ///
     /// This will reset the terminal dirty state since it is consumed
     /// by this render state update.
@@ -582,11 +615,11 @@ impl RenderState {
 
         let row_len = self.row_data.len();
         for run in self.pending_styles.iter() {
-            // Defensive: the row data may have changed shape if the caller
-            // violated ordering (e.g. an error path skipped an `end_update`
-            // between updates). Any update that changes dimensions clears the
-            // pending list (redraw), so this should never actually trigger, but
-            // the cost is trivial.
+            // Defensive: the row data may have changed shape if the
+            // caller violated ordering (e.g. an error path skipped an
+            // endUpdate between updates). Any update that changes
+            // dimensions clears the pending list (redraw), so this
+            // should never actually trigger, but the cost is trivial.
             if run.y as usize >= row_len {
                 continue;
             }
@@ -598,23 +631,24 @@ impl RenderState {
         self.pending_styles.clear();
     }
 
-    /// Begin an update of the render state to the latest terminal state. Every
-    /// begin must be completed with an `end_update` call before the render
-    /// state is read.
+    /// Begin an update of the render state to the latest terminal
+    /// state. Every begin must be completed with an `endUpdate` call
+    /// before the render state is read.
     ///
-    /// This two-phase structure exists for callers that lock the terminal
-    /// state: only this function requires terminal access, so a caller can hold
-    /// its lock for this call only and then call `end_update` after releasing
-    /// it. `end_update` exclusively reads and writes memory owned by the render
-    /// state.
+    /// This two-phase structure exists for callers that lock the
+    /// terminal state: only this function requires terminal access, so
+    /// a caller can hold its lock for this call only and then call
+    /// `endUpdate` after releasing it. `endUpdate` exclusively reads
+    /// and writes memory owned by the render state.
     ///
     /// Work that doesn't require terminal access may be deferred to
-    /// `end_update` to keep this call (and therefore lock hold time) as short
-    /// as possible. At the time of writing, the deferred work is the per-cell
-    /// style denormalization, so between this call and `end_update` the
-    /// per-cell `style` data of any updated rows is stale and must not be read.
-    /// More work may be deferred in the future; callers should treat the render
-    /// state as incomplete until `end_update` is called.
+    /// `endUpdate` to keep this call (and therefore lock hold time) as
+    /// short as possible. At the time of writing, the deferred work is
+    /// the per-cell style denormalization, so between this call and
+    /// `endUpdate` the per-cell `style` data of any updated rows is
+    /// stale and must not be read. More work may be deferred in the
+    /// future; callers should treat the render state as incomplete
+    /// until `endUpdate` is called.
     ///
     /// This will reset the terminal dirty state since it is consumed
     /// by this render state update.
@@ -849,17 +883,19 @@ impl RenderState {
                 unsafe { core::slice::from_raw_parts(page_rows_ptr, take) };
             debug_assert!(unsafe { (*p).size.cols } == cols);
 
-            // Store our pins. We have to store these even for rows that
-            // aren't dirty because dirty is only a renderer optimization;
-            // it doesn't apply to memory movement. This lets us remap any
-            // cell pins back to an exact entry in our RenderState.
+            // Store our pins and their node generations. We have to store
+            // these even for rows that aren't dirty because dirty is only a
+            // renderer optimization; it doesn't apply to memory movement.
+            // This lets us remap any cell pins back to an exact entry in our
+            // RenderState and validate them later without dereferencing a
+            // potentially stale node.
             //
-            // We can skip the writes when the pins are unchanged: if we're
-            // not redrawing, every pin was stored by a prior update (row
-            // count changes force a redraw). Within a single update a node
-            // appears at most once and its stored pins have consecutive y
-            // values, so if the first and last pins of this chunk's range
-            // already match then every pin in between matches too.
+            // We can skip the writes when the pins and serials are unchanged:
+            // if we're not redrawing, every value was stored by a prior update
+            // (row count changes force a redraw). Within a single update a
+            // node appears at most once and its stored pins have consecutive
+            // y values, so if the first and last entries of this chunk's range
+            // already match then every entry in between matches too.
             //
             // PORT NOTE: rustty also stores `node.serial` per row (the
             // compressed-page INSPECT-not-RESTORE discipline; see
@@ -1449,6 +1485,9 @@ fn row_builder(
     // not want to reallocate space for cells (which are large). This
     // was a source of huge slowdown.
     //
+    // Our per-row arena is only used for temporary allocations
+    // pertaining to cells directly (e.g. graphemes, hyperlinks).
+    //
     // We always copy our raw cell data. In the case we have no
     // managed memory, we can skip setting any other fields.
     //
@@ -1516,9 +1555,10 @@ fn row_builder(
                 debug_assert!(sid > 0); // special + codepoint implies styled
                 let style_val: Style = unsafe { *(*styles).get_at(style_items, sid) };
 
-                // A cell continues the run if its masked special bits are
-                // exactly the style ID of the run (in particular the content tag
-                // must be a plain codepoint). We can check groups of cells at a
+                // A cell continues the run if its masked special
+                // bits are exactly the style ID of the run (in
+                // particular the content tag must be a plain
+                // codepoint). We can check groups of cells at a
                 // time this way.
                 let pattern = CellSpecialMask::pattern(*page_cell);
                 let start = x;
@@ -1544,11 +1584,11 @@ fn row_builder(
                 });
             }
 
-            // If we have a multi-codepoint grapheme, look it up and set our
-            // content type. Note grapheme cells may also be styled. The style
-            // must be recorded as a run (rather than written directly) so that
-            // it is ordered correctly relative to possibly-stale runs from prior
-            // updates.
+            // If we have a multi-codepoint grapheme, look it up and
+            // set our content type. Note grapheme cells may also
+            // be styled. The style must be recorded as a run (rather
+            // than written directly) so that it is ordered correctly
+            // relative to possibly-stale runs from prior updates.
             page::ContentTag::CodepointGrapheme => {
                 if page_cell.style_id() > 0 {
                     let style_val: Style =
@@ -1577,10 +1617,11 @@ fn row_builder(
                 x += 1;
             }
 
-            // Background-color-only cells. The style is derived entirely from
-            // the cell contents. Consecutive cleared cells with the same
-            // background are bit-identical, so we run-detect on full equality
-            // (e.g. a line cleared with a background color pending is one run).
+            // Background-color-only cells. The style is derived
+            // entirely from the cell contents. Consecutive cleared
+            // cells with the same background are bit-identical, so
+            // we run-detect on full equality (e.g. a line cleared
+            // with a background color pending is one run).
             page::ContentTag::BgColorRgb | page::ContentTag::BgColorPalette => {
                 let style_val: Style = match page_cell.content_tag() {
                     page::ContentTag::BgColorRgb => {
