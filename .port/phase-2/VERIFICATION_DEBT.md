@@ -1131,6 +1131,33 @@ untouched here).
 
 ## V15. The `origin/main` oracle cannot be compared against, and the PINNED oracle can no longer be rebuilt — **OWNER: Phase 3 — `BEYOND-PIN`**
 
+**Re-verified after pin advance:** 2026-07-31 — **PREMISE REFUTED.** This row's
+blocker was "the pinned oracle needs Zig 0.15.2 and this host has 0.16.0, so it
+cannot be rebuilt, and `origin/main` cannot be built at all". The pin advanced to
+`6ad1fe7d8`, whose own `build.zig.zon` declares `minimum_zig_version = "0.16.0"`
+— the version installed here. Tested rather than assumed:
+
+* `zig build -Doptimize=ReleaseFast` at `6ad1fe7d8` reaches **394/397 steps**. The
+  only failure is the macOS app-bundle `CpResource` step in `xcodebuild`, which
+  copies shell-completion and terminfo resources into `Ghostty.app` and has
+  nothing to do with any benchmark or library artifact.
+* `zig build -Doptimize=ReleaseFast -Demit-bench=true -Dapp-runtime=none`
+  **succeeds** and produces `ghostty-bench`
+  (`version=1.3.2-HEAD-+6ad1fe7d8`, `optimize=ReleaseFast`).
+* Preserved at `~/rustty-oracle-artifacts/ghostty-bench-6ad1fe7d8`, sha256
+  `52606275dde534b032d8f021c3f82e281969e011306edb6ebfe8223a17edd3d0`.
+* `src/benchmark/` at this pin carries **ApcParser.zig** and **HyperlinkMap.zig**
+  — the two actions V18 said no obtainable oracle binary had — and its action set
+  is 1:1 with `crates/rustty-bench/src/`.
+
+So a comparable oracle exists again and these three rows are no longer blocked.
+The measurements themselves are the remaining work, not the impossibility.
+
+The 4749c4e93 binary and its sha256 stay recorded above: historical rustty
+figures are anchored to it, and numbers from the new binary are a NEW baseline,
+not a continuation of the old series. Comparing across the two would be invalid.
+
+
 **Two halves, both about the reference oracle.**
 
 **(a) The pinned oracle binary is now irreplaceable.** Every rustty perf figure
@@ -1232,6 +1259,33 @@ Owner is Phase 3 because `origin/main` **is** the upstream resync range:
 `BEYOND-PIN`.
 
 ## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **OWNER: Phase 3 — `BEYOND-PIN`**
+
+**Re-verified after pin advance:** 2026-07-31 — **PREMISE REFUTED.** This row's
+blocker was "the pinned oracle needs Zig 0.15.2 and this host has 0.16.0, so it
+cannot be rebuilt, and `origin/main` cannot be built at all". The pin advanced to
+`6ad1fe7d8`, whose own `build.zig.zon` declares `minimum_zig_version = "0.16.0"`
+— the version installed here. Tested rather than assumed:
+
+* `zig build -Doptimize=ReleaseFast` at `6ad1fe7d8` reaches **394/397 steps**. The
+  only failure is the macOS app-bundle `CpResource` step in `xcodebuild`, which
+  copies shell-completion and terminfo resources into `Ghostty.app` and has
+  nothing to do with any benchmark or library artifact.
+* `zig build -Doptimize=ReleaseFast -Demit-bench=true -Dapp-runtime=none`
+  **succeeds** and produces `ghostty-bench`
+  (`version=1.3.2-HEAD-+6ad1fe7d8`, `optimize=ReleaseFast`).
+* Preserved at `~/rustty-oracle-artifacts/ghostty-bench-6ad1fe7d8`, sha256
+  `52606275dde534b032d8f021c3f82e281969e011306edb6ebfe8223a17edd3d0`.
+* `src/benchmark/` at this pin carries **ApcParser.zig** and **HyperlinkMap.zig**
+  — the two actions V18 said no obtainable oracle binary had — and its action set
+  is 1:1 with `crates/rustty-bench/src/`.
+
+So a comparable oracle exists again and these three rows are no longer blocked.
+The measurements themselves are the remaining work, not the impossibility.
+
+The 4749c4e93 binary and its sha256 stay recorded above: historical rustty
+figures are anchored to it, and numbers from the new binary are a NEW baseline,
+not a continuation of the old series. Comparing across the two would be invalid.
+
 
 **Re-owned 2026-07-30 (was `OWNER: WS20`).** WS20 is finished, and `Phase 3` here is
 not a parking space — it is forced. The 9 labels are ORACLE artifacts (Zig static
@@ -1374,6 +1428,33 @@ traceable.
 ---
 
 ## V18. `f2a7652ab`'s two BL-4 perf configs have no paired oracle number — **OWNER: Phase 3 — `BEYOND-PIN`** [WS10 T11/T16/T17, 2026-07-30]
+
+**Re-verified after pin advance:** 2026-07-31 — **PREMISE REFUTED.** This row's
+blocker was "the pinned oracle needs Zig 0.15.2 and this host has 0.16.0, so it
+cannot be rebuilt, and `origin/main` cannot be built at all". The pin advanced to
+`6ad1fe7d8`, whose own `build.zig.zon` declares `minimum_zig_version = "0.16.0"`
+— the version installed here. Tested rather than assumed:
+
+* `zig build -Doptimize=ReleaseFast` at `6ad1fe7d8` reaches **394/397 steps**. The
+  only failure is the macOS app-bundle `CpResource` step in `xcodebuild`, which
+  copies shell-completion and terminfo resources into `Ghostty.app` and has
+  nothing to do with any benchmark or library artifact.
+* `zig build -Doptimize=ReleaseFast -Demit-bench=true -Dapp-runtime=none`
+  **succeeds** and produces `ghostty-bench`
+  (`version=1.3.2-HEAD-+6ad1fe7d8`, `optimize=ReleaseFast`).
+* Preserved at `~/rustty-oracle-artifacts/ghostty-bench-6ad1fe7d8`, sha256
+  `52606275dde534b032d8f021c3f82e281969e011306edb6ebfe8223a17edd3d0`.
+* `src/benchmark/` at this pin carries **ApcParser.zig** and **HyperlinkMap.zig**
+  — the two actions V18 said no obtainable oracle binary had — and its action set
+  is 1:1 with `crates/rustty-bench/src/`.
+
+So a comparable oracle exists again and these three rows are no longer blocked.
+The measurements themselves are the remaining work, not the impossibility.
+
+The 4749c4e93 binary and its sha256 stay recorded above: historical rustty
+figures are anchored to it, and numbers from the new binary are a NEW baseline,
+not a continuation of the old series. Comparing across the two would be invalid.
+
 
 WS10 T11 and T17 each add a rustty-bench config that the pinned oracle binary
 does not have, because both were introduced upstream AFTER the pin:
