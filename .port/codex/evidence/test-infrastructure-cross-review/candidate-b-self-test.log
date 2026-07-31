@@ -1,0 +1,6 @@
+=== G5 :: differential fuzz clean (runner) ===
+--- runner self-test: assert fuzz wiring ---
+  FUZZ-INVENTORY.md present: OK
+  rustty-synthetic crate present (corpus generator): OK
+  cargo present: OK
+SELF-TEST: PASS

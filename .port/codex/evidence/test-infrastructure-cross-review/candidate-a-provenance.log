@@ -1,0 +1,11 @@
+absent target/include/ghostty/vt.h
+present /Users/gael/projects/ghostty/include/ghostty/vt.h
+present /Users/gael/projects/ghostty/zig-out/include/ghostty/vt.h
+.port/phase-0/harness/bin/vt_driver_ref epoch=1782078095 date=Jun 21 14:41:35 2026 size=5325184
+.port/phase-0/harness/bin/vt_driver_port epoch=1783708555 date=Jul 10 11:35:55 2026 size=7454928
+.port/phase-0/harness/ref_driver/vt_driver.c epoch=1784129179 date=Jul 15 08:26:19 2026 size=6565
+/Users/gael/projects/ghostty/include/ghostty/vt/terminal.h epoch=1785508114 date=Jul 31 07:28:34 2026 size=62922
+/Users/gael/projects/ghostty/zig-out/include/ghostty/vt/terminal.h epoch=1782016973 date=Jun 20 21:42:53 2026 size=46142
+include/rustty/vt/terminal.h epoch=1785494122 date=Jul 31 03:35:22 2026 size=60941
+ghost_ctor_commit=03d5fa268902d609b2872178a1d5a4d9ff351ee7 2026-07-27T07:14:40-07:00 lib-vt: move scrollback limits to terminal_set
+rust_ctor_commit=ede15d533b352333b5382068560c28bc4c75a604 2026-07-30T22:55:54-07:00 vt-c: remove RusttyTerminalOptions; scrollback limits become options 27/28 with data readers 34/35 (oracle 03d5fa268 a27e04e8f 5fd2973b9 2729996ea) (P3-W3 T5)

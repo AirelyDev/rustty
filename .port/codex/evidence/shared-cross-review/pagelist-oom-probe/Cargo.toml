@@ -1,0 +1,9 @@
+[package]
+name = "pagelist-oom-probe"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+rustty-vt = { path = "../../../../../crates/rustty-vt" }
+
+[workspace]

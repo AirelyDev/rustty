@@ -1,0 +1,60 @@
+crates/rustty-core/src/app.rs:1130:            unimplemented!("test runtime: not driven by the C4 seam tests")
+crates/rustty-core/src/app.rs:1192:            unimplemented!("test runtime: not driven by the C4 seam tests")
+crates/rustty-core/src/app.rs:1196:            unimplemented!("test runtime: not driven by the C4 seam tests")
+crates/rustty-core/src/app.rs:1204:            unimplemented!("test runtime: not driven by the C4 seam tests")
+crates/rustty-core/src/app.rs:1212:            unimplemented!("test runtime: not driven by the C4 seam tests")
+crates/rustty-core/src/app.rs:1221:            unimplemented!("test runtime: not driven by the C4 seam tests")
+crates/rustty-core/src/app.rs:1225:            unimplemented!("test runtime: not driven by the C4 seam tests")
+crates/rustty-core/src/app.rs:1229:            unimplemented!("test runtime: not driven by the C4 seam tests")
+crates/rustty-font-shaper/src/collection.rs:283:    // `unimplemented!()` stub until L3 Task 6/7; note the reference's
+crates/rustty-renderer/src/lib.rs:52://!     `unimplemented!()` remains for this seam.
+crates/rustty-font-shaper/src/deferred_face.rs:505:// `unimplemented!()` leaves (matching Task 1's convention); they are not reached
+crates/rustty-core/src/lib.rs:13://! (`unimplemented!()`, placeholder-leaf doctrine); the remaining
+crates/rustty-core/src/lib.rs:14://! `unimplemented!()` sites are rustty-only test dummies — the `app`
+crates/rustty-core/src/lib.rs:129:    // `unimplemented!()`) ----
+crates/rustty-core/src/lib.rs:146:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:154:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:160:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:185:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:189:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:197:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:205:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:214:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:218:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/lib.rs:222:            unimplemented!("dummy backend: not driven by the prototype test")
+crates/rustty-core/src/renderer_seam.rs:17://! structs, faithful field/signature shapes, `unimplemented!()` method bodies
+crates/rustty-core/src/renderer_seam.rs:41://! this file carried "15 `unimplemented!()` C3 dependency-placeholder bodies,
+crates/rustty-core/src/renderer_seam.rs:42://! Target: Phase-3 R-d GPU tier / D6". It does not. All 15 `unimplemented!()`
+crates/rustty-core/src/renderer_seam.rs:44://! read `unimplemented!("test runtime: not driven by the compression tests")` —
+crates/rustty-core/src/renderer_seam.rs:250:/// `unimplemented!()` leaves) are deleted — the `Thread<A>` call sites now type-check
+crates/rustty-core/src/renderer_seam.rs:539:// as `unimplemented!()` placeholders. Generic over the apprt backend `A`
+crates/rustty-core/src/renderer_seam.rs:2091:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2099:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2105:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2118:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2122:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2130:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2134:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2142:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2150:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2159:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2163:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/src/renderer_seam.rs:2167:            unimplemented!("test runtime: not driven by the compression tests")
+crates/rustty-core/tests/surface_visibility_kat.rs:74:        unimplemented!("V21 KAT: not driven")
+crates/rustty-core/tests/surface_visibility_kat.rs:108:        unimplemented!("V21 KAT: not driven")
+crates/rustty-core/tests/surface_visibility_kat.rs:111:        unimplemented!("V21 KAT: not driven")
+crates/rustty-core/tests/surface_visibility_kat.rs:117:        unimplemented!("V21 KAT: not driven")
+crates/rustty-core/tests/surface_visibility_kat.rs:124:        unimplemented!("V21 KAT: not driven")
+crates/rustty-core/tests/surface_visibility_kat.rs:132:        unimplemented!("V21 KAT: not driven")
+crates/rustty-core/tests/surface_visibility_kat.rs:135:        unimplemented!("V21 KAT: not driven")
+crates/rustty-core/tests/surface_visibility_kat.rs:138:        unimplemented!("V21 KAT: not driven")
+crates/rustty-renderer/src/metal/metal_impl.rs:48://! `unimplemented!("windowing-host")` or offscreen stub with the verbatim Zig body
+crates/rustty-font-shaper/src/shaper/coretext.rs:44://     SEAM (`rustty_global::seam::Xev`, all `unimplemented!()`), so that thread
+crates/rustty-renderer/src/generic.rs:45://! DEFERRED (a later tier — still an `unimplemented!()` seam, verbatim body
+crates/rustty-renderer/src/generic.rs:5225:        // :825), which stays the `unimplemented!()` seam (§1). `draw_frame`'s reinit
+crates/rustty-font-shaper/src/shared_grid_set.rs:1197:    // `unimplemented!()` stub (`discovery.rs`'s `fontconfig_impl`) until the real
+crates/rustty-font-shaper/src/discovery.rs:87:// not-yet-written feature. So these bodies are HONEST `unimplemented!()` leaves
+crates/rustty-font-shaper/src/discovery.rs:2440:    /// their bodies are honest `unimplemented!()` leaves until the real Fontconfig
+crates/rustty-os/tests/cf_release_live.rs:46:    // Run the REAL loop until stop. If the loop were the old unimplemented!()
+crates/rustty-config/src/value_types.rs:14://! `todo!()`. The method bodies + every `test {}` (R1, count is a contract) are
+crates/rustty-termio/src/backend.rs:180:            Backend::Exec(_exec) => unimplemented!(

@@ -1,0 +1,35 @@
+Audit date: 2026-07-31
+Rustty: 5243303fbb2f2cfd0832edfb8fa49d72ce322d81
+Ghostty: 6ad1fe7d8cbda36c77b337a96c9bea8a77883699
+
+The same C program, scripts/check-terminal-allocator.c, was compiled once
+against each current header and current library. Its custom allocator rejects
+every allocation and counts allocator calls.
+
+Rustty command:
+  clang -DCHECK_RUSTTY -I include \
+    .port/codex/scripts/check-terminal-allocator.c \
+    -L target/release-safe -lrustty_vt_c \
+    -Wl,-rpath,/Users/gael/projects/rustty/target/release-safe \
+    -o /tmp/rustty-codex-check-allocator-rust
+
+Rustty observed output:
+  result=0 terminal_nonnull=1 alloc_calls=0 free_calls=0
+
+Ghostty command:
+  clang -I /Users/gael/projects/ghostty/include \
+    .port/codex/scripts/check-terminal-allocator.c \
+    -L /tmp/rustty-codex-ghostty-prefix/lib -lghostty-vt \
+    -Wl,-rpath,/tmp/rustty-codex-ghostty-prefix/lib \
+    -o /tmp/rustty-codex-check-allocator-ghost
+
+Ghostty observed output:
+  result=-1 terminal_nonnull=0 alloc_calls=1 free_calls=0
+
+Interpretation:
+  The Ghostty terminal constructor routes its first terminal allocation through
+  the supplied allocator and returns OUT_OF_MEMORY when it rejects the request.
+  Rustty never calls the supplied allocator, returns SUCCESS, and creates a
+  terminal on Rust's global heap. This reproduces the implementation comments
+  at crates/rustty-vt-c/src/terminal.rs:947-968 and the Box allocations at
+  lines 1009 and 1062.

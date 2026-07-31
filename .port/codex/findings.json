@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-07-31",
+  "rustty_revision": "5243303fbb2f2cfd0832edfb8fa49d72ce322d81",
+  "ghostty_revision": "6ad1fe7d8cbda36c77b337a96c9bea8a77883699",
+  "canonical_report": "FINDINGS.md",
+  "counts": { "P1": 5, "P2": 9, "P3": 3, "P4": 3, "total": 20 },
+  "findings": [
+    { "id": "F-001", "severity": "P1", "scope": ["windows"], "title": "Shared OS support does not compile; VT C and ConPTY are cut off" },
+    { "id": "F-002", "severity": "P1", "scope": ["freebsd"], "title": "Default GTK runtime is not compiled" },
+    { "id": "F-003", "severity": "P1", "scope": ["freebsd", "windows"], "title": "Selected OpenGL renderer is Linux-only" },
+    { "id": "F-004", "severity": "P1", "scope": ["freebsd"], "title": "Selected kqueue backend exports an unusable fallback" },
+    { "id": "F-005", "severity": "P1", "scope": ["linux"], "title": "Kitty graphics are accepted but never rendered" },
+    { "id": "F-006", "severity": "P2", "scope": ["wasm", "browser"], "title": "Private VT table prevents installation of effect callbacks" },
+    { "id": "F-007", "severity": "P2", "scope": ["linux"], "title": "Default build enables neither native Wayland nor X11 integration" },
+    { "id": "F-008", "severity": "P2", "scope": ["c-abi", "shared"], "title": "Terminal constructor ignores the caller allocator" },
+    { "id": "F-009", "severity": "P2", "scope": ["linux", "gtk"], "title": "Application-wide Quit confirmation is a dead end" },
+    { "id": "F-010", "severity": "P2", "scope": ["linux", "gtk"], "title": "Non-confirming Quit does not destroy windows" },
+    { "id": "F-011", "severity": "P2", "scope": ["linux", "gtk"], "title": "Launch-time LANG is discarded from child environments" },
+    { "id": "F-012", "severity": "P2", "scope": ["linux"], "title": "Background-image configuration is ignored" },
+    { "id": "F-013", "severity": "P2", "scope": ["linux"], "title": "Custom shaders are compiled but not applied" },
+    { "id": "F-014", "severity": "P2", "scope": ["linux", "gtk"], "title": "Renderer scrollbar updates are discarded" },
+    { "id": "F-015", "severity": "P3", "scope": ["linux", "vt-core"], "title": "Two recoverable PageList allocation failures panic or abort" },
+    { "id": "F-016", "severity": "P3", "scope": ["test-infrastructure"], "title": "VT differential gate uses stale binaries and unbuildable source" },
+    { "id": "F-017", "severity": "P3", "scope": ["test-infrastructure"], "title": "No coverage-guided or live differential fuzz target exists" },
+    { "id": "F-018", "severity": "P4", "scope": ["linux", "distribution"], "title": "Linux integration templates have no repository installer" },
+    { "id": "F-019", "severity": "P4", "scope": ["linux", "gtk"], "title": "Performance warning widget is blank" },
+    { "id": "F-020", "severity": "P4", "scope": ["linux", "inspector"], "title": "Renderer inspector overlays are dropped" }
+  ]
+}
+

@@ -1,0 +1,7 @@
+rustty OpenGL gate: /Users/gael/projects/rustty/crates/rustty-renderer/src/lib.rs:105 #[cfg(target_os = "linux")]
+rustty renderer linux/freebsd cfg entries: [(105, '#[cfg(target_os = "linux")]'), (188, '#[cfg(target_os = "linux")]')]
+ghostty non-Darwin renderer fallback: /Users/gael/projects/ghostty/src/renderer/backend.zig:21 return .opengl;
+freebsd target cfg present: True
+rustty Windows compile stop: /Users/gael/projects/rustty/crates/rustty-os/src/page_allocator.rs:361 compile_error!("rustty-os::page_allocator: windows VM mapping path is not yet ported");
+ghostty Windows reader: /Users/gael/projects/ghostty/src/termio/Exec.zig:1770 fn threadMainWindows(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
+ghostty ConPTY handoff: /Users/gael/projects/ghostty/src/termio/Exec.zig:1031 .pseudo_console = if (builtin.os.tag == .windows) pty.pseudo_console else {},

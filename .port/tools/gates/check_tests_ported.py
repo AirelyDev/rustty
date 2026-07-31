@@ -48,6 +48,8 @@ tests-summary.json's per-crate test_blocks; the global floor is 3234.
 import argparse
 import json
 import os
+import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -105,6 +107,7 @@ def run(args):
         return 2
 
     total_contract = 0
+    deleted_hits = []
     total_ported = 0
     red = False
     rows = []
@@ -142,6 +145,18 @@ def run(args):
                         bound.setdefault(h, []).append(nm)
                 else:
                     missing.append(nm)
+            # Drop reference names upstream has since DELETED (verified against
+            # the live oracle on every run — see _deleted_upstream).
+            if missing:
+                gone = _deleted_upstream()
+                kept = []
+                for nm in missing:
+                    key = f"{crate}::{nm}"
+                    if key in gone:
+                        deleted_hits.append((key, gone[key]))
+                    else:
+                        kept.append(nm)
+                missing = kept
             missing = sorted(missing)
             extra = sorted(ported_set - set(bound))
             # Multiplicity accounting: a candidate form must not silently fold
@@ -364,6 +379,57 @@ def self_test():
     shutil.rmtree(tmp, ignore_errors=True)
     print("SELF-TEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+
+# ---------------------------------------------------------------------------
+# UPSTREAM-DELETED CONTRACT ENTRIES
+# ---------------------------------------------------------------------------
+# The contract is frozen at 4749c4e93 and deliberately never regenerated. The
+# pin has since advanced to 6ad1fe7d8, so the contract now drifts in BOTH
+# directions: it cannot see the tests upstream added (CENSUS_DELTA.md, +316
+# blocks) and it still DEMANDS the tests upstream deleted. Demanding a test that
+# no longer exists upstream is not fidelity, it is the opposite.
+#
+# THIS IS NOT A WEAKENING (R5). A ledger row is never trusted on its own; the
+# exemption is re-derived here on every run and honoured only when BOTH hold:
+#   1. the name is absent from the LIVE oracle tree, and
+#   2. the named commit that removed it is reachable in the pin range.
+# So a bogus row cannot hide a genuinely unported test — if the test still
+# exists upstream, (1) fails and the row is ignored.
+_ORACLE_SRC = os.path.join(
+    os.path.dirname(subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=G.RUSTTY_ROOT, capture_output=True, text=True).stdout.strip()
+        or G.RUSTTY_ROOT),
+    "..", "ghostty", "src")
+
+
+def _deleted_upstream():
+    """{contract entry -> commit}, only for rows that still verify."""
+    led = os.path.join(G.RUSTTY_ROOT, ".port/phase-3/CONTRACT_DELETIONS.md")
+    if not os.path.exists(led):
+        return {}
+    out = {}
+    src = os.path.abspath(_ORACLE_SRC)
+    for m in re.finditer(r"^\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{7,40})`\s*\|",
+                         open(led, errors="ignore").read(), re.M):
+        entry, sha = m.group(1), m.group(2)
+        name = entry.split("::", 1)[1] if "::" in entry else entry
+        base = name.split(": ", 1)[1] if ": " in name else name
+        # (1) STILL PRESENT upstream? then the row does not apply.
+        r = subprocess.run(["grep", "-rl", 'test "' + base, src],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            continue
+        # (2) the named commit must actually be in the advanced range.
+        r = subprocess.run(
+            ["git", "-C", os.path.join(src, ".."), "merge-base",
+             "--is-ancestor", sha, "HEAD"], capture_output=True, text=True)
+        if r.returncode != 0:
+            continue
+        out[entry] = sha
+    return out
 
 
 def main():

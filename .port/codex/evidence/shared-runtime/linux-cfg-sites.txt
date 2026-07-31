@@ -1,0 +1,77 @@
+crates/rustty-input/src/keycodes.rs:214:    #[cfg(any(target_os = "freebsd", target_os = "linux"))]
+crates/rustty-input/src/keycodes.rs:242:        target_os = "linux",
+crates/rustty-cli/src/toggle_quick_terminal.rs:20:#[cfg(not(all(target_os = "linux", feature = "gtk")))]
+crates/rustty-cli/src/toggle_quick_terminal.rs:22:#[cfg(not(all(target_os = "linux", feature = "gtk")))]
+crates/rustty-cli/src/toggle_quick_terminal.rs:113:    #[cfg(all(target_os = "linux", feature = "gtk"))]
+crates/rustty-cli/src/toggle_quick_terminal.rs:116:    #[cfg(not(all(target_os = "linux", feature = "gtk")))]
+crates/rustty-core/src/surface.rs:2484:        } else if cfg!(target_os = "linux") && config._xdg_terminal_exec {
+crates/rustty-core/src/renderer_seam.rs:199:// `#[cfg(target_os = "linux")] pub use linux_impl::*;`. This is exactly the macOS
+crates/rustty-config/src/config_struct.rs:5071:            copy_on_select: if cfg!(target_os = "linux") || cfg!(target_os = "macos") {
+crates/rustty-config/src/config_struct.rs:5083:            quit_after_last_window_closed: cfg!(target_os = "linux"),
+crates/rustty-config/src/config_struct.rs:5132:            linux_cgroup: if cfg!(target_os = "linux") {
+crates/rustty-config/src/config_struct.rs:6368:        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+crates/rustty-config/src/config_struct.rs:6387:        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+crates/rustty-cli/src/new_window.rs:24:#[cfg(not(all(target_os = "linux", feature = "gtk")))]
+crates/rustty-cli/src/new_window.rs:26:#[cfg(not(all(target_os = "linux", feature = "gtk")))]
+crates/rustty-cli/src/new_window.rs:484:    #[cfg(all(target_os = "linux", feature = "gtk"))]
+crates/rustty-cli/src/new_window.rs:486:    #[cfg(not(all(target_os = "linux", feature = "gtk")))]
+crates/rustty-os/src/passwd.rs:218:    #[cfg(not(target_os = "linux"))]
+crates/rustty-os/src/passwd.rs:222:    #[cfg(target_os = "linux")]
+crates/rustty-termio/src/shell_integration.rs:1934:    #[cfg(target_os = "linux")]
+crates/rustty-config/src/conditional.rs:77:        #[cfg(target_os = "linux")]
+crates/rustty-config/src/conditional.rs:91:            target_os = "linux",
+crates/rustty-os/src/pty.rs:407:        #[cfg(target_os = "linux")]
+crates/rustty-os/src/pty.rs:419:        #[cfg(not(target_os = "linux"))]
+crates/rustty-os/src/pty.rs:459:        #[cfg(target_os = "linux")]
+crates/rustty-os/src/pty.rs:475:        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+crates/rustty-os/src/pty.rs:736:        #[cfg(any(target_os = "freebsd", target_os = "linux", target_os = "macos"))]
+crates/rustty-os/src/pty.rs:741:            #[cfg(target_os = "linux")]
+crates/rustty-os/src/pty.rs:746:        #[cfg(not(any(target_os = "freebsd", target_os = "linux", target_os = "macos")))]
+crates/rustty-termio/src/command.rs:1228:    #[cfg(target_os = "linux")]
+crates/rustty-termio/src/command.rs:1276:        target_os = "linux",
+crates/rustty-termio/src/command.rs:1545:            #[cfg(target_os = "linux")]
+crates/rustty-os/src/open.rs:64:        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+crates/rustty-os/src/open.rs:98:            target_os = "linux",
+crates/rustty-os/src/flatpak.rs:30:    #[cfg(not(target_os = "linux"))]
+crates/rustty-os/src/flatpak.rs:34:    #[cfg(target_os = "linux")]
+crates/rustty-os/src/mach.rs:211:        // so it is reproduced here as a `cfg(target_os = "linux")` path (Linux
+crates/rustty-os/src/mach.rs:213:        #[cfg(target_os = "linux")]
+crates/rustty-os/src/mach.rs:233:        #[cfg(not(target_os = "linux"))]
+crates/rustty-termio/tests/live_shell.rs:287:    #[cfg(target_os = "linux")]
+crates/rustty-os/src/hostname.rs:33:    #[cfg(target_os = "linux")]
+crates/rustty-os/src/hostname.rs:43:        target_os = "linux"
+crates/rustty-os/src/desktop.rs:71:    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+crates/rustty-os/src/desktop.rs:108:        target_os = "linux",
+crates/rustty-os/src/desktop.rs:144:    not(any(target_os = "linux", target_os = "freebsd")),
+crates/rustty-os/src/desktop.rs:156:    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+crates/rustty-os/src/desktop.rs:190:        target_os = "linux",
+crates/rustty-os/src/desktop.rs:204:#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+crates/rustty-os/src/desktop.rs:248:        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+crates/rustty-os/src/desktop.rs:288:            target_os = "linux",
+crates/rustty-os/src/pipe.rs:33:            target_os = "linux",
+crates/rustty-os/src/pipe.rs:48:            target_os = "linux",
+crates/rustty-os/src/kernel_info.rs:13:    if cfg!(not(target_os = "linux")) {
+crates/rustty-os/src/kernel_info.rs:54:        if cfg!(not(target_os = "linux")) {
+crates/rustty-renderer/src/lib.rs:105:#[cfg(target_os = "linux")]
+crates/rustty-renderer/src/lib.rs:183:// re-exported by `generic`'s own `#[cfg(target_os = "linux")] pub use
+crates/rustty-renderer/src/lib.rs:188:#[cfg(target_os = "linux")]
+crates/rustty-os/src/lib.rs:219:        if cfg!(target_os = "linux") {
+crates/rustty-os/src/systemd.rs:10:// `cfg!(target_os = "linux")`. The Linux paths use raw `libc` syscalls
+crates/rustty-os/src/systemd.rs:26:    #[cfg(target_os = "linux")]
+crates/rustty-os/src/systemd.rs:72:    #[cfg(not(target_os = "linux"))]
+crates/rustty-os/src/systemd.rs:110:        #[cfg(target_os = "linux")]
+crates/rustty-os/src/systemd.rs:219:        #[cfg(target_os = "linux")]
+crates/rustty-os/src/systemd.rs:228:        #[cfg(target_os = "linux")]
+crates/rustty-os/src/systemd.rs:254:    #[cfg(target_os = "linux")]
+crates/rustty-os/src/systemd.rs:256:    #[cfg(target_os = "linux")]
+crates/rustty-os/src/systemd.rs:267:#[cfg(target_os = "linux")]
+crates/rustty-os/src/homedir.rs:35:    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+crates/rustty-os/src/homedir.rs:53:        target_os = "linux",
+crates/rustty-os/src/homedir.rs:64:#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+crates/rustty-os/src/homedir.rs:251:    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+crates/rustty-os/src/homedir.rs:271:        target_os = "linux",
+crates/rustty-os/src/homedir.rs:282:#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+crates/rustty-os/src/dbus.rs:21:    #[cfg(target_os = "linux")]
+crates/rustty-os/src/dbus.rs:31:    #[cfg(not(target_os = "linux"))]
+crates/rustty-renderer/src/generic.rs:7609:#[cfg(target_os = "linux")]
+crates/rustty-renderer/src/generic.rs:7611:#[cfg(target_os = "linux")]

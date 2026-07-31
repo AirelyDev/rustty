@@ -1,0 +1,584 @@
+   Compiling highway-sys v0.1.0 (/Users/gael/projects/rustty/crates-sys/highway-sys)
+   Compiling simdutf-sys v0.1.0 (/Users/gael/projects/rustty/crates-sys/simdutf-sys)
+   Compiling zlib-sys v0.1.0 (/Users/gael/projects/rustty/crates-sys/zlib-sys)
+   Compiling prettyplease v0.2.37
+    Checking rustty-os v0.1.0 (/Users/gael/projects/rustty/crates/rustty-os)
+error: rustty-os::page_allocator: windows VM mapping path is not yet ported
+   --> crates/rustty-os/src/page_allocator.rs:361:9
+    |
+361 |         compile_error!("rustty-os::page_allocator: windows VM mapping path is not yet ported");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: rustty-os::page_allocator: windows VM mapping path is not yet ported
+   --> crates/rustty-os/src/page_allocator.rs:365:9
+    |
+365 |         compile_error!("rustty-os::page_allocator: windows VM mapping path is not yet ported");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: passwd is not available on windows
+   --> crates/rustty-os/src/passwd.rs:187:5
+    |
+187 |     compile_error!("passwd is not available on windows")
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::passwd`
+  --> crates/rustty-os/src/homedir.rs:14:5
+   |
+14 | use crate::passwd;
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `rustty_build_config as build_config`
+  --> crates/rustty-os/src/passwd.rs:14:5
+   |
+14 | use rustty_build_config as build_config;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `BOOL`, `DWORD_PTR`, `HANDLE`, `LPWSTR`, `PVOID`, and `SIZE_T`
+   --> crates/rustty-os/src/windows.rs:210:25
+    |
+210 |     use super::{c_void, BOOL, DWORD, DWORD_PTR, HANDLE, LPWSTR, PVOID, SIZE_T};
+    |                         ^^^^         ^^^^^^^^^  ^^^^^^  ^^^^^^  ^^^^^  ^^^^^^
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/locale.rs:422:33
+    |
+422 | const LC_ALL: std::ffi::c_int = libc::LC_ALL;
+    |                                 ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/locale.rs:424:38
+    |
+424 | const LC_ALL_MASK: std::ffi::c_int = libc::LC_ALL_MASK;
+    |                                      ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/locale.rs:434:22
+    |
+434 |     let p = unsafe { libc::setlocale(category, locale.as_ptr()) };
+    |                      ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/locale.rs:448:14
+    |
+448 |     unsafe { libc::newlocale(category_mask, locale, base) }
+    |              ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/locale.rs:453:14
+    |
+453 |     unsafe { libc::freelocale(loc) };
+    |              ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:156:17
+    |
+156 |                 libc::mmap(
+    |                 ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:159:21
+    |
+159 |                     libc::PROT_READ | libc::PROT_WRITE,
+    |                     ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:159:39
+    |
+159 |                     libc::PROT_READ | libc::PROT_WRITE,
+    |                                       ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:160:21
+    |
+160 |                     libc::MAP_PRIVATE | libc::MAP_ANON,
+    |                     ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:160:41
+    |
+160 |                     libc::MAP_PRIVATE | libc::MAP_ANON,
+    |                                         ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:165:21
+    |
+165 |             if p == libc::MAP_FAILED {
+    |                     ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:177:22
+    |
+177 |             unsafe { libc::munmap(slice_ptr.cast(), drop_len) };
+    |                      ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:182:17
+    |
+182 |                 libc::munmap(
+    |                 ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:195:18
+    |
+195 |         unsafe { libc::munmap(memory.as_mut_ptr().cast(), page_aligned_len) };
+    |                  ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:239:26
+    |
+239 |                 unsafe { libc::munmap(ptr.cast(), page_aligned_len - new_size_aligned) };
+    |                          ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:252:14
+    |
+252 |     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+    |              ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/mach.rs:252:28
+    |
+252 |     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+    |                            ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0308]: mismatched types
+   --> crates/rustty-os/src/page_allocator.rs:360:54
+    |
+360 |     fn map_pages(&self, _n: usize, _align: usize) -> Option<NonNull<u8>> {
+    |        ---------                                     ^^^^^^^^^^^^^^^^^^^ expected `Option<NonNull<u8>>`, found `()`
+    |        |
+    |        implicitly returns `()` as its body has no tail or `return` expression
+    |
+    = note:   expected enum `Option<NonNull<u8>>`
+            found unit type `()`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+  --> crates/rustty-os/src/path.rs:53:28
+   |
+53 |     let mut path_buf: [u8; libc::PATH_MAX as usize] = [0; libc::PATH_MAX as usize];
+   |                            ^^^^ use of unresolved module or unlinked crate `libc`
+   |
+   = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+  --> crates/rustty-os/src/path.rs:53:59
+   |
+53 |     let mut path_buf: [u8; libc::PATH_MAX as usize] = [0; libc::PATH_MAX as usize];
+   |                                                           ^^^^ use of unresolved module or unlinked crate `libc`
+   |
+   = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+error[E0277]: the trait bound `WindowsPtyError: std::error::Error` is not satisfied
+   --> crates/rustty-os/src/pty.rs:649:28
+    |
+649 |                 return Err(Box::new(WindowsPtyError::Unexpected));
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `std::error::Error` is not implemented for `WindowsPtyError`
+   --> crates/rustty-os/src/pty.rs:530:1
+    |
+530 | pub enum WindowsPtyError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::boxed::Box<WindowsPtyError>` to `std::boxed::Box<dyn std::error::Error>`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `libc`
+   --> crates/rustty-os/src/locale.rs:427:17
+    |
+427 | type locale_t = libc::locale_t;
+    |                 ^^^^ use of unresolved module or unlinked crate `libc`
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+Some errors have detailed explanations: E0277, E0308, E0433.
+For more information about an error, try `rustc --explain E0277`.
+warning: `rustty-os` (lib) generated 3 warnings
+error: could not compile `rustty-os` (lib) due to 25 previous errors; 3 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: zlib-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/adler32.c:8:
+warning: zlib-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/zutil.h:22:
+warning: zlib-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/zlib.h:34:
+warning: zlib-sys@0.1.0: /Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/zconf.h:446:14: fatal error: 'sys/types.h' file not found
+warning: zlib-sys@0.1.0:   446 | #    include <sys/types.h>      /* for off_t */
+warning: zlib-sys@0.1.0:       |              ^~~~~~~~~~~~~
+warning: zlib-sys@0.1.0: 1 error generated.
+error: failed to run custom build command for `zlib-sys v0.1.0 (/Users/gael/projects/rustty/crates-sys/zlib-sys)`
+
+Caused by:
+  process didn't exit successfully: `/Users/gael/projects/rustty/target/debug/build/zlib-sys-de3a2c51b75b829c/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rerun-if-changed=vendor/adler32.c
+  cargo:rerun-if-changed=vendor/crc32.c
+  cargo:rerun-if-changed=vendor/inftrees.c
+  cargo:rerun-if-changed=vendor/inffast.c
+  cargo:rerun-if-changed=vendor/inflate.c
+  cargo:rerun-if-changed=vendor/uncompr.c
+  cargo:rerun-if-changed=vendor/deflate.c
+  cargo:rerun-if-changed=vendor/trees.c
+  cargo:rerun-if-changed=vendor/compress.c
+  cargo:rerun-if-changed=vendor/zutil.c
+  cargo:rerun-if-changed=vendor/deflate.c
+  cargo:rerun-if-changed=vendor/trees.c
+  cargo:rerun-if-changed=vendor/compress.c
+  cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+  CC_FORCE_DISABLE = None
+  cargo:rerun-if-env-changed=VCINSTALLDIR
+  VCINSTALLDIR = None
+  cargo:rerun-if-env-changed=CC_x86_64-pc-windows-msvc
+  CC_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_x86_64_pc_windows_msvc
+  CC_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=TARGET_CC
+  TARGET_CC = None
+  cargo:rerun-if-env-changed=CC
+  CC = None
+  cargo:rerun-if-env-changed=CROSS_COMPILE
+  CROSS_COMPILE = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CFLAGS
+  CFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CFLAGS
+  TARGET_CFLAGS = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+  CFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+  CFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CFLAGS
+  CFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CFLAGS
+  TARGET_CFLAGS = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+  CFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+  CFLAGS_x86_64-pc-windows-msvc = None
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/adler32.c:8:
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/zutil.h:22:
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/zlib.h:34:
+  cargo:warning=/Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/zconf.h:446:14: fatal error: 'sys/types.h' file not found
+  cargo:warning=  446 | #    include <sys/types.h>      /* for off_t */
+  cargo:warning=      |              ^~~~~~~~~~~~~
+  cargo:warning=1 error generated.
+
+  --- stderr
+
+
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1): LC_ALL="C" "cc" "-O0" "-ffunction-sections" "-fdata-sections" "-g" "-fno-omit-frame-pointer" "-m64" "--target=x86_64-pc-windows-msvc" "-I" "/Users/gael/projects/rustty/crates-sys/zlib-sys/vendor" "-w" "-w" "-o" "/Users/gael/projects/rustty/target/x86_64-pc-windows-msvc/debug/build/zlib-sys-25bb87b18e5eee83/out/527e678a60a68e67-adler32.o" "-c" "/Users/gael/projects/rustty/crates-sys/zlib-sys/vendor/adler32.c"
+
+
+warning: simdutf-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/simdutf-sys/vendor/simdutf.cpp:3:
+warning: simdutf-sys@0.1.0: /Users/gael/projects/rustty/crates-sys/simdutf-sys/vendor/simdutf.h:5:10: fatal error: 'cstring' file not found
+warning: simdutf-sys@0.1.0:     5 | #include <cstring>
+warning: simdutf-sys@0.1.0:       |          ^~~~~~~~~
+warning: simdutf-sys@0.1.0: 1 error generated.
+error: failed to run custom build command for `simdutf-sys v0.1.0 (/Users/gael/projects/rustty/crates-sys/simdutf-sys)`
+
+Caused by:
+  process didn't exit successfully: `/Users/gael/projects/rustty/target/debug/build/simdutf-sys-99964991b68e7a21/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rerun-if-changed=vendor/simdutf.cpp
+  cargo:rerun-if-changed=vendor/simdutf.h
+  cargo:rerun-if-changed=cbits/shim.cpp
+  cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+  CC_FORCE_DISABLE = None
+  cargo:rerun-if-env-changed=VCINSTALLDIR
+  VCINSTALLDIR = None
+  cargo:rerun-if-env-changed=CXX_x86_64-pc-windows-msvc
+  CXX_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CXX_x86_64_pc_windows_msvc
+  CXX_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=TARGET_CXX
+  TARGET_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CROSS_COMPILE
+  CROSS_COMPILE = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/simdutf-sys/vendor/simdutf.cpp:3:
+  cargo:warning=/Users/gael/projects/rustty/crates-sys/simdutf-sys/vendor/simdutf.h:5:10: fatal error: 'cstring' file not found
+  cargo:warning=    5 | #include <cstring>
+  cargo:warning=      |          ^~~~~~~~~
+  cargo:warning=1 error generated.
+
+  --- stderr
+
+
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1): LC_ALL="C" "c++" "-O0" "-ffunction-sections" "-fdata-sections" "-g" "-fno-omit-frame-pointer" "-m64" "--target=x86_64-pc-windows-msvc" "-std=c++17" "-I" "/Users/gael/projects/rustty/crates-sys/simdutf-sys/vendor" "-w" "-w" "-fno-sanitize=undefined" "-fno-sanitize-trap=undefined" "-fno-exceptions" "-fno-rtti" "-DSIMDUTF_IMPLEMENTATION_ICELAKE=0" "-DSIMDUTF_NO_LIBCXX=1" "-o" "/Users/gael/projects/rustty/target/x86_64-pc-windows-msvc/debug/build/simdutf-sys-0a54b589d8152877/out/ec2526e051584c6e-simdutf.o" "-c" "/Users/gael/projects/rustty/crates-sys/simdutf-sys/vendor/simdutf.cpp"
+
+
+warning: highway-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/cpp/per_target.cc:41:
+warning: highway-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/vendor/hwy/foreach_target.h:72:
+warning: highway-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/vendor/hwy/per_target.cc:28:
+warning: highway-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/vendor/hwy/highway.h:610:
+warning: highway-sys@0.1.0: In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/vendor/hwy/ops/x86_128-inl.h:32:
+warning: highway-sys@0.1.0: In file included from /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include/emmintrin.h:17:
+warning: highway-sys@0.1.0: In file included from /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include/xmmintrin.h:31:
+warning: highway-sys@0.1.0: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include/mm_malloc.h:13:10: fatal error: 'stdlib.h' file not found
+warning: highway-sys@0.1.0:    13 | #include <stdlib.h>
+warning: highway-sys@0.1.0:       |          ^~~~~~~~~~
+warning: highway-sys@0.1.0: 1 error generated.
+error: failed to run custom build command for `highway-sys v0.1.0 (/Users/gael/projects/rustty/crates-sys/highway-sys)`
+
+Caused by:
+  process didn't exit successfully: `/Users/gael/projects/rustty/target/debug/build/highway-sys-bb485bb1b21aba2c/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rerun-if-changed=cpp/abort.cc
+  cargo:rerun-if-changed=cpp/per_target.cc
+  cargo:rerun-if-changed=cpp/targets.cpp
+  cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+  CC_FORCE_DISABLE = None
+  cargo:rerun-if-env-changed=VCINSTALLDIR
+  VCINSTALLDIR = None
+  cargo:rerun-if-env-changed=CXX_x86_64-pc-windows-msvc
+  CXX_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CXX_x86_64_pc_windows_msvc
+  CXX_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=TARGET_CXX
+  TARGET_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CROSS_COMPILE
+  CROSS_COMPILE = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=VCINSTALLDIR
+  VCINSTALLDIR = None
+  cargo:rerun-if-env-changed=CXX_x86_64-pc-windows-msvc
+  CXX_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CXX_x86_64_pc_windows_msvc
+  CXX_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=TARGET_CXX
+  TARGET_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CROSS_COMPILE
+  CROSS_COMPILE = None
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_pc_windows_msvc
+  CXXFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-pc-windows-msvc
+  CXXFLAGS_x86_64-pc-windows-msvc = None
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/cpp/per_target.cc:41:
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/vendor/hwy/foreach_target.h:72:
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/vendor/hwy/per_target.cc:28:
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/vendor/hwy/highway.h:610:
+  cargo:warning=In file included from /Users/gael/projects/rustty/crates-sys/highway-sys/vendor/hwy/ops/x86_128-inl.h:32:
+  cargo:warning=In file included from /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include/emmintrin.h:17:
+  cargo:warning=In file included from /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include/xmmintrin.h:31:
+  cargo:warning=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include/mm_malloc.h:13:10: fatal error: 'stdlib.h' file not found
+  cargo:warning=   13 | #include <stdlib.h>
+  cargo:warning=      |          ^~~~~~~~~~
+  cargo:warning=1 error generated.
+
+  --- stderr
+
+
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1): LC_ALL="C" "c++" "-O0" "-ffunction-sections" "-fdata-sections" "-g" "-fno-omit-frame-pointer" "-m64" "--target=x86_64-pc-windows-msvc" "-std=c++17" "-I" "/Users/gael/projects/rustty/crates-sys/highway-sys/vendor" "-w" "-w" "-Wno-builtin-macro-redefined" "-fmerge-all-constants" "-fno-cxx-exceptions" "-fno-slp-vectorize" "-fno-vectorize" "-fno-sanitize=undefined" "-fno-sanitize-trap=undefined" "-DHWY_NO_LIBCXX" "-D__DATE__=\"redacted\"" "-D__TIMESTAMP__=\"redacted\"" "-D__TIME__=\"redacted\"" "-o" "/Users/gael/projects/rustty/target/x86_64-pc-windows-msvc/debug/build/highway-sys-6cc40fca94a30796/out/30270a3f827af26f-per_target.o" "-c" "/Users/gael/projects/rustty/crates-sys/highway-sys/cpp/per_target.cc"
+
+
