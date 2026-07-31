@@ -897,7 +897,39 @@ most likely place for a regression). **Negative control:** make
 closing the surface HANGS — a passing run with a no-op signal would prove
 nothing.
 
-## V13. GTK `pre_exec`/`post_fork` — WIRING **DISCHARGED**; the Linux cgroup end-to-end check REMAINS — **OWNER: WS20**
+## ~~V13. GTK `pre_exec`/`post_fork` are ported but NOT YET REACHED by `Command`~~ — **DISCHARGED 2026-07-30 [WS20]**
+
+> **END-TO-END CHECK RUN AND PASSED, 2026-07-30 (Linux VM, GTK 4.22.4, Wayland).**
+> Recipe step 4 is no longer debt. Both arms, real `/proc` evidence, config written
+> to the REAL config path:
+>
+> ```
+> ARM linux-cgroup=always -> scope-transition log lines: 2
+>   debug(gtk_post_fork): beginning transition to transient systemd scope
+>     app-rustty-surface-transient-362480.scope
+>   child 362480 cgroup:
+>     0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-rustty-surface-transient-362480.scope
+>
+> ARM linux-cgroup=never  -> scope-transition log lines: 0
+>   (no transition line)
+>   child 362565 cgroup: 0::/user.slice/user-1000.slice/session-545.scope
+> ```
+>
+> **THE FIRST RUN OF THIS KAT WAS VACUOUS, and that is worth recording.** It set
+> `RUSTTY_CONFIG_PATH=...` — an environment variable this project does not have.
+> Config is discovered through the XDG path (`rustty_config::file_load::default_xdg_path`
+> -> `~/.config/rustty/config.rustty`), so BOTH arms ran the DEFAULT config, whose
+> Linux default is `LinuxCgroup::SingleInstance` — and both arms transitioned. The
+> `never` arm "failing" is what exposed it; had the default been `never`, both arms
+> would have agreed and the KAT would have "passed" while testing nothing. Rerun
+> against the real config path (with backup/restore), the arms differ, which is the
+> non-vacuity proof.
+>
+> Also verified on Linux, since macOS compiles NONE of the gtk half:
+> `cargo check -p rustty-apprt --features gtk --all-targets` GREEN,
+> `cargo test -p rustty-termio --no-fail-fast` 55 passed / 0 failed,
+> `cargo clippy -p rustty-apprt --features gtk --all-targets -- -D warnings` clean.
+
 
 **Filed WS20, 2026-07-30. Wiring discharged 2026-07-30 (branch
 `ws20-v13-preexec-wiring`).** `src/apprt/gtk/pre_exec.zig` and
