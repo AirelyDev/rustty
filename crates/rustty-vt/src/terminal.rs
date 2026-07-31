@@ -5392,10 +5392,18 @@ impl Terminal {
     ///
     ///   - If the column count changes, tabstops are reset.
     ///   - The scroll region is always reset
-    ///   - Synchronized output mode is reset before grid resize work.
+    ///   - Synchronized output mode is reset for every successful resize.
     ///
-    /// If this returns an error, the terminal is in a bad state currently.
-    /// We will make this safe soon.
+    /// This handles errors gracefully and recovers the terminal back to
+    /// a clean usable state.
+    ///
+    /// The only error handling edge case is in the highly exceptional scenario
+    /// where the primary screen can be resized but the alternate screen cannot.
+    /// In this scenario, we attempt to clear the alt screen at the desired
+    /// new size. If that fails, we unconditionally deallocate the alt screen
+    /// and move to primary screen. This can break terminal programs but it
+    /// requires a really particular scenario where memory exists for one
+    /// but not the other and we do our best.
     pub fn resize(
         &mut self,
         alloc: Allocator,
@@ -5411,13 +5419,23 @@ impl Terminal {
         let cols = opts.cols;
         let rows = opts.rows;
 
-        // If we have cell geometry, set that now.
-        // if (opts.cell_size_px) |cell_size| {
-        //     self.width_px = std.math.mul(u32, opts.cols, cell_size.width) catch
-        //         std.math.maxInt(u32);
-        //     self.height_px = std.math.mul(u32, opts.rows, cell_size.height) catch
-        //         std.math.maxInt(u32);
+        // Pixel geometry and synchronized output are updated on every valid
+        // resize attempt, including one that doesn't change the grid dimensions.
+        // Save their old values so later allocation failures can roll them back.
+        // errdefer {
+        //     self.width_px = old_width_px;
+        //     self.height_px = old_height_px;
+        //     self.modes.set(.synchronized_output, old_synchronized_output);
         // }
+        //
+        // PORT NOTE: Rust has no `errdefer`; the block is spelled out as
+        // `resize_rollback_geometry` and invoked at every fallible exit below.
+        let old_width_px = self.width_px;
+        let old_height_px = self.height_px;
+        let old_synchronized_output = self.modes.get(modespkg::Mode::SynchronizedOutput);
+
+        // If our pixel geometry was set, then we set it even if our rows/cols
+        // didn't change.
         // PORT NOTE: `std.math.mul(...) catch maxInt(u32)` is saturate-on-overflow.
         if let Some(cell_size) = opts.cell_size_px {
             self.width_px = u32::from(cols).saturating_mul(cell_size.width);
@@ -5433,88 +5451,202 @@ impl Terminal {
             return Ok(());
         }
 
-        // Resize our tabstops
-        // if (self.cols != cols) {
-        //     const tabstops: Tabstops = try .init(
-        //         alloc,
-        //         cols,
-        //         TABSTOP_INTERVAL,
-        //     );
-        //     self.tabstops.deinit(alloc);
-        //     self.tabstops = tabstops;
-        // }
-        // PORT NOTE (parity 91f0cf67d): allocate and initialize the replacement
-        // FIRST, release the old tab stops only after allocation succeeds. A
-        // failed resize retains the original tab stops and remains safe to
-        // destroy. The upstream FailingAllocator test hunk is ported as
-        // `terminal_resize_preserves_tabstops_on_allocation_failure`, arming the
-        // `Tabstops::resize` tripwire fail point that this path reaches through
-        // `Tabstops::init` (WS8 T17 — the MAIN_PARITY PARTIAL row is now closed).
+        // Build replacement tabstops without touching the current table. Keep
+        // ownership here until every fallible resize operation has succeeded.
+        // var new_tabstops: ?Tabstops = null;
+        // errdefer if (new_tabstops) |*v| v.deinit(alloc);
+        let mut new_tabstops: Option<Tabstops> = None;
         if self.cols != cols {
+            // try tw.check(.tabstops);
+            #[cfg(test)]
+            if let Err(e) = resize_tw_check(ResizeFp::Tabstops) {
+                self.resize_rollback_geometry(old_width_px, old_height_px, old_synchronized_output);
+                return Err(e.into());
+            }
             // PORT NOTE: `Tabstops::init`'s allocation-failure type is its own
-            // `OutOfMemory`; both map to the reference `Allocator.Error`. We
-            // normalize to `pagelist::OutOfMemory` (this crate's canonical OOM)
-            // to match the `resize` signature.
-            let tabstops = match Tabstops::init(alloc, cols as usize, TABSTOP_INTERVAL as usize) {
-                Ok(t) => t,
-                Err(_e) => return Err(ResizeError::OutOfMemory),
-            };
-            // PORT NOTE: `Tabstops::deinit` consumes `self` by value (mirrors
-            // the reference `self.tabstops.deinit(alloc)`); we take the field
-            // out via `core::mem::take` (leaving an empty default) to call it,
-            // then overwrite with the freshly initialized tabstops.
-            core::mem::take(&mut self.tabstops).deinit(alloc);
-            self.tabstops = tabstops;
+            // `OutOfMemory`; both map to the reference `Allocator.Error`.
+            match Tabstops::init(alloc, cols as usize, TABSTOP_INTERVAL as usize) {
+                Ok(t) => new_tabstops = Some(t),
+                Err(_e) => {
+                    self.resize_rollback_geometry(
+                        old_width_px,
+                        old_height_px,
+                        old_synchronized_output,
+                    );
+                    return Err(ResizeError::OutOfMemory);
+                }
+            }
         }
 
-        // Resize primary screen, which supports reflow
+        // Resize primary screen, which supports reflow. We do this first
+        // because the cleanup situation is a lot better if this succeeds
+        // and alt fails than the reverse.
+        // try tw.check(.primary_screen);
         // const primary = self.screens.get(.primary).?;
         // try primary.resize(.{
-        //     .cols = cols,
-        //     .rows = rows,
+        //     .cols = opts.cols,
+        //     .rows = opts.rows,
         //     .reflow = self.modes.get(.wraparound),
         //     .prompt_redraw = self.flags.shell_redraws_prompt,
         // });
         let reflow = self.modes.get(modespkg::Mode::Wraparound);
         let prompt_redraw = self.flags.shell_redraws_prompt;
         let primary: *mut Screen = self.screens.get(crate::screen_set::Key::Primary).unwrap();
+
+        #[cfg(test)]
+        if let Err(e) = resize_tw_check(ResizeFp::PrimaryScreen) {
+            // errdefer if (new_tabstops) |*v| v.deinit(alloc);
+            if let Some(v) = new_tabstops.take() {
+                v.deinit(alloc);
+            }
+            self.resize_rollback_geometry(old_width_px, old_height_px, old_synchronized_output);
+            return Err(e.into());
+        }
         // SAFETY: `primary` is a stable heap pointer owned by `self.screens`;
         // `resize` takes `&mut Screen` and does not mutate `self.screens`.
-        unsafe {
+        if let Err(e) = unsafe {
             (*primary).resize(crate::screen::Resize {
                 cols,
                 rows,
                 reflow,
                 prompt_redraw,
-            })?;
+            })
+        } {
+            if let Some(v) = new_tabstops.take() {
+                v.deinit(alloc);
+            }
+            self.resize_rollback_geometry(old_width_px, old_height_px, old_synchronized_output);
+            return Err(e.into());
         }
 
-        // Alternate screen, if it exists, doesn't reflow
-        // if (self.screens.get(.alternate)) |alt| try alt.resize(.{
-        //     .cols = cols,
-        //     .rows = rows,
-        //     .reflow = false,
-        // });
+        // Alternate screen, if it exists, doesn't reflow. The primary resize
+        // above can't be losslessly undone, so if the alternate resize fails we
+        // replace it with an empty screen at the requested size. If that
+        // also fails, we fall back to the primary screen.
         if let Some(alt) = self.screens.get(crate::screen_set::Key::Alternate) {
-            // SAFETY: `alt` is a stable heap pointer owned by `self.screens`.
-            unsafe {
-                (*alt).resize(crate::screen::Resize {
-                    cols,
-                    rows,
-                    reflow: false,
-                    // PORT NOTE: the reference omits `prompt_redraw` here, so it
-                    // takes the `Screen.Resize` struct field default, which is
-                    // `.false` (`Screen.zig` `prompt_redraw: ... = .false`).
-                    //
-                    // PORT FINDING (P3-W4 T2): this previously read
-                    // `Redraw::True`, citing a `.true` default that the reference
-                    // has never had. The alternate screen would therefore clear
-                    // its cursor row on resize whenever the cursor's semantic
-                    // content was not `.output`. Guarded by
-                    // `terminal_resize_does_not_prompt_redraw_the_alternate_screen`.
-                    prompt_redraw: osc::semantic_prompt::Redraw::False,
-                })?;
+            'alt: {
+                let _err: ResizeError = 'resize: {
+                    #[cfg(test)]
+                    if let Err(e) = resize_tw_check(ResizeFp::AlternateScreen) {
+                        break 'resize e.into();
+                    }
+                    // SAFETY: `alt` is a stable heap pointer owned by `self.screens`.
+                    match unsafe {
+                        (*alt).resize(crate::screen::Resize {
+                            cols,
+                            rows,
+                            reflow: false,
+                            // PORT NOTE: the reference omits `prompt_redraw`
+                            // here, so it takes the `Screen.Resize` struct field
+                            // default, which is `.false` (`Screen.zig`
+                            // `prompt_redraw: ... = .false`).
+                            //
+                            // PORT FINDING (P3-W4 T2): this previously read
+                            // `Redraw::True`, citing a `.true` default the
+                            // reference has never had. The alternate screen
+                            // would therefore clear its cursor row on resize
+                            // whenever the cursor's semantic content was not
+                            // `.output`. Guarded by
+                            // `terminal_resize_does_not_prompt_redraw_the_alternate_screen`.
+                            prompt_redraw: osc::semantic_prompt::Redraw::False,
+                        })
+                    } {
+                        Err(e) => break 'resize e.into(),
+                        // Resize succeeded.
+                        Ok(()) => break 'alt,
+                    }
+                };
+
+                // log.warn("alternate screen resize failed, replacing it err={}", .{err});
+
+                // If the alternate screen isn't active, then we just free it
+                // and move on. It'll be reallocated when it gets reinitialized
+                // lazily. In this case, we just lose the prior data if the
+                // terminal program expected it to be saved.
+                if self.screens.active_key != crate::screen_set::Key::Alternate {
+                    self.screens
+                        .remove(alloc, crate::screen_set::Key::Alternate);
+                    break 'alt;
+                }
+
+                // The alt screen is active, so we temporarily switch to primary
+                // so we can safely remove the alt and recreate it blank. This
+                // loses the data but hopefully keeps us on the alt screen.
+                // SAFETY: `alt` is still live here (nothing has removed it yet).
+                let charset = unsafe { (*alt).charset.clone() };
+                self.screens.switch_to(crate::screen_set::Key::Primary);
+                self.screens
+                    .remove(alloc, crate::screen_set::Key::Alternate);
+
+                // Replace the alt screen with an empty version. If this fails
+                // we just go back to the primary screen. Not great, but best
+                // we can do.
+                // tw.check(.alternate_screen_init) catch break :alt;
+                #[cfg(test)]
+                if resize_tw_check(ResizeFp::AlternateScreenInit).is_err() {
+                    break 'alt;
+                }
+                // PORT NOTE (oracle b988efcfe): upstream's 0.16 regression fix
+                // changed this call's first argument from `alt.io` to
+                // `self.io()`. rustty's `ScreenSet::get_init` has no `io`
+                // parameter at all, so the pre-fix form is simply never
+                // reproduced and there is nothing to port.
+                let replacement = match self.screens.get_init(
+                    alloc,
+                    crate::screen_set::Key::Alternate,
+                    crate::screen::Options {
+                        cols,
+                        rows,
+                        // .max_scrollback = 0
+                        max_scrollback_bytes: Some(0),
+                        max_scrollback_lines: None,
+                        // Inherit our Kitty image settings from the primary
+                        // screen (see `switch_screen`'s PORT NOTE: kitty
+                        // graphics IS enabled in rustty, so the reference's
+                        // `build_options.kitty_graphics` arm is the live one).
+                        kitty_image_storage_limit: unsafe { (*primary).kitty_images.total_limit },
+                        kitty_image_loading_limits: unsafe { (*primary).kitty_images.image_limits },
+                    },
+                ) {
+                    Ok(r) => r,
+                    Err(_init_err) => {
+                        // log.warn("alternate screen replacement failed,
+                        //   falling back to primary err={}", .{init_err});
+                        break 'alt;
+                    }
+                };
+
+                // SAFETY: freshly initialized screen owned by `self.screens`.
+                unsafe { (*replacement).charset = charset };
+                self.screens.switch_to(crate::screen_set::Key::Alternate);
             }
+        }
+
+        // errdefer comptime unreachable;
+        //
+        // PORT NOTE: "No more failures are allowed after this point because the
+        // screens have committed their new sizes and the remaining Terminal
+        // state must follow." Zig's `errdefer comptime unreachable` is a
+        // COMPILE-TIME assertion that no fallible operation follows; Rust has no
+        // equivalent, so the property is held by construction — nothing below
+        // returns `Err` and the function's only remaining exit is `Ok(())`.
+        // The marker below is that contract written down at the commit point,
+        // as a real (non-vacuous) invariant: reaching here means every screen
+        // has already committed to the new size. A bare `debug_assert!(true)`
+        // would be a no-op that clippy rightly rejects.
+        debug_assert!(
+            unsafe { (*primary).pages.cols == cols && (*primary).pages.rows == rows },
+            "resize commit point reached without the primary screen at the new size"
+        );
+
+        // All fallible work is complete. Replace the old tabstop table only now.
+        if let Some(v) = new_tabstops.take() {
+            // PORT NOTE: `Tabstops::deinit` consumes `self` by value (mirrors
+            // the reference `self.tabstops.deinit(alloc)`); we take the field
+            // out via `core::mem::take` (leaving an empty default) to call it,
+            // then overwrite with the freshly initialized tabstops.
+            core::mem::take(&mut self.tabstops).deinit(alloc);
+            self.tabstops = v;
         }
 
         // Whenever we resize we just mark it as a screen clear
@@ -5542,6 +5674,25 @@ impl Terminal {
         };
 
         Ok(())
+    }
+
+    /// The pixel-geometry / synchronized-output `errdefer` of `resize`,
+    /// spelled out (Rust has no `errdefer`).
+    fn resize_rollback_geometry(
+        &mut self,
+        old_width_px: u32,
+        old_height_px: u32,
+        old_synchronized_output: bool,
+    ) {
+        self.width_px = old_width_px;
+        self.height_px = old_height_px;
+        // NOTE: when `old_synchronized_output` is false this re-clears the mode
+        // and therefore bumps `modes::sync_output_clear_count`. That counter
+        // measures the SUCCESS path (see its PORT NOTE); a rollback restoring
+        // `false` is indistinguishable from a clear at the `ModeState::set`
+        // seam, and no assertion counts an error path.
+        self.modes
+            .set(modespkg::Mode::SynchronizedOutput, old_synchronized_output);
     }
 
     /// Set the pwd for the terminal.
@@ -6144,6 +6295,54 @@ thread_local! {
 #[inline]
 fn set_string_tw_check(point: SetStringFp) -> Result<(), OutOfMemory> {
     SET_STRING_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+// const resize_tw = tripwire.module(enum {
+//     tabstops,
+//     primary_screen,
+//     alternate_screen,
+//     alternate_screen_init,
+// }, resize);
+//
+// PORT NOTE: same instance-vs-comptime-type idiom as `SET_STRING_TW` above; the
+// fail-point NAMES are the reference's verbatim. Distinct from
+// `tabstops::RESIZE_TW` (which injects inside `Tabstops::init`) and from
+// `screen::RESIZE_TW` (which injects inside `Screen::resize`).
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ResizeFp {
+    Tabstops,
+    PrimaryScreen,
+    AlternateScreen,
+    AlternateScreenInit,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RESIZE_TW:
+        core::cell::RefCell<rustty_util::tripwire::Module<ResizeFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+/// `try resize_tw.check(point)`.
+#[cfg(test)]
+#[inline]
+fn resize_tw_check(point: ResizeFp) -> Result<(), OutOfMemory> {
+    RESIZE_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+/// `resize_tw.errorAlways(point, error.OutOfMemory)`.
+#[cfg(test)]
+pub(crate) fn resize_tw_error_always(point: ResizeFp) {
+    RESIZE_TW.with(|tw| tw.borrow_mut().errorAlways(point, OutOfMemory));
+}
+
+/// `try resize_tw.end(mode)`.
+#[cfg(test)]
+pub(crate) fn resize_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    RESIZE_TW.with(|tw| tw.borrow_mut().end(mode))
 }
 
 #[cfg(test)]
@@ -17450,6 +17649,324 @@ mod tests {
         // original interval-8 stop is still present.
         assert_eq!(10 as size::CellCountInt, t.cols);
         assert!(t.tabstops.get(8));
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize failure paths preserve consistent state"
+    //
+    // NEGATIVE CONTROL (P3-W4 T3 Step 3): one arm per fail point, each asserting
+    // a DIFFERENT piece of rolled-back state, because a single "resize failed
+    // and nothing changed" test cannot say which rollback arm regressed:
+    //   - `Tabstops`      trips BEFORE the tabstop table is replaced.
+    //   - `PrimaryScreen` trips after the tabstops were built (they must be
+    //                     freed) but before any screen mutated.
+    //   - `AlternateScreen` is the RECOVERY arm, not a restoration arm: the
+    //                     primary already resized, so the resize SUCCEEDS and
+    //                     the inactive alternate is dropped instead.
+    //
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn terminal_resize_failure_paths_preserve_consistent_state() {
+        let alloc = Global;
+
+        for tag in [
+            ResizeFp::Tabstops,
+            ResizeFp::PrimaryScreen,
+            ResizeFp::AlternateScreen,
+        ] {
+            let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+            t.print_string(b"primary").unwrap();
+            let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+            t.print_string(b"alternate").unwrap();
+            let _ = t.switch_screen(crate::screen_set::Key::Primary).unwrap();
+
+            t.width_px = 100;
+            t.height_px = 50;
+            t.modes.set(modespkg::Mode::SynchronizedOutput, true);
+            t.flags.dirty.clear = false;
+            t.scrolling_region = ScrollingRegion {
+                top: 1,
+                bottom: 2,
+                left: 1,
+                right: 8,
+            };
+            t.tabstops.unset(8);
+            t.tabstops.set(3);
+
+            let primary = t.screens.get(crate::screen_set::Key::Primary).unwrap();
+            let alternate = t.screens.get(crate::screen_set::Key::Alternate).unwrap();
+            let alternate_generation = t.screens.generation(crate::screen_set::Key::Alternate);
+            assert!(std::ptr::eq(
+                unsafe { (*primary).pages.pages.first },
+                unsafe { (*primary).pages.pages.last }
+            ));
+            assert!(std::ptr::eq(
+                unsafe { (*alternate).pages.pages.first },
+                unsafe { (*alternate).pages.pages.last }
+            ));
+
+            // PORT NOTE: `const before = t;` is a Zig by-value struct copy; the
+            // Rust port snapshots exactly the fields the reference compares.
+            let before_width_px = t.width_px;
+            let before_height_px = t.height_px;
+            let before_modes = (t.modes.values, t.modes.saved, t.modes.default);
+            let before_cols = t.cols;
+            let before_rows = t.rows;
+            let before_scrolling_region = (
+                t.scrolling_region.top,
+                t.scrolling_region.bottom,
+                t.scrolling_region.left,
+                t.scrolling_region.right,
+            );
+            let before_dirty_clear = t.flags.dirty.clear;
+            let before_tabstop_8 = t.tabstops.get(8);
+            let before_tabstop_3 = t.tabstops.get(3);
+            let before_active_key = t.screens.active_key;
+            let before_active = t.screens.active;
+            let (before_primary_cols, before_primary_rows, before_primary_total_rows) = unsafe {
+                (
+                    (*primary).pages.cols,
+                    (*primary).pages.rows,
+                    (*primary).pages.total_rows,
+                )
+            };
+            let before_primary_cursor_xy = unsafe { ((*primary).cursor.x, (*primary).cursor.y) };
+            let before_primary_page: Vec<u8> = unsafe {
+                let page: *const Page = crate::pagelist::Node::page((*primary).pages.pages.first);
+                core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
+            };
+            let (before_alt_cols, before_alt_rows, before_alt_total_rows) = unsafe {
+                (
+                    (*alternate).pages.cols,
+                    (*alternate).pages.rows,
+                    (*alternate).pages.total_rows,
+                )
+            };
+            let before_alt_cursor_xy = unsafe { ((*alternate).cursor.x, (*alternate).cursor.y) };
+            let before_alternate_page: Vec<u8> = unsafe {
+                let page: *const Page = crate::pagelist::Node::page((*alternate).pages.pages.first);
+                core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
+            };
+
+            resize_tw_error_always(tag);
+
+            // A failure after the primary screen has resized is recovered by
+            // dropping the inactive alternate and completing the resize. This
+            // also proves the alternate tripwire is after the primary resize
+            // rather than acting as a preflight check.
+            if tag == ResizeFp::AlternateScreen {
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 513,
+                        rows: 4,
+                        cell_size_px: Some(ResizeCellSize {
+                            width: 9,
+                            height: 18,
+                        }),
+                    },
+                )
+                .unwrap();
+
+                assert_eq!(513 as size::CellCountInt, t.cols);
+                assert_eq!(4 as size::CellCountInt, t.rows);
+                assert_eq!(4617_u32, t.width_px);
+                assert_eq!(72_u32, t.height_px);
+                assert!(!t.modes.get(modespkg::Mode::SynchronizedOutput));
+                assert!(t.flags.dirty.clear);
+                assert_eq!(513 as size::CellCountInt, unsafe { (*primary).pages.cols });
+                assert_eq!(4 as size::CellCountInt, unsafe { (*primary).pages.rows });
+                assert!(t.screens.get(crate::screen_set::Key::Alternate).is_none());
+                assert_eq!(
+                    alternate_generation.wrapping_add(1),
+                    t.screens.generation(crate::screen_set::Key::Alternate)
+                );
+                assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+                assert!(std::ptr::eq(primary, t.screens.active));
+                assert!(t.tabstops.get(8));
+                assert!(!t.tabstops.get(3));
+
+                // The alternate is recreated lazily at the terminal's new size.
+                let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+                let replacement = t.screens.get(crate::screen_set::Key::Alternate).unwrap();
+                assert_eq!(513 as size::CellCountInt, unsafe {
+                    (*replacement).pages.cols
+                });
+                assert_eq!(4 as size::CellCountInt, unsafe {
+                    (*replacement).pages.rows
+                });
+                assert!(unsafe {
+                    (*(*replacement)
+                        .pages
+                        .get_cell(point::Point::Active(point::Coordinate::default()))
+                        .unwrap()
+                        .cell)
+                        .is_empty()
+                });
+
+                resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+                t.deinit(alloc);
+                continue;
+            }
+
+            assert_eq!(
+                Err(ResizeError::OutOfMemory),
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 513,
+                        rows: 4,
+                        cell_size_px: Some(ResizeCellSize {
+                            width: 9,
+                            height: 18
+                        }),
+                    }
+                )
+            );
+
+            assert_eq!(before_width_px, t.width_px);
+            assert_eq!(before_height_px, t.height_px);
+            assert_eq!(
+                before_modes,
+                (t.modes.values, t.modes.saved, t.modes.default)
+            );
+            assert_eq!(before_cols, t.cols);
+            assert_eq!(before_rows, t.rows);
+            assert_eq!(
+                before_scrolling_region,
+                (
+                    t.scrolling_region.top,
+                    t.scrolling_region.bottom,
+                    t.scrolling_region.left,
+                    t.scrolling_region.right,
+                )
+            );
+            assert_eq!(before_dirty_clear, t.flags.dirty.clear);
+            assert_eq!(before_tabstop_8, t.tabstops.get(8));
+            assert_eq!(before_tabstop_3, t.tabstops.get(3));
+            assert_eq!(before_active_key, t.screens.active_key);
+            assert!(std::ptr::eq(before_active, t.screens.active));
+
+            unsafe {
+                assert_eq!(before_primary_cols, (*primary).pages.cols);
+                assert_eq!(before_primary_rows, (*primary).pages.rows);
+                assert_eq!(before_primary_total_rows, (*primary).pages.total_rows);
+                assert_eq!(
+                    before_primary_cursor_xy,
+                    ((*primary).cursor.x, (*primary).cursor.y)
+                );
+                let page: *const Page = crate::pagelist::Node::page((*primary).pages.pages.first);
+                let after = core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len());
+                assert!(
+                    before_primary_page == after,
+                    "primary page memory changed after a failed resize"
+                );
+
+                assert_eq!(before_alt_cols, (*alternate).pages.cols);
+                assert_eq!(before_alt_rows, (*alternate).pages.rows);
+                assert_eq!(before_alt_total_rows, (*alternate).pages.total_rows);
+                assert_eq!(
+                    before_alt_cursor_xy,
+                    ((*alternate).cursor.x, (*alternate).cursor.y)
+                );
+                let page: *const Page = crate::pagelist::Node::page((*alternate).pages.pages.first);
+                let after = core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len());
+                assert!(
+                    before_alternate_page == after,
+                    "alternate page memory changed after a failed resize"
+                );
+            }
+
+            resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            t.deinit(alloc);
+        }
+    }
+
+    // test "Terminal: alternate resize failure replaces active alternate screen"
+    //
+    // WS18 release lane: tripwire fail point; see the PORT NOTE above.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn terminal_alternate_resize_failure_replaces_active_alternate_screen() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+        unsafe { (*t.screens.active).charset.gl = charsets::Slots::G1 };
+        t.print_string(b"alternate").unwrap();
+        let generation = t.screens.generation(crate::screen_set::Key::Alternate);
+
+        resize_tw_error_always(ResizeFp::AlternateScreen);
+        t.resize(
+            alloc,
+            Resize {
+                cols: 20,
+                rows: 4,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+        resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+        let alternate = t.screens.get(crate::screen_set::Key::Alternate).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+        assert!(std::ptr::eq(alternate, t.screens.active));
+        assert_eq!(20 as size::CellCountInt, unsafe { (*alternate).pages.cols });
+        assert_eq!(4 as size::CellCountInt, unsafe { (*alternate).pages.rows });
+        assert!(unsafe {
+            (*(*alternate)
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate::default()))
+                .unwrap()
+                .cell)
+                .is_empty()
+        });
+        assert_eq!(charsets::Slots::G1, unsafe { (*alternate).charset.gl });
+        assert_eq!(
+            generation.wrapping_add(1),
+            t.screens.generation(crate::screen_set::Key::Alternate)
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: alternate resize replacement failure falls back to primary"
+    //
+    // WS18 release lane: tripwire fail point; see the PORT NOTE above.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn terminal_alternate_resize_replacement_failure_falls_back_to_primary() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+        resize_tw_error_always(ResizeFp::AlternateScreen);
+        resize_tw_error_always(ResizeFp::AlternateScreenInit);
+        t.resize(
+            alloc,
+            Resize {
+                cols: 20,
+                rows: 4,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+        resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+        let primary = t.screens.get(crate::screen_set::Key::Primary).unwrap();
+        assert!(t.screens.get(crate::screen_set::Key::Alternate).is_none());
+        assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+        assert!(std::ptr::eq(primary, t.screens.active));
+        assert_eq!(20 as size::CellCountInt, unsafe { (*primary).pages.cols });
+        assert_eq!(4 as size::CellCountInt, unsafe { (*primary).pages.rows });
 
         t.deinit(alloc);
     }

@@ -2294,7 +2294,7 @@ mod tests {
         t.deinit(Global);
     }
 
-    // test "resize failure resets synchronized output but does not write"
+    // test "resize failure preserves terminal state and does not write"
     //
     // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
     // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
@@ -2303,7 +2303,7 @@ mod tests {
     // debug — where it still runs and passes. NOT disabled to hide a failure.
     #[test]
     #[cfg_attr(not(debug_assertions), ignore)]
-    fn resize_failure_resets_synchronized_output_but_does_not_write() {
+    fn resize_failure_preserves_terminal_state_and_does_not_write() {
         calls_reset();
 
         let mut t = Terminal::init(Global, opts(10, 1)).unwrap();
@@ -2331,9 +2331,14 @@ mod tests {
         }
         crate::tabstops::resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
 
-        assert!(!t.modes.get(modespkg::Mode::SynchronizedOutput));
+        // oracle a3c1caba5: the failed resize now ROLLS BACK, so
+        // synchronized output stays as it was and the pixel geometry is
+        // untouched (it was never set on this terminal).
+        assert!(t.modes.get(modespkg::Mode::SynchronizedOutput));
         assert_eq!(0_usize, calls_get());
         assert_eq!(10 as size::CellCountInt, t.cols);
+        assert_eq!(0_u32, t.width_px);
+        assert_eq!(0_u32, t.height_px);
 
         t.deinit(Global);
     }
