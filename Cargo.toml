@@ -286,7 +286,7 @@ dcimgui-sys = { path = "crates-sys/dcimgui-sys" }
 # faithful Rust map of Zig's `std.mem.Allocator`: `Allocator::allocate(Layout)`
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current
 # `std::alloc` path, so threading it as the child allocator is behavior-preserving.
-allocator-api2 = "0.2"
+allocator-api2 = "0.4"
 # Zig `std.json` equivalent for the crash-envelope port (rustty-crash): the
 # reference's `std.json.ObjectMap` is a `StringArrayHashMap(Value)` — an
 # INSERTION-ORDER-preserving string map — so `serde_json` is pinned with the
