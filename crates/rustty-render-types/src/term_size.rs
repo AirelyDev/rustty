@@ -158,10 +158,41 @@ impl<T> Offset<T> {
 // holding an `Offset(T)` plus a `len`. Rust associated types can't be generic
 // over the outer `T` in the same way, so it is hoisted to a standalone
 // `OffsetSlice<T>` with the identical fields and `slice` method.
+//
+// PORT NOTE (P3 F1, uninit-in-page-mapping fix): this is `#[repr(C)]` with an
+// EXPLICIT `_padding` field rather than a plain `repr(Rust)` two-field struct,
+// for exactly the reason recorded on `style::Color`. `OffsetSlice` values are
+// stored INSIDE the terminal page's backing mapping (`hyperlink.PageEntry.uri`
+// and `.id`, and the grapheme map's values), and
+// `compress::CompressedPage::init` compresses that whole mapping as one
+// `&[u8]` — as the oracle's `compress/Page.zig` compresses `page.memory`. A
+// `u32` next to a `usize` under `repr(Rust)` yields 4 bytes of TAIL PADDING,
+// and a typed Rust write leaves padding UNINITIALIZED even over freshly-zeroed
+// memory, so the compressor then read uninit bytes (Miri: "constructing
+// invalid value of type `[u8; 4]`: encountered uninitialized memory" inside
+// `lz4::compress`).
+//
+// Naming the padding is a faithfulness IMPROVEMENT, not a divergence: the
+// oracle's `Offset(T).Slice` is a Zig auto-layout struct with the same `u32` +
+// `usize` fields and therefore the same 4 padding bytes and the same
+// `@sizeOf == 16`; Zig simply permits reading those undefined bytes and Rust
+// does not. `repr(C)` in the declared order gives `offset` @0, `_padding` @4,
+// `len` @8 — 16 bytes, align 8, every byte covered by a field. This port
+// already names such implicit padding elsewhere (`Row._padding: u23`).
+#[repr(C)]
 pub struct OffsetSlice<T> {
     pub offset: Offset<T>,
+    /// The 4 tail-padding bytes the field pair implies, named so that every
+    /// byte of an `OffsetSlice` written into a page mapping is initialized.
+    /// Always zero; never read.
+    _padding: u32,
     pub len: usize,
 }
+
+// `OffsetSlice` must have no implicit padding at all, or the reshape above is
+// pointless. 4 + 4 + 8 == 16 at align 8.
+const _: () = assert!(core::mem::size_of::<OffsetSlice<u8>>() == 16);
+const _: () = assert!(core::mem::align_of::<OffsetSlice<u8>>() == 8);
 
 // PORT NOTE: the reference `Offset(T).Slice` is a plain value type copied freely
 // (`var x = self.uri`); both fields are `Copy`, so the wrapper is `Copy`/`Clone`.
@@ -174,14 +205,24 @@ impl<T> Copy for OffsetSlice<T> {}
 
 impl<T> Default for OffsetSlice<T> {
     fn default() -> Self {
-        OffsetSlice {
-            offset: Offset::default(),
-            len: 0,
-        }
+        OffsetSlice::new(Offset::default(), 0)
     }
 }
 
 impl<T> OffsetSlice<T> {
+    /// Construct an `OffsetSlice` from its two reference fields. (The reference
+    /// uses struct literals `.{ .offset = ..., .len = ... }`; this constructor
+    /// exists only so callers never have to name the private `_padding` field
+    /// added by the byte-completeness reshape above.)
+    #[inline]
+    pub const fn new(offset: Offset<T>, len: usize) -> Self {
+        OffsetSlice {
+            offset,
+            _padding: 0,
+            len,
+        }
+    }
+
     /// Returns a slice for the data, properly typed.
     ///
     /// # Safety

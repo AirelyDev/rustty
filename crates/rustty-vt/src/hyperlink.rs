@@ -116,14 +116,127 @@ pub struct PageEntry {
 
 // PORT NOTE: the reference is `PageEntry.Id`, a nested union; hoisted to
 // `PageEntryId` (same reason as `HyperlinkId`).
+//
+// PORT NOTE (P3 F1, uninit-in-page-mapping fix): this was a plain Rust `enum`
+// and is now a byte-complete `#[repr(C)]` value, for exactly the reason
+// recorded on `style::Color` (WS19 T5) and `size::OffsetSlice`. A `PageEntry`
+// is stored in the page's `hyperlink_set` item array, which lives INSIDE the
+// terminal page's backing mapping, and `compress::CompressedPage::init`
+// compresses that whole mapping as one `&[u8]` — exactly as the oracle's
+// `compress/Page.zig` compresses `page.memory`. A typed Rust write of an enum
+// initializes only the active variant's payload and the discriminant, and
+// actively DE-initializes everything else in the value — here the 7 bytes of
+// discriminant padding at 1..8 (both variants) and the 12 unused payload bytes
+// at 12..24 (`Implicit`). The compressor then read them, and Miri aborted with
+// "constructing invalid value of type `[u8; 8]`: encountered uninitialized
+// memory" inside `lz4::compress`. (Located precisely: the first uninit byte of
+// the failing test's mapping was at +4452, i.e. `hyperlink_set` item 1's
+// `PageEntryId` byte 4.)
+//
+// This is a JUSTIFIED R1 DIVERGENCE in representation only, not in value
+// semantics or size: the oracle's `union(enum) { explicit: Offset(u8).Slice,
+// implicit: size.OffsetInt }` has the same 24-byte size and the same undefined
+// bytes — Zig simply permits reading undefined bytes and Rust does not, so
+// R1 fidelity cannot carry the enum representation over. Both payload slots
+// are now always fully written (the inactive one as zero), the tag is a raw
+// `u8` so a value read back out of a page mapping can never be
+// invalid-enum-value UB, and every read goes through a tag-checked accessor —
+// the analogue of the reference's checked union-field access, and the identical
+// shape `style::Color` already uses in this port.
+#[repr(C)]
 #[derive(Clone, Copy)]
-pub enum PageEntryId {
-    /// An explicitly provided ID via the OSC8 sequence.
-    Explicit(OffsetSlice<u8>),
+pub struct PageEntryId {
+    /// The `explicit` union payload. Zeroed (and never read) when the tag is
+    /// `Implicit`, so that these bytes are always initialized.
+    explicit: OffsetSlice<u8>,
 
+    /// The `implicit` union payload. Zero (and never read) when the tag is
+    /// `Explicit`, so that these bytes are always initialized.
+    implicit: size::OffsetInt,
+
+    /// A `PageEntryIdTag` held as a raw `u8` (see the PORT NOTE above).
+    /// The mapping arrives zeroed and `0` is `PageEntryIdTag::Implicit`, which
+    /// is also `PageEntry::default()`'s tag.
+    tag: u8,
+
+    /// The 3 tail-padding bytes the fields above imply, named so that every
+    /// byte of a `PageEntryId` written into a page mapping is initialized.
+    _padding: [u8; 3],
+}
+
+// `PageEntryId` must have no implicit padding at all, or the reshape above is
+// pointless. 16 + 4 + 1 + 3 == 24 at align 8, the oracle's `@sizeOf` too.
+const _: () = assert!(core::mem::size_of::<PageEntryId>() == 24);
+const _: () = assert!(core::mem::align_of::<PageEntryId>() == 8);
+
+/// `std.meta.activeTag(PageEntry.Id)` — the reference's union tag.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageEntryIdTag {
     /// No ID was provided so we auto-generate the ID based on an
     /// incrementing counter attached to the screen.
-    Implicit(size::OffsetInt),
+    Implicit = 0,
+
+    /// An explicitly provided ID via the OSC8 sequence.
+    Explicit = 1,
+}
+
+impl PageEntryId {
+    /// The reference's `.{ .explicit = slice }`. Named like the former enum
+    /// variant it replaces, so the construction sites are unchanged by the
+    /// byte-complete reshape (the same convention as `style::Color::Palette`).
+    #[allow(non_snake_case)]
+    #[inline]
+    pub const fn Explicit(slice: OffsetSlice<u8>) -> PageEntryId {
+        PageEntryId {
+            explicit: slice,
+            implicit: 0,
+            tag: PageEntryIdTag::Explicit as u8,
+            _padding: [0; 3],
+        }
+    }
+
+    /// The reference's `.{ .implicit = v }`. See `Explicit`.
+    #[allow(non_snake_case)]
+    #[inline]
+    pub const fn Implicit(v: size::OffsetInt) -> PageEntryId {
+        PageEntryId {
+            explicit: OffsetSlice::new(Offset::new(0), 0),
+            implicit: v,
+            tag: PageEntryIdTag::Implicit as u8,
+            _padding: [0; 3],
+        }
+    }
+
+    /// The active tag — the reference's `std.meta.activeTag(self)`.
+    #[inline]
+    pub fn tag(self) -> PageEntryIdTag {
+        // Only 0/1 are constructible (every write goes through the two
+        // constructors above, and a zeroed mapping reads as `.implicit`), so
+        // the fallback arm is unreachable and is `debug_assert`ed rather than
+        // trapping — the same contract as `style::Color::tag`.
+        debug_assert!(self.tag <= PageEntryIdTag::Explicit as u8);
+        match self.tag {
+            1 => PageEntryIdTag::Explicit,
+            _ => PageEntryIdTag::Implicit,
+        }
+    }
+
+    /// The reference's `self.explicit` union-field access. Only valid when
+    /// `self.tag() == PageEntryIdTag::Explicit`, which the reference also
+    /// requires (Zig checks it in safe modes; we `debug_assert` it).
+    #[inline]
+    pub fn explicit(self) -> OffsetSlice<u8> {
+        debug_assert!(self.tag == PageEntryIdTag::Explicit as u8);
+        self.explicit
+    }
+
+    /// The reference's `self.implicit` union-field access. See `explicit`.
+    #[inline]
+    pub fn implicit(self) -> size::OffsetInt {
+        debug_assert!(self.tag == PageEntryIdTag::Implicit as u8);
+        self.implicit
+    }
 }
 
 impl Default for PageEntry {
@@ -167,17 +280,16 @@ impl PageEntry {
             let buf =
                 unsafe { Page::string_alloc_alloc(dst_page, uri.len()).map_err(|_| OutOfMemory)? };
             buf.copy_from_slice(uri);
-            copy.uri = OffsetSlice {
-                offset: unsafe { get_offset::<u8, _>(dst_base, &buf[0]) },
-                len: uri.len(),
-            };
+            copy.uri =
+                OffsetSlice::new(unsafe { get_offset::<u8, _>(dst_base, &buf[0]) }, uri.len());
         }
         // errdefer dst_page.string_alloc.free(...) — handled below on error.
 
         // Copy the ID
-        match copy.id {
-            PageEntryId::Implicit(_) => {} // Shallow is fine
-            PageEntryId::Explicit(slice) => {
+        match copy.id.tag() {
+            PageEntryIdTag::Implicit => {} // Shallow is fine
+            PageEntryIdTag::Explicit => {
+                let slice = copy.id.explicit();
                 let id = unsafe { slice.slice(self_base) };
                 let id_len = id.len();
                 let buf = match unsafe { Page::string_alloc_alloc(dst_page, id_len) } {
@@ -192,10 +304,10 @@ impl PageEntry {
                     }
                 };
                 buf.copy_from_slice(id);
-                copy.id = PageEntryId::Explicit(OffsetSlice {
-                    offset: unsafe { get_offset::<u8, _>(dst_base, &buf[0]) },
-                    len: id_len,
-                });
+                copy.id = PageEntryId::Explicit(OffsetSlice::new(
+                    unsafe { get_offset::<u8, _>(dst_base, &buf[0]) },
+                    id_len,
+                ));
             }
         }
 
@@ -214,14 +326,14 @@ impl PageEntry {
         // then uri bytes) using the std hasher.
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         // autoHash(&hasher, std.meta.activeTag(self.id));
-        match &self.id {
-            PageEntryId::Implicit(v) => {
+        match self.id.tag() {
+            PageEntryIdTag::Implicit => {
                 hasher.write_u8(1); // tag: implicit
-                hasher.write_u32(*v);
+                hasher.write_u32(self.id.implicit());
             }
-            PageEntryId::Explicit(slice) => {
+            PageEntryIdTag::Explicit => {
                 hasher.write_u8(0); // tag: explicit
-                let s = unsafe { slice.slice(base) };
+                let s = unsafe { self.id.explicit().slice(base) };
                 hasher.write(s);
             }
         }
@@ -241,15 +353,15 @@ impl PageEntry {
         other_base: B2,
     ) -> bool {
         // if (std.meta.activeTag(self.id) != std.meta.activeTag(other.id)) return false;
-        match (&self.id, &other.id) {
-            (PageEntryId::Implicit(a), PageEntryId::Implicit(b)) => {
-                if a != b {
+        match (self.id.tag(), other.id.tag()) {
+            (PageEntryIdTag::Implicit, PageEntryIdTag::Implicit) => {
+                if self.id.implicit() != other.id.implicit() {
                     return false;
                 }
             }
-            (PageEntryId::Explicit(a), PageEntryId::Explicit(b)) => {
-                let self_ptr = unsafe { a.slice(self_base) };
-                let other_ptr = unsafe { b.slice(other_base) };
+            (PageEntryIdTag::Explicit, PageEntryIdTag::Explicit) => {
+                let self_ptr = unsafe { self.id.explicit().slice(self_base) };
+                let other_ptr = unsafe { other.id.explicit().slice(other_base) };
                 if self_ptr != other_ptr {
                     return false;
                 }
@@ -273,10 +385,10 @@ impl PageEntry {
         // runs from the hyperlink set context's `deleted` while the page's
         // `hyperlink_set` is mutably borrowed.
         let base = unsafe { Page::memory_ptr_of(page) };
-        match self.id {
-            PageEntryId::Implicit(_) => {}
-            PageEntryId::Explicit(v) => {
-                let s = unsafe { v.slice(base) };
+        match self.id.tag() {
+            PageEntryIdTag::Implicit => {}
+            PageEntryIdTag::Explicit => {
+                let s = unsafe { self.id.explicit().slice(base) };
                 unsafe { Page::string_alloc_free(page, s) };
             }
         }

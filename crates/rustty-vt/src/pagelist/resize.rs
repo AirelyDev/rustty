@@ -1628,9 +1628,9 @@ impl ReflowCursor {
                 // Ensure that the string alloc has sufficient capacity
                 // to dupe the link (and the ID if it's not implicit).
                 let additional_required_string_capacity = src_link.uri.len
-                    + match src_link.id {
-                        crate::hyperlink::PageEntryId::Explicit(v) => v.len,
-                        crate::hyperlink::PageEntryId::Implicit(_) => 0,
+                    + match src_link.id.tag() {
+                        crate::hyperlink::PageEntryIdTag::Explicit => src_link.id.explicit().len,
+                        crate::hyperlink::PageEntryIdTag::Implicit => 0,
                     };
                 // Keep trying until we have enough capacity.
                 loop {

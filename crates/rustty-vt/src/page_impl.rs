@@ -962,11 +962,12 @@ impl Page {
                             string_bytes +=
                                 StringAlloc::bytes_required::<u8>(entry.uri.len);
 
-                            match entry.id {
-                                hyperlink::PageEntryId::Implicit(_) => {}
-                                hyperlink::PageEntryId::Explicit(slice) => {
-                                    string_bytes +=
-                                        StringAlloc::bytes_required::<u8>(slice.len);
+                            match entry.id.tag() {
+                                hyperlink::PageEntryIdTag::Implicit => {}
+                                hyperlink::PageEntryIdTag::Explicit => {
+                                    string_bytes += StringAlloc::bytes_required::<u8>(
+                                        entry.id.explicit().len,
+                                    );
                                 }
                             }
                         }
@@ -2046,10 +2047,10 @@ impl Page {
             // errdefer self.string_alloc.free(self.memory, buf);
             buf.copy_from_slice(&link.uri);
 
-            OffsetSlice {
-                offset: unsafe { get_offset::<u8, _>(base, &buf[0]) },
-                len: link.uri.len(),
-            }
+            OffsetSlice::new(
+                unsafe { get_offset::<u8, _>(base, &buf[0]) },
+                link.uri.len(),
+            )
         };
         // errdefer self.string_alloc.free(self.memory, page_uri.slice(self.memory));
 
@@ -2069,10 +2070,10 @@ impl Page {
                 };
                 buf.copy_from_slice(id);
 
-                hyperlink::PageEntryId::Explicit(OffsetSlice {
-                    offset: unsafe { get_offset::<u8, _>(base, &buf[0]) },
-                    len: id.len(),
-                })
+                hyperlink::PageEntryId::Explicit(OffsetSlice::new(
+                    unsafe { get_offset::<u8, _>(base, &buf[0]) },
+                    id.len(),
+                ))
             }
 
             hyperlink::HyperlinkId::Implicit(id) => hyperlink::PageEntryId::Implicit(*id),
@@ -2093,10 +2094,10 @@ impl Page {
             Ok(id) => id,
             Err(e) => {
                 // errdefer: free the explicit id string and the uri.
-                match page_id {
-                    hyperlink::PageEntryId::Implicit(_) => {}
-                    hyperlink::PageEntryId::Explicit(slice) => unsafe {
-                        let s = slice.slice(base);
+                match page_id.tag() {
+                    hyperlink::PageEntryIdTag::Implicit => {}
+                    hyperlink::PageEntryIdTag::Explicit => unsafe {
+                        let s = page_id.explicit().slice(base);
                         self.string_alloc.free(base, s);
                     },
                 }
@@ -2262,10 +2263,10 @@ impl Page {
         // errdefer self.grapheme_alloc.free(self.memory, slice);
         slice.copy_from_slice(cps);
 
-        let value = OffsetSlice {
-            offset: unsafe { get_offset::<u32, _>(base, &slice[0]) },
-            len: slice.len(),
-        };
+        let value = OffsetSlice::new(
+            unsafe { get_offset::<u32, _>(base, &slice[0]) },
+            slice.len(),
+        );
         if map
             .put_no_clobber_context(cell_offset, value, &actx)
             .is_err()
@@ -2318,10 +2319,10 @@ impl Page {
             // errdefer self.grapheme_alloc.free(self.memory, cps);
             cps[0] = cp;
 
-            let value = OffsetSlice {
-                offset: unsafe { get_offset::<u32, _>(base, &cps[0]) },
-                len: 1,
-            };
+            let value = OffsetSlice::new(
+                unsafe { get_offset::<u32, _>(base, &cps[0]) },
+                1,
+            );
             if map.put_no_clobber_context(cell_offset, value, &actx).is_err() {
                 unsafe { self.grapheme_alloc.free(base, cps) };
                 return Err(OutOfMemory);
@@ -2365,10 +2366,10 @@ impl Page {
         fastmem::copy(&mut cps[0..old_cps.len()], old_cps);
         cps[slice_ref.len] = cp;
         let new_len = slice_ref.len + 1;
-        *slice_ref = OffsetSlice {
-            offset: unsafe { get_offset::<u32, _>(base, &cps[0]) },
-            len: new_len,
-        };
+        *slice_ref = OffsetSlice::new(
+            unsafe { get_offset::<u32, _>(base, &cps[0]) },
+            new_len,
+        );
 
         // Free our old chunk
         unsafe { self.grapheme_alloc.free(base, old_cps) };
