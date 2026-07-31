@@ -511,6 +511,57 @@ fn start_hyperlink_tw_check(point: StartHyperlinkFp) -> Result<(), OutOfMemory> 
     START_HYPERLINK_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
+// const resize_tw = tripwire.module(enum {
+//     saved_cursor_pin,
+//     pages,
+// }, resize);
+//
+// PORT NOTE: same instance-vs-comptime-type idiom as `SELECTION_STRING_TW`
+// above. The fail-point NAMES are the reference's verbatim (`saved_cursor_pin`,
+// `pages`) so the parity is free. Upstream's `Screen: resize errors preserve
+// state` test iterates `std.meta.tags(resize_tw.FailPoint)`; the Rust port
+// iterates `ResizeFp::ALL`, which must be kept in sync with the enum.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ResizeFp {
+    SavedCursorPin,
+    Pages,
+}
+
+#[cfg(test)]
+impl ResizeFp {
+    /// `std.meta.tags(resize_tw.FailPoint)`.
+    pub(crate) const ALL: [ResizeFp; 2] = [ResizeFp::SavedCursorPin, ResizeFp::Pages];
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RESIZE_TW:
+        core::cell::RefCell<rustty_util::tripwire::Module<ResizeFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+/// `try resize_tw.check(point)`.
+#[cfg(test)]
+#[inline]
+fn resize_tw_check(point: ResizeFp) -> Result<(), OutOfMemory> {
+    RESIZE_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+/// `resize_tw.errorAlways(point, error.OutOfMemory)`.
+#[cfg(test)]
+pub(crate) fn resize_tw_error_always(point: ResizeFp) {
+    RESIZE_TW.with(|tw| tw.borrow_mut().errorAlways(point, OutOfMemory));
+}
+
+/// `try resize_tw.end(mode)`.
+#[cfg(test)]
+pub(crate) fn resize_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    RESIZE_TW.with(|tw| tw.borrow_mut().end(mode))
+}
+
 pub struct SelectLine<'a> {
     /// The pin of some part of the line to select.
     pub pin: Pin,
@@ -2541,70 +2592,114 @@ impl Screen {
         self.cursor.style.bg_cell().unwrap_or_else(Cell::zeroed)
     }
 
-    /// Resize the screen. The rows or cols can be bigger or smaller.
-    ///
-    /// If this returns an error, the screen is left in a likely garbage state.
-    /// It is very hard to undo this operation without blowing up our memory
-    /// usage. The only way to recover is to reset the screen. The only way
-    /// this really fails is if page allocation is required and fails, which
-    /// probably means the system is in trouble anyways. I'd like to improve this
-    /// in the future but it is not a priority particularly because this scenario
-    /// (resize) is difficult.
+    /// Resize the screen. The rows or cols can be bigger or smaller. If this
+    /// returns an error, the screen is unchanged.
     pub fn resize(&mut self, opts: Resize) -> Result<(), OutOfMemory> {
         // defer self.assertIntegrity();
         // PORT NOTE: Rust has no `defer`. The reference runs `assertIntegrity`
-        // at every exit; we wrap the body in a closure and run the assert after.
+        // at every exit; we wrap the body in a helper and run the assert after.
         let result = self.resize_inner(opts);
         self.assert_integrity();
         result
     }
 
     fn resize_inner(&mut self, opts: Resize) -> Result<(), OutOfMemory> {
-        // if (comptime build_options.kitty_graphics) {
-        //     // No matter what we mark our image state as dirty
-        //     self.kitty_images.dirty = true;
-        // }
-        if crate::options::KITTY_GRAPHICS {
-            // No matter what we mark our image state as dirty
-            self.kitty_images.dirty = true;
+        // We need to insert a tracked pin for our saved cursor so we can
+        // modify its X/Y for reflow. Do this before changing any state since
+        // tracking the pin can fail.
+        let saved_cursor_pin: Option<*mut Pin> = 'saved_cursor: {
+            let Some(sc) = self.saved_cursor.as_ref() else {
+                break 'saved_cursor None;
+            };
+            let (sc_x, sc_y) = (sc.x, sc.y as u32);
+            let Some(pin) = self
+                .pages
+                .pin(point::Point::Active(point::Coordinate { x: sc_x, y: sc_y }))
+            else {
+                break 'saved_cursor None;
+            };
+            #[cfg(test)]
+            resize_tw_check(ResizeFp::SavedCursorPin)?;
+            Some(self.pages.track_pin(pin)?)
+        };
+        // PORT NOTE: the reference `defer if (saved_cursor_pin) |p|
+        // self.pages.untrackPin(p);` is run at every exit below via
+        // `resize_tracked`.
+        let result = self.resize_tracked(opts, saved_cursor_pin);
+        if let Some(p) = saved_cursor_pin {
+            self.pages.untrack_pin(p);
         }
+        result
+    }
 
-        // Release the cursor style while resizing just
-        // in case the cursor ends up on a different page.
+    /// The remainder of `resize` once the saved-cursor pin is tracked.
+    //
+    // PORT NOTE (UB HAZARD, area A §5(a)): `PageList::resize` reallocates and
+    // can destroy pages, so nothing here may hold a `&mut Page` (or any
+    // reference derived from one) across it. Every page touch below goes
+    // through a freshly-materialized `*mut Page`, and the only value that
+    // outlives the resize is the raw `cursor_node` POINTER, which is compared
+    // but never dereferenced afterwards (see the survival check at the bottom).
+    fn resize_tracked(
+        &mut self,
+        opts: Resize,
+        saved_cursor_pin: Option<*mut Pin>,
+    ) -> Result<(), OutOfMemory> {
+        // A cursor style and hyperlink are partly stored in the page containing
+        // the cursor. Their IDs only have meaning within that page, and the page
+        // keeps reference counts for them. Resizing can replace or destroy the
+        // page, so below we temporarily remove both values from the cursor before
+        // asking PageList to resize.
+        //
+        // Save everything first so we can put the cursor back together afterward,
+        // or restore it unchanged if the resize fails. We also save the original
+        // node and serial so after a successful resize we can tell whether that
+        // page survived and still needs its temporary references released.
+        let cursor_node = unsafe { (*self.cursor.page_pin).node };
+        let cursor_node_serial = unsafe { (*cursor_node).serial };
         let cursor_style = self.cursor.style;
+        let cursor_style_id = self.cursor.style_id;
+        let cursor_hyperlink = self.cursor.hyperlink;
+        let cursor_hyperlink_id = self.cursor.hyperlink_id;
+
+        // Keep an extra reference to the cursor style and hyperlink while the
+        // resize is in progress. Releasing the cursor references below therefore
+        // can't delete either entry, and an error can restore the cursor without
+        // any allocation.
+        {
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(cursor_node) };
+            unsafe {
+                let base = (*page).memory_ptr();
+                if cursor_style_id != style::DEFAULT_ID {
+                    (*page).styles.use_id(base, cursor_style_id);
+                }
+                if cursor_hyperlink_id != 0 {
+                    (*page).hyperlink_set.use_id(base, cursor_hyperlink_id);
+                }
+            }
+        }
+        // errdefer {
+        //     self.cursor.style = cursor_style;
+        //     self.cursor.style_id = cursor_style_id;
+        //     self.cursor.hyperlink = cursor_hyperlink;
+        //     self.cursor.hyperlink_id = cursor_hyperlink_id;
+        // }
+        //
+        // PORT NOTE: Rust has no `errdefer`; the block above is spelled out as
+        // `resize_restore_cursor` and invoked on each of the two fallible exits
+        // below. It performs NO allocation, which is the point of the extra
+        // references taken just above.
+
+        // Release the cursor style while resizing just in case the cursor ends
+        // up on a different page.
         self.cursor.style = style::Style::default();
         self.manual_style_update()
             .expect("manualStyleUpdate to default cannot fail");
-        // PORT NOTE: the reference restores the cursor style in a `defer` block.
-        // Rust has no `defer`; we run the restore at every exit below by routing
-        // the rest of the body through `resize_body` and restoring after.
-        let body = self.resize_body(opts, cursor_style);
 
-        // defer { restore cursor style }
-        self.cursor.style = cursor_style;
-        if self.manual_style_update().is_err() {
-            // This failure should not happen because manualStyleUpdate
-            // handles page splitting, overflow, and more. This should only
-            // happen if we're out of RAM. In this case, we'll just degrade
-            // gracefully back to the default style.
-            // log.err("failed to update style on cursor reload err={}", .{err});
-            self.cursor.style = style::Style::default();
-            self.cursor.style_id = 0;
-        }
-
-        body
-    }
-
-    fn resize_body(
-        &mut self,
-        opts: Resize,
-        _cursor_style: style::Style,
-    ) -> Result<(), OutOfMemory> {
         // If we have a hyperlink, release it from the old page
         // and then we need to re-add it to the new page. This needs
         // to happen because resize below typically reallocates a
         // new page so the old hyperlink is invalid.
-        let hyperlink_ = self.cursor.hyperlink;
         if self.cursor.hyperlink_id != 0 {
             // Note we do NOT use endHyperlink because we want to keep
             // our allocated self.cursor.hyperlink valid.
@@ -2620,38 +2715,201 @@ impl Screen {
             self.cursor.hyperlink = None;
         }
 
-        // We need to insert a tracked pin for our saved cursor so we can
-        // modify its X/Y for reflow.
-        let saved_cursor_pin: Option<*mut Pin> = match &self.saved_cursor {
-            None => None,
-            Some(sc) => {
-                match self.pages.pin(point::Point::Active(point::Coordinate {
-                    x: sc.x,
-                    y: sc.y as u32,
-                })) {
-                    None => None,
-                    Some(pin) => Some(self.pages.track_pin(pin)?),
+        // Perform the resize operation.
+        // try tw.check(.pages);
+        #[cfg(test)]
+        if let Err(e) = resize_tw_check(ResizeFp::Pages) {
+            self.resize_restore_cursor(
+                cursor_style,
+                cursor_style_id,
+                cursor_hyperlink,
+                cursor_hyperlink_id,
+            );
+            return Err(e);
+        }
+        if let Err(e) = self.pages.resize(pagelist::resize::Resize {
+            rows: Some(opts.rows),
+            cols: Some(opts.cols),
+            reflow: opts.reflow,
+            cursor: Some(pagelist::resize::Cursor {
+                x: self.cursor.x,
+                y: self.cursor.y,
+                pin: Some(self.cursor.page_pin),
+            }),
+        }) {
+            self.resize_restore_cursor(
+                cursor_style,
+                cursor_style_id,
+                cursor_hyperlink,
+                cursor_hyperlink_id,
+            );
+            return Err(e);
+        }
+
+        // errdefer comptime unreachable;
+        //
+        // PORT NOTE: "No more failures are possible after this. Enforced by
+        // compiler because we do NO cleanup of the state below." Zig's
+        // `errdefer comptime unreachable` is a COMPILE-TIME assertion that no
+        // fallible operation follows. Rust has no equivalent construct; the
+        // property is held by construction — every call below either returns
+        // `()` or swallows its error the way the reference does — and the
+        // function's single remaining `return` is the `Ok(())` at the end.
+
+        // Resizing moves image placements, so mark their geometry as dirty.
+        if crate::options::KITTY_GRAPHICS {
+            self.kitty_images.dirty = true;
+        }
+
+        // If we have no scrollback and we shrunk our rows, we must explicitly
+        // erase our history. This is because PageList always keeps at least
+        // a page size of history.
+        if self.no_scrollback {
+            self.pages.erase_history(None);
+        }
+
+        // If our cursor was updated, we do a full reload so all our cursor
+        // state is correct.
+        self.cursor_reload();
+
+        // Clear any redrawable prompt after the fallible resize but before
+        // restoring the cursor style and hyperlink, so cleared cells retain the
+        // same default styling they had with the previous ordering.
+        self.clear_prompt_for_redraw(opts.prompt_redraw);
+
+        // Restore the cursor style.
+        self.cursor.style = cursor_style;
+        if self.manual_style_update().is_err() {
+            // This failure should not happen because manualStyleUpdate handles
+            // page splitting, overflow, and more. This should only happen if
+            // we're out of RAM. In this case, we'll just degrade gracefully back
+            // to the default style.
+            // log.err("failed to update style on cursor reload err={}", .{err});
+            self.cursor.style = style::Style::default();
+            self.cursor.style_id = 0;
+        }
+
+        // If we reflowed a saved cursor, update it.
+        if let Some(p) = saved_cursor_pin {
+            // This should never fail because a non-null saved_cursor_pin
+            // implies a non-null saved_cursor.
+            let pin_val = unsafe { *p };
+            match self.pages.point_from_pin(point::Tag::Active, pin_val) {
+                Some(pt) => {
+                    let sc = self.saved_cursor.as_mut().unwrap();
+                    sc.x = pt.coord().x;
+                    sc.y = pt.coord().y as size::CellCountInt;
+
+                    // If we had pending wrap set and we're no longer at the end of
+                    // the line, we unset the pending wrap and move the cursor to
+                    // reflect the correct next position.
+                    if sc.pending_wrap && sc.x != opts.cols - 1 {
+                        sc.pending_wrap = false;
+                        sc.x += 1;
+                    }
+                }
+                None => {
+                    // I think this can happen if the screen is resized to be
+                    // less rows or less cols and our saved cursor moves outside
+                    // the active area. In this case, there isn't anything really
+                    // reasonable we can do so we just move the cursor to the
+                    // top-left. It may be reasonable to also move the cursor to
+                    // match the primary cursor. Any behavior is fine since this is
+                    // totally unspecified.
+                    let sc = self.saved_cursor.as_mut().unwrap();
+                    sc.x = 0;
+                    sc.y = 0;
+                    sc.pending_wrap = false;
                 }
             }
-        };
-        // PORT NOTE: the reference `defer if (saved_cursor_pin) |p|
-        // self.pages.untrackPin(p);` is run at every exit below via
-        // `resize_finish`.
-        let result = self.resize_finish(opts, hyperlink_, saved_cursor_pin);
-        if let Some(p) = saved_cursor_pin {
-            self.pages.untrack_pin(p);
         }
-        result
+
+        // Fix up our hyperlink if we had one.
+        if let Some(link) = cursor_hyperlink {
+            let uri = unsafe { (*link).uri.clone() };
+            let id_ = match unsafe { &(*link).id } {
+                hyperlink::HyperlinkId::Explicit(v) => Some(v.clone()),
+                hyperlink::HyperlinkId::Implicit(_) => None,
+            };
+            if let Err(_err) = self.start_hyperlink(&uri, id_.as_deref()) {
+                // This shouldn't happen because startHyperlink should handle
+                // resizing. This only happens if we're truly out of RAM. Degrade
+                // to forgetting the hyperlink.
+                // log.err("failed to update hyperlink on resize err={}", .{err});
+            }
+
+            // Remove our old link
+            let boxed = unsafe { Box::from_raw(link) };
+            boxed.deinit();
+            drop(boxed);
+        }
+
+        // A tracked pin follows its content when PageList moves or replaces a
+        // page. If the cursor's pin still points to the node we started with,
+        // that node survived the resize and still owns the temporary style and
+        // hyperlink references we added above.
+        //
+        // Comparing pointers is not enough by itself. PageList keeps a pool of
+        // nodes, so it can destroy a node and create a replacement at the same
+        // memory address. Every new use of a node gets a different serial number,
+        // making the pointer-and-serial pair an O(1) identity check.
+        let live_node = unsafe { (*self.cursor.page_pin).node };
+        let cursor_node_survived = core::ptr::eq(
+            live_node as *const crate::pagelist::Node,
+            cursor_node as *const crate::pagelist::Node,
+        ) && unsafe { (*live_node).serial } == cursor_node_serial;
+        if crate::options::SLOW_RUNTIME_SAFETY {
+            assert!(
+                cursor_node_survived == self.pages.node_is_valid(cursor_node, cursor_node_serial)
+            );
+        }
+
+        // A surviving node still contains our temporary references, so remove
+        // them now. If the node was replaced, its destruction removed those
+        // references along with the rest of the old page so we don't need to
+        // fix it up.
+        //
+        // PORT NOTE: the reference writes `cursor_node.page()`. We deref
+        // `live_node` instead — the same address when we get here, but with
+        // live provenance; `cursor_node`'s allocation may have been retired and
+        // re-created by the pool, which would make a deref through it UB under
+        // Stacked Borrows even though the addresses match.
+        if cursor_node_survived {
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(live_node) };
+            unsafe {
+                let base = (*page).memory_ptr();
+                if cursor_style_id != style::DEFAULT_ID {
+                    (*page).styles.release(base, cursor_style_id);
+                }
+                if cursor_hyperlink_id != 0 {
+                    (*page).hyperlink_set.release(base, cursor_hyperlink_id);
+                }
+            }
+        }
+
+        Ok(())
     }
 
-    fn resize_finish(
+    /// The `errdefer` of `resize`, spelled out: put the cursor back exactly as
+    /// it was, with NO allocation (the extra style/hyperlink references taken
+    /// at the top of `resize_tracked` guarantee the IDs are still live).
+    fn resize_restore_cursor(
         &mut self,
-        opts: Resize,
-        hyperlink_: Option<*mut hyperlink::Hyperlink>,
-        saved_cursor_pin: Option<*mut Pin>,
-    ) -> Result<(), OutOfMemory> {
+        cursor_style: style::Style,
+        cursor_style_id: style::Id,
+        cursor_hyperlink: Option<*mut hyperlink::Hyperlink>,
+        cursor_hyperlink_id: hyperlink::Id,
+    ) {
+        self.cursor.style = cursor_style;
+        self.cursor.style_id = cursor_style_id;
+        self.cursor.hyperlink = cursor_hyperlink;
+        self.cursor.hyperlink_id = cursor_hyperlink_id;
+    }
+
+    fn clear_prompt_for_redraw(&mut self, redraw: osc::semantic_prompt::Redraw) {
         // If our cursor is on a prompt or input line, clear it so the shell can
-        // redraw it. This works with OSC 133 semantic prompts.
+        // redraw it. This works with OSC 133 semantic prompts. We do this after
+        // the fallible resize so an error leaves the original prompt untouched.
         //
         // We check cursor.semantic_content rather than page_row.semantic_prompt
         // because some shells (e.g., Nu) mark input areas with OSC 133 B but don't
@@ -2660,14 +2918,14 @@ impl Screen {
         // would miss them. By checking semantic_content, we assume that if the
         // cursor is on anything other than command output, we're at a prompt/input
         // line and should clear from there.
-        if !matches!(opts.prompt_redraw, osc::semantic_prompt::Redraw::False)
+        if !matches!(redraw, osc::semantic_prompt::Redraw::False)
             && !matches!(
                 self.cursor.semantic_content,
                 pagepkg::SemanticContent::Output
             )
         {
             'prompt: {
-                match opts.prompt_redraw {
+                match redraw {
                     osc::semantic_prompt::Redraw::False => unreachable!(),
 
                     // For `.last`, only clear the current line where the cursor is.
@@ -2711,86 +2969,6 @@ impl Screen {
                 }
             }
         }
-
-        // Perform the resize operation.
-        self.pages.resize(pagelist::resize::Resize {
-            rows: Some(opts.rows),
-            cols: Some(opts.cols),
-            reflow: opts.reflow,
-            cursor: Some(pagelist::resize::Cursor {
-                x: self.cursor.x,
-                y: self.cursor.y,
-                pin: Some(self.cursor.page_pin),
-            }),
-        })?;
-
-        // If we have no scrollback and we shrunk our rows, we must explicitly
-        // erase our history. This is because PageList always keeps at least
-        // a page size of history.
-        if self.no_scrollback {
-            self.pages.erase_history(None);
-        }
-
-        // If our cursor was updated, we do a full reload so all our cursor
-        // state is correct.
-        self.cursor_reload();
-
-        // If we reflowed a saved cursor, update it.
-        if let Some(p) = saved_cursor_pin {
-            // This should never fail because a non-null saved_cursor_pin
-            // implies a non-null saved_cursor.
-            let pin_val = unsafe { *p };
-            match self.pages.point_from_pin(point::Tag::Active, pin_val) {
-                Some(pt) => {
-                    let sc = self.saved_cursor.as_mut().unwrap();
-                    sc.x = pt.coord().x;
-                    sc.y = pt.coord().y as size::CellCountInt;
-
-                    // If we had pending wrap set and we're no longer at the end of
-                    // the line, we unset the pending wrap and move the cursor to
-                    // reflect the correct next position.
-                    if sc.pending_wrap && sc.x != opts.cols - 1 {
-                        sc.pending_wrap = false;
-                        sc.x += 1;
-                    }
-                }
-                None => {
-                    // I think this can happen if the screen is resized to be
-                    // less rows or less cols and our saved cursor moves outside
-                    // the active area. In this case, there isn't anything really
-                    // reasonable we can do so we just move the cursor to the
-                    // top-left. It may be reasonable to also move the cursor to
-                    // match the primary cursor. Any behavior is fine since this is
-                    // totally unspecified.
-                    let sc = self.saved_cursor.as_mut().unwrap();
-                    sc.x = 0;
-                    sc.y = 0;
-                    sc.pending_wrap = false;
-                }
-            }
-        }
-
-        // Fix up our hyperlink if we had one.
-        if let Some(link) = hyperlink_ {
-            let uri = unsafe { (*link).uri.clone() };
-            let id_ = match unsafe { &(*link).id } {
-                hyperlink::HyperlinkId::Explicit(v) => Some(v.clone()),
-                hyperlink::HyperlinkId::Implicit(_) => None,
-            };
-            if let Err(_err) = self.start_hyperlink(&uri, id_.as_deref()) {
-                // This shouldn't happen because startHyperlink should handle
-                // resizing. This only happens if we're truly out of RAM. Degrade
-                // to forgetting the hyperlink.
-                // log.err("failed to update hyperlink on resize err={}", .{err});
-            }
-
-            // Remove our old link
-            let boxed = unsafe { Box::from_raw(link) };
-            boxed.deinit();
-            drop(boxed);
-        }
-
-        Ok(())
     }
 
     /// Set a style attribute for the current cursor.
@@ -6799,6 +6977,251 @@ mod tests {
         // Our cursor should've moved
         assert_eq!(2 as size::CellCountInt, s.cursor.x);
         assert_eq!(2 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize errors preserve state"
+    //
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
+    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run in
+    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn screen_resize_errors_preserve_state() {
+        // for (std.meta.tags(resize_tw.FailPoint)) |tag| { ... }
+        for tag in ResizeFp::ALL {
+            let mut s = mkscreen(10, 3, 0);
+
+            s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+                osc::semantic_prompt::PromptKind::Initial,
+            ));
+            s.test_write_string(b"> ").unwrap();
+            s.cursor_set_semantic_content(SemanticContentArg::Input(
+                SemanticContentInput::ClearExplicit,
+            ));
+            s.test_write_string(b"echo").unwrap();
+            s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+            s.start_hyperlink(b"https://example.com", Some(b"resize"))
+                .unwrap();
+            s.saved_cursor = Some(SavedCursor {
+                x: 1,
+                y: 0,
+                style: s.cursor.style,
+                protected: s.cursor.protected,
+                pending_wrap: s.cursor.pending_wrap,
+                origin: false,
+                charset: s.charset.clone(),
+            });
+
+            if crate::options::KITTY_GRAPHICS {
+                s.kitty_images.dirty = false;
+            }
+
+            // Keep a shallow copy for all non-page state and a byte-for-byte
+            // copy of the sole page so reference counts and prompt contents are
+            // covered as well.
+            assert!(std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+            // PORT NOTE: `const before = s;` is a Zig by-value struct copy
+            // compared with `std.meta.eql`. `Screen` is not `Copy` in Rust and
+            // most of its members have no `PartialEq`, so we snapshot exactly
+            // the fields the reference then compares, field by field.
+            let before_cursor = s.cursor;
+            let before_saved_cursor = {
+                let sc = s.saved_cursor.as_ref().unwrap();
+                (sc.x, sc.y, sc.protected, sc.pending_wrap, sc.origin)
+            };
+            let before_selection_is_none = s.selection.is_none();
+            let before_charset = (s.charset.gl, s.charset.gr, s.charset.single_shift);
+            let before_protected_mode = s.protected_mode;
+            let before_kitty_keyboard = s.kitty_keyboard;
+            let before_semantic_prompt = (s.semantic_prompt.seen, s.semantic_prompt.click);
+            let before_dirty = (s.dirty.selection, s.dirty.hyperlink_hover);
+            let before_pages_first = s.pages.pages.first;
+            let before_pages_last = s.pages.pages.last;
+            let before_cols = s.pages.cols;
+            let before_rows = s.pages.rows;
+            let before_total_rows = s.pages.total_rows;
+            let before_viewport = s.pages.viewport;
+            let before_viewport_pin = unsafe { *s.pages.viewport_pin };
+            let before_tracked_pins = s.pages.count_tracked_pins();
+            let before_page: Vec<u8> = unsafe {
+                let page: *const Page = crate::pagelist::Node::page(s.pages.pages.first);
+                core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
+            };
+            let before_kitty_dirty = s.kitty_images.dirty;
+
+            resize_tw_error_always(tag);
+            assert!(matches!(
+                s.resize(Resize {
+                    cols: 20,
+                    rows: 4,
+                    reflow: true,
+                    prompt_redraw: osc::semantic_prompt::Redraw::True,
+                }),
+                Err(OutOfMemory)
+            ));
+
+            assert_eq!(before_cursor.x, s.cursor.x);
+            assert_eq!(before_cursor.y, s.cursor.y);
+            assert!(before_cursor.cursor_style == s.cursor.cursor_style);
+            assert_eq!(before_cursor.pending_wrap, s.cursor.pending_wrap);
+            assert_eq!(before_cursor.protected, s.cursor.protected);
+            assert!(before_cursor.style.eql(&s.cursor.style));
+            assert_eq!(before_cursor.style_id, s.cursor.style_id);
+            assert_eq!(before_cursor.hyperlink_id, s.cursor.hyperlink_id);
+            assert_eq!(
+                before_cursor.hyperlink_implicit_id,
+                s.cursor.hyperlink_implicit_id
+            );
+            assert_eq!(before_cursor.hyperlink, s.cursor.hyperlink);
+            assert!(before_cursor.semantic_content == s.cursor.semantic_content);
+            assert_eq!(
+                before_cursor.semantic_content_clear_eol,
+                s.cursor.semantic_content_clear_eol
+            );
+            assert!(std::ptr::eq(before_cursor.page_pin, s.cursor.page_pin));
+            assert!(std::ptr::eq(before_cursor.page_row, s.cursor.page_row));
+            assert!(std::ptr::eq(before_cursor.page_cell, s.cursor.page_cell));
+            {
+                let sc = s.saved_cursor.as_ref().unwrap();
+                assert_eq!(
+                    before_saved_cursor,
+                    (sc.x, sc.y, sc.protected, sc.pending_wrap, sc.origin)
+                );
+            }
+            assert_eq!(before_selection_is_none, s.selection.is_none());
+            assert_eq!(
+                before_charset,
+                (s.charset.gl, s.charset.gr, s.charset.single_shift)
+            );
+            assert!(before_protected_mode == s.protected_mode);
+            assert_eq!(before_kitty_keyboard, s.kitty_keyboard);
+            assert_eq!(
+                before_semantic_prompt,
+                (s.semantic_prompt.seen, s.semantic_prompt.click)
+            );
+            assert_eq!(before_dirty, (s.dirty.selection, s.dirty.hyperlink_hover));
+            assert!(std::ptr::eq(before_pages_first, s.pages.pages.first));
+            assert!(std::ptr::eq(before_pages_last, s.pages.pages.last));
+            assert_eq!(before_cols, s.pages.cols);
+            assert_eq!(before_rows, s.pages.rows);
+            assert_eq!(before_total_rows, s.pages.total_rows);
+            assert!(before_viewport == s.pages.viewport);
+            assert!(before_viewport_pin.eql(unsafe { *s.pages.viewport_pin }));
+            assert_eq!(before_tracked_pins, s.pages.count_tracked_pins());
+            let after_page: Vec<u8> = unsafe {
+                let page: *const Page = crate::pagelist::Node::page(s.pages.pages.first);
+                core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
+            };
+            assert!(
+                before_page == after_page,
+                "page memory changed after a failed resize"
+            );
+            if crate::options::KITTY_GRAPHICS {
+                assert_eq!(before_kitty_dirty, s.kitty_images.dirty);
+            }
+
+            resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            s.deinit();
+        }
+    }
+
+    // test "Screen: resize cursor references when node survives"
+    #[test]
+    fn screen_resize_cursor_references_when_node_survives() {
+        let mut s = mkscreen(5, 3, 1000);
+
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.start_hyperlink(b"https://example.com/", Some(b"resize"))
+            .unwrap();
+        s.test_write_string(b"abc").unwrap();
+
+        let original_node = unsafe { (*s.cursor.page_pin).node };
+        let original_serial = unsafe { (*original_node).serial };
+        {
+            let page = unsafe { &(*crate::pagelist::Node::page(original_node)) };
+            let base = page.memory_ptr();
+            assert_eq!(4, unsafe { page.styles.ref_count(base, s.cursor.style_id) });
+            assert_eq!(4, unsafe {
+                page.hyperlink_set.ref_count(base, s.cursor.hyperlink_id)
+            });
+        }
+
+        // A row-only resize grows the existing page without replacing the
+        // cursor's node. The temporary resize references must be released from
+        // this page after the cursor state is restored.
+        s.resize(Resize {
+            cols: 5,
+            rows: 4,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        assert!(std::ptr::eq(original_node, unsafe {
+            (*s.cursor.page_pin).node
+        }));
+        assert_eq!(original_serial, unsafe {
+            (*(*s.cursor.page_pin).node).serial
+        });
+        {
+            let page = unsafe { &(*crate::pagelist::Node::page((*s.cursor.page_pin).node)) };
+            let base = page.memory_ptr();
+            assert_eq!(4, unsafe { page.styles.ref_count(base, s.cursor.style_id) });
+            assert_eq!(4, unsafe {
+                page.hyperlink_set.ref_count(base, s.cursor.hyperlink_id)
+            });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize cursor references when node is replaced"
+    #[test]
+    fn screen_resize_cursor_references_when_node_is_replaced() {
+        let mut s = mkscreen(5, 3, 1000);
+
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.start_hyperlink(b"https://example.com/", Some(b"resize"))
+            .unwrap();
+        s.test_write_string(b"abc").unwrap();
+
+        let original_node = unsafe { (*s.cursor.page_pin).node };
+        let original_serial = unsafe { (*original_node).serial };
+        {
+            let page = unsafe { &(*crate::pagelist::Node::page(original_node)) };
+            let base = page.memory_ptr();
+            assert_eq!(4, unsafe { page.styles.ref_count(base, s.cursor.style_id) });
+            assert_eq!(4, unsafe {
+                page.hyperlink_set.ref_count(base, s.cursor.hyperlink_id)
+            });
+        }
+
+        // A column resize with reflow replaces the page and remaps the tracked
+        // cursor pin. The old page owns the temporary references, so destroying
+        // it must account for them without attempting to release them afterward.
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        let live_node = unsafe { (*s.cursor.page_pin).node };
+        assert!(
+            !std::ptr::eq(live_node, original_node)
+                || unsafe { (*live_node).serial } != original_serial
+        );
+        {
+            let page = unsafe { &(*crate::pagelist::Node::page(live_node)) };
+            let base = page.memory_ptr();
+            assert_eq!(4, unsafe { page.styles.ref_count(base, s.cursor.style_id) });
+            assert_eq!(4, unsafe {
+                page.hyperlink_set.ref_count(base, s.cursor.hyperlink_id)
+            });
+        }
         s.deinit();
     }
 
