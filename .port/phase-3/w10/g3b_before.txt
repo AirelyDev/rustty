@@ -1,0 +1,167 @@
+G3b [args]: distinctive ref comments=185 missing=0 review=1
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+G3b [bench]: distinctive ref comments=112 missing=8 review=1
+    REVIEW (ratio 0.64): implements the handler interface for the terminal.stream.
+    MISSING ref comment: if we need to optimize something more specific (e.g. the parser).
+    MISSING ref comment: it is a fairly broad benchmark that can be used to determine
+    MISSING ref comment: note that the handler used for this benchmark isn't the full
+    MISSING ref comment: state. this is a simplified version that only handles specific
+    MISSING ref comment: terminal handler, since that requires a significant amount of
+    MISSING ref comment: terminal operations like printing characters. we should expand
+    MISSING ref comment: this to include more operations to improve the accuracy of the
+    MISSING ref comment: we should expand this to include more operations to make
+G3b [build-config]: distinctive ref comments=27 missing=0 review=0
+G3b [cli]: distinctive ref comments=591 missing=2 review=2
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+    MISSING ref comment: decompress the frames into a slice of individual frames
+    MISSING ref comment: heap allocated list of frames. the underlying frame data references decompressed_data
+G3b [config]: distinctive ref comments=2777 missing=30 review=13
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.79): desktop environments that are known to support (or not support)
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.63): note: `global:` is only supported on macos and certain linux platforms.
+    REVIEW (ratio 0.64): options for copy on select behavior.
+    REVIEW (ratio 0.65): parse the colors two at a time.
+    REVIEW (ratio 0.73): see "clipboard-codepoint-map" for documentation.
+    REVIEW (ratio 0.69): see `font-synthetic-style` for documentation.
+    REVIEW (ratio 0.75): see macos-dock-drop-behavior
+    REVIEW (ratio 0.74): see window-show-tab-bar
+    MISSING ref comment: "apps & windows" > "window management" > "desktop effects" and select the
+    MISSING ref comment: "blur" plugin. if disabled, enable it by ticking the checkbox to the left.
+    MISSING ref comment: (important: [`xdg-desktop-portal-hyprland`](https://wiki.hyprland.org/hypr-ecosystem/xdg-desktop-por
+    MISSING ref comment: * kde plasma (wayland and x11)
+    MISSING ref comment: - notably, global shortcuts have not been implemented on wlroots-based
+    MISSING ref comment: achieve the same effect. the reason is that kwin, the window compositor
+    MISSING ref comment: all other linux desktop environments are as of now unsupported. users may
+    MISSING ref comment: allocated lazily up to this limit, so if you set this to a very large
+    MISSING ref comment: allow you to set background blur and noise intensities for all apps,
+    MISSING ref comment: applications to specify individual blur settings.
+    MISSING ref comment: expand short hex values to full hex values
+    MISSING ref comment: fromhex parses a color from a hex value such as #rrggbb. the "#"
+    MISSING ref comment: in order to support background blur, as there isn't a unified interface for
+    MISSING ref comment: it is not currently possible to set an unlimited scrollback buffer.
+    MISSING ref comment: larger this value, the larger potential memory usage. scrollback is
+    MISSING ref comment: need to set environment-specific settings and/or install third-party plugins
+    MISSING ref comment: on linux, you need a desktop environment that implements the
+    MISSING ref comment: parse the color part (color.parsecli will handle whitespace)
+    MISSING ref comment: parse the key part (trim whitespace)
+    MISSING ref comment: powering plasma, only has one global blur setting and does not allow
+    MISSING ref comment: protocol as a part of its xdg desktop protocol implementation.
+    MISSING ref comment: scrollback currently exists completely in memory. this means that the
+    MISSING ref comment: supported on macos and on some linux desktop environments, including:
+    MISSING ref comment: then click on the "configure" button and there will be two sliders that
+    MISSING ref comment: this is a future planned feature.
+G3b [core]: distinctive ref comments=1163 missing=0 review=0
+G3b [crash]: distinctive ref comments=163 missing=0 review=0
+G3b [datastruct]: distinctive ref comments=539 missing=0 review=0
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [global]: distinctive ref comments=58 missing=0 review=0
+G3b [inspector]: distinctive ref comments=192 missing=0 review=0
+G3b [lib]: distinctive ref comments=89 missing=0 review=0
+G3b [os]: distinctive ref comments=688 missing=35 review=3
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+    REVIEW (ratio 0.62): prepend a value to an environment variable such as path.
+    REVIEW (ratio 0.63): save and restore each environment variable
+    MISSING ref comment: allocate our buffer. we add 1 for the null terminator.
+    MISSING ref comment: always append value to environment, even when it is empty.
+    MISSING ref comment: append a value to an environment variable such as path.
+    MISSING ref comment: be big enough because we precomputed the maximum length.
+    MISSING ref comment: but handles macos using nsprocessinfo instead of libc argc/argv.
+    MISSING ref comment: convert to string using getcstring. our buffer should always
+    MISSING ref comment: determine our maximum length so we can allocate the buffer to
+    MISSING ref comment: duck-typed to std.process.argiterator
+    MISSING ref comment: for zig-aware readers: this is the same as std.process.argswithallocator
+    MISSING ref comment: get the command line arguments since libc argc/argv pointers are not
+    MISSING ref comment: gets the value of an environment variable, or null if not found.
+    MISSING ref comment: gets the value of an environment variable. returns null if not found or the
+    MISSING ref comment: i believe this should work for all macos applications even if
+    MISSING ref comment: if (true) return try std.process.argswithallocator(allocator);
+    MISSING ref comment: if there is no prior value, we return it as-is
+    MISSING ref comment: matter what platform you are on.
+    MISSING ref comment: non-windows doesn't need to allocate
+    MISSING ref comment: not allocate depending on the platform.
+    MISSING ref comment: note: we don't release self.args because it is a pointer copy
+    MISSING ref comment: nsapplicationmain is not used, but i haven't tested that so i'm not
+    MISSING ref comment: nsapplicationmain-based applications on macos. it uses nsprocessinfo to
+    MISSING ref comment: nsstring. no release because not a copy.
+    MISSING ref comment: returns an iterator over the command line arguments. this may or may
+    MISSING ref comment: sure. if/when librustty is ever used outside of nsapplicationmain
+    MISSING ref comment: the result of getenv, with a shared deinit to properly handle allocation
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [simd]: distinctive ref comments=79 missing=0 review=2
+    REVIEW (ratio 0.65): input that may be completed later. stop decoding
+    REVIEW (ratio 0.65): truncated at end of buffer: treat as incomplete
+G3b [synthetic]: distinctive ref comments=95 missing=0 review=0
+G3b [terminfo]: distinctive ref comments=95 missing=0 review=0
+G3b [termio]: distinctive ref comments=995 missing=23 review=1
+    REVIEW (ratio 0.69): fds and this is still much faster and lower overhead than any async
+    MISSING ref comment: almost all terminal-modifying activity is from the pty read, so
+    MISSING ref comment: an async mechanism like io_uring/epoll because the reads are generally
+    MISSING ref comment: and since we rarely have contention, this is fast.
+    MISSING ref comment: assume we're setting to a non-default.
+    MISSING ref comment: below here, the cursor styles aren't represented by
+    MISSING ref comment: decscusr so we map it to some other style.
+    MISSING ref comment: disable synchronized output mode so that we show changes
+    MISSING ref comment: if our cursor is the default, then we update it immediately.
+    MISSING ref comment: immediately for a resize. this is allowed by the spec.
+    MISSING ref comment: margin mode (declrmm) is enabled.
+    MISSING ref comment: offset the stream position to just past the response prefix.
+    MISSING ref comment: our response is valid if we have a response payload
+    MISSING ref comment: printattributes wrote into our buffer, so adjust the stream
+    MISSING ref comment: putting this on a dedicated thread keeps performance very predictable
+    MISSING ref comment: set to true when we're currently in the default cursor state.
+    MISSING ref comment: the default cursor state. this is used with csi q. this is
+    MISSING ref comment: the read thread sits in a loop doing the following pseudo code:
+    MISSING ref comment: this is also empirically fast compared to putting the read into
+    MISSING ref comment: we only send a valid response when left and right
+    MISSING ref comment: we will write the "payload" (if any) below. if no payload is
+    MISSING ref comment: while also almost optimal. "locking is fast, lock contention is slow."
+    MISSING ref comment: write the response prefix into the buffer
+    MISSING ref comment: written then we send an invalid decrpss response.
+G3b [unicode]: distinctive ref comments=64 missing=0 review=0
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=9609 missing=116 review=55
+    REVIEW (ratio 0.63): a monotonically increasing serial number that is incremented each
+    REVIEW (ratio 0.71): are non-standard size since those were allocated outside
+    REVIEW (ratio 0.78): because dirty is only a renderer optimization. it doesn't
+    REVIEW (ratio 0.63): compact should return null since there's nothing to compact
+    REVIEW (ratio 0.66): finalize our final dirty page
+    REVIEW (ratio 0.65): find a prompt if we already verified our row is some kind of
+    REVIEW (ratio 0.63): future we should fix this up.
+    REVIEW (ratio 0.8): grow forever. in reality, the limit is set to the byte limit that your
+    REVIEW (ratio 0.66): hyperlink_count * hyperlink_cell_multiplier (rounded to power of 2)
+    REVIEW (ratio 0.69): if max_size is null then there is no defined limit and the screen will
+    MISSING ref comment: 2, since the first code point must be at least width 1 to
+    MISSING ref comment: a super hot path so we do this instead.
+    MISSING ref comment: all selection requires valid pins so we prune history and
+    MISSING ref comment: allow for smaller than `std_size` nodes so if the current node's backing
+    MISSING ref comment: and at least two pages for our algorithms.
+    MISSING ref comment: and its more important to get the terminal page representation working
+    MISSING ref comment: any external references holding this page's serial will know it
+    MISSING ref comment: append assuming its a single-codepoint, styled cell
+    MISSING ref comment: be violated under certain circumstances by incomplete reflow.
+    MISSING ref comment: because the page nodes may be invalid. all that is safe is comparing
+    MISSING ref comment: but they may in the future. for now we just ignore it.
+    MISSING ref comment: call this as needed and not too frequently.
+    MISSING ref comment: case to work in the eraserowbounded codepath and remove
+    MISSING ref comment: cheap try to lower probing lengths after deletions. recycle a tombstone.
+    MISSING ref comment: check if it is a valid variation sequence in
+    MISSING ref comment: clear our row dirty, we'll clear our page dirty later.
+    MISSING ref comment: continue the loop to try handling this row again.
+    MISSING ref comment: currently. we should probably change insertlines
+    MISSING ref comment: default cursor style used by decscusr reset (csi 0 q).
+    MISSING ref comment: deinit the pagelist. if you own the memory pool (used clonepool) then
+    MISSING ref comment: either it compacted or determined insufficient savings
+    MISSING ref comment: emoji-variation-sequences.txt, and if not, ignore the char.
+    MISSING ref comment: eraserow and eraserowbounded will end up moving the cursor pin
+    MISSING ref comment: erasure would create serial gaps that page_serial_min cannot
+    MISSING ref comment: everything from here forward we assume is invalid because
+G3b [vt-c]: distinctive ref comments=334 missing=4 review=0
+    MISSING ref comment: disable synchronized output mode so that we show changes
+    MISSING ref comment: if we have in-band size reporting enabled, send a report.
+    MISSING ref comment: immediately for a resize. this is allowed by the spec.
+    MISSING ref comment: verify field offsets make sense (cols should be at 0)
+RED: dropped reference comment(s) — see MISSING above (R1 violation)
