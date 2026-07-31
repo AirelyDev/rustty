@@ -1353,12 +1353,35 @@ fn execvpeZ(
         unsafe { CStr::from_ptr(path_env) }.to_bytes()
     };
 
+    execvpeZ_search(file_slice, path_bytes, child_argv, envp)
+}
+
+/// The PATH-search half of [`execvpeZ`], split out so the `err`-latching
+/// contract (area-E `E29`) is testable without mutating the process
+/// environment — which is exactly what `P3-W7 T3` removed from this workspace.
+/// Behaviour is unchanged: `execvpeZ` calls this with the `PATH` it read.
+#[cfg(not(windows))]
+fn execvpeZ_search(
+    file_slice: &[u8],
+    path_bytes: &[u8],
+    child_argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> ExecveError {
     // var path_buf: [PATH_MAX]u8 = undefined;
     let mut path_buf = [0u8; libc::PATH_MAX as usize];
     // var it = mem.tokenizeScalar(u8, PATH, ':');
     let mut seen_eacces = false;
-    // var err: ExecveError = error.FileNotFound;
-    let err = ExecveError::FileNotFound;
+    // var err: posix.system.E = .NOENT;
+    //
+    // PORT NOTE (P3-W7 T5 / area-E `E29`): this was `let err = ...` — never
+    // reassigned — so if the FINAL PATH entry yielded `ENOTDIR`, rustty
+    // reported `NOENT` where upstream reports `NOTDIR`. Upstream updates `err`
+    // from each `execve` result before the switch:
+    //   err = posix.errno(posix.system.execve(full_path, argsZ, envp));
+    //   switch (err) { .ACCES => seen_eacces = true, .NOENT, .NOTDIR => {}, else => break :execve err }
+    // Observable in the child's stderr text: `NOENT` prints the friendly
+    // "not on the PATH" message, anything else prints "unexpected error: E<name>".
+    let mut err = ExecveError::FileNotFound;
     for search_path in path_bytes.split(|&b| b == b':').filter(|s| !s.is_empty()) {
         // const path_len = search_path.len + file_slice.len + 1;
         let path_len = search_path.len() + file_slice.len() + 1;
@@ -1371,7 +1394,8 @@ fn execvpeZ(
         path_buf[search_path.len() + 1..][..file_slice.len()].copy_from_slice(file_slice);
         path_buf[path_len] = 0;
         let full_path = path_buf.as_ptr() as *const c_char;
-        match execveZ(full_path, child_argv, envp) {
+        err = execveZ(full_path, child_argv, envp);
+        match err {
             ExecveError::AccessDenied => seen_eacces = true,
             ExecveError::FileNotFound | ExecveError::NotDir => {}
             e => return e,
@@ -1491,6 +1515,46 @@ mod tests {
     use super::*;
     use rustty_os::tempdir::TempDir;
     use std::io::{Read as _, Seek as _, SeekFrom};
+
+    /// NEGATIVE CONTROL (P3-W7 T5 Step 3 / area-E `E29`): the errno of the LAST
+    /// PATH entry must be the one reported.
+    ///
+    /// `execvpeZ`'s `err` was initialized to `FileNotFound` and **never
+    /// reassigned**, so a PATH whose last entry is a *file* (not a directory)
+    /// reported `NOENT` where upstream reports `NOTDIR`. Before the two-line
+    /// fix this test is RED — verified, see the P3-W7 report — and it is the
+    /// only assertion that can see the difference, because the value is
+    /// observable solely in the child's stderr text.
+    ///
+    /// No `fork` and no environment mutation: `execve` on a path that cannot
+    /// resolve always returns, so the search can be driven in-process.
+    #[test]
+    #[cfg(not(windows))]
+    #[cfg_attr(miri, ignore)] // real execve(2) syscalls
+    fn execvpe_latches_the_last_path_entry_errno() {
+        // A PATH whose FIRST entry does not exist (-> ENOENT) and whose LAST
+        // entry is a regular file (-> ENOTDIR when used as a directory).
+        let mut path = std::env::temp_dir();
+        path.push(format!("rustty-w7-e29-{}", std::process::id()));
+        std::fs::write(&path, b"not a directory").expect("write probe file");
+
+        let file_bytes = b"rustty-w7-definitely-not-a-real-binary";
+        let argv: [*const c_char; 1] = [std::ptr::null()];
+        let envp: [*const c_char; 1] = [std::ptr::null()];
+
+        let mut path_env: Vec<u8> = b"/rustty-w7-no-such-dir:".to_vec();
+        path_env.extend_from_slice(path.as_os_str().as_encoded_bytes());
+
+        let got = execvpeZ_search(file_bytes, &path_env, argv.as_ptr(), envp.as_ptr());
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            got,
+            ExecveError::NotDir,
+            "the errno of the FINAL PATH entry must be reported (got {got:?}); \
+             `FileNotFound` means `err` is not being latched per iteration"
+        );
+    }
 
     // [T8] Every test below forks. Take the crate-wide fork-serialization lock
     // (lib.rs `FORK_KAT_SERIAL`) for the test's duration: an unserialized
