@@ -297,23 +297,26 @@ impl Parser {
             self.state = State::Idle;
             Ok(Some(Notification::SessionsChanged))
         } else if is_oni_command(cmd) {
-            // PORT NOTE: with `oniguruma` off, the Oniguruma-parsed commands are
-            // recognized here (so they are NOT misreported as "unknown
-            // notification" spam) and fall through to the shared idle cleanup —
-            // the equivalent of the reference's `break :cmd` on a failed regex
-            // match. The arms themselves (and their tests) are compiled only when
-            // the feature is on.
-            #[cfg(not(feature = "oniguruma"))]
-            {
-                self.buffer.clear();
-                self.state = State::Idle;
-                Ok(None)
-            }
-            #[cfg(feature = "oniguruma")]
-            {
-                // Handled by `parse_notification_oni`; unreachable here.
-                unreachable!()
-            }
+            // PORT NOTE: this arm is the reference's `break :cmd` for the
+            // Oniguruma-parsed commands, and it is LIVE IN BOTH BUILDS.
+            //
+            //  - With `oniguruma` OFF the commands are recognized here (so they
+            //    are NOT misreported as "unknown notification" spam) and fall
+            //    through to the shared idle cleanup.
+            //  - With `oniguruma` ON `parse_notification_oni` returns `Ok(None)`
+            //    exactly when its `re.search` FAILED, which is the reference's
+            //    `catch |err| { log.warn(...); break :cmd; }` (control.zig:226-229
+            //    and the seven sibling arms at :259, :299, :337, :367, :398, :433,
+            //    :459). The reference falls out of the labelled `cmd:` block into
+            //    the shared cleanup at control.zig:481-485
+            //    (`buffer.clearRetainingCapacity(); state = .idle; return null`),
+            //    so this arm must do the same. It previously panicked here, which
+            //    turned a logged, recoverable no-op on a malformed `%output` /
+            //    `%window-add` line from the PTY into an abort driven by
+            //    untrusted input.
+            self.buffer.clear();
+            self.state = State::Idle;
+            Ok(None)
         } else {
             // Unknown notification, log it and return to idle state.
             // log.warn("unknown tmux control mode notification={s}", .{cmd});
@@ -1180,6 +1183,48 @@ mod tests {
         assert_eq!(42, *pane_id);
         assert_eq!(b"foo bar baz" as &[u8], data.as_slice());
         c.deinit();
+    }
+
+    // REGRESSION (P3 unreachable audit): a malformed line whose command IS one of
+    // the Oniguruma-parsed notifications but whose regex does NOT match must be a
+    // logged, recoverable no-op that returns to `.idle` — the reference's
+    // `re.search(...) catch |err| { log.warn(...); break :cmd; }` falling into the
+    // shared cleanup at `control.zig:481-485`. This arm used to `unreachable!()`
+    // under `--features oniguruma`, aborting on untrusted PTY input.
+    //
+    // Not gated on the feature: the behavior must be identical in both builds.
+    #[test]
+    fn tmux_oni_command_regex_mismatch_returns_to_idle() {
+        // `%output` with no pane id / body: recognized command, no regex match.
+        for line in [
+            b"%output" as &[u8],
+            b"%output nope",
+            b"%window-add",
+            b"%client-session-changed bogus",
+        ] {
+            let mut c = Parser::init();
+            for &byte in line {
+                assert!(c.put(byte).unwrap().is_none());
+            }
+            assert!(
+                c.put(b'\n').unwrap().is_none(),
+                "malformed {:?} must yield no notification",
+                core::str::from_utf8(line).unwrap()
+            );
+            // Back to idle with an empty buffer, ready for the next line.
+            assert!(c.buffer.is_empty());
+            assert!(matches!(c.state, State::Idle));
+
+            // And the parser is still usable afterwards.
+            for &byte in b"%sessions-changed" {
+                assert!(c.put(byte).unwrap().is_none());
+            }
+            assert!(matches!(
+                c.put(b'\n').unwrap(),
+                Some(Notification::SessionsChanged)
+            ));
+            c.deinit();
+        }
     }
 
     // test "tmux session-changed"
