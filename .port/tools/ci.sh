@@ -363,6 +363,12 @@ GATE_REGISTRY=(
   # — which is how three post-pin files sat unexamined until the file-level
   # audit. An absence is acceptable only when ARGUED in NON_PORTS.md.
   "G-FILES|HARD|$PY $ROOT/.port/tools/audit_file_coverage.py"
+  # G-SYMS (2026-07-31). Pass 2 of the audit: G-FILES proves a counterpart FILE
+  # exists; this proves every oracle `pub fn` has a counterpart SYMBOL. A file
+  # can exist, be the right size, cite its oracle source and still be missing
+  # individual functions — that is what a partial port looks like, and nothing
+  # else here looks for it.
+  "G-SYMS|HARD|$PY $ROOT/.port/tools/audit_symbol_coverage.py"
   "G-ONIG|HARD|bash $GATES/check_oniguruma_lane.sh"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
