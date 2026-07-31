@@ -310,7 +310,7 @@ mod tests {
         with_test_allocator(|alloc| {
             // var terminal: terminal_c.Terminal = null;
             let mut term: terminal::Terminal = std::ptr::null_mut();
-            // try testing.expectEqual(Result.success, terminal_c.new(..., .{ .cols=5, .rows=2, .max_scrollback=10_000 }));
+            // try testing.expectEqual(Result.success, terminal_c.new(..., 5, 2));
             assert_eq!(Result::Success, unsafe {
                 terminal::new(alloc, &mut term, 5, 2)
             });
