@@ -3319,9 +3319,9 @@ impl Screen {
                     page = unsafe { crate::pagelist::Node::page(new_node) };
                 }
 
-                // Canonical map insertion rehashes tombstones in place. Reaching
-                // this error therefore means live entries fill the usable map
-                // capacity and the page must grow.
+                // The hyperlink map is fixed-capacity, so reaching this error
+                // means live entries fill the usable map capacity and the page
+                // must grow.
                 let _ = self.increase_capacity(
                     unsafe { (*self.cursor.page_pin).node },
                     Some(IncreaseCapacity::HyperlinkBytes),
