@@ -358,6 +358,17 @@ GATE_REGISTRY=(
   # count: -p rustty-vt --features oniguruma runs the WHOLE crate, so an
   # absolute floor would hold even if every gated test vanished.
   "G-ONIG|HARD|bash $GATES/check_oniguruma_lane.sh"
+  # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
+  # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
+  # gtk/wayland/x11 features are default-OFF, so ~30k lines of ported GTK4/
+  # Wayland/X11 code were linted by nothing: a lane that is never compiled cannot
+  # fail. It had been red on main for some time (unused_mut in the wayland
+  # queue-source, large_enum_variant on winproto::Window). Like G-ONIG the gate
+  # floors the DELTA of gated tests — plus per-backend wayland_*/x11_* floors,
+  # since losing a whole backend moves a 140-test delta by only 3 — so it cannot
+  # go green by linting an empty shell. Exits 3 BLOCKED (a WARNING, never a pass)
+  # on non-Linux, where --features gtk resolves to a no-op.
+  "G-GTKFEAT|HARD|bash $GATES/check_gtk_feature_lane.sh"
   "G-XEVREACH|HARD|sh $GATES/xev_scope_boundary_gate.sh"
   # G-BENCH (WS10 T4) — the `rustty-bench` unit-test lane, debug AND --release.
   # `B-compression.md` §4.5 records "`rustty-bench` is in NO gate". Half right:

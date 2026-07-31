@@ -255,8 +255,18 @@ pub enum Window {
     /// .none`).
     None(noop::Window),
     /// `wayland: wayland.Window` (`winproto.zig:91`).
+    ///
+    /// BOXED (the reference stores the payload inline, `winproto.zig:91`): this arm
+    /// is 576 bytes against the X11 arm's 120 and the `.none` arm's 0, so an inline
+    /// union would make EVERY window's `RefCell<winproto::Window>` — including the
+    /// `.none` one a window starts life on — carry the Wayland arm's footprint
+    /// (`clippy::large_enum_variant`). The indirection costs one allocation per
+    /// realized Wayland window (`Window::init`, once per window, not a hot path) and
+    /// is otherwise invisible: the dispatch arms below call through the `Box` by
+    /// auto-deref, so the shape of the port's dispatch matches the reference's
+    /// `inline for` exactly as before.
     #[cfg(feature = "wayland")]
-    Wayland(wayland::Window),
+    Wayland(Box<wayland::Window>),
     /// `x11: x11.Window` (`winproto.zig:92`).
     #[cfg(feature = "x11")]
     X11(x11::Window),
@@ -287,7 +297,7 @@ impl Window {
         match app {
             App::None(a) => Ok(Window::None(noop::Window::init(a, window)?)),
             #[cfg(feature = "wayland")]
-            App::Wayland(a) => Ok(Window::Wayland(wayland::Window::init(a, window)?)),
+            App::Wayland(a) => Ok(Window::Wayland(Box::new(wayland::Window::init(a, window)?))),
             #[cfg(feature = "x11")]
             App::X11(a) => Ok(Window::X11(x11::Window::init(a, window)?)),
         }

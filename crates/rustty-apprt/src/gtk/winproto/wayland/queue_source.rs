@@ -99,8 +99,12 @@ unsafe fn queue_has_pending(source: *mut glib::ffi::GSource) -> glib::ffi::gbool
     // Never nested with the trampoline (GLib calls prepare/check/dispatch
     // sequentially) nor with App's shared borrows (main-thread, non-reentrant);
     // fail closed (not-ready) if a borrow is somehow live.
+    // The borrow is taken MUTABLY on purpose even though the read below needs only
+    // `&EventQueue` (`prepare_read(&self)`, wayland-client 0.31
+    // `event_queue.rs:456`): an exclusive borrow is what makes the fail-closed test
+    // above meaningful. The binding itself needs no `mut` for the same reason.
     match unsafe { &*pump }.try_borrow_mut() {
-        Ok(mut p) => match p.event_queue.prepare_read() {
+        Ok(p) => match p.event_queue.prepare_read() {
             None => glib::ffi::GTRUE,
             Some(guard) => {
                 drop(guard);
