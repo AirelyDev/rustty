@@ -873,7 +873,7 @@ landed in the scope `cgroup::fmt_scope` names (mutation-proved: renaming the
 
 ---
 
-## V14. The `gtk-v4_16` byte-dump is proved at the BINDING, not at the HANDLER — **OWNER: WS20**
+## ~~V14. The `gtk-v4_16` byte-dump is proved at the BINDING, not at the HANDLER~~ — **DISCHARGED 2026-07-30 [WS20]**
 
 **Filed WS20, 2026-07-30.** `class/application.rs`'s
 `signal_css_parsing_error` now carries the `application.zig:1261-1274` byte-dump
@@ -916,6 +916,65 @@ cargo check -p rustty-apprt --features gtk
 under `--features gtk` the unconditional arm fails to compile exactly as quoted,
 and under `--features gtk,gtk-v4_16` it compiles and the headed KAT passes on
 GTK 4.22.4.
+
+**DISCHARGED 2026-07-30 [WS20, branch `ws20-v14-css-handler`].** The recipe's unit
+test now exists: `crates/rustty-apprt/src/gtk/class/application.rs`,
+`mod tests::signal_css_parsing_error_byte_dump_follows_the_feature_ceiling`. It
+builds an `Application` (`build_test_app`), wires a real `CssProvider`'s
+`parsing-error` straight into `imp::Application::signal_css_parsing_error` (the
+production shape at `:1201-1207`), redirects fd 2 into a temp file across
+`load_from_string`, and reads the handler's own bytes back. Being a LIB test it
+reaches the `pub(super)` handler the integration KAT cannot.
+
+The assertion is a DIFFERENTIAL — `assert_eq!(has_bytes, cfg!(feature =
+"gtk-v4_16"))` — so it is not satisfiable by both arms for the same reason. Two
+anti-vacuity guards: the handler-call count must be > 0, and an EMPTY fd-2
+capture is a hard failure (libtest's output capture would otherwise swallow the
+`eprintln!`, hence the mandatory `--nocapture`).
+
+Run on the Linux VM, GTK 4.22.4, Wayland:
+
+```
+$ cargo test -p rustty-apprt --features gtk,gtk-v4_16 --lib css_parsing_error -- --ignored --nocapture
+V14 EVIDENCE (gtk-v4_16 = true): warn(gtk): css parsing failed at <data>:1:17-18: gtk-css-parser-error-quark 1 Expected a valid color.
+window { color: ###notacolor; }
+test ...::signal_css_parsing_error_byte_dump_follows_the_feature_ceiling ... ok
+test result: ok. 1 passed; 0 failed
+
+$ cargo test -p rustty-apprt --features gtk --lib css_parsing_error -- --ignored --nocapture
+V14 EVIDENCE (gtk-v4_16 = false): warn(gtk): css parsing failed at <data>:1:17-18: gtk-css-parser-error-quark 1 Expected a valid color.
+test ...::signal_css_parsing_error_byte_dump_follows_the_feature_ceiling ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+The source line `window { color: ###notacolor; }` is PRESENT in the first output
+and ABSENT in the second — the handler's `:1261-1274` arm, not the binding.
+
+**NEGATIVE CONTROL (run, not assumed).** With the expected value temporarily
+hard-coded to `true` (i.e. claiming the bytes are dumped at the 4.14 ceiling) and
+built `--features gtk`, the same test FAILS:
+
+```
+assertion `left == right` failed: the `application.zig:1261-1274` byte dump must be
+present IFF `gtk-v4_16` is on (feature on = false); logged: "warn(gtk): css parsing
+failed at <data>:1:17-18: gtk-css-parser-error-quark 1 Expected a valid color.\n"
+  left: false
+ right: true
+test result: FAILED. 0 passed; 1 failed
+```
+
+The patch was reverted (`git checkout`) immediately after; the committed test
+carries `cfg!(feature = "gtk-v4_16")`, not `true`.
+
+**G-GTKINIT: GREEN** (`9 gtk4::init() call site(s) across 29 test file(s); none
+doubled`). The new test adds NO `gtk4::init()` to a `tests/` binary — it lives in
+the lib-test binary and reuses that binary's single init with the established
+soft-skip (`if gtk4::init().is_err() { println!("V14: SKIPPED …"); return; }`),
+which is why the recipe's `--lib css_parsing_error` filter matters: it makes this
+the only headed body in the process. `cargo fmt --check` clean; `cargo clippy
+-p rustty-apprt --features gtk,gtk-v4_16 --lib --tests` clean for this code (one
+PRE-EXISTING `unused_imports` warning on `tests/gtk_css_parse_error.rs:24`,
+untouched here).
 
 ---
 
