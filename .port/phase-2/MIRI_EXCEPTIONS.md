@@ -2077,3 +2077,166 @@ G6 lane and belong here.
   (`search/pagelist.rs:870`, `search/screen.rs:2721`, `search/screen.rs:2793`, …).
   Harmless to coverage, noisy in every Miri log. Left alone deliberately —
   dropping either changes which lane the test is excluded from.
+
+---
+
+## The 2026-07-31 ADVERSARIAL re-audit — the four families re-attacked
+
+A second, deliberately hostile pass over the four families the re-audit above
+declared "all KEEP", run on branch `miri-adversarial`. The brief was to try to
+BREAK each verdict, treating a justification written once and never re-tested as
+a hypothesis rather than a fact. Two families held, two were partially wrong.
+
+**Method note that invalidates part of the earlier pass.** Every bounded run in
+this file (and the pass above) used `perl -e 'alarm N; exec @ARGV' -- cargo
++nightly miri test …`. `alarm` kills **cargo**, not the `miri` child it spawned.
+The child is reparented to PID 1 and **keeps running at 100% CPU**, and it still
+writes its `test result:` summary into the same log when it eventually finishes.
+Two consequences, both observed here:
+
+1. A run recorded as "TIMEOUT, no libtest summary" can acquire a summary
+   minutes-to-hours later. `terminal_input_glitch_text`, recorded by this pass as
+   `rc=142 TIMEOUT at 900s`, has `test result: ok … finished in 3928.86s` in its
+   own log.
+2. Orphans from earlier bounded runs silently steal CPU from later ones. Two
+   99%-CPU orphans were found alive here and had been corrupting the timings of
+   every subsequent measurement.
+
+`.port/tools/miri-run.sh` has a `killtree` for exactly this reason; ad-hoc `perl
+alarm` measurements do not. **Any future bounded Miri measurement must kill the
+process tree, and must re-read the log after the bound before recording
+"TIMEOUT".**
+
+### Family 1 — `rustty-xev`, 30 live-syscall annotations — **PARTIALLY WRONG (29 KEEP, 1 REMOVED)**
+
+The structural claim was tested per test rather than per class: all 30 were run
+individually with `cargo +nightly miri test -p rustty-xev --lib -- --include-ignored
+--exact <name> --test-threads=1`, and the log grepped for `can't call foreign function`.
+
+* **29 of 30 hold**, and hold instantly: each aborts in ≤1s with
+  `error: unsupported operation: can't call foreign function {kqueue,mach_port_allocate,
+  posix_spawn,openpty,…}`. Miri does not run these slowly; it cannot start them.
+  The 31st annotation (`tests/surface_parity.rs`, `public_loop_surface_is_live`)
+  was checked separately and also aborts on `kqueue`.
+* **1 is INVALID and has been REMOVED**: `kqueue::tests::kqueue_file_io_on_thread_pool`
+  (`crates/rustty-xev/src/kqueue.rs`). Its reason string claimed "live
+  kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions".
+  **The test makes no syscall at all.** While `MACOS_FILE_WATCHER_PORTED == false`
+  its entire body is an `include_str!` of `DEFERRALS.md` plus a `contains()`
+  assertion and an early `return` — a deferral-ledger skip-stub. It runs **clean
+  under Miri in 23.87s**. The annotation had been applied by file/module, not by
+  body — exactly the sweep-in failure mode the class argument invites.
+  Verified after removal, without `--include-ignored`:
+  `test kqueue::tests::kqueue_file_io_on_thread_pool ... ok` /
+  `1 passed; 0 failed; 0 ignored`, with the negative control on a still-annotated
+  sibling (`kqueue_mach_port`) printing `0 passed; 1 ignored` from the same build.
+
+Gate impact: `live_ffi_unit_floor` is source-derived and drops 30 → 29 on its
+own; the ASan companion still runs 31 module-prefix-matched tests, so the arm
+stays green. No hand-edit of the floor is needed (and must not be made).
+
+### Family 2 — the `G6 LANE ONLY` partition — **ATTACKED AND HELD**
+
+The verdict was not re-litigated (the earlier pass proved the tests run in G6c).
+What was attacked is the *causal* story: that `assert_integrity` is the dominant
+cost, rather than that being a narrative fitted to the outcome. Tested directly
+by stubbing `Page::assert_integrity`, `PageList::assert_integrity` and
+`Screen::assert_integrity` behind a temporary const while leaving
+`debug_assertions` **ON** (so every other `debug_assert!` still ran), in a fresh
+`CARGO_TARGET_DIR` so no stale artifact could be reused:
+
+| test | assertions ON, unmodified | assertions ON, integrity stubbed | assertions OFF (G6c) |
+|---|---|---|---|
+| `terminal_input_glitch_text` | **3928.86s** | **3.87s** | 8.49s (prior pass) |
+| `screen_cursor_absolute_to_page_with_insufficient_capacity` | >900s (orphan killed) | **24.04s** | 53.17s (prior pass) |
+
+Stubbing the integrity checks **alone** rescues the tests — a **1015x** reduction
+on the first. The stated cause is correct, not fitted. The `all(miri,
+debug_assertions)` partition is the right lever and the "do NOT widen this to a
+plain `miri` ignore" warning is load-bearing.
+
+*Honest limit: 2 of the 9 sites were measured this way, not all 9.*
+
+### Family 3 — `screen.rs:14857` — **PARTIALLY WRONG (KEEP stands; "TIMEOUT" and the stated cause do not)**
+
+The question posed was whether "361s at a 6-minute bound" meant *genuinely slow*
+or *hung/livelocked*. Answered definitively: **genuinely slow, and it completes
+clean.**
+
+Run with no practical bound, `-C debug-assertions=off`, single worker,
+`--include-ignored`, essentially alone on the host:
+
+```
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2320 filtered out; finished in 1656.89s
+```
+
+**27.6 minutes, 0 UB, 0 leaks.** An independent earlier run of the same test
+(under 3-way CPU contention) also completed, at 1977.51s. There is no hang: every
+loop in the test is counter-bounded and monotone, the test is single-threaded,
+and an instrumented run shows uninterrupted forward progress the whole way.
+
+**The stated cause in the annotation was wrong.** WS19 T6 wrote "the cost is
+page-mapping/LZ4 volume". This test never invokes LZ4. Instrumented breakdown of
+the 1656.89s:
+
+| phase | time | share |
+|---|---|---|
+| `increase_capacity` doubling 128 → 65535 styles (10 iterations, the "page-mapping" phase) | 13.0s | 0.8% |
+| filling the `RefCountedSet` style map with 53248 entries | 1650.7s | 99.6% |
+
+The per-iteration curve is smooth and finite (0.77s, 0.78s, 0.80s, 0.85s, 0.94s,
+1.11s, 1.48s, 2.23s, 3.89s for the doublings; the fill loop degrades gently from
+~3s to ~20s per 200 inserts as the set's load factor rises).
+
+**Verdict: KEEP** — 27.6 min is far past the file's own 20-min tractability
+criterion and past any lane budget — **but the annotation must say "too slow,
+completes in ~28 min" and must not say "LZ4"**. Corrected in place at
+`crates/rustty-vt/src/screen.rs`.
+
+*Honest limit: only `screen.rs:14857` was run to completion. `terminal.rs:15740`
+(`terminal_pagepool_no_leak_resize_grow`) was NOT re-run here and its
+"slow vs hung" question remains formally open, though the same reasoning applies.*
+
+### Family 4 — the self-declared-unmeasured compression exceptions — **OVERTURNED (2 of 4 REMOVED)**
+
+First, a factual correction to the premise this family is usually stated with:
+there are **not ~20** annotated-but-unmeasured compression tests. The
+`pagelist_incremental_compression_*` family (10 tests) carries **no Miri ignore at
+all** and is already fully Miri-gated. Exactly **4** annotations in the tree carry
+the self-incriminating string *"NOT individually re-measured by this lane"*. All
+four were measured — not a sample — with debug assertions **ON** (the strict G6
+lane), 600s bound:
+
+| test | measured | verdict |
+|---|---|---|
+| `pagelist_memory_stats_include_unused_pool_backing` | **2.05s** (re-verified 1.69s) | **REMOVED** |
+| `pagelist_does_not_compress_the_mixed_history_and_active_page` | **1.57s** (re-verified 1.26s) | **REMOVED** |
+| `pagelist_memory_stats_do_not_restore_compressed_pages` | TIMEOUT at 600s | KEEP |
+| `pagelist_full_and_incremental_compression_skip_a_spanning_viewport` | TIMEOUT at 600s | KEEP |
+
+The two removals are **three orders of magnitude** inside budget. Their reason
+string blamed "LZ4 page-compression volume"; one compresses a single 1x1 pool
+page, and the other exists precisely to assert that a mixed history/active page
+is **not** compressed — i.e. it was excepted for the one code path it never
+takes. Both now run in the ordinary G6 lane: verified without
+`--include-ignored`, `1 passed; 0 failed; 0 ignored`.
+
+The two that did reproduce as TIMEOUTs have had their reason strings rewritten to
+record the measurement and to warn against re-applying the string by class
+inference.
+
+**This is the same defect as Family 1, in a different crate: an exception
+inherited from a class rather than established from a body.** Two of four
+annotations written on assumption were wrong, which is the base rate this file
+should assume for any future "same class as" reason string.
+
+### What this pass did NOT test
+
+* `terminal.rs:15740` slow-vs-hung (see Family 3).
+* 7 of the 9 Family-2 sites (only 2 had the stub experiment run against them).
+* Whether the ASan companion arm added by the previous pass is itself
+  sound — it was taken at face value here.
+* The `rustty-extra` `webgen`/`mdgen` family (Family 4 of the previous pass) was
+  out of scope for this one.
+* The OPEN `rustty-xev` `thread_pool.rs` Stacked-Borrows failure is being handled
+  by a concurrent lane and was deliberately not touched.

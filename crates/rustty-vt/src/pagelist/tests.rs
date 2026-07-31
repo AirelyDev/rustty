@@ -4014,7 +4014,7 @@ fn pagelist_oversized_page_is_heap_owned() {
 /// `test "PageList memory stats do not restore compressed pages"`.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume. INDIVIDUALLY MEASURED 2026-07-31 (adversarial re-audit): TIMEOUT at a 600s hard bound under `cargo +nightly miri test -p rustty-vt --lib -- --include-ignored --exact <name> --test-threads=1`, debug-assertions ON. Two siblings that carried this same reason string were measured at 2.05s/1.57s and had their ignores REMOVED -- do not re-apply this string by class inference. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_memory_stats_do_not_restore_compressed_pages() {
@@ -4093,10 +4093,10 @@ fn pagelist_memory_stats_do_not_restore_compressed_pages() {
 
 /// PORTS: oracle@main PageList.zig
 /// `test "PageList memory stats include unused pool backing"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
+// NO MIRI EXCEPTION. This test carried the G3b-vt "LZ4 page-compression volume /
+// NOT individually re-measured" annotation until the 2026-07-31 adversarial
+// re-audit measured it: it compresses ONE 1x1 pool page, and Miri runs it in
+// 2.05s. The class inference was wrong for this test.
 #[test]
 fn pagelist_memory_stats_include_unused_pool_backing() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
@@ -4143,10 +4143,10 @@ fn pagelist_memory_stats_include_unused_pool_backing() {
 
 /// PORTS: oracle@main PageList.zig
 /// `test "PageList does not compress the mixed history and active page"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
+// NO MIRI EXCEPTION. Same finding as the sibling above: measured 1.57s under
+// Miri by the 2026-07-31 adversarial re-audit. It asserts that a mixed
+// history/active page is NOT compressed, so the LZ4 path it was excepted for is
+// the one path it never takes.
 #[test]
 fn pagelist_does_not_compress_the_mixed_history_and_active_page() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
@@ -4169,7 +4169,7 @@ fn pagelist_does_not_compress_the_mixed_history_and_active_page() {
 /// `test "PageList full and incremental compression skip a spanning viewport"`.
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
+    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume. INDIVIDUALLY MEASURED 2026-07-31 (adversarial re-audit): TIMEOUT at a 600s hard bound under `cargo +nightly miri test -p rustty-vt --lib -- --include-ignored --exact <name> --test-threads=1`, debug-assertions ON. Two siblings that carried this same reason string were measured at 2.05s/1.57s and had their ignores REMOVED -- do not re-apply this string by class inference. Covered natively + by ASan."
 )]
 #[test]
 fn pagelist_full_and_incremental_compression_skip_a_spanning_viewport() {

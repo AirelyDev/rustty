@@ -3741,11 +3741,15 @@ mod tests {
     /// reference body above.
     const MACOS_FILE_WATCHER_PORTED: bool = false;
 
+    // NO MIRI EXCEPTION. This test carried the C3 live-syscall annotation until
+    // the 2026-07-31 adversarial re-audit, which found the reason string false
+    // for THIS test: while `MACOS_FILE_WATCHER_PORTED == false` the body makes no
+    // syscall at all -- it is a deferral-ledger skip-stub (`include_str!` +
+    // `contains`). Miri runs it clean in ~24s. The annotation had been applied by
+    // class/file, not by body. If the watcher is ever ported and the flag flipped,
+    // the real body WILL make live kqueue/kevent64 calls and the annotation must
+    // come back (see the sibling tests in this module for the exact string).
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
-    )]
     fn kqueue_file_io_on_thread_pool() {
         if !MACOS_FILE_WATCHER_PORTED {
             // Deferred: the macOS `xev.File` watcher. The Zap work-stealing pool
