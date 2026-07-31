@@ -2084,7 +2084,11 @@ where
                 Err(_err) => {
                     // If an error occurs, we don't want to block surface startup.
                     // log.warn("error getting env map for surface err={}", .{err});
-                    internal_os::env::getEnvMap()
+                    // PORT NOTE (P3-W7 T4): `internal_os.getEnvMap(alloc)` ->
+                    // `global.environMap()` (`src/os/env.zig` was DELETED by
+                    // `e8525c0fd`). This is the site area E §3.1 identified as
+                    // the live non-UTF-8 PANIC; it is byte-typed now.
+                    rustty_global::environ_map()
                 }
             };
             // errdefer env.deinit();
@@ -2096,7 +2100,7 @@ where
             // PORT NOTE (R2 identity): the reference's `GHOSTTY_*` env names carry
             // the product identity — `<ENV_PREFIX>_<suffix>` (the termio
             // shell_integration `env_name` precedent).
-            env.remove(&format!("{}_LOG", rustty_identity::ENV_PREFIX));
+            env.remove(format!("{}_LOG", rustty_identity::ENV_PREFIX).as_bytes());
 
             // var buf: [18]u8 = undefined;
             // try env.put(
@@ -2107,8 +2111,8 @@ where
             // ("0x" + 16 zero-padded hex digits fills the [18]u8 exactly; the
             // `catch unreachable` collapses — `format!` is infallible.)
             env.insert(
-                format!("{}_SURFACE_ID", rustty_identity::ENV_PREFIX),
-                format!("0x{:016x}", unsafe { (*self_).id }),
+                format!("{}_SURFACE_ID", rustty_identity::ENV_PREFIX).into_bytes(),
+                format!("0x{:016x}", unsafe { (*self_).id }).into_bytes(),
             );
 
             // Initialize our IO backend

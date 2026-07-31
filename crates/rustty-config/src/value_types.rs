@@ -1795,7 +1795,11 @@ impl WorkingDirectory {
         // };
         #[cfg(not(target_family = "wasm"))]
         {
-            let expanded = match rustty_os::homedir::expandHome(&path, &mut buf) {
+            let expanded = match rustty_os::homedir::expandHome(
+                &rustty_global::environ_map(),
+                &path,
+                &mut buf,
+            ) {
                 Ok(v) => v,
                 Err(_err) => {
                     // log.warn("error expanding home directory for working-directory path={s}: {}", ...);
@@ -7466,11 +7470,14 @@ mod tests {
         // var buf: [std.fs.max_path_bytes]u8 = undefined;
         // const expected = internal_os.expandHome("~/projects/ghostty", &buf) catch "~/projects/ghostty";
         let mut buf = [0u8; MAX_PATH_BYTES];
-        let expected: Vec<u8> =
-            match rustty_os::homedir::expandHome(b"~/projects/ghostty", &mut buf) {
-                Ok(v) => v.to_vec(),
-                Err(_) => b"~/projects/ghostty".to_vec(),
-            };
+        let expected: Vec<u8> = match rustty_os::homedir::expandHome(
+            &rustty_global::environ_map(),
+            b"~/projects/ghostty",
+            &mut buf,
+        ) {
+            Ok(v) => v.to_vec(),
+            Err(_) => b"~/projects/ghostty".to_vec(),
+        };
         // try testing.expectEqualStrings(expected, wd.value().?);
         assert_eq!(expected.as_slice(), wd.value().unwrap());
     }

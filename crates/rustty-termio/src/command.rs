@@ -68,9 +68,22 @@ use core::fmt::Write as _;
 #[cfg(not(windows))]
 use std::os::fd::{AsRawFd as _, RawFd};
 
-/// PORT NOTE: `EnvMap = std.process.EnvMap` — a string-keyed hash map of
-/// environment variables (the same shape rustty-os `getEnvMap` returns).
-pub type EnvMap = std::collections::HashMap<String, String>;
+/// PORT NOTE: `EnvMap = std.process.EnvMap` — a hash map of environment
+/// variables. Upstream retyped this to `std.process.Environ.Map` when
+/// `os/env.zig` was deleted (`e8525c0fd`); rustty's single definition of that
+/// map lives in `rustty-global` next to the captured `Environ` block.
+///
+/// P3-W7 T2: this was `HashMap<String, String>`, which could not represent a
+/// non-UTF-8 environment variable at all — the defect that made
+/// `rustty-os`'s `getEnvMap` **panic** on the surface-creation path. Zig
+/// byte-slices become `Vec<u8>`/`&[u8]`, never lossy `String`.
+pub type EnvMap = rustty_global::EnvMap;
+
+/// PORT NOTE (P3-W7 T2): `std.process.EnvMap`'s own `put`/`get`/`remove` API
+/// over byte slices, restored as an extension trait next to the map type in
+/// `rustty-global`. Re-exported here because `Command`/`Exec` are its heaviest
+/// users and the reference spells them on `EnvMap` itself.
+pub use rustty_global::EnvMapExt;
 
 /// Function prototype for a function executed /in the child process/ after the
 /// fork, but before exec'ing the command. If the function returns a u8, the
@@ -1028,11 +1041,11 @@ fn createNullDelimitedEnvMap(env_map: &EnvMap) -> NullDelimitedEnvMap {
         // const env_buf = try arena.allocSentinel(u8, pair.key_ptr.len + pair.value_ptr.len + 1, 0);
         let mut env_buf: Vec<u8> = Vec::with_capacity(key.len() + value.len() + 2);
         // @memcpy(env_buf[0..pair.key_ptr.len], pair.key_ptr.*);
-        env_buf.extend_from_slice(key.as_bytes());
+        env_buf.extend_from_slice(key);
         // env_buf[pair.key_ptr.len] = '=';
         env_buf.push(b'=');
         // @memcpy(env_buf[pair.key_ptr.len + 1 ..], pair.value_ptr.*);
-        env_buf.extend_from_slice(value.as_bytes());
+        env_buf.extend_from_slice(value);
         // (the allocSentinel 0 terminator)
         env_buf.push(0);
         // envp_buf[i] = env_buf.ptr;
@@ -1058,6 +1071,29 @@ fn createNullDelimitedEnvMap(env_map: &EnvMap) -> NullDelimitedEnvMap {
 // PORT NOTE: `fn createWindowsEnvBlock(allocator: mem.Allocator, env_map: *const
 // EnvMap) ![]u16` — the allocator collapses into the returned Vec. Compiled
 // on all targets (pure re-encode logic); only `startWindows` calls it.
+/// PORT NOTE (P3-W7 T2): `std.unicode.utf8ToUtf16Le` over an `EnvMap` entry.
+/// The map is byte-typed (`Vec<u8>`), and on Windows those bytes are the
+/// lossless WTF-8 encoding `OsStr::as_encoded_bytes` produces, so the round
+/// trip back to UTF-16 goes through `OsStr` rather than `str` — a non-UTF-8
+/// (unpaired-surrogate) value must not be corrupted here.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn encode_wide(bytes: &[u8]) -> Vec<u16> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        rustty_global::environ::os_string_from_bytes(bytes)
+            .as_os_str()
+            .encode_wide()
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        // Compiled on all targets (the reference's `createWindowsEnvBlock` is
+        // too); off Windows the bytes are plain POSIX bytes.
+        String::from_utf8_lossy(bytes).encode_utf16().collect()
+    }
+}
+
 #[cfg_attr(not(windows), allow(dead_code))]
 fn createWindowsEnvBlock(env_map: &EnvMap) -> Vec<u16> {
     // count bytes needed
@@ -1078,14 +1114,14 @@ fn createWindowsEnvBlock(env_map: &EnvMap) -> Vec<u16> {
     let mut i: usize = 0;
     for (key, value) in env_map {
         // i += try std.unicode.utf8ToUtf16Le(result[i..], pair.key_ptr.*);
-        for u in key.encode_utf16() {
+        for u in encode_wide(key) {
             result[i] = u;
             i += 1;
         }
         result[i] = '=' as u16;
         i += 1;
         // i += try std.unicode.utf8ToUtf16Le(result[i..], pair.value_ptr.*);
-        for u in value.encode_utf16() {
+        for u in encode_wide(value) {
             result[i] = u;
             i += 1;
         }
@@ -1511,12 +1547,35 @@ fn execvpeZ(
         unsafe { CStr::from_ptr(path_env) }.to_bytes()
     };
 
+    execvpeZ_search(file_slice, path_bytes, child_argv, envp)
+}
+
+/// The PATH-search half of [`execvpeZ`], split out so the `err`-latching
+/// contract (area-E `E29`) is testable without mutating the process
+/// environment — which is exactly what `P3-W7 T3` removed from this workspace.
+/// Behaviour is unchanged: `execvpeZ` calls this with the `PATH` it read.
+#[cfg(not(windows))]
+fn execvpeZ_search(
+    file_slice: &[u8],
+    path_bytes: &[u8],
+    child_argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> ExecveError {
     // var path_buf: [PATH_MAX]u8 = undefined;
     let mut path_buf = [0u8; libc::PATH_MAX as usize];
     // var it = mem.tokenizeScalar(u8, PATH, ':');
     let mut seen_eacces = false;
-    // var err: ExecveError = error.FileNotFound;
-    let err = ExecveError::FileNotFound;
+    // var err: posix.system.E = .NOENT;
+    //
+    // PORT NOTE (P3-W7 T5 / area-E `E29`): this was `let err = ...` — never
+    // reassigned — so if the FINAL PATH entry yielded `ENOTDIR`, rustty
+    // reported `NOENT` where upstream reports `NOTDIR`. Upstream updates `err`
+    // from each `execve` result before the switch:
+    //   err = posix.errno(posix.system.execve(full_path, argsZ, envp));
+    //   switch (err) { .ACCES => seen_eacces = true, .NOENT, .NOTDIR => {}, else => break :execve err }
+    // Observable in the child's stderr text: `NOENT` prints the friendly
+    // "not on the PATH" message, anything else prints "unexpected error: E<name>".
+    let mut err = ExecveError::FileNotFound;
     for search_path in path_bytes.split(|&b| b == b':').filter(|s| !s.is_empty()) {
         // const path_len = search_path.len + file_slice.len + 1;
         let path_len = search_path.len() + file_slice.len() + 1;
@@ -1529,7 +1588,8 @@ fn execvpeZ(
         path_buf[search_path.len() + 1..][..file_slice.len()].copy_from_slice(file_slice);
         path_buf[path_len] = 0;
         let full_path = path_buf.as_ptr() as *const c_char;
-        match execveZ(full_path, child_argv, envp) {
+        err = execveZ(full_path, child_argv, envp);
+        match err {
             ExecveError::AccessDenied => seen_eacces = true,
             ExecveError::FileNotFound | ExecveError::NotDir => {}
             e => return e,
@@ -1742,6 +1802,46 @@ mod tests {
         assert_eq!(RtPostForkInfo::default().linux_cgroup_processes_limit, None);
     }
 
+    /// NEGATIVE CONTROL (P3-W7 T5 Step 3 / area-E `E29`): the errno of the LAST
+    /// PATH entry must be the one reported.
+    ///
+    /// `execvpeZ`'s `err` was initialized to `FileNotFound` and **never
+    /// reassigned**, so a PATH whose last entry is a *file* (not a directory)
+    /// reported `NOENT` where upstream reports `NOTDIR`. Before the two-line
+    /// fix this test is RED — verified, see the P3-W7 report — and it is the
+    /// only assertion that can see the difference, because the value is
+    /// observable solely in the child's stderr text.
+    ///
+    /// No `fork` and no environment mutation: `execve` on a path that cannot
+    /// resolve always returns, so the search can be driven in-process.
+    #[test]
+    #[cfg(not(windows))]
+    #[cfg_attr(miri, ignore)] // real execve(2) syscalls
+    fn execvpe_latches_the_last_path_entry_errno() {
+        // A PATH whose FIRST entry does not exist (-> ENOENT) and whose LAST
+        // entry is a regular file (-> ENOTDIR when used as a directory).
+        let mut path = std::env::temp_dir();
+        path.push(format!("rustty-w7-e29-{}", std::process::id()));
+        std::fs::write(&path, b"not a directory").expect("write probe file");
+
+        let file_bytes = b"rustty-w7-definitely-not-a-real-binary";
+        let argv: [*const c_char; 1] = [std::ptr::null()];
+        let envp: [*const c_char; 1] = [std::ptr::null()];
+
+        let mut path_env: Vec<u8> = b"/rustty-w7-no-such-dir:".to_vec();
+        path_env.extend_from_slice(path.as_os_str().as_encoded_bytes());
+
+        let got = execvpeZ_search(file_bytes, &path_env, argv.as_ptr(), envp.as_ptr());
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            got,
+            ExecveError::NotDir,
+            "the errno of the FINAL PATH entry must be reported (got {got:?}); \
+             `FileNotFound` means `err` is not being latched per iteration"
+        );
+    }
+
     // [T8] Every test below forks. Take the crate-wide fork-serialization lock
     // (lib.rs `FORK_KAT_SERIAL`) for the test's duration: an unserialized
     // `fork()` snapshots every open fd, leaking a concurrently-running exec
@@ -1765,11 +1865,11 @@ mod tests {
         let mut envmap = EnvMap::new();
 
         // try envmap.put(...);
-        envmap.insert("HOME".to_string(), "/home/ifreund".to_string());
-        envmap.insert("WAYLAND_DISPLAY".to_string(), "wayland-1".to_string());
-        envmap.insert("DISPLAY".to_string(), ":1".to_string());
-        envmap.insert("DEBUGINFOD_URLS".to_string(), " ".to_string());
-        envmap.insert("XCURSOR_SIZE".to_string(), "24".to_string());
+        envmap.put(b"HOME", b"/home/ifreund");
+        envmap.put(b"WAYLAND_DISPLAY", b"wayland-1");
+        envmap.put(b"DISPLAY", b":1");
+        envmap.put(b"DEBUGINFOD_URLS", b" ");
+        envmap.put(b"XCURSOR_SIZE", b"24");
 
         // var arena = std.heap.ArenaAllocator.init(allocator);
         // defer arena.deinit();
@@ -2187,7 +2287,7 @@ mod tests {
         // defer env.deinit();
         let mut env = EnvMap::new();
         // try env.put("VALUE", "hello");
-        env.insert("VALUE".to_string(), "hello".to_string());
+        env.put(b"VALUE", b"hello");
 
         // var cmd: Command = if (builtin.os.tag == .windows) .{ ... } else .{ ... };
         #[cfg(windows)]

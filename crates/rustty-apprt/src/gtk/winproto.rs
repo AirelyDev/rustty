@@ -348,7 +348,7 @@ impl Window {
     /// `class::Surface::default_termio_env` (`surface.zig:1633`).
     pub fn add_subprocess_env(
         &mut self,
-        env: &mut std::collections::HashMap<String, String>,
+        env: &mut rustty_global::EnvMap,
     ) -> Result<(), WinprotoError> {
         match self {
             Window::None(v) => v.add_subprocess_env(env),

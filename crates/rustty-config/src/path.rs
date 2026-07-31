@@ -248,7 +248,11 @@ impl Path {
                 #[cfg(not(any(target_os = "windows", target_family = "wasm")))]
                 {
                     let mut buf = [0u8; libc_max_path_bytes()];
-                    let expanded: &[u8] = match rustty_os::homedir::expandHome(&path, &mut buf) {
+                    let expanded: &[u8] = match rustty_os::homedir::expandHome(
+                        &rustty_global::environ_map(),
+                        &path,
+                        &mut buf,
+                    ) {
                         Ok(expanded) => expanded,
                         Err(err) => {
                             // try diags.append(arena_alloc, .{

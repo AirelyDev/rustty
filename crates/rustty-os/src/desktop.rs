@@ -40,8 +40,12 @@ pub fn launchedFromDesktop() -> bool {
         // was launched from the desktop.
         if build_config::artifact() == build_config::Artifact::Lib {
             'lib: {
-                let env = "RUSTTY_MAC_LAUNCH_SOURCE";
-                let source = match posix_getenv(env) {
+                let env = b"RUSTTY_MAC_LAUNCH_SOURCE";
+                // PORT NOTE (P3-W7 T3 / area-E `E15`):
+                // `global.environ().getPosix(env)` — the captured environment
+                // block, not an ad-hoc `posix.getenv`.
+                let environ = rustty_global::environ();
+                let source = match environ.get_posix(env) {
                     Some(s) => s,
                     None => break 'lib,
                 };
@@ -49,7 +53,7 @@ pub fn launchedFromDesktop() -> bool {
                 // Source can be "app", "cli", or "zig_run". We assume
                 // its the desktop only if its "app". We may want to do
                 // "zig_run" but at the moment there's no reason.
-                if source == "app" {
+                if source == b"app" {
                     return true;
                 }
             }
@@ -66,15 +70,22 @@ pub fn launchedFromDesktop() -> bool {
     // rustty and rustty inherits the env.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        let gio_pid_str = match posix_getenv("GIO_LAUNCHED_DESKTOP_FILE_PID") {
+        // PORT NOTE (P3-W7 T3 / area-E `E15`):
+        // `global.environ().getPosix("GIO_LAUNCHED_DESKTOP_FILE_PID")`.
+        let environ = rustty_global::environ();
+        let gio_pid_str = match environ.get_posix(b"GIO_LAUNCHED_DESKTOP_FILE_PID") {
             Some(s) => s,
             None => return false,
         };
 
         let pid = unsafe { c::getpid() };
-        let gio_pid = match gio_pid_str.parse::<libc::pid_t>() {
-            Ok(v) => v,
-            Err(_) => return false,
+        // const gio_pid = std.fmt.parseInt(@TypeOf(pid), gio_pid_str, 10) catch break :ul false;
+        let gio_pid = match std::str::from_utf8(gio_pid_str)
+            .ok()
+            .and_then(|s| s.parse::<libc::pid_t>().ok())
+        {
+            Some(v) => v,
+            None => return false,
         };
 
         gio_pid == pid
@@ -118,8 +129,22 @@ pub enum DesktopEnvironment {
 /// Detect what desktop environment we are running under. This is mainly used
 /// on Linux and BSD to enable or disable certain features but there may be more uses in
 /// the future.
+//
+// PORT NOTE (P3-W7 T3 / area-E `E15`, oracle `f8e13f31e`): upstream gained an
+// explicit `environ_map: *const std.process.Environ.Map` parameter so the
+// detection reads a CALLER-SUPPLIED map instead of the process environment.
+// That is what lets its tests build a local map instead of calling `setenv` on
+// the process — which in Rust is not merely tidier: `setenv` is not
+// thread-safe against a concurrent `getenv` in glibc or Apple libc, and
+// `cargo test` runs tests on parallel threads by default (the recorded
+// `parallel-cargo-test-exposes-c-init-races` failure class). Rust 2024 makes
+// `std::env::set_var` `unsafe` for exactly this reason.
 #[allow(non_snake_case)]
-pub fn desktopEnvironment() -> DesktopEnvironment {
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "freebsd")),
+    allow(unused_variables)
+)]
+pub fn desktopEnvironment(environ_map: &rustty_global::EnvMap) -> DesktopEnvironment {
     #[cfg(target_os = "macos")]
     {
         DesktopEnvironment::Macos
@@ -136,11 +161,11 @@ pub fn desktopEnvironment() -> DesktopEnvironment {
 
         // Use $XDG_SESSION_DESKTOP to determine what DE we are using on Linux
         // https://www.freedesktop.org/software/systemd/man/latest/pam_systemd.html#desktop=
-        if let Some(sd) = posix_getenv("XDG_SESSION_DESKTOP") {
-            if eql_ignore_case("gnome", &sd) {
+        if let Some(sd) = environ_map.get(&b"XDG_SESSION_DESKTOP"[..]) {
+            if eql_ignore_case(b"gnome", sd) {
                 return DesktopEnvironment::Gnome;
             }
-            if eql_ignore_case("gnome-xorg", &sd) {
+            if eql_ignore_case(b"gnome-xorg", sd) {
                 return DesktopEnvironment::Gnome;
             }
         }
@@ -150,9 +175,9 @@ pub fn desktopEnvironment() -> DesktopEnvironment {
         // colon-separated list of up to three desktop names, although we
         // only look at the first.
         // https://specifications.freedesktop.org/desktop-entry-spec/latest/recognized-keys.html
-        if let Some(cd) = posix_getenv("XDG_CURRENT_DESKTOP") {
-            let cd_first = cd.split(':').next().unwrap_or("");
-            if eql_ignore_case(cd_first, "gnome") {
+        if let Some(cd) = environ_map.get(&b"XDG_CURRENT_DESKTOP"[..]) {
+            let cd_first = cd.split(|&b| b == b':').next().unwrap_or(b"");
+            if eql_ignore_case(cd_first, b"gnome") {
                 return DesktopEnvironment::Gnome;
             }
         }
@@ -170,73 +195,92 @@ pub fn desktopEnvironment() -> DesktopEnvironment {
     }
 }
 
-// `posix.getenv`: returns the value as a `String` or `None`.
-#[cfg(not(windows))]
-fn posix_getenv(key: &str) -> Option<String> {
-    std::env::var(key).ok()
-}
+// PORT NOTE (P3-W7 T3): the `posix_getenv` shim is GONE — every reader in this
+// module now goes through `global::environ()` (the two `launchedFromDesktop`
+// arms) or a caller-supplied `EnvMap` (`desktopEnvironment`), matching upstream
+// after `e8525c0fd`/`f8e13f31e`.
 
 // `std.ascii.eqlIgnoreCase`.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn eql_ignore_case(a: &str, b: &str) -> bool {
+fn eql_ignore_case(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .all(|(x, y)| x.eq_ignore_ascii_case(&y))
+        && a.iter()
+            .zip(b.iter())
+            .all(|(x, y)| x.eq_ignore_ascii_case(y))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustty_global::EnvMap;
 
+    // test "desktop environment" {
+    //
+    // PORT NOTE (P3-W7 T3 / area-E `E15`, oracle `f8e13f31e`): upstream's test
+    // was rewritten to build a LOCAL `Environ.Map` per case —
+    //
+    //   // Always run these tests with a blank evironment map so that we don't
+    //   // get any failures from values in the "real" evironment leaking in.
+    //
+    // — and every `setenv`/`unsetenv` call was deleted. rustty follows: the ten
+    // process-`setenv`/`unsetenv` calls that used to live here are GONE, and
+    // with them the `RestoreEnv` Drop guard and the `crate::env_test_lock()`
+    // serialization those calls forced. `setenv` is not thread-safe against a
+    // concurrent `getenv`, and `cargo test` is parallel by default.
     #[test]
-    #[cfg_attr(miri, ignore)] // reads/mutates process env (real OS state)
     #[allow(non_snake_case)]
     fn desktop_environment() {
-        let _env = crate::env_test_lock();
+        // Always run these tests with a blank evironment map so that we don't get any
+        // failures from values in the "real" evironment leaking in.
         #[cfg(target_os = "macos")]
         {
-            assert_eq!(DesktopEnvironment::Macos, desktopEnvironment());
+            let environ_map = EnvMap::new();
+            assert_eq!(DesktopEnvironment::Macos, desktopEnvironment(&environ_map));
         }
         #[cfg(windows)]
         {
-            assert_eq!(DesktopEnvironment::Windows, desktopEnvironment());
+            let environ_map = EnvMap::new();
+            assert_eq!(
+                DesktopEnvironment::Windows,
+                desktopEnvironment(&environ_map)
+            );
         }
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
-            use crate::env::{setenv, unsetenv};
-            let getenv = |k: &str| std::env::var(k).ok();
+            {
+                let mut environ_map = EnvMap::new();
+                environ_map.insert(b"XDG_SESSION_DESKTOP".to_vec(), b"gnome".to_vec());
+                assert_eq!(DesktopEnvironment::Gnome, desktopEnvironment(&environ_map));
+            }
 
-            let xdg_current_desktop = getenv("XDG_CURRENT_DESKTOP");
-            let _restore_current = RestoreEnv {
-                key: c"XDG_CURRENT_DESKTOP",
-                value: xdg_current_desktop,
-            };
-            let _ = unsetenv(c"XDG_CURRENT_DESKTOP");
+            {
+                let mut environ_map = EnvMap::new();
+                environ_map.insert(b"XDG_SESSION_DESKTOP".to_vec(), b"gnome-xorg".to_vec());
+                assert_eq!(DesktopEnvironment::Gnome, desktopEnvironment(&environ_map));
+            }
 
-            let xdg_session_desktop = getenv("XDG_SESSION_DESKTOP");
-            let _restore_session = RestoreEnv {
-                key: c"XDG_SESSION_DESKTOP",
-                value: xdg_session_desktop,
-            };
-            let _ = unsetenv(c"XDG_SESSION_DESKTOP");
+            {
+                let mut environ_map = EnvMap::new();
+                environ_map.insert(b"XDG_SESSION_DESKTOP".to_vec(), b"foobar".to_vec());
+                assert_eq!(DesktopEnvironment::Other, desktopEnvironment(&environ_map));
+            }
 
-            let _ = setenv(c"XDG_SESSION_DESKTOP", c"gnome");
-            assert_eq!(DesktopEnvironment::Gnome, desktopEnvironment());
-            let _ = setenv(c"XDG_SESSION_DESKTOP", c"gnome-xorg");
-            assert_eq!(DesktopEnvironment::Gnome, desktopEnvironment());
-            let _ = setenv(c"XDG_SESSION_DESKTOP", c"foobar");
-            assert_eq!(DesktopEnvironment::Other, desktopEnvironment());
+            {
+                let mut environ_map = EnvMap::new();
+                environ_map.insert(b"XDG_CURRENT_DESKTOP".to_vec(), b"GNOME".to_vec());
+                assert_eq!(DesktopEnvironment::Gnome, desktopEnvironment(&environ_map));
+            }
 
-            let _ = unsetenv(c"XDG_SESSION_DESKTOP");
-            assert_eq!(DesktopEnvironment::Other, desktopEnvironment());
+            {
+                let mut environ_map = EnvMap::new();
+                environ_map.insert(b"XDG_CURRENT_DESKTOP".to_vec(), b"FOOBAR".to_vec());
+                assert_eq!(DesktopEnvironment::Other, desktopEnvironment(&environ_map));
+            }
 
-            let _ = setenv(c"XDG_CURRENT_DESKTOP", c"GNOME");
-            assert_eq!(DesktopEnvironment::Gnome, desktopEnvironment());
-            let _ = setenv(c"XDG_CURRENT_DESKTOP", c"FOOBAR");
-            assert_eq!(DesktopEnvironment::Other, desktopEnvironment());
-            let _ = unsetenv(c"XDG_CURRENT_DESKTOP");
-            assert_eq!(DesktopEnvironment::Other, desktopEnvironment());
+            {
+                let environ_map = EnvMap::new();
+                assert_eq!(DesktopEnvironment::Other, desktopEnvironment(&environ_map));
+            }
         }
         #[cfg(not(any(
             target_os = "macos",
@@ -248,29 +292,8 @@ mod tests {
             // PORT NOTE: the reference test's `else` arm calls `DesktopEnvironment()`
             // (the type, capitalized) rather than `desktopEnvironment()`. We
             // reproduce the intended assertion against the function.
-            assert_eq!(DesktopEnvironment::Other, desktopEnvironment());
-        }
-    }
-
-    // PORT NOTE: helper: a Drop guard reproducing the reference test's `defer if (...)
-    // |v| setenv else unsetenv` env save/restore behavior.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    struct RestoreEnv {
-        key: &'static std::ffi::CStr,
-        value: Option<String>,
-    }
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    impl Drop for RestoreEnv {
-        fn drop(&mut self) {
-            use crate::env::{setenv, unsetenv};
-            match &self.value {
-                Some(v) => {
-                    let _ = setenv(self.key, &std::ffi::CString::new(v.as_str()).unwrap());
-                }
-                None => {
-                    let _ = unsetenv(self.key);
-                }
-            }
+            let environ_map = EnvMap::new();
+            assert_eq!(DesktopEnvironment::Other, desktopEnvironment(&environ_map));
         }
     }
 }

@@ -43,7 +43,9 @@ impl TempDir {
 
         let dir = {
             let cwd = std_fs_cwd();
-            let tmp_dir = file::allocTmpDir();
+            // PORT NOTE (P3-W7 T3 / area-E `E15`):
+            // `file.allocTmpDir(std.heap.page_allocator, global.environ())`.
+            let tmp_dir = file::allocTmpDir(&rustty_global::environ());
             let r = cwd.openDirPath(Path::new(&tmp_dir));
             file::freeTmpDir(&tmp_dir);
             r?

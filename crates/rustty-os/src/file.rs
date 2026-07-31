@@ -104,10 +104,19 @@ pub fn restoreMaxFiles(lim: rlimit) {
 /// POSIX this returns `$TMPDIR`/`$TMP` (or `"/tmp"` as a fallback)
 /// without allocating. Always pair with `freeTmpDir` to release any
 /// allocation.
+//
+// PORT NOTE (P3-W7 T3/T4 / area-E `E15` + `E20`): upstream's signature became
+// `allocTmpDir(alloc, environ)` — the `TMPDIR`/`TMP` lookup reads the captured
+// environment instead of the process environment — and `os/main.zig` STOPPED
+// re-exporting `allocTmpDir`/`freeTmpDir` because `global.zig` became its only
+// importer. rustty's equivalent of that single importer is
+// `rustty_global::environ::set_tmp_dir_path`, which the app initializer feeds
+// from here.
 #[allow(non_snake_case)]
-pub fn allocTmpDir() -> String {
+pub fn allocTmpDir(environ: &rustty_global::Environ) -> String {
     #[cfg(windows)]
     {
+        let _ = environ;
         // GetTempPathW guarantees the result fits in MAX_PATH+1.
         let mut buf = [0u16; crate::windows::MAX_PATH + 1];
         let len = unsafe { windows_GetTempPathW(buf.len() as u32, buf.as_mut_ptr()) };
@@ -126,11 +135,15 @@ pub fn allocTmpDir() -> String {
     }
     #[cfg(not(windows))]
     {
-        let tmpdir = match std::env::var_os("TMPDIR").or_else(|| std::env::var_os("TMP")) {
+        let tmpdir = match environ
+            .get_posix(b"TMPDIR")
+            .or_else(|| environ.get_posix(b"TMP"))
+            .filter(|v| !v.is_empty())
+        {
             Some(v) => v,
             None => return "/tmp".to_string(),
         };
-        let tmpdir = tmpdir.to_string_lossy();
+        let tmpdir = String::from_utf8_lossy(tmpdir);
         trim_end_str(&tmpdir, PATH_SEP).to_string()
     }
 }
@@ -219,14 +232,16 @@ pub fn randomBasename(buf: &mut [u8]) -> Result<&[u8], RandomBasenameError> {
 /// overkill.
 #[allow(non_snake_case)]
 pub fn randomTmpPath(prefix: &str) -> String {
-    let tmp_dir = allocTmpDir();
+    // PORT NOTE (P3-W7 T4 / area-E `E20`): this used to call
+    // `allocTmpDir()` + `freeTmpDir()` on EVERY call. Upstream `e8525c0fd`
+    // switched it to the temp directory discovered once at `global.init`:
+    //   const tmp_dir = global.tmpDirPath();
+    let tmp_dir = String::from_utf8_lossy(rustty_global::tmp_dir_path()).into_owned();
     let mut name_buf = [0u8; random_basename_len];
     let basename = randomBasename(&mut name_buf).unwrap_or_else(|_| unreachable!());
     // PORT NOTE: `std.fmt.allocPrint(.., "{s}{c}{s}{s}", .{ tmp_dir, sep, prefix, basename })`.
     let basename = std::str::from_utf8(basename).expect("base64 output is ASCII");
-    let result = format!("{tmp_dir}{}{prefix}{basename}", PATH_SEP as char);
-    freeTmpDir(&tmp_dir);
-    result
+    format!("{tmp_dir}{}{prefix}{basename}", PATH_SEP as char)
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +344,48 @@ fn log_debug(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P3-W7 T3/T4 (area-E `E15`/`E20`) — the two temp-dir discoveries must
+    /// agree.
+    ///
+    /// `global.zig` imports `os/file.zig`'s `allocTmpDir` directly; rustty
+    /// cannot (R4: `rustty-os` is ABOVE the leaf `rustty-global`), so
+    /// `rustty_global::tmp_dir_path()` carries a fallback implementing the same
+    /// rule for the case where nothing published a value — a `#[test]`, or a
+    /// library consumer that never ran `init`. Two implementations of one rule
+    /// is a divergence risk, so it is pinned by a test rather than by hope.
+    #[test]
+    #[allow(non_snake_case)]
+    fn alloc_tmp_dir_agrees_with_global_fallback() {
+        let from_os = allocTmpDir(&rustty_global::environ());
+        let from_global = rustty_global::tmp_dir_path();
+        assert_eq!(
+            from_os.as_bytes(),
+            from_global,
+            "rustty-os allocTmpDir and rustty-global's tmp_dir_path fallback diverged"
+        );
+    }
+
+    /// P3-W7 T4 (area-E `E20`) — `randomTmpPath` uses the CACHED temp dir and
+    /// still produces a fresh, unguessable basename per call.
+    ///
+    /// `crypto_random_bytes` STAYS: upstream's switch to `global.io().random()`
+    /// is a `std.Io` plumbing artifact, and the basename is what makes the temp
+    /// path unguessable, so weakening it to a non-cryptographic RNG "for
+    /// fidelity" would be a real security regression.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall
+    #[allow(non_snake_case)]
+    fn random_tmp_path_is_cached_and_fresh() {
+        let a = randomTmpPath("w7-");
+        let b = randomTmpPath("w7-");
+        assert_ne!(a, b, "basename must differ per call");
+
+        let dir = String::from_utf8_lossy(rustty_global::tmp_dir_path()).into_owned();
+        let prefix = format!("{dir}{}w7-", PATH_SEP as char);
+        assert!(a.starts_with(&prefix), "{a} does not start with {prefix}");
+        assert_eq!(a.len(), prefix.len() + random_basename_len);
+    }
 
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall (getentropy/arc4random_buf)

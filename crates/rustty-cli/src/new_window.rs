@@ -130,8 +130,8 @@ impl Options {
             // var expandhome_buf: [std.fs.max_path_bytes]u8 = undefined;
             // const expanded = try homedir.expandHome(stripped, &expandhome_buf);
             let mut expandhome_buf = [0u8; libc::PATH_MAX as usize];
-            let expanded =
-                expandHome(stripped, &mut expandhome_buf).map_err(CheckArgError::ExpandHome)?;
+            let expanded = expandHome(&rustty_global::environ_map(), stripped, &mut expandhome_buf)
+                .map_err(CheckArgError::ExpandHome)?;
             // var realpath_buf: [std.fs.max_path_bytes]u8 = undefined;
             // const realpath = try cwd.realpath(expanded, &realpath_buf);
             let realpath = realpath_bytes(expanded).map_err(CheckArgError::RealPath)?;

@@ -269,7 +269,7 @@ pub trait Surface: Sized {
     //
     // PORT NOTE: `pub fn defaultTermioEnv(self: *const Surface)
     // !std.process.EnvMap` — embedded.zig:953. `std.process.EnvMap` maps to
-    // `HashMap<String, String>` (== `rustty_termio::command::EnvMap` == what
+    // `rustty_global::EnvMap` (== `rustty_termio::command::EnvMap` == what
     // rustty-os `getEnvMap` returns — the established EnvMap shape).
-    fn default_termio_env(&self) -> Result<std::collections::HashMap<String, String>, ApprtError>;
+    fn default_termio_env(&self) -> Result<rustty_global::EnvMap, ApprtError>;
 }

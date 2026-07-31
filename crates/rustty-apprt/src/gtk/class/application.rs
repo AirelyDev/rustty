@@ -1947,7 +1947,7 @@ fn set_gtk_env(config: &CoreConfig) {
         let value = parts.join(",");
         eprintln!("warn(gtk): setting GDK_DEBUG={value}");
         if let Ok(v) = CString::new(value) {
-            rustty_os::env::setenv(c"GDK_DEBUG", &v);
+            env_setenv(c"GDK_DEBUG", &v);
         }
     }
 
@@ -1966,7 +1966,7 @@ fn set_gtk_env(config: &CoreConfig) {
         let value = parts.join(",");
         eprintln!("warn(gtk): setting GDK_DISABLE={value}");
         if let Ok(v) = CString::new(value) {
-            rustty_os::env::setenv(c"GDK_DISABLE", &v);
+            env_setenv(c"GDK_DISABLE", &v);
         }
     }
 }
@@ -2201,17 +2201,10 @@ impl Application {
         // Capture the launch-time LANG, then override it from `config.language`
         // (`application.zig:274-284`). The capture happens BEFORE the override.
         let saved_language: Option<CString> = {
-            let old_language = match rustty_os::env::getenv("LANG") {
-                Ok(Some(result)) => {
-                    let dup = CString::new(result.value.clone()).ok();
-                    result.deinit();
-                    dup
-                }
-                _ => None,
-            };
+            let old_language = env_getenv(c"LANG").and_then(|v| CString::new(v).ok());
             if let Some(language) = &config.language {
                 if let Ok(lang) = CString::new(language.clone()) {
-                    rustty_os::env::setenv(c"LANG", &lang);
+                    env_setenv(c"LANG", &lang);
                 }
             }
             old_language
@@ -4412,9 +4405,7 @@ mod tests {
         fn get_cursor_pos(&self) -> Result<apprt::CursorPos, apprt::ApprtError> {
             unimplemented!("test double: not exercised")
         }
-        fn default_termio_env(
-            &self,
-        ) -> Result<std::collections::HashMap<String, String>, apprt::ApprtError> {
+        fn default_termio_env(&self) -> Result<rustty_global::EnvMap, apprt::ApprtError> {
             unimplemented!("test double: not exercised")
         }
     }
@@ -5005,4 +4996,60 @@ mod tests {
             String::from_utf8_lossy(&logged)
         );
     }
+}
+
+// PORT NOTE (P3-W7 T4): `src/os/env.zig` was DELETED upstream (`e8525c0fd`) and
+// with it `internal_os.setenv`/`getenv`. The GDK/LANG mutations below are
+// GENUINE process-environment mutations with no replacement in `os/`, so they
+// follow upstream's own `locale.zig` precedent: file-local `extern "c"`
+// declarations. Every mutation is followed by `rustty_global::sync_environ()`,
+// which is what upstream's `global.init` calls after `ensureLocale()` to
+// re-capture the block.
+//
+// These run BEFORE `gtk_init` and before any surface exists, i.e. before any
+// other thread can be reading the environment — which is the only reason a
+// process-wide `setenv` is defensible here at all (see
+// `.port/tools/gates/check_no_test_setenv.sh` for why it is banned in tests).
+mod env_c {
+    use std::ffi::{c_char, c_int};
+
+    extern "C" {
+        pub fn getenv(name: *const c_char) -> *mut c_char;
+        #[cfg(not(windows))]
+        pub fn setenv(name: *const c_char, value: *const c_char, overwrite: c_int) -> c_int;
+        #[cfg(windows)]
+        pub fn _putenv_s(varname: *const c_char, value_string: *const c_char) -> c_int;
+    }
+}
+
+/// `posix.getenv(key)` — the raw bytes, or `None` when unset.
+fn env_getenv(key: &std::ffi::CStr) -> Option<Vec<u8>> {
+    // SAFETY: `key` is NUL-terminated; the returned pointer, when non-null,
+    // points at a NUL-terminated string owned by the C runtime that stays valid
+    // until the next environment mutation, and we copy it immediately.
+    unsafe {
+        let p = env_c::getenv(key.as_ptr());
+        if p.is_null() {
+            return None;
+        }
+        Some(std::ffi::CStr::from_ptr(p).to_bytes().to_vec())
+    }
+}
+
+/// `setenv(key, value, 1)` followed by `global.syncEnviron()`.
+fn env_setenv(key: &std::ffi::CStr, value: &std::ffi::CStr) -> std::ffi::c_int {
+    // SAFETY: both pointers are NUL-terminated C strings.
+    let rc = unsafe {
+        #[cfg(windows)]
+        {
+            env_c::_putenv_s(key.as_ptr(), value.as_ptr())
+        }
+        #[cfg(not(windows))]
+        {
+            env_c::setenv(key.as_ptr(), value.as_ptr(), 1)
+        }
+    };
+    // We need to re-sync the environment after this completes.
+    rustty_global::sync_environ();
+    rc
 }

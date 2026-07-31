@@ -139,7 +139,7 @@ impl Window {
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     pub fn add_subprocess_env(
         &mut self,
-        _env: &mut std::collections::HashMap<String, String>,
+        _env: &mut rustty_global::EnvMap,
     ) -> Result<(), WinprotoError> {
         Ok(())
     }

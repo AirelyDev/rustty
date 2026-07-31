@@ -75,10 +75,13 @@ pub fn default_xdg_path() -> Result<String, FileLoadError> {
             rustty_identity::CONFIG_DIR,
             rustty_identity::CONFIG_FILE
         );
-        Ok(rustty_os::xdg::config(rustty_os::xdg::Options {
-            subdir: Some(&subdir),
-            ..Default::default()
-        })?)
+        Ok(rustty_os::xdg::config(
+            &rustty_global::environ_map(),
+            rustty_os::xdg::Options {
+                subdir: Some(&subdir),
+                ..Default::default()
+            },
+        )?)
     }
 }
 
@@ -101,10 +104,13 @@ pub fn legacy_default_xdg_path() -> Result<String, FileLoadError> {
     #[cfg(not(target_family = "wasm"))]
     {
         let subdir = format!("{}/config", rustty_identity::CONFIG_DIR);
-        Ok(rustty_os::xdg::config(rustty_os::xdg::Options {
-            subdir: Some(&subdir),
-            ..Default::default()
-        })?)
+        Ok(rustty_os::xdg::config(
+            &rustty_global::environ_map(),
+            rustty_os::xdg::Options {
+                subdir: Some(&subdir),
+                ..Default::default()
+            },
+        )?)
     }
 }
 

@@ -44,6 +44,7 @@
 //! * **(12) floating-ref sink** — `glib::Object::builder().build()` sinks the
 //!   floating ref exactly as `gobject.ext.newInstance` does.
 
+use rustty_global::EnvMapExt as _;
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -2343,35 +2344,37 @@ impl Surface {
     /// winproto `addSubprocessEnv` hook and the quick-terminal env var
     /// (`:1629-1638`) ARE ported below.
     #[must_use]
-    pub fn default_termio_env(&self) -> std::collections::HashMap<String, String> {
+    pub fn default_termio_env(&self) -> rustty_global::EnvMap {
         let app = Application::default();
-        let mut env = rustty_os::env::getEnvMap();
+        // PORT NOTE (P3-W7 T4): `internal_os.getEnvMap(alloc)` -> `global.environMap()`
+        // (`src/os/env.zig` was DELETED by `e8525c0fd`).
+        let mut env = rustty_global::environ_map();
 
         // Language override (`:1598-1602`).
         match app.saved_language() {
             Some(language) => {
-                env.insert("LANG".to_string(), language);
+                env.put(b"LANG", language.as_bytes());
             }
             None => {
-                env.remove("LANG");
+                env.removev(b"LANG");
             }
         }
 
         // Don't leak GTK debug / desktop-activation vars to children
         // (`:1604-1617`).
         for key in [
-            "GDK_DEBUG",
-            "GDK_DISABLE",
-            "GSK_RENDERER",
-            "GIO_LAUNCHED_DESKTOP_FILE",
-            "GIO_LAUNCHED_DESKTOP_FILE_PID",
-            "DBUS_STARTER_ADDRESS",
-            "DBUS_STARTER_BUS_TYPE",
-            "INVOCATION_ID",
-            "JOURNAL_STREAM",
-            "NOTIFY_SOCKET",
+            b"GDK_DEBUG".as_slice(),
+            b"GDK_DISABLE",
+            b"GSK_RENDERER",
+            b"GIO_LAUNCHED_DESKTOP_FILE",
+            b"GIO_LAUNCHED_DESKTOP_FILE_PID",
+            b"DBUS_STARTER_ADDRESS",
+            b"DBUS_STARTER_BUS_TYPE",
+            b"INVOCATION_ID",
+            b"JOURNAL_STREAM",
+            b"NOTIFY_SOCKET",
         ] {
-            env.remove(key);
+            env.removev(key);
         }
 
         // `if (ext.getAncestor(Window, self.as(gtk.Widget))) |window| { try
@@ -2388,9 +2391,9 @@ impl Surface {
 
             if window.is_quick_terminal() {
                 // R2: product-namespaced, unlike `WINDOWID` above.
-                env.insert(
-                    format!("{}_QUICK_TERMINAL", rustty_identity::ENV_PREFIX),
-                    "1".to_string(),
+                env.put(
+                    format!("{}_QUICK_TERMINAL", rustty_identity::ENV_PREFIX).as_bytes(),
+                    b"1",
                 );
             }
         }

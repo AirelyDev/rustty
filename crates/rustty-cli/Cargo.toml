@@ -33,6 +33,10 @@ rustty-font = { workspace = true }
 rustty-font-shaper = { workspace = true }
 rustty-input = { workspace = true }
 rustty-os = { workspace = true }
+# P3-W7 T2: the byte-typed environment accessors (`global.environ()`), which is
+# where `internal_os.getenv`'s replacement lives upstream. rustty-global is the
+# LEAF state-holder (break #1), so this is a downward edge.
+rustty-global = { workspace = true }
 rustty-terminfo = { workspace = true }
 rustty-args = { workspace = true }
 rustty-apprt = { workspace = true }

@@ -25,7 +25,6 @@
 //! .surface = self }`) and never rewritten.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 
 use glib::prelude::*;
@@ -257,7 +256,7 @@ impl ApprtSurface for Surface {
         self.gobj().map(|s| s.get_cursor_pos()).ok_or(ApprtError)
     }
 
-    fn default_termio_env(&self) -> Result<HashMap<String, String>, ApprtError> {
+    fn default_termio_env(&self) -> Result<rustty_global::EnvMap, ApprtError> {
         // PORTS: `Surface.zig:97-99`.
         self.gobj()
             .map(|s| s.default_termio_env())

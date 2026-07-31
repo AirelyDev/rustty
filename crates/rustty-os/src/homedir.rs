@@ -21,22 +21,31 @@ pub enum Error {
 
 /// Determine the home directory for the currently executing user. This
 /// is generally an expensive process so the value should be cached.
+//
+// PORT NOTE (P3-W7 T3 / area-E `E15`): upstream gained an explicit
+// `environ_map: *const std.process.Environ.Map` first parameter so `HOME` (and
+// `HOMEDRIVE`/`HOMEPATH` on Windows) is read from a caller-supplied map rather
+// than the process environment. See `desktop.rs` for why that matters more in
+// Rust than in Zig.
 #[inline]
-pub fn home(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
+pub fn home<'a>(
+    environ_map: &rustty_global::EnvMap,
+    buf: &'a mut [u8],
+) -> Result<Option<&'a [u8]>, Error> {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
     {
-        homeUnix(buf)
+        homeUnix(environ_map, buf)
     }
 
     #[cfg(windows)]
     {
-        homeWindows(buf)
+        homeWindows(environ_map, buf)
     }
 
     // iOS doesn't have a user-writable home directory
     #[cfg(target_os = "ios")]
     {
-        let _ = buf;
+        let _ = (environ_map, buf);
         Ok(None)
     }
 
@@ -59,13 +68,16 @@ pub fn home(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
 // allocation path is `#[cfg]`-excluded, which clippy flags. The explicit
 // `return` is kept to mirror the reference control flow verbatim.
 #[allow(clippy::needless_return)]
-fn homeUnix(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
+fn homeUnix<'a>(
+    environ_map: &rustty_global::EnvMap,
+    buf: &'a mut [u8],
+) -> Result<Option<&'a [u8]>, Error> {
     // First: if we have a HOME env var, then we use that.
-    if let Some(result) = posix_getenv("HOME") {
+    if let Some(result) = environ_map.get(&b"HOME"[..]) {
         if buf.len() < result.len() {
             return Err(Error::BufferTooSmall);
         }
-        buf[0..result.len()].copy_from_slice(&result);
+        buf[0..result.len()].copy_from_slice(result);
         let n = result.len();
         return Ok(Some(&buf[0..n]));
     }
@@ -133,7 +145,10 @@ fn homeUnix(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
 
 #[cfg(windows)]
 #[allow(non_snake_case)]
-fn homeWindows(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
+fn homeWindows<'a>(
+    environ_map: &rustty_global::EnvMap,
+    buf: &'a mut [u8],
+) -> Result<Option<&'a [u8]>, Error> {
     // PORT NOTE: the reference uses a `std.heap.FixedBufferAllocator.init(buf)` and
     // allocates `HOMEDRIVE` (then `HOMEPATH`) into it via
     // `std.process.getEnvVarOwned`, so the env var bytes are written *in place*
@@ -147,7 +162,7 @@ fn homeWindows(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
     let buf_ptr = buf.as_ptr();
 
     let drive_len = {
-        let drive = match fixed_buffer_env(buf, "HOMEDRIVE") {
+        let drive = match fixed_buffer_env(environ_map, buf, b"HOMEDRIVE") {
             Ok(Some(v)) => v,
             Ok(None) => return Ok(None),
             Err(_) => return Err(Error::BufferTooSmall),
@@ -161,7 +176,7 @@ fn homeWindows(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
 
     let path_len = {
         let path_buf_ptr = buf[drive_len..].as_ptr();
-        let homepath = match fixed_buffer_env(&mut buf[drive_len..], "HOMEPATH") {
+        let homepath = match fixed_buffer_env(environ_map, &mut buf[drive_len..], b"HOMEPATH") {
             Ok(Some(v)) => v,
             Ok(None) => return Ok(None),
             Err(_) => return Err(Error::BufferTooSmall),
@@ -185,12 +200,15 @@ fn homeWindows(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
 // WTF-16 and `var_os` always yields an `OsString`, so the invalid-WTF8 case maps
 // to a successful read here.
 #[cfg(windows)]
-fn fixed_buffer_env<'a>(dst: &'a mut [u8], key: &str) -> Result<Option<&'a [u8]>, ()> {
-    let value = match std::env::var(key) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
+fn fixed_buffer_env<'a>(
+    environ_map: &rustty_global::EnvMap,
+    dst: &'a mut [u8],
+    key: &[u8],
+) -> Result<Option<&'a [u8]>, ()> {
+    let bytes: &[u8] = match environ_map.get(key) {
+        Some(v) => v,
+        None => return Ok(None),
     };
-    let bytes = value.as_bytes();
     if dst.len() < bytes.len() {
         return Err(());
     }
@@ -225,23 +243,27 @@ pub enum ExpandError {
 /// Errors if `home` fails or if the size of the expanded path is larger
 /// than `buf.len`.
 #[allow(non_snake_case)]
-pub fn expandHome<'a>(path: &'a [u8], buf: &'a mut [u8]) -> Result<&'a [u8], ExpandError> {
+pub fn expandHome<'a>(
+    environ_map: &rustty_global::EnvMap,
+    path: &'a [u8],
+    buf: &'a mut [u8],
+) -> Result<&'a [u8], ExpandError> {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
     {
-        expandHomeUnix(path, buf)
+        expandHomeUnix(environ_map, path, buf)
     }
 
     // `~/` is not an idiom generally used on Windows
     #[cfg(windows)]
     {
-        let _ = buf;
+        let _ = (environ_map, buf);
         Ok(path)
     }
 
     // iOS doesn't have a user-writable home directory
     #[cfg(target_os = "ios")]
     {
-        let _ = buf;
+        let _ = (environ_map, buf);
         Ok(path)
     }
 
@@ -259,7 +281,11 @@ pub fn expandHome<'a>(path: &'a [u8], buf: &'a mut [u8]) -> Result<&'a [u8], Exp
 
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
 #[allow(non_snake_case)]
-fn expandHomeUnix<'a>(path: &'a [u8], buf: &'a mut [u8]) -> Result<&'a [u8], ExpandError> {
+fn expandHomeUnix<'a>(
+    environ_map: &rustty_global::EnvMap,
+    path: &'a [u8],
+    buf: &'a mut [u8],
+) -> Result<&'a [u8], ExpandError> {
     if !path.starts_with(b"~/") {
         return Ok(path);
     }
@@ -267,7 +293,7 @@ fn expandHomeUnix<'a>(path: &'a [u8], buf: &'a mut [u8]) -> Result<&'a [u8], Exp
     // orelse return error.HomeDetectionFailed else |_| return
     // error.HomeDetectionFailed;`. `home` writes into `buf`, so we compute the
     // home length first, then operate on `buf` directly.
-    let home_dir_len = match home(buf) {
+    let home_dir_len = match home(environ_map, buf) {
         Ok(Some(home_)) => home_.len(),
         Ok(None) => return Err(ExpandError::HomeDetectionFailed),
         Err(_) => return Err(ExpandError::HomeDetectionFailed),
@@ -287,14 +313,8 @@ fn expandHomeUnix<'a>(path: &'a [u8], buf: &'a mut [u8]) -> Result<&'a [u8], Exp
     Ok(&buf[0..expanded_len])
 }
 
-// `posix.getenv`: returns the value bytes (no allocation) or `None`.
-#[cfg(not(windows))]
-fn posix_getenv(key: &str) -> Option<Vec<u8>> {
-    std::env::var_os(key).map(|v| {
-        use std::os::unix::ffi::OsStrExt;
-        v.as_os_str().as_bytes().to_vec()
-    })
-}
+// PORT NOTE (P3-W7 T3): the `posix_getenv` shim is GONE — `HOME` is read from
+// the caller-supplied `EnvMap` now, matching upstream after `e8525c0fd`.
 
 #[cfg(test)]
 mod tests {
@@ -308,46 +328,58 @@ mod tests {
             return; // error.SkipZigTest
         }
 
-        let _env = crate::env_test_lock();
+        // PORT NOTE (P3-W7 T3): upstream's test now builds the map from
+        // `testing.environ`; rustty's equivalent is the captured process
+        // environment, and the `crate::env_test_lock()` serialization is gone
+        // because no test mutates the process environment any more.
+        let environ_map = rustty_global::environ_map();
         let mut buf = [0u8; libc::PATH_MAX as usize];
-        let home_dir = expandHomeUnix(b"~/", &mut buf).unwrap().to_vec();
+        let home_dir = expandHomeUnix(&environ_map, b"~/", &mut buf)
+            .unwrap()
+            .to_vec();
         // Joining the home directory `~` with the path `/`
         // the result should end with a separator here. (e.g. `/home/user/`)
         assert!(home_dir[home_dir.len() - 1] == SEP);
 
-        let downloads = expandHomeUnix(b"~/Downloads/shader.glsl", &mut buf)
+        let downloads = expandHomeUnix(&environ_map, b"~/Downloads/shader.glsl", &mut buf)
             .unwrap()
             .to_vec();
         let mut expected_downloads = home_dir.clone();
         expected_downloads.extend_from_slice(b"Downloads/shader.glsl");
         assert_eq!(expected_downloads, downloads);
 
-        assert_eq!(b"~".as_slice(), expandHomeUnix(b"~", &mut buf).unwrap());
+        assert_eq!(
+            b"~".as_slice(),
+            expandHomeUnix(&environ_map, b"~", &mut buf).unwrap()
+        );
         assert_eq!(
             b"~abc/".as_slice(),
-            expandHomeUnix(b"~abc/", &mut buf).unwrap()
+            expandHomeUnix(&environ_map, b"~abc/", &mut buf).unwrap()
         );
         assert_eq!(
             b"/home/user".as_slice(),
-            expandHomeUnix(b"/home/user", &mut buf).unwrap()
+            expandHomeUnix(&environ_map, b"/home/user", &mut buf).unwrap()
         );
-        assert_eq!(b"".as_slice(), expandHomeUnix(b"", &mut buf).unwrap());
+        assert_eq!(
+            b"".as_slice(),
+            expandHomeUnix(&environ_map, b"", &mut buf).unwrap()
+        );
 
         // Expect an error if the buffer is large enough to hold the home directory,
         // but not the expanded path
         let mut small_buf = vec![0u8; home_dir.len()];
         assert_eq!(
             Err(ExpandError::BufferTooSmall),
-            expandHomeUnix(b"~/Downloads", &mut small_buf[..])
+            expandHomeUnix(&environ_map, b"~/Downloads", &mut small_buf[..])
         );
     }
 
     #[test]
     #[cfg_attr(miri, ignore)] // env/passwd/objc home lookup hits real OS state
     fn home_returns_value() {
-        let _env = crate::env_test_lock();
+        let environ_map = rustty_global::environ_map();
         let mut buf = [0u8; 1024];
-        let result = home(&mut buf).unwrap();
+        let result = home(&environ_map, &mut buf).unwrap();
         assert!(result.is_some());
         assert!(!result.unwrap().is_empty());
     }

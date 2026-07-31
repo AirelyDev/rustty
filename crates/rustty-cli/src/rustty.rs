@@ -40,7 +40,7 @@ pub enum Error {
     /// A CLI argument failed to parse.
     Parse(rustty_args::args::ParseError),
     /// The process args iterator failed to initialize.
-    ArgsInit(rustty_os::args::InitError),
+    ArgsInit(rustty_args::args::InitError),
     /// A `Config.load`/`loadFile`/`finalize` failure propagated from an action
     /// (`show_config`/`validate_config`/`explain_config`). Reference: the
     /// `Config.load(alloc)` errors folded into each action `run`'s inferred `!u8`
@@ -95,8 +95,8 @@ impl From<rustty_args::args::ParseError> for Error {
     }
 }
 
-impl From<rustty_os::args::InitError> for Error {
-    fn from(e: rustty_os::args::InitError) -> Self {
+impl From<rustty_args::args::InitError> for Error {
+    fn from(e: rustty_args::args::InitError) -> Self {
         Error::ArgsInit(e)
     }
 }

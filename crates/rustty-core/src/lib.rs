@@ -218,9 +218,7 @@ mod type_core_prototype {
             unimplemented!("dummy backend: not driven by the prototype test")
         }
 
-        fn default_termio_env(
-            &self,
-        ) -> Result<std::collections::HashMap<String, String>, apprt::ApprtError> {
+        fn default_termio_env(&self) -> Result<rustty_global::EnvMap, apprt::ApprtError> {
             unimplemented!("dummy backend: not driven by the prototype test")
         }
     }

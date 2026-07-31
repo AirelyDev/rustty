@@ -56,26 +56,29 @@ pub fn detect_args<E: Action>() -> Result<Option<E>, DetectError> {
     // var iter = try std.process.argsWithAllocator(alloc);
     // defer iter.deinit();
     //
-    // PORT NOTE: `rustty_os::args::iterator()`'s `InitError` is uninhabited (the
-    // reference's `Allocator.Error` — allocation failure aborts in Rust rather
-    // than being recoverable), so init never fails; `match e {}` discharges it.
-    let mut iter = OsArgs(rustty_os::args::iterator().unwrap_or_else(|e| match e {}));
+    // PORT NOTE (P3-W7 T4): the reference's `Allocator.Error` init failure is
+    // not recoverable in Rust (allocation failure aborts), and upstream deleted
+    // `src/os/args.zig` entirely, so there is no fallible init left to discharge
+    // — `std::env::args_os()` is infallible.
+    let mut iter = OsArgs(std::env::args_os());
     // return try detectIter(E, &iter);
-    let result = detect_iter::<E, _>(&mut iter);
-    iter.0.deinit();
-    result
+    detect_iter::<E, _>(&mut iter)
 }
 
-/// Adapter: `rustty_os::args::ArgIterator` (yields `Option<String>`) viewed as an
-/// [`ArgsIter`] over byte-slices, mirroring the reference's `std.process
-/// .ArgIterator` yielding `?[]const u8`. Note the reference iterates ALL args
-/// (including argv0) — `detectArgs` does not skip argv0 — which never starts with
-/// `+` and never matches a special case, so it is harmless.
-struct OsArgs(rustty_os::args::ArgIterator);
+/// Adapter: the process argument iterator viewed as an [`ArgsIter`] over
+/// byte-slices, mirroring the reference's `std.process.ArgIterator` yielding
+/// `?[]const u8`. Note the reference iterates ALL args (including argv0) —
+/// `detectArgs` does not skip argv0 — which never starts with `+` and never
+/// matches a special case, so it is harmless.
+///
+/// PORT NOTE (P3-W7 T4): this used to wrap `rustty_os::args::ArgIterator`
+/// (deleted with `src/os/args.zig`), whose `Option<String>` yield corrupted a
+/// non-UTF-8 argv element. `OsStr::as_encoded_bytes` is lossless.
+struct OsArgs(std::env::ArgsOs);
 
 impl ArgsIter for OsArgs {
     fn next(&mut self) -> Option<Vec<u8>> {
-        self.0.next().map(String::into_bytes)
+        self.0.next().map(|s| s.as_encoded_bytes().to_vec())
     }
 }
 

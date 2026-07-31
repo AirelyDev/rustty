@@ -191,13 +191,29 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     //   Allocator doctrine: Rust's global allocator is process-wide; the
     //   GPA-vs-libc selection collapses (seam::Allocator = ()).
 
+    // Discover and save the temporary directory path.
+    //   `self.tmp_dir_path = try allocTmpDir(self.alloc, self.environ);`
+    //
+    //   PORT NOTE (P3-W7 T1/T4, area-E `E16`/`E20`): upstream's `global.init`
+    //   imports `os/file.zig`'s `allocTmpDir` directly. `rustty-os` is ABOVE the
+    //   leaf `rustty-global` (R4), so the edge is inverted: the initializer —
+    //   which can see both — does the discovery and publishes it. This is what
+    //   makes `file::randomTmpPath` a cached lookup instead of a per-call
+    //   `allocTmpDir` + `freeTmpDir` pair.
+    rustty_global::set_tmp_dir_path(
+        rustty_os::file::allocTmpDir(&rustty_global::environ()).into_bytes(),
+    );
+
     // We first try to parse any action that we may be executing.
     //   (done by the caller; `action_detected` carries the result.)
     // If we have an action executing, we disable logging by default ...
     // if ((try internal_os.getenv(self.alloc, "GHOSTTY_LOG"))) |v| { ... }
     //   R2: RUSTTY_LOG. The env error is Infallible off-Windows (discharged).
-    let env = rustty_os::env::getenv("RUSTTY_LOG").unwrap_or_else(|e| match e {});
-    let logging = compute_logging(action_detected, env.as_ref().map(|v| v.value.as_bytes()));
+    //   P3-W7 T4: upstream moved this read INTO `global.init` and it now goes
+    //   through the captured environment block:
+    //     const v = self.environ.getAlloc(self.alloc, "GHOSTTY_LOG") catch ...
+    let env = rustty_global::environ().get_alloc(b"RUSTTY_LOG");
+    let logging = compute_logging(action_detected, env.as_deref());
 
     // Setup our signal handlers before logging
     init_signals();

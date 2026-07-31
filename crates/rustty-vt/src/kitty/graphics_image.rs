@@ -42,24 +42,47 @@ use rustty_util::quirks::inlineAssert as assert;
 // PORT NOTE: temp-file helpers. The reference's `temp_dir` is a small namespace
 // over `os/TempDir.zig` + `os/file.zig`; here they come from `rustty_os`.
 mod temp_dir {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub use rustty_os::file::{allocTmpDir, freeTmpDir};
     #[cfg(test)]
     pub use rustty_os::tempdir::TempDir;
 
-    // PORT NOTE (wasm32): `rustty_os::file` is POSIX-only (rlimit/arc4random) and
-    // gated out on wasm. `allocTmpDir`'s non-windows body is pure-std (reads
-    // `$TMPDIR`/`$TMP`, else `/tmp`), so it is reproduced here for wasm —
-    // byte-faithful to `os/file.zig`'s POSIX `allocTmpDir`.
-    #[cfg(target_arch = "wasm32")]
+    // PORT NOTE (P3-W7 T3, area-E `E15`/`E12`): `allocTmpDir` gained an
+    // explicit captured-environment parameter upstream, and the value it
+    // discovers now lives in `global.tmpDirPath()`. **This crate is the
+    // libghostty-vt artifact, which upstream FORBIDS from importing
+    // `global.zig`** (`@compileError("global state cannot be used in
+    // libghostty-vt")`, enforced on this side as a dependency-edge assertion in
+    // `.port/tools/gates/check_acyclic.sh` — see `P3-W7 T1`). So this crate
+    // cannot reach either the accessor or `rustty-os`'s new signature.
+    //
+    // Upstream's own resolution is `E12`: `isPathInTempDir` takes the temp dir
+    // as a PARAMETER, threaded in from
+    // `kitty_image_loading_limits = .allWithTempDir(global.tmpDirPath())` set by
+    // `termio`. That is an area A–D change (`Limits.temporary_directory`) and is
+    // NOT part of P3-W7 — it is recorded as residual. Until it lands, the
+    // self-contained discovery below (byte-faithful to `os/file.zig`'s POSIX
+    // `allocTmpDir`, and the same body this module already used on wasm32)
+    // keeps behaviour identical to before this task WITHOUT taking a forbidden
+    // dependency edge.
     #[allow(non_snake_case)]
     pub fn allocTmpDir() -> String {
-        match std::env::var_os("TMPDIR").or_else(|| std::env::var_os("TMP")) {
-            Some(v) => v.to_string_lossy().trim_end_matches('/').to_string(),
-            None => "/tmp".to_string(),
+        #[cfg(windows)]
+        {
+            std::env::temp_dir()
+                .to_string_lossy()
+                .trim_end_matches('\\')
+                .to_string()
+        }
+        #[cfg(not(windows))]
+        {
+            match std::env::var_os("TMPDIR").or_else(|| std::env::var_os("TMP")) {
+                Some(v) => v.to_string_lossy().trim_end_matches('/').to_string(),
+                None => "/tmp".to_string(),
+            }
         }
     }
-    #[cfg(target_arch = "wasm32")]
+
+    /// PORT NOTE: `freeTmpDir` — a no-op on POSIX; in Rust the returned `String`
+    /// owns its allocation and is freed by Drop on every platform.
     #[allow(non_snake_case)]
     pub fn freeTmpDir(_dir: &str) {}
 }

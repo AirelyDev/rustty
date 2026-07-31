@@ -29,6 +29,27 @@
 //! ported from the reference verbatim. The reference `global.zig` has 0 `test {}`
 //! blocks (Phase-0 inventory contract), so this crate has no ported tests.
 
+// PARITY (P3-W7 T1, area-E `E16`): upstream added a comptime import guard at
+// the top of `global.zig`:
+//
+//   // This file should only be imported for certain platforms.
+//   comptime {
+//       switch (@import("terminal_options").artifact) {
+//           .ghostty => {},
+//           // This file is not allowed to be included in libghostty-vt
+//           .lib => @compileError("global state cannot be used in libghostty-vt"),
+//       }
+//   }
+//
+// Zig selects the `lib` (libghostty-vt) artifact with a build option on ONE
+// module graph, so the guard has to be a `@compileError`. rustty's libghostty-vt
+// artifact is a separate CRATE (`rustty-vt` / `rustty-vt-c`), so the equivalent
+// invariant is a DEPENDENCY-EDGE assertion, not a comptime block: neither
+// `rustty-vt` nor `rustty-vt-c` may declare a `rustty-global` dependency in any
+// dependency table. That assertion is enforced by
+// `.port/tools/gates/check_acyclic.sh` (gate G7) and proven RED by the
+// negative control recorded in `P3-W7 T1 Step 4`. (R4.)
+//
 // PARITY (BREAK #1, R4): the reference module imports are listed here for fidelity.
 // As the LEAF state-holder, `rustty-global` does NOT pull these crates in; the
 // upward wirings move to `rustty-core`. The reference import lines were:
@@ -46,6 +67,18 @@
 //   const apprt = @import("apprt.zig");
 // `build_config` is available (it is a leaf below us, R4 break #3) and is used.
 use rustty_build_config as build_config;
+
+// PORT NOTE (P3-W7 T1, area-E `E16`): upstream's `global.zig` also imports
+//   const allocTmpDir = @import("os/file.zig").allocTmpDir;
+//   const freeTmpDir = @import("os/file.zig").freeTmpDir;
+// `rustty-os` sits ABOVE this leaf crate (R4), so that edge is inverted: the
+// temp-dir discovery is published INTO this crate by the initializer. See
+// `environ::set_tmp_dir_path`.
+pub mod environ;
+pub use environ::{
+    environ, environ_map, set_environ, set_tmp_dir_path, sync_environ, tmp_dir_path, EnvMap,
+    EnvMapExt, Environ, EnvironRef,
+};
 
 /// We export the xev backend we want to use so that the rest of
 /// Ghostty can import this once and have access to the proper
@@ -92,6 +125,16 @@ pub struct GlobalState<Action = (), ResourcesDir = ()> {
     /// PARITY: reference `action: ?cli.ghostty.Action,` — DEFERRED SEAM, the
     /// concrete `cli.ghostty.Action` type is wired in `rustty-core`.
     pub action: Option<Action>,
+    /// PARITY: reference `environ: std.process.Environ,` (added by `e8525c0fd`)
+    /// — the environment block captured once at init and threaded explicitly
+    /// from then on. The free accessors `environ()`/`environ_map()` read the
+    /// process-global copy this field publishes; see `environ`'s module docs
+    /// for why the process-global cannot be a `GlobalState` field lookup.
+    pub environ: environ::Environ,
+    /// PARITY: reference `tmp_dir_path: ?[]const u8,` (added by `e8525c0fd`) —
+    /// the temp directory discovered once at init so `randomTmpPath` need not
+    /// re-derive (and re-allocate) it per call.
+    pub tmp_dir_path: Option<Vec<u8>>,
     pub logging: Logging,
     pub rlimits: ResourceLimits,
 
@@ -248,6 +291,43 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     // side effects (the `self.* = .{ ... }` step). `rustty-core` calls this and
     // then runs the deferred-seam side effects above.
     pub fn new(alloc: seam::Allocator, resources_dir: ResourcesDir) -> Self {
+        Self::new_with_environ(alloc, resources_dir, environ::Environ::from_process())
+    }
+
+    /// PARITY: the `.environ = switch (opts) { .main, .tool => |m| m.environ,
+    /// .c => |c| c.environ }` arm of upstream's `init`. The `.c` arm takes the
+    /// block from the C caller, which is why this is a separate entry point;
+    /// `new` is the `.main` arm.
+    ///
+    /// PORT NOTE (E16, `048619a6b`): the `InitOpts::tool` arm is **N/A** for
+    /// rustty and is deliberately NOT ported — do not add it later. Upstream
+    /// needed it because `main_bench.zig`/`main_gen.zig` funnel through the
+    /// shared `global.init`, so app-action detection ran on tool argv and
+    /// `+terminal-stream` failed with `InvalidAction`.
+    /// `crates/rustty-bench/src/main_bench.rs` never initializes global state
+    /// (`grep -n "STATE\|init_with_action\|global"` -> 0 hits) and
+    /// `crates/rustty-bench/src/cli.rs` `Action::from_name` owns its own action
+    /// namespace, so the failure upstream fixed cannot occur here. Same
+    /// reasoning for `main_gen.zig` -> `rustty-gen`.
+    ///
+    /// PORT NOTE (E16): the `.c` arm's
+    /// `return error.UnsupportedOSForCApi` on Windows is carried by
+    /// `rustty-apprt-c`'s `rustty_init`, which owns the argc/argv seam.
+    pub fn new_with_environ(
+        alloc: seam::Allocator,
+        resources_dir: ResourcesDir,
+        env: environ::Environ,
+    ) -> Self {
+        // Discover and save the temporary directory path.
+        //
+        // PORT NOTE: upstream does
+        //   self.tmp_dir_path = try allocTmpDir(self.alloc, self.environ);
+        // here. `allocTmpDir` lives in `rustty-os`, ABOVE this leaf (R4), so
+        // the initializer publishes it with `environ::set_tmp_dir_path` and
+        // `environ::tmp_dir_path()` falls back to the same rule otherwise.
+        environ::set_environ(env.clone());
+        let tmp_dir_path = environ::tmp_dir_path().to_vec();
+
         // Initialize ourself to nothing so we don't have any extra state.
         // IMPORTANT: this MUST be initialized before any log output because
         // the log function uses the global state.
@@ -255,6 +335,8 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
             gpa: None,
             alloc,
             action: None,
+            environ: env,
+            tmp_dir_path: Some(tmp_dir_path),
             logging: Logging::default(),
             rlimits: ResourceLimits::default(),
             resources_dir,

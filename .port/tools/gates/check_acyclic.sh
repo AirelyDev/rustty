@@ -170,7 +170,58 @@ PYEOF
   fi
 fi
 
+# --- binding directed-edge assertion: libghostty-vt MUST NOT depend on rustty-global ---
+# Ports the comptime guard upstream added to `src/global.zig` (`e8525c0fd`):
+#
+#   comptime { switch (@import("terminal_options").artifact) {
+#       .ghostty => {},
+#       .lib => @compileError("global state cannot be used in libghostty-vt"),
+#   } }
+#
+# Zig builds both artifacts from ONE module graph and selects with a build
+# option, so the guard has to be a @compileError. rustty's libghostty-vt is a
+# separate CRATE PAIR (`rustty-vt` + its C API `rustty-vt-c`), so the same
+# invariant is a dependency-edge assertion (R4). Checked in EVERY dependency
+# table (prod, dev, build) so a dev-dependency cannot smuggle the edge in.
 echo ""
+echo "--- lib-vt assertion: rustty-vt / rustty-vt-c have NO rustty-global edge (prod/dev/build) ---"
+VT_EDGE_RC=0
+for _crate in rustty-vt rustty-vt-c; do
+  _toml="$RUSTTY_ROOT/crates/$_crate/Cargo.toml"
+  if [ ! -f "$_toml" ]; then
+    echo "BLOCKED: $_toml not found" >&2
+    VT_EDGE_RC=2
+    continue
+  fi
+  if "$PY" - "$_toml" <<'PYEOF'
+import re, sys
+path = sys.argv[1]
+bad = []
+with open(path, encoding="utf-8") as f:
+    for n, line in enumerate(f, 1):
+        s = line.split("#", 1)[0]  # drop trailing/whole-line comments
+        if re.match(r'^\s*["\']?rustty[-_]global["\']?\s*=', s):
+            bad.append((n, line.rstrip("\n")))
+if bad:
+    for n, l in bad:
+        print(f"  FORBIDDEN lib-vt->global edge at line {n}: {l}", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0)
+PYEOF
+  then
+    echo "  GREEN: $_crate declares no rustty-global dependency"
+  else
+    echo "RED: $_crate declares a forbidden rustty-global dependency" >&2
+    echo "     (upstream: \"global state cannot be used in libghostty-vt\")" >&2
+    VT_EDGE_RC=1
+  fi
+done
+
+echo ""
+if [ "$VT_EDGE_RC" -ne 0 ]; then
+  echo "RED: libghostty-vt -> rustty-global edge (G7; global.zig lib-artifact guard)"
+  exit 1
+fi
 if [ "$RC" -eq 0 ] && [ "$EDGE_RC" -eq 0 ]; then
   echo "GREEN: rustty crate graph is acyclic (G7)"
   exit 0

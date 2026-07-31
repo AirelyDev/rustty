@@ -35,14 +35,34 @@
 // Zig's laziness: on wasm32 exactly the `os/wasm*` helper surface remains, which
 // is the whole point of a wasm build. Every other target compiles all modules
 // unchanged. See the workstream report (B2) for the full-workspace follow-up.
-pub mod args;
+// PORT NOTE (P3-W7 T4): `pub mod args;` is GONE — upstream DELETED
+// `src/os/args.zig` (-130) in `e8525c0fd`. Zig 0.16 hands `std.process.Args`
+// to `main()` inside `std.process.Init.Minimal` and the C API takes them from
+// the caller, so the macOS `NSProcessInfo` detour is no longer needed. On the
+// Rust side that detour never had a reason to exist (`std::env::args_os()` on
+// macOS reads the real process argv via `_NSGetArgv`, valid under
+// `NSApplicationMain`) AND it was lossy. The consumer seam moved to
+// `rustty_args::args::OsArgIterator`.
 pub mod autorelease;
 pub mod cf_release_thread;
 pub mod cgroup;
 pub mod dbus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
-pub mod env;
+// PORT NOTE (P3-W7 T4): `pub mod env;` is GONE — upstream DELETED
+// `src/os/env.zig` (-178) in `e8525c0fd`, and `src/os/main.zig` dropped all of
+// its re-exports (`GetEnvResult`, `getEnvMap`, `appendEnv`, `appendEnvAlways`,
+// `prependEnv`, `getenv`, `setenv`, `unsetenv`, plus `allocTmpDir`/`freeTmpDir`).
+// The replacements:
+//   getEnvMap                 -> `rustty_global::environ_map()`
+//   getenv / getenvNotEmpty   -> `rustty_global::environ().get_posix/get_alloc`
+//                                or a caller-supplied `EnvMap`
+//   appendEnv/appendEnvAlways -> `rustty-termio`'s `exec.rs` (file-private)
+//   prependEnv                -> `rustty-termio`'s `shell_integration.rs`
+//   setenv / unsetenv         -> file-local `extern "C"` decls in the two
+//                                modules that legitimately mutate the process
+//                                environment (`locale.rs`, GTK `application.rs`),
+//                                per upstream's own `locale.zig` precedent
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file;
 pub mod flatpak;
@@ -123,20 +143,19 @@ pub use crate::dbus::launchedByDbusActivation;
 pub use crate::desktop::desktopEnvironment;
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::desktop::launchedFromDesktop;
-pub use crate::env::appendEnv;
-pub use crate::env::appendEnvAlways;
-pub use crate::env::getEnvMap;
-pub use crate::env::getenv;
-pub use crate::env::prependEnv;
-pub use crate::env::setenv;
-pub use crate::env::unsetenv;
-pub use crate::env::GetEnvResult;
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::file::allocTmpDir;
+// PORT NOTE (P3-W7 T2 / area-E `E13`): the `appendEnv`/`appendEnvAlways`/
+// `prependEnv` re-exports are GONE — upstream `e8525c0fd` moved those
+// functions into `src/termio/Exec.zig` and
+// `src/termio/shell_integration.zig` on the way to deleting `src/os/env.zig`,
+// and `src/os/main.zig` dropped the corresponding `pub const` lines.
+// PORT NOTE (P3-W7 T4 / area-E `E20`): the `allocTmpDir`/`freeTmpDir`
+// re-exports are GONE — upstream `e8525c0fd` dropped them from `os/main.zig`
+// because `global.zig` became their only importer. `crate::file::allocTmpDir`
+// is still reachable by path for that one caller (`tempdir.rs` and the app
+// initializer, which publishes the result via
+// `rustty_global::set_tmp_dir_path`).
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::fixMaxFiles;
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::file::freeTmpDir;
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::randomTmpPath;
 #[cfg(not(target_arch = "wasm32"))]
@@ -172,28 +191,15 @@ pub use crate::resourcesdir::resourcesDir;
 pub use crate::resourcesdir::ResourcesDir;
 pub use crate::shell::ShellEscapeWriter;
 
-// PORT NOTE (test-only glue, R1 "no-loss, not no-addition"): the reference's Zig test
-// runner executes a file's `test {}` blocks SERIALLY, so tests that read or
-// mutate the process-global environment (`HOME`/`XDG_*`, via `setenv`/`unsetenv`/
-// `getenv`) never observe each other's mutations. Rust's `libtest` runner instead
-// runs tests in PARALLEL, which would race those process-global reads/writes
-// across the `desktop`/`xdg`/`homedir` env tests. This adds nothing-lost: it
-// changes no reference logic, comment, or assertion — it only restores the
-// reference's serial-execution invariant for the env-touching tests by having
-// each acquire one shared lock for the duration of its env access.
-#[cfg(test)]
-pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// PORT NOTE (test-only glue): acquire the shared env lock. Returns the guard; held
-/// for the rest of the calling test so env reads/writes are serialized exactly
-/// as the reference's serial test runner guarantees. The lock is poison-tolerant
-/// (a panicking test must not deadlock the rest of the suite).
-#[cfg(test)]
-pub(crate) fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+// PORT NOTE (P3-W7 T3 / area-E `E15`): a test-only `ENV_TEST_LOCK` used to live
+// here. It existed only because this crate's `desktop`/`xdg`/`homedir` tests
+// mutated the PROCESS environment with `setenv`/`unsetenv` — which Zig's serial
+// test runner tolerates and Rust's parallel `libtest` runner does not (`setenv`
+// is not thread-safe against a concurrent `getenv` in glibc or Apple libc; see
+// the recorded `parallel-cargo-test-exposes-c-init-races` lesson). Upstream
+// `e8525c0fd` + `f8e13f31e` rewrote those tests to build LOCAL environment maps
+// and deleted every `setenv`/`unsetenv` call, so the hazard is gone at the
+// source and the lock is deleted with it rather than kept as a workaround.
 
 #[cfg(test)]
 mod tests {

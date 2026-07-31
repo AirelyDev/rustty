@@ -160,10 +160,13 @@ impl Location {
                     None
                 }
                 #[cfg(not(target_family = "wasm"))]
-                match internal_os::xdg::config(internal_os::xdg::Options {
-                    subdir: Some(&subdir_str),
-                    ..Default::default()
-                }) {
+                match internal_os::xdg::config(
+                    &rustty_global::environ_map(),
+                    internal_os::xdg::Options {
+                        subdir: Some(&subdir_str),
+                        ..Default::default()
+                    },
+                ) {
                     Ok(v) => Some(v.into_bytes()),
                     // Any other error we treat as the XDG directory not
                     // existing. Windows in particularly can return a LOT
