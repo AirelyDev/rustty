@@ -6498,7 +6498,12 @@ mod tests {
     // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
     // `debug_assertions` the fail point never trips, so the test can only run in
     // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
+    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
+    // attribute is not enough — the test would not COMPILE in release, which is
+    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
+    // out entirely; it still runs and passes in debug.
+    #[cfg(debug_assertions)]
     fn terminal_set_string_tripwire_seam_arms_and_resets() {
         SET_STRING_TW.with(|tw| {
             tw.borrow_mut()
@@ -6520,7 +6525,12 @@ mod tests {
     // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
     // `debug_assertions` the fail point never trips, so the test can only run in
     // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
+    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
+    // attribute is not enough — the test would not COMPILE in release, which is
+    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
+    // out entirely; it still runs and passes in debug.
+    #[cfg(debug_assertions)]
     fn terminal_set_pwd_preserves_a_sentinel_on_allocation_failure() {
         let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
 
@@ -6577,7 +6587,12 @@ mod tests {
     // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
     // `debug_assertions` the fail point never trips, so the test can only run in
     // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
+    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
+    // attribute is not enough — the test would not COMPILE in release, which is
+    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
+    // out entirely; it still runs and passes in debug.
+    #[cfg(debug_assertions)]
     fn terminal_set_title_preserves_a_sentinel_on_allocation_failure() {
         let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
 
