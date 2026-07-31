@@ -14888,7 +14888,7 @@ mod tests {
     // test "Screen setAttribute splits page on OutOfSpace at max styles"
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — re-measured per test in single-worker isolation at a 6-minute bound with `-C debug-assertions=off`, so removing the integrity assertions does not rescue it; the cost is page-mapping/LZ4 volume, not assertion overhead. Covered natively + by ASan."
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'the 2026-07-31 adversarial re-audit'): too slow for either Miri lane, but NOT a hang. RUN TO COMPLETION under Miri with `-C debug-assertions=off`, single worker, no bound: `ok ... finished in 1656.89s` (27.6 min), 0 UB / 0 leaks. Removing the integrity assertions does not rescue it. CORRECTION to the WS19 T6 wording: the cost is NOT `page-mapping/LZ4 volume` -- this test never touches LZ4, and an instrumented run attributes 13.0s (0.8%) to the increase_capacity page-mapping phase and 1650.7s (99.6%) to filling the RefCountedSet style map with 53248 entries. Covered natively + by ASan."
     )]
     #[test]
     fn screen_set_attribute_splits_page_on_out_of_space_at_max_styles() {
