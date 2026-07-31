@@ -81,7 +81,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `91a63e528` | terminal: invalidate split source page refs | missing BL-1 | — |
 | `a804e3ac7` | terminal: invalidate partially erased page refs | missing BL-1 | — |
 | `f1a5fab45` | terminal: keep page serial floor conservative | missing BL-1 | — |
-| `8c523ed03` | terminal: vectorize APC payload scanning | missing BL-4 | stream.rs APC fast path |
+| `8c523ed03` | terminal: vectorize APC payload scanning | **PORTED** (WS10 T17, `f96957c`) | `Stream::consume_apc_string` vector `invalid` scan `stream.rs:1045`; guarded by `stream_apc_vector_invalid_branch_matches_scalar_path` `stream.rs:4406`. Row was stale — re-vetted `P3-W5`. |
 | `9b466e9c5` | terminal: fix count-limited page iteration | **PORTED** (P3-W1) | `pagelist/iter.rs` forward + reverse `Limit::Count` arms + 2 tests (T2) |
 | `73ac36fa5` | terminal/search: discard destroyed screen state | missing BL-1 | search/thread.rs + screen.rs |
 | `86e1f7b8b` | terminal/search: reject replaced result pages | missing BL-1 | — |
@@ -117,7 +117,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `5bc6588e4` | terminal/search: ignore empty search needles | **PORTED** (P3-W1) | empty-needle early returns in `SlidingWindow::next` and `ActiveSearch::update`; saturating `overlap_len` in `search/viewport.rs` (the oracle does NOT saturate `search/active.rs:132` — its early return covers it, so the WS7 Phase C M2 note over-specified by one site); the `sliding_window.rs` PORT NOTE claiming Zig returns null for an empty needle was the bug, not the code (REACHABILITY row 8) (T5) |
 | `a23d90c89` | search: reset cached results after resize (#13274) | n/a-merge | constituent below |
 | `627518447` | terminal/search: reset cached results after resize | **PORTED** (P3-W1) | `reset_if_dimensions_changed` extracted; called from `feed`, first in `reload_active` (early return), first in `select` + 2 tests (T5) |
-| `f6f79acce` | terminal: dispatch APC string bytes in bulk slices | missing BL-4 | stream/apc/kitty + bench/synthetic surface (12 files) |
+| `f6f79acce` | terminal: dispatch APC string bytes in bulk slices | **PORTED** (WS10 T17, `f96957c`; termio arm `P3-W7 T6`, `8da32f4`) | `Action::ApcPutSlice` + `apc_put_slice` `stream.rs:605`, `consume_apc_string:1045`, `apc::Handler::feed_slice`, `crates/rustty-bench/src/apc_parser.rs`. Row was stale — re-vetted `P3-W5`. |
 | `7e02af879` | scrollback page compression (#13264) | n/a-merge | constituents = BL-1 |
 | `4f53b846b` | renderer: move State declaration to top of file | n/a | pure Zig decl reordering, no semantic content; Rust module layout differs |
 | `9a4bd2120` | terminal: optimize LZ4 decoding + differential tests | missing BL-1 | compress/lz4 does not exist |
@@ -139,7 +139,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `f6fd4cb08` | terminal: generalize page memory reclamation | missing BL-1 | — |
 | `ebc3ffd22` | terminal: add compressed page representation | missing BL-1 | — |
 | `c62c15984` | terminal: add standalone LZ4 block codec | missing BL-1 | — |
-| `9c9cf3e82` | renderer: avoid allocating when no active links | missing BL-4 | `crates/rustty-renderer/src/link.rs` exists; perf change (82/14) |
+| `9c9cf3e82` | renderer: avoid allocating when no active links | **PORTED** (WS10 T9, `684ac51`) | `Link::active` `link.rs:92` + the pre-allocation early return; guarded by a counting `#[global_allocator]` zero-allocation assertion `link.rs:488`. Row was stale — re-vetted `P3-W5`. |
 | `60121a039` | Revert "termio: bound POSIX read-ahead on non-Darwin" | n/a | reverts `bed47168c`; net-zero pair |
 | `896aca499` | terminal: return free-listed page memory to the OS | ported (WS8 T12/T13) | pagelist pool decommit; Miri exception registered (MIRI_EXCEPTIONS.md Category 2); verified by `examples/rss_probe.rs` on macOS (9.0 MiB returned vs 0.0 control). Linux arm not yet run |
 | `c442eb4b3` | terminal: document the pool reuse zeroing invariant | **PORTED** (P3-W1) | `const _` size_of Row >= size_of usize next to `Row`, `assert!(cap.rows > 0)` in `init_buf`, layout/pool comments, stale doc fixes (T4) |
@@ -152,23 +152,23 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `20a1bfa5f` | fix: pass RGB color inputs by pointer | **PORTED** | rustty_color_rgb_get by-pointer ABI (WS5 T2) |
 | `bb0ac4c72` | termio: don't bridge pty reads while the parser is idle | **PORTED** | landed WITH `2f0e6659d` as one change (WS10 T20, `a788346`) — 110 lines that only exist on top of the ring they modify |
 | `bed47168c` | termio: bound POSIX read-ahead on non-Darwin | n/a | reverted upstream by `60121a039` |
-| `77190bd02` | terminal: handful of scroll region optimizations | missing BL-4 | screen.rs/terminal.rs scroll paths (496/38, has tests); WS7 Phase C divergence #11 — blocks porting `0bad91adb`'s 4th `invalidateNodeLayout` site (`Screen::cursor_scroll_region_up`), see DEFERRALS.md |
+| `77190bd02` | terminal: handful of scroll region optimizations | **PORTED** (`P3-W5 T3`) | `Screen::cursor_scroll_region_up` + `_slow` in `screen.rs`, `Terminal::index`/`scroll_up` routing; carries `0bad91adb`'s 4th `invalidateNodeLayout` site, closing WS7 Phase C divergence #11 and re-vet row P3-RV3. 10 oracle tests + a 168-case fast-vs-slow differential + `.port/phase-3/mirihar-scroll-region-up`. |
 | `cabbdee32` | Fix adjust-cursor-height regression (#13225) | n/a-merge | constituents `dac341cad`+`e8f3f6c43` — PORTED |
 | `446f80f4e` | terminal: render state update optimizations | **PORTED** | WS10 T19 (`56dba9c`): `page::Mask` + `begin_update`/`end_update` + `pending_styles` + chunked update in render.rs; `rustty_render_state_{begin,end}_update` in vt-c + `include/rustty/vt/render.h`; renderer two-phase; three `screen-clone` render modes. Measured lock-hold 2.88x-11.19x. The `Terminal.zig` hunk is a refactor of T16's `printSliceFill`, which does not exist in rustty yet — `Mask` is landed for it; adoption is T16's. |
-| `b5053153f` | terminal: log unsupported-input messages once per distinct value | missing BL-4 | stream.rs logging dedup (85/10) |
+| `b5053153f` | terminal: log unsupported-input messages once per distinct value | **PORTED** (WS10 T7, `6d69269`) | `log_unsupported_once` + the 16-slot atomic dedup table, 8 call sites converted (`stream.rs:1619`, `:2214`, `:2324`, …). Row was stale — re-vetted `P3-W5`. |
 | `8d663a76e` | terminal: release style refs per run in clearCells | **PORTED** (P3-W1) | `clear_cells` groups same-style runs and calls `release_multiple` once per run, ids read through the raw `*mut Cell`; ref-count-to-exactly-zero tests (T6) |
-| `cb2d78587` | terminal: fill style-only cell runs in bulk in printSliceFill | missing BL-4 | terminal.rs print slice fill (BL-4 fast-path family) |
-| `300f42c7a` | terminal: handle CSI entry bytes inline in consumeUntilGround | missing BL-4 | stream.rs |
-| `083d9709b` | terminal: decode ASCII inline in SIMD scan for ESC | missing BL-4 | rustty-simd (src/simd/vt.cpp analogue) |
+| `cb2d78587` | terminal: fill style-only cell runs in bulk in printSliceFill | **PORTED** (WS10 T16, `6cffd25`) | `Terminal::print_slice_fill` `terminal.rs:1319`. Row was stale — re-vetted `P3-W5`. |
+| `300f42c7a` | terminal: handle CSI entry bytes inline in consumeUntilGround | **PORTED** (WS10 T13+T14, `ae48e3b`) | `Stream::csi_entry_byte` `stream.rs:1115` behind the `HAS_VT_RAW` gate `:289`. Row was stale — re-vetted `P3-W5`. |
+| `083d9709b` | terminal: decode ASCII inline in SIMD scan for ESC | **PORTED** (WS10 T15, `ae05b31`) | `WidenAsciiStore` / `DecodeNonAsciiUntilControlSeq` incl. the mandatory `HWY_TARGET == HWY_SCALAR` arm, `crates/rustty-simd/cbits/simd/vt.cpp:204,232,208`. Row was stale — re-vetted `P3-W5`. |
 | `e8f3f6c43` | font/sprite: regression test for cursor-height metric | **PORTED** | face.rs test (§1) |
 | `dac341cad` | font/sprite: cursor height respects adjust-cursor-height | **PORTED** | face.rs:704-716 (§1) |
 | `cb4c49fbf` | terminal: scalar UTF-8 decode consumes partial sequences cut by ESC | **PORTED** (verified P3-W1) | ALREADY present on `main` -- the ESC-boundary guard, both named byte sequences, and the 10k SIMD-vs-scalar differential. Re-proven by mutation; the P3-W1 plan text claiming it was absent is stale (T6) |
-| `4c5b1d5d5` | bench: terminal-stream reads 64KiB chunks | pending-small BL-3 | rustty-bench terminal_stream (5/2) |
+| `4c5b1d5d5` | bench: terminal-stream reads 64KiB chunks | **PORTED** (WS10 T10, `713cf22`) | `crates/rustty-bench/src/terminal_stream.rs:249` `[0u8; 64 * 1024]`, unbuffered reader. Row was stale — re-vetted `P3-W5`. |
 | `cee35cabf` | terminal: skip style map update when SGR unchanged | **PORTED** | screen.rs:2752 (§1) |
-| `253e4f9c3` | terminal: bulk-parse CSI parameter bytes at slice level | missing BL-4 | stream.rs (76/0, has tests) |
-| `1a88f3622` | terminal: dispatch CSI finals directly from stream fast paths | missing BL-4 | stream.rs (89/0) |
-| `47e26df60` | terminal: batch printed codepoint runs into direct row fills | missing BL-4 | stream/terminal/termio print pipeline (726/3) |
-| `258de36d1` | benchmark: terminal-stream uses full terminal handler | missing BL-4 | rustty-bench |
+| `253e4f9c3` | terminal: bulk-parse CSI parameter bytes at slice level | **PORTED** (WS10 T13, `ae48e3b`) | `Stream::consume_csi_params` `stream.rs:1186`. Row was stale — re-vetted `P3-W5`. |
+| `1a88f3622` | terminal: dispatch CSI finals directly from stream fast paths | **PORTED** (WS10 T14, `ae48e3b`) | `Stream::csi_dispatch_final` `stream.rs:1146`. Row was stale — re-vetted `P3-W5`. |
+| `47e26df60` | terminal: batch printed codepoint runs into direct row fills | **PORTED** (WS10 T16, `6cffd25` + `587e5ae`; termio arm `P3-W7 T6`, `8da32f4`) | `Terminal::print_slice` `terminal.rs:1177`, `Action::PrintSlice` + `next_slice` run scan `stream.rs:888`, `rustty_simd::lanes`. Guarded by `terminal_print_slice_differential_fuzz_vs_print` `terminal.rs:16604`. Row was stale — re-vetted `P3-W5`. |
+| `258de36d1` | benchmark: terminal-stream uses full terminal handler | **PORTED** (WS10 T10, `713cf22`) | `terminal_stream.rs` uses `rustty_vt::stream_terminal`'s readonly handler; guarded by `terminal_stream_uses_the_full_terminal_handler`. Row was stale — re-vetted `P3-W5`. |
 | `2f0e6659d` | termio: pipeline pty reads to overlap parsing with draining | **PORTED** | WS10 T20 (`a788346`): `io-gather` thread + 4x64 KiB ring with a raw-pointer slot handoff, proven SB+TB clean on `.port/phase-2/mirihar-ws10-pipeline` against three negative controls. The QoS hunk landed separately as T8 (`7725606`) and is now applied to both threads. |
 | `63e75e86c` | lib-vt: many more color utility APIs (#13206) | n/a-merge | constituent below |
 | `2970e9a2a` | lib-vt: many more color utility APIs | **PORTED** | color.rs/x11_color.rs + vt-c color.rs/lib.rs/types.rs + color.h/sgr.h + config delegation (WS5 T3-T6) |

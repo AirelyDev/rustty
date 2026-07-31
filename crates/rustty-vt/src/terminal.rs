@@ -3410,13 +3410,23 @@ impl Terminal {
             // deferred, so the `kitty_images.dirty = true` flag set under
             // `if (comptime build_options.kitty_graphics)` is omitted.
 
-            // If our scrolling region is at the top, we create scrollback.
+            // If our scrolling region is at the top, we create scrollback,
+            // but only if our screen retains scrollback. If our screen
+            // doesn't retain scrollback (e.g. the alternate screen) then
+            // creating scrollback is pure overhead: the rows are never
+            // visible and are simply pruned later. In that case we use the
+            // in-place region scroll below, unless the region is a single
+            // row (a one row screen) which cursorScrollRegionUp can't
+            // handle (and cursorDownScroll special-cases).
             // if (self.scrolling_region.top == 0 and
             //     self.scrolling_region.left == 0 and
-            //     self.scrolling_region.right == self.cols - 1)
+            //     self.scrolling_region.right == self.cols - 1 and
+            //     (!screen.no_scrollback or
+            //         self.scrolling_region.bottom == 0))
             if self.scrolling_region.top == 0
                 && self.scrolling_region.left == 0
                 && self.scrolling_region.right == self.cols - 1
+                && (!unsafe { (*screen).no_scrollback } || self.scrolling_region.bottom == 0)
             {
                 // try screen.cursorScrollAbove();
                 self.active_mut().cursor_scroll_above()?;
@@ -3425,71 +3435,29 @@ impl Terminal {
 
             // Slow path for left and right scrolling region margins.
             // if (self.scrolling_region.left != 0 or
-            //     self.scrolling_region.right != self.cols - 1 or
-            //     !screen.blankCell().isZero())
-            if self.scrolling_region.left != 0
-                || self.scrolling_region.right != self.cols - 1
-                // PERF(mitchellh): If we have an SGR background set then
-                // we need to preserve that background in our erased rows.
-                // scrollUp does that but eraseRowBounded below does not.
-                // However, scrollUp is WAY slower. We should optimize this
-                // case to work in the eraseRowBounded codepath and remove
-                // this check.
-                || !unsafe { (*screen).blank_cell() }.is_zero()
-            {
+            //     self.scrolling_region.right != self.cols - 1)
+            //
+            // PORT NOTE (oracle 77190bd02, `P3-W5 T3`): the third disjunct
+            // `!screen.blankCell().isZero()` was DELETED by the oracle along
+            // with its `PERF(mitchellh)` comment. It existed because
+            // `eraseRowBounded` (the old fast path) did not preserve an SGR
+            // background in the erased row; `cursorScrollRegionUp` does, so
+            // the background case now takes the fast path too.
+            if self.scrolling_region.left != 0 || self.scrolling_region.right != self.cols - 1 {
                 // try self.scrollUp(1);
                 self.scroll_up(1)?;
                 return Ok(());
             }
 
-            // Otherwise use a fast path function from PageList to efficiently
-            // scroll the contents of the scrolling region.
-
-            // Preserve old cursor just for assertions
-            // const old_cursor = screen.cursor;
-            let old_cursor_x = unsafe { (*screen).cursor.x };
-            let old_cursor_y = unsafe { (*screen).cursor.y };
-
-            // try screen.pages.eraseRowBounded(
-            //     .{ .active = .{ .y = self.scrolling_region.top } },
+            // Otherwise use a fast path function to efficiently scroll
+            // the contents of the scrolling region.
+            // try screen.cursorScrollRegionUp(
             //     self.scrolling_region.bottom - self.scrolling_region.top,
             // );
             let sr_top = self.scrolling_region.top;
             let sr_bottom = self.scrolling_region.bottom;
-            self.active_mut().pages.erase_row_bounded(
-                point::Point::Active(point::Coordinate {
-                    x: 0,
-                    y: sr_top as u32,
-                }),
-                (sr_bottom - sr_top) as usize,
-            )?;
-
-            // eraseRow and eraseRowBounded will end up moving the cursor pin
-            // up by 1, so we need to move it back down. A `cursorReload`
-            // would be better option but this is more efficient and this is
-            // a super hot path so we do this instead.
-            // assert(screen.cursor.x == old_cursor.x);
-            debug_assert!(unsafe { (*screen).cursor.x } == old_cursor_x);
-            // assert(screen.cursor.y == old_cursor.y);
-            debug_assert!(unsafe { (*screen).cursor.y } == old_cursor_y);
-            // screen.cursor.y -= 1;
-            unsafe { (*screen).cursor.y -= 1 };
-            // screen.cursorDown(1);
-            unsafe { (*screen).cursor_down(1) };
-
-            // The operations above can prune our cursor style so we need to
-            // update. This should never fail because the above can only FREE
-            // memory.
-            // screen.manualStyleUpdate() catch |err| {
-            //     std.log.warn("deleteLines manualStyleUpdate err={}", .{err});
-            //     screen.cursor.style = .{};
-            //     screen.manualStyleUpdate() catch unreachable;
-            // };
-            if unsafe { (*screen).manual_style_update() }.is_err() {
-                // std.log.warn("deleteLines manualStyleUpdate err={}", .{err});
-                unsafe { (*screen).cursor.style = style::Style::default() };
-                unsafe { (*screen).manual_style_update() }.unwrap();
-            }
+            self.active_mut()
+                .cursor_scroll_region_up((sr_bottom - sr_top) as usize)?;
 
             return Ok(());
         }
@@ -3762,9 +3730,22 @@ impl Terminal {
 
         // If our scroll region is at the top and we have no left/right
         // margins then we move the scrolled out text into the scrollback.
+        //
+        // If our screen doesn't retain scrollback (e.g. the alternate
+        // screen) then creating scrollback is pure overhead, so we use the
+        // deleteLines path below instead, unless the region is the full
+        // screen where cursorScrollAbove has a specialized fast path
+        // (cursorDownScroll) for scrolling without scrollback.
+        // if (self.scrolling_region.top == 0 and
+        //     self.scrolling_region.left == 0 and
+        //     self.scrolling_region.right == self.cols - 1 and
+        //     (!self.screens.active.no_scrollback or
+        //         self.scrolling_region.bottom == self.rows - 1))
         if self.scrolling_region.top == 0
             && self.scrolling_region.left == 0
             && self.scrolling_region.right == self.cols - 1
+            && (!unsafe { (*self.screens.active).no_scrollback }
+                || self.scrolling_region.bottom == self.rows - 1)
         {
             // Scrolling dirties the images because it updates their placements pins.
             // if (comptime build_options.kitty_graphics) {
@@ -6517,7 +6498,12 @@ mod tests {
     // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
     // `debug_assertions` the fail point never trips, so the test can only run in
     // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
+    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
+    // attribute is not enough — the test would not COMPILE in release, which is
+    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
+    // out entirely; it still runs and passes in debug.
+    #[cfg(debug_assertions)]
     fn terminal_set_string_tripwire_seam_arms_and_resets() {
         SET_STRING_TW.with(|tw| {
             tw.borrow_mut()
@@ -6539,7 +6525,12 @@ mod tests {
     // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
     // `debug_assertions` the fail point never trips, so the test can only run in
     // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
+    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
+    // attribute is not enough — the test would not COMPILE in release, which is
+    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
+    // out entirely; it still runs and passes in debug.
+    #[cfg(debug_assertions)]
     fn terminal_set_pwd_preserves_a_sentinel_on_allocation_failure() {
         let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
 
@@ -6596,7 +6587,12 @@ mod tests {
     // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
     // `debug_assertions` the fail point never trips, so the test can only run in
     // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
+    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
+    // attribute is not enough — the test would not COMPILE in release, which is
+    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
+    // out entirely; it still runs and passes in debug.
+    #[cfg(debug_assertions)]
     fn terminal_set_title_preserves_a_sentinel_on_allocation_failure() {
         let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
 
@@ -13707,6 +13703,144 @@ mod tests {
                 },
                 unsafe { (*cell).content_color_rgb() }
             );
+        }
+
+        t.deinit(Global);
+    }
+
+    // -- oracle 77190bd02: index/scrollUp scroll-region routing (`P3-W5 T3`) --
+
+    // test "Terminal: index bottom of scroll region with top margin and background SGR"
+    #[test]
+    fn terminal_index_bottom_of_scroll_region_with_top_margin_and_background_sgr() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("1\n2\n3\n4\n5".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(2, 4);
+        t.set_cursor_pos(4, 1);
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.index().unwrap();
+
+        // The region (rows 2-4) scrolled up, rows outside are unchanged.
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1\n3\n4\n\n5".as_bytes());
+        }
+
+        // The cursor is on the new blank row.
+        assert_eq!(3 as size::CellCountInt, unsafe {
+            (*t.screens.active).cursor.y
+        });
+
+        // The new blank row must be filled with our background color.
+        for x in 0..t.cols {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(x, 3)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of alt screen full region"
+    #[test]
+    fn terminal_index_bottom_of_alt_screen_full_region() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+        t.print_string("A\nB\nC".as_bytes()).unwrap();
+        t.index().unwrap();
+        t.carriage_return();
+        t.print('D' as u32).unwrap();
+
+        // Content scrolled up and the scrolled-out row is discarded, NOT
+        // moved into scrollback (the alt screen has none).
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "B\nC\nD".as_bytes());
+        }
+        {
+            let str = t
+                .active_mut()
+                .dump_string_alloc(Global, screen_pt(0, 0))
+                .unwrap();
+            assert_eq!(str.as_slice(), "B\nC\nD".as_bytes());
+        }
+
+        // Primary screen is untouched.
+        t.switch_screen_mode(SwitchScreenMode::M1049, false)
+            .unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of alt screen top region"
+    #[test]
+    fn terminal_index_bottom_of_alt_screen_top_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+        t.print_string("1\n2\n3\n4\n5".as_bytes()).unwrap();
+
+        // Region at the top of the screen, excluding the last row. On the
+        // alt screen this must NOT create scrollback.
+        t.set_top_and_bottom_margin(1, 4);
+        t.set_cursor_pos(4, 1);
+        t.index().unwrap();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "2\n3\n4\nX\n5".as_bytes());
+        }
+        {
+            let str = t
+                .active_mut()
+                .dump_string_alloc(Global, screen_pt(0, 0))
+                .unwrap();
+            assert_eq!(str.as_slice(), "2\n3\n4\nX\n5".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp top region no scrollback"
+    #[test]
+    fn terminal_scroll_up_top_region_no_scrollback() {
+        let mut t = Terminal::init(Global, opts_sb(5, 5, 0)).unwrap();
+
+        t.print_string("A\nB\nC\nD\nE".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(1, 3);
+        t.scroll_up(1).unwrap();
+
+        // The region scrolled and the scrolled-out row is discarded.
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "B\nC\n\nD\nE".as_bytes());
+        }
+        {
+            let str = t
+                .active_mut()
+                .dump_string_alloc(Global, screen_pt(0, 0))
+                .unwrap();
+            assert_eq!(str.as_slice(), "B\nC\n\nD\nE".as_bytes());
         }
 
         t.deinit(Global);

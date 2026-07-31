@@ -2680,7 +2680,12 @@ mod tests {
     // Without `debug_assertions` the fail point never trips, so the test can only
     // run in debug — where it still runs and passes. NOT disabled to hide a failure.
     #[test]
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
+    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
+    // attribute is not enough — the test would not COMPILE in release, which is
+    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
+    // out entirely; it still runs and passes in debug.
+    #[cfg(debug_assertions)]
     fn semantic_failure_is_sticky_while_processing_continues() {
         let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
 

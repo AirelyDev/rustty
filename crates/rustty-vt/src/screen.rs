@@ -1848,6 +1848,266 @@ impl Screen {
         Ok(())
     }
 
+    /// Scroll a full-width scroll region that ends at the cursor row up by
+    /// one row. The cursor must be on the bottom row of the region. `limit`
+    /// is the number of rows in the region above the cursor (region height
+    /// minus one) and must be at least 1.
+    ///
+    /// The top row of the region is discarded (NOT moved into scrollback).
+    /// All other rows in the region shift up by one and the cursor row
+    /// becomes a blank row, filled with the current background color (like
+    /// other scroll operations such as deleteLines).
+    ///
+    /// The cursor stays at the same screen position (the new blank row).
+    /// Content outside of the region is unmodified.
+    ///
+    /// This is a very hot path for scroll region usage (e.g. a program
+    /// on the alt screen using DECSTBM and scrolling via LF/IND) so this
+    /// is optimized for the common case where the full region is within
+    /// a single page.
+    //
+    // pub fn cursorScrollRegionUp(self: *Screen, limit: usize) !void
+    //
+    // PORTS: oracle 77190bd02 (`Screen.cursorScrollRegionUp`) + the
+    // `invalidateNodeLayout` hunk from 0bad91adb (Phase 3 re-vet row P3-RV3).
+    //
+    // PORT NOTE (UB HAZARD, `P3-W5 T3`): the fast path holds a `*mut Page`
+    // while it mutates tracked pins and the cursor's cached row/cell pointers,
+    // and `assert_integrity()` re-walks the same memory afterwards. Every
+    // access here therefore goes through RAW POINTERS derived from the page's
+    // memory base; the only `&mut` ever formed is the `&mut [Row]` handed to
+    // `fastmem::rotateOnce`, created from the raw base inside the narrowest
+    // possible scope and dropped before the next raw access. In particular the
+    // cursor's new `page_row`/`page_cell` are recomputed from the RAW base,
+    // never from that temporary slice, so no pointer survives the borrow that
+    // created it. Never form `&mut Page` (that is the mutation the Miri
+    // harness `.port/phase-3/mirihar-scroll-region-up` proves fails).
+    pub fn cursor_scroll_region_up(&mut self, limit: usize) -> Result<(), OutOfMemory> {
+        // assert(limit >= 1);
+        debug_assert!(limit >= 1);
+        // assert(self.cursor.y >= limit);
+        debug_assert!(self.cursor.y as usize >= limit);
+        // defer self.assertIntegrity();
+        //
+        // PORT NOTE: Zig's `defer` runs on ERROR returns too, so the body lives
+        // in an inner fn and the integrity gate runs unconditionally after it,
+        // on every exit path including the slow path's `?` OOM early-return.
+        // (Same shape as `PageList::erase_row_bounded`.)
+        let result = self.cursor_scroll_region_up_inner(limit);
+        self.assert_integrity();
+        result
+    }
+
+    /// The body of `cursor_scroll_region_up` (the reference fn minus its
+    /// `defer`); see the PORT NOTE above.
+    fn cursor_scroll_region_up_inner(&mut self, limit: usize) -> Result<(), OutOfMemory> {
+        // const pin: *Pin = self.cursor.page_pin;
+        let pin: *mut Pin = self.cursor.page_pin;
+        let pin_y = unsafe { (*pin).y };
+        let pin_node = unsafe { (*pin).node };
+
+        // If the region crosses a page boundary we take a slower path. This
+        // is rare: it requires the active area to span multiple pages with
+        // the split point inside the scroll region.
+        // if (pin.y < limit) return try self.cursorScrollRegionUpSlow(limit);
+        if (pin_y as usize) < limit {
+            return self.cursor_scroll_region_up_slow(limit);
+        }
+
+        // Fast path: the entire region is in a single page. We can clear
+        // the top row and rotate it down to the cursor row, updating any
+        // tracked pins along the way.
+        //
+        // The cursor's cached row and cell pointers refer into this mapping.
+        // PageList cannot compress the cursor page while those pointers are
+        // installed, so the node is known to be resident here.
+        // const page: *Page = pin.node.pageAssumeResident();
+        let page: *mut Page = unsafe { pagelist::Node::page_assume_resident(pin_node) };
+        // const rows = page.rows.ptr(page.memory.ptr)[pin.y - limit ..][0 .. limit + 1];
+        //
+        // PORT NOTE: the reference's `rows` is a `[]Row` slice used for the
+        // clear, the rotate AND the final cursor-row pointer. In Rust it is a
+        // raw base pointer for exactly the aliasing reason in the fn's PORT
+        // NOTE; the slice is materialized only for `rotateOnce` below.
+        let rows: *mut Row = unsafe {
+            (*page)
+                .rows
+                .ptr((*page).memory_ptr())
+                .add(pin_y as usize - limit)
+        };
+
+        // Clear the erased (top) row.
+        {
+            // const row: *Row = &rows[0];
+            let row: *mut Row = rows;
+
+            // Whether our blank cell is a plain zero cell. This is true
+            // unless the cursor has a background color set (see blankCell).
+            // const blank_is_zero = self.cursor.style_id == style.default_id or
+            //     self.cursor.style.bg_color == .none;
+            let blank_is_zero = self.cursor.style_id == style::DEFAULT_ID
+                || matches!(self.cursor.style.bg_color.tag(), style::ColorTag::None);
+
+            // if (!row.managedMemory() and blank_is_zero)
+            if !unsafe { *row }.managed_memory() && blank_is_zero {
+                // Hot path: the row has no managed memory (styles,
+                // graphemes, hyperlinks) and our blank is zero so this is
+                // a straight zero fill. This is the overwhelmingly common
+                // case for scroll region usage.
+                // const cells = page.getCells(row);
+                // @memset(@as([]u64, @ptrCast(cells)), 0);
+                //
+                // PORT NOTE: the reference re-casts the cell slice to `[]u64`
+                // to memset the backing integers; `Cell` is
+                // `#[repr(transparent)] struct Cell(u64)` here, so a byte-wise
+                // zero of the same extent is the identical write.
+                let cells = unsafe { (*page).get_cells(row) };
+                let len = cells.len();
+                unsafe {
+                    core::ptr::write_bytes(cells as *mut Cell, 0u8, len);
+                }
+            } else {
+                // The generic clear handles managed memory and fills the
+                // row with our blank cell, preserving the background color.
+                // self.clearCells(page, row, page.getCells(row));
+                let cells = unsafe { (*page).get_cells(row) };
+                self.clear_cells(page, row, cells);
+            }
+        }
+
+        // Rotate the region rows so the now-blank top row moves to the
+        // bottom (the cursor row) and everything else shifts up by one.
+        // Rotating the region changes which logical row its coordinates identify.
+        // self.pages.invalidateNodeLayout(pin.node);
+        // fastmem.rotateOnce(Row, rows);
+        self.pages.invalidate_node_layout(pin_node);
+        fastmem::rotateOnce(unsafe { core::slice::from_raw_parts_mut(rows, limit + 1) });
+
+        // Mark the whole page as dirty.
+        //
+        // Technically we only need to mark the rotated rows but this is
+        // a hot function, so we want to minimize work.
+        // page.dirty = true;
+        unsafe { (*page).dirty = true };
+
+        // If our viewport is a pin and it's within the rotated region
+        // then we need to shift its cached row offset up. See
+        // PageList.eraseRowBounded for details; this mirrors that logic.
+        // if (self.pages.viewport == .pin) viewport: { ... }
+        if self.pages.viewport == pagelist::Viewport::Pin {
+            'viewport: {
+                if let Some(v) = self.pages.viewport_pin_row_offset.as_mut() {
+                    let p = self.pages.viewport_pin;
+                    if !core::ptr::eq(unsafe { (*p).node }, pin_node)
+                        || unsafe { (*p).y } < pin_y - limit as size::CellCountInt
+                        || unsafe { (*p).y } > pin_y
+                        || unsafe { (*p).y } == 0
+                    {
+                        break 'viewport;
+                    }
+                    *v -= 1;
+                }
+            }
+        }
+
+        // Update tracked pins within the region since their rows moved up
+        // by one. The cursor's own pin is skipped because the cursor stays
+        // at the region bottom (the new blank row).
+        // const pin_keys = self.pages.tracked_pins.keys();
+        // for (pin_keys) |p| { ... }
+        let pin_keys = self.pages.tracked_pins.keys();
+        for p in pin_keys {
+            let p: *mut Pin = *p;
+            if !core::ptr::eq(unsafe { (*p).node }, pin_node)
+                || core::ptr::eq(p, pin)
+                || unsafe { (*p).y } < pin_y - limit as size::CellCountInt
+                || unsafe { (*p).y } > pin_y
+            {
+                continue;
+            }
+            if unsafe { (*p).y } == 0 {
+                unsafe { (*p).x = 0 };
+            } else {
+                unsafe { (*p).y -= 1 };
+            }
+        }
+
+        // The cursor pin is unchanged, but the Row structure at the pin
+        // position now contains the blank row, so we need to refresh our
+        // cached row/cell pointers. We compute them directly from the row
+        // slice we already have rather than going through the pin since
+        // this is a hot path.
+        // const cursor_row: *Row = &rows[limit];
+        // self.cursor.page_row = cursor_row;
+        // self.cursor.page_cell = &page.getCells(cursor_row)[self.cursor.x];
+        let cursor_row: *mut Row = unsafe { rows.add(limit) };
+        self.cursor.page_row = cursor_row;
+        self.cursor.page_cell =
+            unsafe { ((*page).get_cells(cursor_row) as *mut Cell).add(self.cursor.x as usize) };
+
+        Ok(())
+    }
+
+    /// Slow path for cursorScrollRegionUp: the scroll region spans
+    /// multiple pages so we use the generic PageList erase machinery.
+    // fn cursorScrollRegionUpSlow(self: *Screen, limit: usize) !void
+    fn cursor_scroll_region_up_slow(&mut self, limit: usize) -> Result<(), OutOfMemory> {
+        // The call to eraseRowBounded below will move our tracked cursor
+        // pin up by one row since it is inside the erased region, but we
+        // don't actually want that: the cursor stays put, on the new blank
+        // row at the region bottom. We keep the old pin and put it back
+        // after, exactly like cursorDownScroll does for the no-scrollback
+        // case.
+        //
+        // This matters beyond performance: when the cursor is on the first
+        // row of a page, eraseRowBounded moves the tracked pin to the
+        // previous page. Moving the cursor back down with cursorDown would
+        // then cross pages via cursorChangePin, which migrates the cursor
+        // style refcount from a page that never held it, corrupting the
+        // style accounting.
+        // const old_pin = self.cursor.page_pin.*;
+        let old_pin = unsafe { *self.cursor.page_pin };
+
+        // try self.pages.eraseRowBounded(
+        //     .{ .active = .{ .y = @intCast(self.cursor.y - limit) } },
+        //     limit,
+        // );
+        let y = self.cursor.y as usize - limit;
+        self.pages.erase_row_bounded(
+            point::Point::Active(point::Coordinate { x: 0, y: y as u32 }),
+            limit,
+        )?;
+
+        // We don't use `cursorChangePin` here because we aren't actually
+        // changing the pin, we're keeping it the same. Since the page
+        // never changes, the cursor's style ref stays valid and no style
+        // accounting needs to be updated.
+        // self.cursor.page_pin.* = old_pin;
+        unsafe { *self.cursor.page_pin = old_pin };
+
+        // We do, however, need to refresh the cached page row and cell,
+        // because the row contents at our pin position changed (it now
+        // contains the blank row).
+        let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+        self.cursor.page_row = page_rac.row;
+        self.cursor.page_cell = page_rac.cell;
+
+        // eraseRowBounded clears the new row with zero cells so if our
+        // blank cell isn't zero (bg color is set) we need to fill it.
+        // const blank = self.blankCell();
+        // if (!blank.isZero()) {
+        //     const cells: [*]Cell = @ptrCast(self.cursor.page_cell);
+        //     @memset((cells - self.cursor.x)[0..self.pages.cols], blank);
+        // }
+        let blank = self.blank_cell();
+        if !blank.is_zero() {
+            let cells = unsafe { self.cursor.page_cell.sub(self.cursor.x as usize) };
+            unsafe { core::slice::from_raw_parts_mut(cells, self.pages.cols as usize).fill(blank) };
+        }
+
+        Ok(())
+    }
+
     /// Move the cursor down if we're not at the bottom of the screen. Otherwise
     /// scroll. Currently only used for testing.
     fn cursor_down_or_scroll(&mut self) -> Result<(), OutOfMemory> {
@@ -12559,6 +12819,407 @@ mod tests {
                 .is_none());
         }
         s.deinit();
+    }
+
+    // -- oracle 77190bd02: Screen.cursorScrollRegionUp (`P3-W5 T3`) ----------
+
+    // test "Screen: cursorScrollRegionUp simple"
+    #[test]
+    fn screen_cursor_scroll_region_up_simple() {
+        let mut s = mkscreen(5, 5, 0);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4MNOP\n5QRST")
+            .unwrap();
+
+        // Scroll a region ending at row 2 (zero-indexed) up by one. This
+        // emulates a scroll region of rows 0-2 with the cursor at the
+        // region bottom.
+        s.cursor_absolute(1, 2);
+        s.cursor_scroll_region_up(2).unwrap();
+
+        // The cursor stays in place, on the new blank row.
+        assert_eq!(1 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+
+        // Rows in the region scrolled, rows below are unchanged, and
+        // nothing was moved into scrollback.
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n\n4MNOP\n5QRST");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorScrollRegionUp renews page generation"
+    //
+    // PORTS: oracle 0bad91adb — the in-place region rotation renews the page
+    // generation so cached row coordinates cannot pass `node_is_valid`.
+    #[test]
+    fn screen_cursor_scroll_region_up_renews_page_generation() {
+        let mut s = mkscreen(5, 5, 0);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4MNOP\n5QRST")
+            .unwrap();
+        s.cursor_absolute(0, 2);
+
+        let node = unsafe { (*s.cursor.page_pin).node };
+        let serial = unsafe { (*node).serial };
+        s.cursor_scroll_region_up(2).unwrap();
+
+        assert!(!s.pages.node_is_valid(node, serial));
+        s.deinit();
+    }
+
+    // test "Screen: cursorScrollRegionUp moves selection"
+    #[test]
+    fn screen_cursor_scroll_region_up_moves_selection() {
+        let mut s = mkscreen(5, 5, 0);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4MNOP\n5QRST")
+            .unwrap();
+
+        // Select the second row.
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate {
+                    x: s.pages.cols - 1,
+                    y: 1,
+                }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        s.cursor_absolute(0, 2);
+        s.cursor_scroll_region_up(2).unwrap();
+
+        // Our selection should've moved up with its row.
+        {
+            let sel = s.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                s.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap()
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate {
+                    x: s.pages.cols - 1,
+                    y: 0,
+                }),
+                s.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap()
+            );
+        }
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n\n4MNOP\n5QRST");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorScrollRegionUp region spans pages"
+    #[test]
+    fn screen_cursor_scroll_region_up_region_spans_pages() {
+        let mut s = mkscreen(10, 5, 10);
+
+        // We need to get the cursor to a new page
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 3) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false)
+        };
+        s.test_write_string(b"1A\n2B\n3C\n4D\n5E").unwrap();
+
+        // At this point:
+        //      +----------+ = PAGE 0
+        //  ... :          :
+        //     +-------------+ ACTIVE
+        // 4305 |1A00000000| | 0
+        // 4306 |2B00000000| | 1
+        // 4307 |3C00000000| | 2
+        //      +----------+ :
+        //      +----------+ : = PAGE 1
+        //    0 |4D00000000| | 3
+        //      :^         : : = PIN 0
+        //    1 |5E00000000| | 4
+        //      +----------+ :
+        //     +-------------+
+
+        // Move the cursor to the first row of the second page and give it
+        // a non-default style. This is important: it verifies that the
+        // cursor's style ref stays accounted on the correct page even
+        // though eraseRowBounded moves the cursor's tracked pin across
+        // the page boundary.
+        s.cursor_absolute(0, 3);
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.last
+        ));
+        assert_eq!(0 as size::CellCountInt, unsafe { (*s.cursor.page_pin).y });
+
+        // Scroll a region of active rows 1-3 with the cursor at the region
+        // bottom. The region spans the page boundary so this exercises the
+        // slow path.
+        s.cursor_scroll_region_up(2).unwrap();
+
+        // The cursor stays in place, on the new blank row.
+        assert_eq!(0 as size::CellCountInt, s.cursor.x);
+        assert_eq!(3 as size::CellCountInt, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1A\n3C\n4D\n\n5E");
+        }
+
+        // Our cursor style must remain usable: write a styled cell and
+        // verify the style ref counting is intact on the cursor's page.
+        s.test_write_string(b"X").unwrap();
+        {
+            let page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+            assert_eq!(1usize, unsafe { (*page).styles.count() });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorScrollRegionUp region spans pages with background SGR"
+    #[test]
+    fn screen_cursor_scroll_region_up_region_spans_pages_with_background_sgr() {
+        let mut s = mkscreen(10, 5, 10);
+
+        // We need to get the cursor to a new page. See the previous test
+        // for a diagram of the page layout.
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 3) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false)
+        };
+        s.test_write_string(b"1A\n2B\n3C\n4D\n5E").unwrap();
+
+        s.cursor_absolute(0, 3);
+        s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.last
+        ));
+        assert_eq!(0 as size::CellCountInt, unsafe { (*s.cursor.page_pin).y });
+
+        s.cursor_scroll_region_up(2).unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1A\n3C\n4D\n\n5E");
+        }
+
+        // The new blank row must be filled with our background color.
+        for x in 0..s.pages.cols {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x, y: 3 }))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorScrollRegionUp with styled erased row"
+    #[test]
+    fn screen_cursor_scroll_region_up_with_styled_erased_row() {
+        let mut s = mkscreen(5, 3, 0);
+
+        // Write a styled row at the top so the erased row has managed
+        // memory that must be released.
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"1ABCD").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+        s.test_write_string(b"\n2EFGH\n3IJKL").unwrap();
+
+        s.cursor_absolute(0, 2);
+        s.cursor_scroll_region_up(2).unwrap();
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+
+        // The style should be gone from the page since the only user
+        // was the erased row.
+        let page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+        s.deinit();
+    }
+
+    // NEGATIVE CONTROL (`P3-W5 T3 Step 4(a)`) — the fast in-page path and the
+    // `_slow` PageList path must be observationally identical.
+    //
+    // The oracle has NO such test: upstream only covers a handful of shapes by
+    // hand. The differential is what makes the fast path falsifiable — it is
+    // the ONLY guard that can see a one-cell/one-row error in the rotated
+    // region base or extent, because every hand-written case would still
+    // produce "something plausible".
+    //
+    // MUTATIONS EXECUTED AND OBSERVED TO FAIL (`P3-W5 T3`), each reverted:
+    //
+    //   1. `rows = ...ptr(...).add(pin_y - limit)` -> `.add(pin_y - limit + 1)`
+    //      (region base off by one row)
+    //   2. `from_raw_parts_mut(rows, limit + 1)` -> `(rows, limit)`
+    //      (region extent off by one row)
+    //   3. `page_cell = ...add(self.cursor.x)` -> `.add(self.cursor.x + 1)`
+    //      (cursor cell off by one)
+    //
+    // The grid is deliberately built so BOTH clear branches of the fast path
+    // are exercised: `bg` toggles the zero-fill hot path vs. `clear_cells`, and
+    // the `styled` arm puts managed memory (a style ref) in the erased row.
+    #[test]
+    fn screen_cursor_scroll_region_up_fast_matches_slow_differential() {
+        // One screen, written identically for both arms.
+        fn build(
+            rows: size::CellCountInt,
+            bg: bool,
+            styled: bool,
+            cursor_y: size::CellCountInt,
+        ) -> Screen {
+            let mut s = mkscreen(5, rows, 0);
+            if styled {
+                s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+            }
+            for y in 0..rows {
+                if y > 0 {
+                    s.test_write_string(b"\n").unwrap();
+                }
+                let line = [b'A' + (y as u8), b'B', b'C', b'D', b'E'];
+                s.test_write_string(&line).unwrap();
+                if styled && y == 0 {
+                    s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+                }
+            }
+            if bg {
+                s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                }))
+                .unwrap();
+            }
+            s.cursor_absolute(2, cursor_y);
+            s
+        }
+
+        // Every cell of the whole screen, as raw backing bits, plus the
+        // cursor's own position AND its cached `page_row`/`page_cell`
+        // pointers expressed as offsets from the page bases. Raw bits catch
+        // style ids and content tags that a string dump cannot see.
+        //
+        // VACUITY NOTE (`P3-W5 T3`): the first version of this snapshot omitted
+        // the two cached-pointer offsets, and mutation 3 (`page_cell` off by
+        // one cell) PASSED it — the differential was vacuous for the one field
+        // the fast path computes by hand rather than via `row_and_cell()`. The
+        // offsets below are what make it bind; keep them.
+        #[allow(clippy::type_complexity)]
+        fn snapshot(
+            s: &Screen,
+        ) -> (
+            Vec<u64>,
+            size::CellCountInt,
+            size::CellCountInt,
+            usize,
+            usize,
+        ) {
+            let mut out = Vec::new();
+            for y in 0..s.pages.rows {
+                for x in 0..s.pages.cols {
+                    let lc = s
+                        .pages
+                        .get_cell(point::Point::Active(point::Coordinate {
+                            x,
+                            y: u32::from(y),
+                        }))
+                        .unwrap();
+                    out.push(unsafe { *lc.cell }.to_bits());
+                }
+            }
+            let page = unsafe { pagelist::Node::page((*s.cursor.page_pin).node) };
+            let rows_base = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+            let row_off =
+                (s.cursor.page_row as usize - rows_base as usize) / core::mem::size_of::<Row>();
+            let cells_base = unsafe { (*page).get_cells(s.cursor.page_row) } as *mut Cell;
+            let cell_off =
+                (s.cursor.page_cell as usize - cells_base as usize) / core::mem::size_of::<Cell>();
+            (out, s.cursor.x, s.cursor.y, row_off, cell_off)
+        }
+
+        let mut cases = 0usize;
+        for rows in [2 as size::CellCountInt, 3, 5, 8] {
+            for cursor_y in 1..rows {
+                for limit in 1..=cursor_y {
+                    for bg in [false, true] {
+                        for styled in [false, true] {
+                            let mut fast = build(rows, bg, styled, cursor_y);
+                            let mut slow = build(rows, bg, styled, cursor_y);
+
+                            // The fast arm goes through the public entry point.
+                            // With a single page and `pin.y >= limit` this is
+                            // always the in-page rotate.
+                            assert!(
+                                unsafe { (*fast.cursor.page_pin).y } as usize >= limit as usize,
+                                "case is not on the fast path; the differential would be vacuous"
+                            );
+                            fast.cursor_scroll_region_up(limit as usize).unwrap();
+
+                            // The slow arm calls the PageList path directly.
+                            slow.cursor_scroll_region_up_slow(limit as usize).unwrap();
+                            slow.assert_integrity();
+
+                            assert_eq!(
+                                snapshot(&fast),
+                                snapshot(&slow),
+                                "fast != slow for rows={rows} cursor_y={cursor_y} \
+                                 limit={limit} bg={bg} styled={styled}"
+                            );
+                            assert_eq!(
+                                dump(&fast, scr()),
+                                dump(&slow, scr()),
+                                "dump differs for rows={rows} cursor_y={cursor_y} \
+                                 limit={limit} bg={bg} styled={styled}"
+                            );
+
+                            fast.deinit();
+                            slow.deinit();
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Anti-vacuity floor: if the grid ever collapses to nothing the
+        // assertions above would never run and the test would still pass.
+        // (R-1)R/2 (cursor_y, limit) pairs per R, x 4 (bg x styled):
+        // R=2 -> 1, R=3 -> 3, R=5 -> 10, R=8 -> 28; (1+3+10+28) * 4 = 168.
+        assert_eq!(cases, 168, "grid size changed");
     }
 
     // test "Screen: scrolling moves viewport"
