@@ -78,7 +78,22 @@ which was read and confirmed present but never triggered end-to-end.
 Re-verify opportunistically on a multi-display machine, or by exercising the
 1x/HiDPI resolution-toggle fallback on a single-display machine.
 
-## V2. Bare-metal GPU rendering/perf sign-off (blocked: VM is llvmpipe-only) — **OWNER: WS17**
+## V2. Bare-metal GPU rendering/perf sign-off (blocked: VM is llvmpipe-only) — **ENVIRONMENT-BLOCKED**
+
+**Blocked on:** a Linux box with a real GPU. The project's only Linux machine is a
+VM whose GL stack is llvmpipe (software) over virtio-gpu, with no hardware path.
+
+```
+PORTED: crates/rustty-renderer/src/opengl.rs
+PORTED: .port/tools/gates/hw_gl_probe.sh
+```
+
+**Re-owned 2026-07-30 (was `OWNER: WS17`).** WS17 is finished. Correctness on this
+renderer IS validated here (see the Context note below — llvmpipe is a legitimate
+correctness environment and the glyph output was checked against upstream Ghostty
+1.3.1); what is blocked is specifically the perf/behaviour-under-real-GL axis.
+`hw_gl_probe.sh` makes it a one-command answer on any real box.
+
 
 > **OWNER [WS19 T19, 2026-07-29]: WS17 (verification debt).** V2 had no owner written
 > anywhere in its entry — it was implicitly WS17's (WS17's Goal names "V2 real-GPU
@@ -489,7 +504,25 @@ RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/debug/rustty
 
 ---
 
-## V7. RTL (Hebrew) UI layout sign-off (blocked: no RTL session; human visual judgment) — **OWNER: WS20**
+## V7. RTL (Hebrew) UI layout sign-off (blocked: no RTL session; human visual judgment) — **ENVIRONMENT-BLOCKED**
+
+**Blocked on:** a desktop session with `he_IL.UTF-8` generated, plus a human who
+reads Hebrew looking at the mirrored layout. This is the one row here blocked on a
+PERSON rather than a machine; it is filed under the same marker because the
+requirement is identical — the code is ported, the recipe is written, and no
+amount of work in this repo can discharge it.
+
+```
+PORTED: po/he.po
+PORTED: crates/rustty-apprt/tests/i18n_msgid_coverage.rs
+PORTED: crates/rustty-apprt-c/tests/i18n_translate.rs
+```
+
+**Re-owned 2026-07-30 (was `OWNER: WS20`).** WS20 is finished. Note what is NOT
+debt here: every mechanical property is already asserted, including a non-Latin
+(Japanese) catalog hit through the same code path `he` takes — so the lookup
+machinery is proven script-generic. What remains is visual judgment alone.
+
 
 > **Why WS20 and not WS13 or Phase 3.** WS13 is CLOSED, so filing here orphaned the
 > row (that is how 21 items were lost before G-P2 existed). And `Phase 3` is NOT a
@@ -547,7 +580,24 @@ LANG=he_IL.UTF-8 LC_ALL=he_IL.UTF-8 \
 
 ---
 
-## V8. libxev `wasi_poll` + `iocp` backends: cross-compile-verified only, never EXECUTED — **OWNER: Phase 3**
+## V8. libxev `wasi_poll` + `iocp` backends: cross-compile-verified only, never EXECUTED — **ENVIRONMENT-BLOCKED**
+
+**Blocked on:** a Windows host (for `iocp`) and a WASI runtime host (for
+`wasi_poll`). Neither exists in this project; the porting host is macOS aarch64.
+
+```
+PORTED: crates/rustty-xev/src/iocp.rs
+PORTED: crates/rustty-xev/src/iocp_watcher.rs
+PORTED: crates/rustty-xev/src/wasi.rs
+PORTED: crates/rustty-xev/src/wasi_poll.rs
+PORTED: crates/rustty-xev/src/wasi_watcher.rs
+```
+
+**Re-owned 2026-07-30 (was `OWNER: Phase 3`).** Nothing about this row is
+beyond-pin: the code is ported and the tests are written. Parking it on a phase
+made Phase-2 closure depend on that phase staying open, which is bookkeeping
+rather than verification. The honest disposition is that the work is done and
+the machine to run it on does not exist here.
 
 **Filed WS20, 2026-07-30.** Both backends are PORTED (see the RETRACTED
 "OUT OF SCOPE BY PLATFORM" entry in `DEFERRALS.md` — that classification was
@@ -620,7 +670,19 @@ suite with a no-op tick would mean the tests never drove the loop.
 
 ---
 
-## V9. `rustty-termio` Windows paths: cannot even be CROSS-CHECKED on this host — **OWNER: Phase 3**
+## V9. `rustty-termio` Windows paths: cannot even be CROSS-CHECKED on this host — **ENVIRONMENT-BLOCKED**
+
+**Blocked on:** a Windows host with the MSVC toolchain. Cross-checking from
+macOS is additionally blocked by `highway-sys`'s `cc`-driven C++ build (see
+below), so unlike V8 this row has no compile-level evidence either.
+
+```
+PORTED: crates/rustty-termio/src/exec.rs
+PORTED: crates/rustty-termio/src/command.rs
+```
+
+**Re-owned 2026-07-30 (was `OWNER: Phase 3`).** Same reasoning as V8: the code
+is ported, only the machine is missing.
 
 **Filed WS20, 2026-07-30.** `ReadThread::threadMainWindows` and
 `Subprocess::start`'s Windows spawn half are PORTED (they previously carried
@@ -659,7 +721,18 @@ read thread would prove nothing.
 
 ---
 
-## V10. `rustty-vaxis` Windows console backend: PORTED, but uncompilable for a Windows target on this host — **OWNER: WS20**
+## V10. `rustty-vaxis` Windows console backend: PORTED, but uncompilable for a Windows target on this host — **ENVIRONMENT-BLOCKED**
+
+**Blocked on:** a Windows host with the MSVC toolchain (`zlib-sys`'s vendored C
+cannot cross-compile to MSVC from macOS — detail below).
+
+```
+PORTED: crates/rustty-vaxis/src/tty.rs
+PORTED: crates/rustty-vaxis/src/loop_.rs
+```
+
+**Re-owned 2026-07-30 (was `OWNER: WS20`).** WS20 is finished; leaving the row
+attached to it would have orphaned it the moment that box was ticked.
 
 **Filed WS20, 2026-07-30.** The whole `#[cfg(windows)]` family in `rustty-vaxis` is
 now LIVE, not a seam: `WindowsTty` (`vaxis/src/tty.zig:189-691` — console-mode +
@@ -722,7 +795,17 @@ with a dead mouse arm would prove nothing.
 
 ---
 
-## V11. `rustty-font-shaper` Windows font discovery: PORTED, needs a stock Windows install to exercise — **OWNER: WS20**
+## V11. `rustty-font-shaper` Windows font discovery: PORTED, needs a stock Windows install to exercise — **ENVIRONMENT-BLOCKED**
+
+**Blocked on:** a stock Windows install (the discoverer scans `%SYSTEMROOT%\Fonts`
+and `%LOCALAPPDATA%\Microsoft\Windows\Fonts`, so a bare toolchain is not enough —
+this row needs a real font-populated system).
+
+```
+PORTED: crates/rustty-font-shaper/src/discovery.rs
+```
+
+**Re-owned 2026-07-30 (was `OWNER: WS20`).** Same reasoning as V10.
 
 **Filed WS20, 2026-07-30.** `discovery.zig`'s `Windows` discoverer (the system +
 per-user font-directory scan, `%SYSTEMROOT%\Fonts` and
@@ -762,7 +845,18 @@ actually `freetype_windows`, then check the discovered `DeferredFace` loads and 
 **Negative control:** ask for a family that is definitely absent (e.g. `"Nonexistent
 Family QQQ"`) and confirm the iterator yields `None` rather than the first font on disk —
 a passing `Arial` lookup alone does not prove the family filter works.
-## V12. `rustty-termio` + `rustty-os` `flatpak` feature: cross-compile-verified only, never EXECUTED — **OWNER: WS20**
+## V12. `rustty-termio` + `rustty-os` `flatpak` feature: cross-compile-verified only, never EXECUTED — **ENVIRONMENT-BLOCKED**
+
+**Blocked on:** a Linux host running inside a flatpak sandbox (or a container
+exposing the `org.freedesktop.Flatpak.Development` portal on the session bus).
+The project's Linux VM is not sandboxed, so it does not discharge this either.
+
+```
+PORTED: crates/rustty-os/src/flatpak.rs
+PORTED: crates/rustty-termio/src/exec.rs
+```
+
+**Re-owned 2026-07-30 (was `OWNER: WS20`).** Same reasoning as V10.
 
 **Filed WS20, 2026-07-30.** The whole flatpak host-command tier is PORTED and now
 WIRED (see the struck "Flatpak comptime-false branches" row in `DEFERRALS.md` —
@@ -1026,7 +1120,15 @@ remove`); the pinned working tree was never touched — no `checkout` was run in
 Owner is Phase 3 because `origin/main` **is** the upstream resync range:
 `BEYOND-PIN`.
 
-## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **OWNER: WS20**
+## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **OWNER: Phase 3 — `BEYOND-PIN`**
+
+**Re-owned 2026-07-30 (was `OWNER: WS20`).** WS20 is finished, and `Phase 3` here is
+not a parking space — it is forced. The 9 labels are ORACLE artifacts (Zig static
+libs and test executables), and per **V15** the pinned oracle can no longer be built
+at all (Zig 0.16.0 hard-errors on it) while `origin/main` can. So the numbers this
+row needs cannot be produced until the pin advances, which is `P3-W10`. That is the
+`BEYOND-PIN` condition, not a deferral.
+
 
 `BASELINE.json` carries 9 `binary_sizes_bytes` labels (`libghostty-vt.a`,
 `ghostty-bench`, `ghostty-test`, …) at **0% tolerance** per DoP.

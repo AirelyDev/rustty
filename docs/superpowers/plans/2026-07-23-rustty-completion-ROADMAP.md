@@ -189,8 +189,15 @@ loud RED rather than an infinite CI wait.
 - [x] WS9 packaging — AUTHORED + EXECUTED + MERGED (self-contained xcframework proven)
 - ~~[ ] WS10–WS17: authored at wave start~~ **STALE [WS19 T2, 2026-07-29 — audit
   §E.4]; per-WS rows:**
-- [ ] WS10 perf (BL-4) — **NOT authored**, not executed. Open. Inherits audit row **O3**
-  (`Screen::cursor_scroll_region_up`, beyond-pin `77190bd02`, pin-sequenced).
+- [x] WS10 perf (BL-4) — **EXECUTED 2026-07-30, T1–T22, merged** (`ea80044`, `d7c3afa`,
+  `1073c9d`, `18fc255`; re-pin `badd4e8`). **DONE.** The row above said "NOT authored, not
+  executed" until 2026-07-30 — it was STALE by 22 tasks, the same falsely-open drift the
+  WS19 audit found in the ledgers, and it was keeping G-P2 green for the wrong reason.
+  Corrected against git, not against memory. The measurement residue is ledgered where it
+  belongs and cannot be run yet: **V17** (oracle-anchored campaign) and **V18** (`f2a7652ab`'s
+  two BL-4 configs), both `Phase 3 — BEYOND-PIN`, because per **V15** the pinned oracle no
+  longer builds under Zig 0.16.0. Audit row **O3** (`cursor_scroll_region_up`, `77190bd02`)
+  is genuinely beyond-pin and belongs to Phase 3.
 - [x] WS11 font glyph resize — **authored 2026-07-29, EXECUTED 2026-07-29 (10 tasks,
   no deferral)**. **CLOSED.** Audit row **O17** as reclassified: the `stb_image_resize`
   port itself SHIPPED at `2e82776`; WS11 owned its **vacuous** coverage (all reaching
@@ -202,8 +209,11 @@ loud RED rather than an infinite CI wait.
 - [x] WS12 vaxis completion — authored (`c7c93f7`); **EXECUTED 2026-07-29** (all 13
   tasks, no deferrals taken). Discharges the DEFERRALS.md "rustty-vaxis Chunk 1b"
   uucode row and the whole "Chunks 4a/4b" image-tier row (both now carry ✅ RESOLVED
-  banners), and deletes the `boo` double-entry. Does NOT touch the `#[cfg(windows)]`
-  family (Chunk 3b items 1/3), which stays correctly open. Also HARDENED WS19 T1's
+  banners), and deletes the `boo` double-entry. Did NOT touch the `#[cfg(windows)]`
+  family (Chunk 3b items 1/3) — **that was left open for WS20, which ported it in full
+  at `4070c39`/`fe53d38`** (`WindowsTty` + the windows `Loop` arms). WS12 is therefore
+  **merged and DONE**; the only remainder is running that code, which needs a Windows
+  host and is filed as `ENVIRONMENT-BLOCKED` **V10**. Also HARDENED WS19 T1's
   `.port/tools/restore_zig_deps.sh`, whose only restore path was dead under Zig 0.16.0.
 - [x] WS13 i18n & docs — authored (`39355ff`); **EXECUTED 2026-07-30 (10/10 tasks)**,
   branch `ws13-i18n-docs-final`, not yet merged. DONE. Audit rows **N8** (3 `.blp`
@@ -225,10 +235,29 @@ loud RED rather than an infinite CI wait.
   `.port/tools/gates/ws14_webgl_browser_gate.sh` / `ci.sh --webgl`.
 - [x] WS15 GTK GlobalShortcuts — authored + EXECUTED + **MERGED `e8a9f59`**. DONE.
 - [x] WS16 X11 winproto — authored + EXECUTED + **MERGED `07b64db`**. DONE.
-- [x] WS17 verification debt — authored (`ef7621a`); **NOT executed**. Open. Scope is
-  V2/V3/V4/V1b **plus V5** (V5 was orphaned; WS19 T14 adds it).
+- [x] WS17 verification debt — authored (`ef7621a`); **EXECUTED 2026-07-29/30, merged**
+  (`a099760`). **DONE.** Scope was V2/V3/V4/V1b + V5. Outcome: **V1b** signed off [WS6],
+  **V3** decoration globals discharged under a live KWin, **V4** DISCHARGED against real
+  mutter without going near the primary session (a second `--headless` mutter on its own
+  socket — `ws17_set_urgent_mutter_gate.sh`, GREEN, VM uptime unchanged so the crash
+  correlation was avoided rather than risked), **V5** discharged [WS16]. **V2** is the
+  only remainder and is now `ENVIRONMENT-BLOCKED`: correctness on the GL renderer IS
+  validated here (llvmpipe is a legitimate correctness environment and the glyph output
+  was checked against upstream Ghostty 1.3.1); only the perf/behaviour-under-real-GL axis
+  needs a box with an actual GPU, and `hw_gl_probe.sh` makes that a one-command answer.
 - [x] WS18 release lane — authored in-ROADMAP + EXECUTED + **MERGED `eeec83f`**. DONE.
-- [ ] WS20 Phase 2 finish — the residue the WS19 audit surfaced. **OPEN, not started.**
+- [x] WS20 Phase 2 finish — the residue the WS19 audit surfaced. **EXECUTED 2026-07-30,
+  merged in three waves** (`fe53d38` vaxis `WindowsTty` + Windows font backend;
+  `ef519ca` flatpak spawn tier + iocp/wasi_poll watcher layer + ThreadPool futex;
+  `12c951c` the 9 zero-counterpart GTK files — 5 real, 4 false positives). **DONE.**
+  The row below is the ORIGINAL scope statement, kept verbatim as the record of what was
+  owed; every item in it is now ported. What remains is verification that no machine here
+  can perform, re-filed as `ENVIRONMENT-BLOCKED` rows **V8–V12** (Windows, WASI, flatpak
+  sandbox) and **V7** (RTL + human visual judgment) — each naming its ported artifacts,
+  which gate G-P2 resolves against disk so the marker cannot be asserted for unported
+  work. **V13** (wiring `Command` to the ported `pre_exec`/`post_fork`) and **V14**
+  (`gtk-v4_16` handler-level proof) were real gaps and are being closed separately.
+  ORIGINAL SCOPE, for the record:
   Owns everything the item-level audit (`.port/phase-3/PHASE2_FINAL_AUDIT.md`) found
   still unported, none of which may be excused as scope: **vaxis `WindowsTty`** (7 stubs
   vs `vaxis/src/tty.zig:189-691`, ~503 reference lines, + the `Loop.zig` arms); the

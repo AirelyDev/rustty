@@ -327,7 +327,11 @@ GATE_REGISTRY=(
   # workstream exists to stop. Its FAIL, PASS and BLOCKED arms are each fixture-proven
   # (`.port/tools/gates/fixtures/phase2-closure-{orphan,owned}.md`), which is the bar
   # G6b and G-REL met. When the last two items land it goes green and STAYS green.
-  "G-P2|HARD|$PY $GATES/check_phase2_closure.py"
+  # --self-test runs FIRST and in the same step: it proves the ENVIRONMENT-BLOCKED
+  # acceptance arm and the workstream derivation can still FAIL. Without it, a green
+  # G-P2 could mean "nothing is open" or "the checker stopped binding", and those look
+  # identical from the outside.
+  "G-P2|HARD|$PY $GATES/check_phase2_closure.py --self-test && $PY $GATES/check_phase2_closure.py"
   # G-XEVREACH (WS20, 2026-07-30 — was G-XEVSCOPE, WS19 T7). The gate's FACT is
   # unchanged; its CONCLUSION is deleted. It used to justify classifying the
   # `iocp`/`wasi_poll` backends as "out of scope by platform" — that

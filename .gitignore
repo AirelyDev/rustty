@@ -92,3 +92,7 @@ example/**/build/
 
 # WS10: stashed bench binaries for the paired self fence (large, regenerable).
 /.perf-bins/
+
+# Restored Zig dependency caches (.port/tools/restore_zig_deps.sh materializes these
+# from hash-pinned tarballs; they are downloads, not sources).
+**/zig-pkg/

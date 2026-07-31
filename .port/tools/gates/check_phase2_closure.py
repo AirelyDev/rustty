@@ -9,6 +9,10 @@ disposition. Every open item in the Phase-2 ledgers must end as exactly one of:
   * FIXED / struck (`~~...~~`, RESOLVED, DONE, ...);
   * a permanent **Justified R1 Divergence** (the `# Justified R1 Divergences` section);
   * **verification debt** with a runnable recipe (`VERIFICATION_DEBT.md`);
+  * **ENVIRONMENT-BLOCKED** verification debt — ported, recipe written, and blocked
+    solely on an environment this project does not have (see `environment_blocked_status`
+    for why this is NOT the `OUT-OF-SCOPE-BY-PLATFORM` marker that was removed, and
+    `--self-test` for the proof that its requirements bind);
   * OPEN, but with a named **OWNER** that is an OPEN workstream (or `Phase 3`).
 
 It ALSO asserts a second, stronger property: that **WS19's own closure tasks are all
@@ -53,6 +57,7 @@ USAGE
   python3 check_phase2_closure.py
   python3 check_phase2_closure.py --fixture <path.md>   # run against one file only
   python3 check_phase2_closure.py --check-derivation    # print the derived WS sets
+  python3 check_phase2_closure.py --self-test           # prove the ENVIRONMENT-BLOCKED arm can FAIL
   python3 check_phase2_closure.py -v                    # also list every owned item
 """
 
@@ -162,6 +167,18 @@ def derive_workstreams(roadmap_text):
         rows.append(cur)
 
     for line in rows:
+        # A STRUCK row (`- ~~[ ] ...~~ **STALE**`) is a retracted statement, not a
+        # status. It must contribute NEITHER open nor closed.
+        #
+        # This was a real hole, found 2026-07-30: the struck `~~[ ] WS10-WS17:
+        # authored at wave start~~ **STALE**` row carries no open/closed keywords,
+        # so it fell through to the `else` and put **WS10 into the OPEN set** — while
+        # WS10's own row put it in CLOSED. Since the consumer checks `owners &
+        # open_ws` FIRST, any row owned by WS10 would have passed on the strength of
+        # a retracted line. That is precisely the orphan-hiding failure this gate
+        # exists to prevent, arriving through the derivation instead of the ledger.
+        if re.match(r"^\s*-\s*~~\[", line):
+            continue
         ids = {m.group(1) for m in re.finditer(r"\b(WS(?:[1-9][0-9]|[1-9]))\b", line)}
         if not ids:
             continue
@@ -206,6 +223,62 @@ def row_is_beyond_pin(text):
     """True when a row's own text proves its source is the beyond-pin upstream
     range, which is the only case where 'Phase 3' is an acceptable owner."""
     return bool(BEYOND_PIN.search(text))
+
+
+# ---------------------------------------------------------------------------
+# ENVIRONMENT-BLOCKED verification debt
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS, AND WHY IT IS NOT THE MARKER THAT WAS REMOVED.
+#
+# `OUT-OF-SCOPE-BY-PLATFORM` was deleted from CLOSED_RE because it let UNPORTED
+# work close by ASSERTING that a platform is not a target. The standing rule is
+# the opposite: everything the reference supports gets ported.
+#
+# But there is a real, different case that rule leaves homeless. Some rows are
+# fully ported, carry a runnable recipe, and are blocked on nothing but a machine
+# that does not exist in this project (a Windows host; a flatpak sandbox). Before
+# this marker they stayed green only by being OWNED by a workstream that was kept
+# nominally open — so Phase 2's closure depended on a checkbox NOT being ticked.
+# That is bookkeeping, not verification, and it hides the real state.
+#
+# The difference from the removed marker is that this one CANNOT BE ASSERTED. A
+# row claiming it must name the ported artifacts, and this gate RESOLVES THOSE
+# PATHS AGAINST DISK. Unported work therefore cannot use it: there is nothing to
+# point at. That resolution is what gives the marker teeth, and `--self-test`
+# proves the resolution binds by breaking the real rows' paths and requiring a
+# rejection.
+ENV_BLOCKED = re.compile(r"\bENVIRONMENT-BLOCKED\b")
+ENV_BLOCKED_ON = re.compile(r"^\*\*Blocked on:\*\*\s*(\S.*)$", re.M)
+ENV_PORTED = re.compile(r"^\s*PORTED:\s*(\S+)\s*$", re.M)
+
+
+def environment_blocked_status(body):
+    """(claimed, accepted, reason) for a ENVIRONMENT-BLOCKED verification-debt row.
+
+    `claimed` is True as soon as the marker appears, so a HALF-WRITTEN claim is a
+    RED with a specific reason rather than falling through to the owner check and
+    possibly passing for an unrelated reason.
+    """
+    if not ENV_BLOCKED.search(body):
+        return False, False, ""
+    if not ENV_BLOCKED_ON.search(body):
+        return True, False, ("ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the "
+                             "missing environment")
+    paths = ENV_PORTED.findall(body)
+    if not paths:
+        return True, False, ("ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker "
+                             "is only for work that IS ported, and must point at it")
+    missing = []
+    for p in paths:
+        full = os.path.join(ROOT, p)
+        if not os.path.exists(full):
+            missing.append(f"{p} (does not exist)")
+        elif os.path.isfile(full) and os.path.getsize(full) == 0:
+            missing.append(f"{p} (empty)")
+    if missing:
+        return True, False, ("ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: "
+                             + "; ".join(missing))
+    return True, True, ""
 
 
 def entries_for(path, text):
@@ -283,6 +356,29 @@ def check_verification_debt(path, rel, open_ws, closed_ws, verbose):
         live = owners & open_ws
         dead = owners & closed_ws
         has_recipe = "```" in body
+        # ENVIRONMENT-BLOCKED is an acceptable standing disposition INSTEAD of an
+        # open-workstream owner — but only when the row proves it (see the
+        # `environment_blocked_status` block comment). A malformed claim is its own
+        # violation, never a fall-through.
+        env_claimed, env_ok, env_why = environment_blocked_status(body)
+        if env_claimed and not env_ok:
+            violations.append((rel, i + 1, title, ",".join(sorted(live | dead)) or "NONE",
+                               env_why, (i + 1, lines[i].strip())))
+            continue
+        if env_ok:
+            if not has_recipe:
+                violations.append((rel, i + 1, title, "ENVIRONMENT-BLOCKED",
+                                   "ENVIRONMENT-BLOCKED with NO RUNNABLE RECIPE (no fenced "
+                                   "code block); whoever gets the hardware needs one",
+                                   (i + 1, lines[i].strip())))
+                continue
+            # ALWAYS printed, not gated on -v. This disposition is the one a
+            # future reader is most likely to over-use, so the full set of things
+            # this project has decided it cannot verify must be visible in every
+            # GREEN run — never buried behind a verbosity flag.
+            blocked_on = ENV_BLOCKED_ON.search(body).group(1).rstrip(".")
+            print(f"    ENVIRONMENT-BLOCKED {vid}: {blocked_on[:96]}")
+            continue
         # 'Phase 3' is an acceptable owner ONLY for beyond-pin upstream work,
         # which cannot be done until the pin advances. The row must prove that
         # about itself by carrying the BEYOND-PIN marker.
@@ -535,6 +631,129 @@ def check_file(path, rel, open_ws, closed_ws, verbose):
     return violations, examined
 
 
+def self_test():
+    """Prove the ENVIRONMENT-BLOCKED acceptance arm can FAIL, on the REAL rows.
+
+    A gate arm that cannot fail is worthless, and this repo has already shipped
+    nine-plus of them. So this does not build a synthetic fixture: it reads the
+    rows actually carrying the marker in VERIFICATION_DEBT.md, confirms they are
+    accepted, then breaks ONE requirement at a time in memory and requires a
+    rejection each time. If the shipped rows were ever rewritten in a way that
+    made the path resolution stop binding, this goes RED.
+    """
+    path = os.path.join(ROOT, ".port/phase-2/VERIFICATION_DEBT.md")
+    if not os.path.exists(path):
+        print("SELF-TEST BLOCKED: VERIFICATION_DEBT.md is missing.", file=sys.stderr)
+        return 3
+    lines = open(path, errors="ignore").read().splitlines()
+    starts = [(i, m.group(1)) for i, line in enumerate(lines)
+              for m in [VD_HEADING.match(line)] if m]
+    rows = []
+    for k, (i, vid) in enumerate(starts):
+        j = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
+        body = "\n".join(lines[i:j])
+        if ENV_BLOCKED.search(body):
+            rows.append((vid, body))
+
+    if not rows:
+        print("SELF-TEST FAILED: ZERO rows carry ENVIRONMENT-BLOCKED, so the acceptance "
+              "arm this test exists to exercise is DEAD CODE. Either the marker is "
+              "unused (delete it) or the row parser stopped matching.", file=sys.stderr)
+        return 1
+
+    print(f"G-P2 SELF-TEST — ENVIRONMENT-BLOCKED arm, {len(rows)} real row(s): "
+          f"{', '.join(v for v, _ in rows)}")
+    failures = 0
+    for vid, body in rows:
+        claimed, ok, why = environment_blocked_status(body)
+        if not ok:
+            print(f"  {vid}: ACCEPT arm FAILED on the shipped row — {why}", file=sys.stderr)
+            failures += 1
+            continue
+        print(f"  {vid}: accepted (artifacts resolve)")
+
+        # CONTROL 1 — break the ported-artifact paths. This is the requirement
+        # that makes the marker unusable for unported work, so it is the one that
+        # must be proved to bind.
+        broken = ENV_PORTED.sub(
+            lambda m: f"PORTED: {m.group(1)}.__self_test_missing__", body)
+        _, ok1, why1 = environment_blocked_status(broken)
+        if ok1:
+            print(f"  {vid}: CONTROL 1 FAILED — the row is still accepted with every "
+                  "PORTED path pointing at a nonexistent file. The disk resolution is "
+                  "VACUOUS and this marker is now assertable.", file=sys.stderr)
+            failures += 1
+        else:
+            print(f"    control 1 (paths broken) -> rejected: {why1[:80]}")
+
+        # CONTROL 2 — remove the `**Blocked on:**` line.
+        no_blocked_on = ENV_BLOCKED_ON.sub("", body)
+        _, ok2, why2 = environment_blocked_status(no_blocked_on)
+        if ok2:
+            print(f"  {vid}: CONTROL 2 FAILED — accepted with no `**Blocked on:**` line.",
+                  file=sys.stderr)
+            failures += 1
+        else:
+            print(f"    control 2 (no Blocked-on) -> rejected: {why2[:80]}")
+
+        # CONTROL 3 — remove the PORTED lines entirely.
+        no_ported = ENV_PORTED.sub("", body)
+        _, ok3, why3 = environment_blocked_status(no_ported)
+        if ok3:
+            print(f"  {vid}: CONTROL 3 FAILED — accepted with no PORTED line at all.",
+                  file=sys.stderr)
+            failures += 1
+        else:
+            print(f"    control 3 (no PORTED line) -> rejected: {why3[:80]}")
+
+    # ---- the DERIVATION's own controls -------------------------------------
+    # The workstream derivation is the gate's foundation: if it is wrong, every
+    # owner check downstream is wrong. These controls exist because it WAS wrong
+    # (see the struck-row comment in derive_workstreams).
+    roadmap_text = open(os.path.join(ROOT, ROADMAP), errors="ignore").read()
+    d_open, d_closed = derive_workstreams(roadmap_text)
+    both = d_open & d_closed
+    if both:
+        print(f"  DERIVATION FAILED — {sorted(both)} are in BOTH the open and closed "
+              "sets. The consumer tests `owners & open_ws` first, so such an id would "
+              "silently launder rows owned by a CLOSED workstream.", file=sys.stderr)
+        failures += 1
+    else:
+        print(f"  derivation: open and closed are disjoint "
+              f"({len(d_open)} open, {len(d_closed)} closed)")
+
+    # CONTROL — a STRUCK row must contribute nothing. Inject one naming an id that
+    # appears nowhere else, and require it to stay out of both sets.
+    probe = "\n- ~~[ ] WS97 self-test probe: a retracted row~~ **STALE**\n"
+    p_open, p_closed = derive_workstreams(roadmap_text + probe)
+    if "WS97" in p_open or "WS97" in p_closed:
+        print("  CONTROL FAILED — a STRUCK checklist row still contributed a workstream "
+              f"id (WS97 landed in {'open' if 'WS97' in p_open else 'closed'}). Retracted "
+              "rows must not decide status.", file=sys.stderr)
+        failures += 1
+    else:
+        print("    control (struck row) -> contributes neither open nor closed")
+
+    # CONTROL — and the same row UNSTRUCK must be picked up, otherwise the skip
+    # above is over-broad and the derivation would quietly stop seeing real rows.
+    live_probe = "\n- [ ] WS97 self-test probe: a live row\n"
+    l_open, _ = derive_workstreams(roadmap_text + live_probe)
+    if "WS97" not in l_open:
+        print("  CONTROL FAILED — an UNSTRUCK checklist row was NOT picked up as open. "
+              "The struck-row skip is over-broad and is now hiding real rows.",
+              file=sys.stderr)
+        failures += 1
+    else:
+        print("    control (same row unstruck) -> correctly read as OPEN")
+
+    if failures:
+        print(f"\nG-P2 SELF-TEST: RED — {failures} arm(s) do not bind.", file=sys.stderr)
+        return 1
+    print("\nG-P2 SELF-TEST: GREEN — the ENVIRONMENT-BLOCKED arm accepts the shipped rows "
+          "and rejects each requirement being broken.")
+    return 0
+
+
 def main():
     argv = sys.argv[1:]
     verbose = "-v" in argv
@@ -564,6 +783,9 @@ def main():
         print("failure it exists for (an item filed into a merged workstream).")
         print(f"Check the plan-authoring checklist in {ROADMAP}.")
         sys.exit(3)
+
+    if "--self-test" in argv:
+        sys.exit(self_test())
 
     if "--fixture" in argv:
         i = argv.index("--fixture")
