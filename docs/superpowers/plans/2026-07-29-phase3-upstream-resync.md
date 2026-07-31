@@ -3414,3 +3414,45 @@ The remaining recipe is written into the V21 row.
       clippy / acyclic / vt-headers all green. Linux VM: 0 `test result: FAILED`
       across the workspace; the `gtk,wayland,x11` predicate KAT green with its
       negative control observed RED).
+
+---
+
+# `P3-W12` — the `vicinae_hotkey_v1` wire-path harness (V22)
+
+**Branch:** `p3-w12-vicinae-harness`. **Created 2026-07-31** when the hotkeys
+series merged.
+
+**One task, and it is deliberately NOT filed as environment-blocked.** No
+mainstream compositor implements this unratified protocol, so no host here can
+drive the wire path — but that is not the end of the argument, because the row's
+own recipe describes a **`wayland-server` 0.31 fake compositor** that can. An
+environment limit is something no amount of work in this repo can fix; this is
+something a harness fixes, so it stays real work with a live owner.
+
+`P3-W8 T7 Step 4` licenses scheduling this separately, which is what this
+workstream is. What it does not license is leaving it unowned.
+
+## Task 1: the fake-compositor harness
+
+`.port/phase-2/VERIFICATION_DEBT.md` row **V22** carries the full recipe and the
+specific assertions. The port already ships the test NAME as an `#[ignore]`d
+`#[test]` (`hotkeys_wire_path_bound_pressed_denied_revoked`) so it appears in the
+test list rather than living only in prose — fill that in rather than adding a
+parallel one.
+
+Cover all four events: `bound`, `pressed`, `denied`, `revoked`. The `denied` and
+`revoked` arms matter most: `Entry::fail` → `emit_bind_failed` is the path that
+turns a rejected global bind into a user-visible notification, and the *whole*
+point of the series is that a failed bind must not silently no-op.
+
+**Watch the two forced divergences** recorded in `hotkeys.rs`: the `HotkeyId`
+token proxy-userdata indirection, and the deferred emission out of the
+queue-dispatch `RefCell` borrow. A harness that drives the wire directly without
+going through the queue GSource would bypass the second and prove less than it
+appears to.
+
+## `P3-W12` finale
+
+- [ ] V22 discharged with observed output for all four events, or the row updated
+      to state a tested limit rather than an assumed one.
+- [ ] `G-P2` green; `check_phase2_closure.py --self-test` green.

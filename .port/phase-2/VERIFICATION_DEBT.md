@@ -2012,7 +2012,18 @@ i.e. its own task, and it is the only part of V21 that remains.
 
 ---
 
-## V22. `P3-W11 T4` — the `vicinae_hotkey_v1` WIRE path (F-W4) — **OPEN, OWNER: its own task (fake-compositor harness)** [2026-07-31]
+## V22. `P3-W11 T4` — the `vicinae_hotkey_v1` WIRE path (F-W4) — **OPEN, OWNER: `P3-W12`** [2026-07-31]
+
+> **Owner corrected at the hotkeys merge, 2026-07-31.** The row was filed naming
+> "its own task", which is not an owner — `G-P2` correctly went RED on it, since
+> both `P3-W11` and `P3-W8` are merged. It is deliberately NOT filed as
+> environment-blocked (lower case deliberately — the gate reads the all-caps
+> token as a CLAIM anywhere in a row body, so prose about the disposition must
+> not spell it; this is the landmine the V19c lane hit and documented): no
+> mainstream compositor implements this unratified protocol, but
+> the recipe below describes a `wayland-server` fake compositor that CAN drive
+> it. An environment limit is something no work in this repo can fix; this is
+> something a harness fixes, so it stays real work with a live owner.
 
 **What IS verified.** F-W1/F-W2 are verified headlessly and headed on the Linux
 VM (`--features gtk,wayland,x11`): `key::keysym_from_trigger` (the oracle's own
@@ -2047,6 +2058,37 @@ with `WAYLAND_DISPLAY`; then assert
 * a server-sent `denied(reason, message)` / `revoked(reason, message)` makes the
   `bind-failed` signal carry those exact message BYTES and the right `revoked`
   flag, and drops `bound_count()` by one.
+
+Concretely, on the Linux VM (`ssh gael@192.168.64.4`, repo `~/projects/rustty`):
+
+```sh
+# 0. the harness crate: wayland-server 0.31, the SIBLING of the vendored
+#    wayland-client, so both sides scan the same vendored XML.
+#    Add as a dev-dependency of rustty-apprt (dev-only: it must not enter the
+#    shipped dependency graph, and check_acyclic.sh will say so if it does).
+cd ~/projects/rustty
+cargo add --dev --package rustty-apprt wayland-server@0.31
+
+# 1. fill in the already-named ignored test rather than adding a parallel one:
+#    crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs
+#    hotkeys_wire_path_bound_pressed_denied_revoked
+
+# 2. run it. The four events are driven by the fake server, so this needs NO
+#    display and NO compositor -- it is not a headed test.
+cargo test -p rustty-apprt --features gtk,wayland,x11 --lib \
+  hotkeys_wire_path_bound_pressed_denied_revoked -- --ignored --nocapture
+
+# 3. NEGATIVE CONTROL, mandatory: make Entry::fail stop calling
+#    emit_bind_failed, rerun, and confirm the denied/revoked assertions FAIL.
+#    A wire test that only asserts "bound" passes while the failure path is
+#    dead -- which is the exact silent-no-op this whole series exists to stop.
+#    Restore by editing in place, never `mv file.bak file` (older mtime ->
+#    cargo skips the rebuild -> the control is invalid).
+
+# 4. the gates this touches
+bash .port/tools/gates/check_gtk_feature_lane.sh
+bash .port/tools/gates/check_acyclic.sh
+```
 
 **Interim marker, visible in the test list, not only here:**
 `crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs`
