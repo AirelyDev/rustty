@@ -1,0 +1,52 @@
+== bench (5 printed MISSING)
+      3  benchmark/TerminalStream.zig
+      2  main_bench.zig
+== cli (11 printed MISSING)
+      7  cli/list_themes.zig
+      2  cli/boo.zig
+      1  cli/edit_config.zig
+      1  cli/new_window.zig
+== config (4 printed MISSING)
+      4  config/Config.zig
+== global (31 printed MISSING)
+     27  global.zig
+      4  <unattributed>
+          ~ and rustty-gen) that have their own cli action namespace. this
+          ~ same as `main` but for auxiliary tool binaries (e.g. rustty-bench
+          ~ skips detection of rustty app cli actions, since tool actions
+          ~ tool binaries (rustty-bench, rustty-gen) have their own action
+== lib (5 printed MISSING)
+      5  lib/enum.zig
+== os (12 printed MISSING)
+      8  os/windows.zig
+      3  os/open.zig
+      1  os/mach.zig
+== simd (4 printed MISSING)
+      4  simd/vt.zig
+== termio (14 printed MISSING)
+     12  Command.zig
+      2  termio/Exec.zig
+== unicode (20 printed MISSING)
+     12  unicode/grapheme.zig
+      7  unicode/props.zig
+      1  unicode/main.zig
+== vt (218 printed MISSING)
+    104  terminal/PageList.zig
+     28  terminal/render.zig
+     27  terminal/page.zig
+     14  terminal/Terminal.zig
+     12  terminal/kitty/graphics_storage.zig
+      8  terminal/Screen.zig
+      6  terminal/hash_map.zig
+      4  terminal/SelectionGesture.zig
+      4  terminal/search/viewport.zig
+      3  terminal/stream_terminal.zig
+      2  terminal/x11_color.zig
+      2  terminal/stream.zig
+      2  terminal/kitty/graphics_image.zig
+      1  terminal/modes.zig
+      1  <unattributed>
+          ~ rustty_mode_* macro in include/rustty/vt/modes.h.
+== vt-c (10 printed MISSING)
+      9  terminal/c/terminal.zig
+      1  terminal/c/color.zig

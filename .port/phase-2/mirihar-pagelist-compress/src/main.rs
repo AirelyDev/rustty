@@ -109,7 +109,17 @@ use rustty_datastruct::intrusive_linked_list::Node as ListNode;
 /// ~100-400x native, so the geometry is the smallest that still produces
 /// multiple complete history pages plus an active page.
 fn list_with_history(pages_wanted: usize) -> PageList {
-    let mut list = PageList::init(20, 6, Some(1 << 30)).unwrap();
+    // P3-W10 T4: `PageList::init` took `(cols, rows, max_size)` when this
+    // harness was written; `P3-W3`'s runtime scrollback limits replaced that
+    // with a single `Options`. The harness was not updated, so from that point
+    // G6b failed to COMPILE and reported "RED: PageList leaked compressed-page
+    // encodings" — a build break wearing a leak's clothes. Same geometry, same
+    // 1 GiB byte budget.
+    let mut list = PageList::init(rustty_vt::pagelist::Options {
+        max_size: Some(1 << 30),
+        ..rustty_vt::pagelist::Options::new(20, 6)
+    })
+    .unwrap();
     // Grow until the requested number of NODES exist. A standard page holds
     // `std_capacity().rows` rows, so this is the only geometry-independent way
     // to make real history pages.
