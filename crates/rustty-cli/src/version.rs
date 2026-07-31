@@ -249,6 +249,18 @@ mod tests {
     /// git checkout. This is the assertion that was dead before WS19 T12
     /// (`commit_hash()` returned `None` unconditionally).
     #[test]
+    // MIRI EXCEPTION (rustty-cli version, process/file-I/O class): the test asks
+    // the environment whether it IS a git checkout by running `git rev-parse`,
+    // which Miri's isolation forbids ("`open` not available when isolation is
+    // enabled"), aborting the whole rustty-cli lib binary. Removing the probe
+    // would make the test vacuous in a tarball build — the exact hole WS19 T12
+    // closed. Same class as `rustty-vaxis/tests/ucd_provenance.rs`. Registered
+    // in .port/phase-2/MIRI_EXCEPTIONS.md ("rustty-cli — the 2026-07-31 CI triage").
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli): spawns `git rev-parse`; \
+         Miri isolation forbids it — see MIRI_EXCEPTIONS.md"
+    )]
     fn commit_hash_is_captured_in_a_git_checkout() {
         if !source_is_git_checkout() {
             // Not a checkout: the reference's own `version.build == null` case.

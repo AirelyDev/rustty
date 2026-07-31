@@ -2162,3 +2162,27 @@ same pairing already justifies `rustty-vt::stream_print_slice_matches_per_byte`.
 (4) **The remaining 16 bench tests are Miri-live**, including every parser
 benchmark — the excepted set is "the tests that cross into C or the filesystem",
 not "the tests that cover the crate".
+
+## rustty-cli / rustty-os — the 2026-07-31 CI triage (3 more tests)
+
+Both crates' G6 Miri lanes were dying on their first foreign call, taking their
+whole lib binary with them. Each crate was probed test-by-test in its own Miri
+process (`.port/phase-3/citriage-bench-miri-probe.sh`) so the excepted set is the
+measured minimum, not a crate-wide retreat: **69 of 70 rustty-cli tests and 63 of
+65 rustty-os tests are Miri-GREEN and stay in the lane.**
+
+| Test | class | measured |
+|---|---|---|
+| `rustty-cli` `boo::tests::decompress_frames_round_trip` | vendored zlib FFI | `can't call foreign function `inflateInit2_`` (see the dedicated section above) |
+| `rustty-cli` `version::tests::commit_hash_is_captured_in_a_git_checkout` | process/file I/O | `` `open` not available when isolation is enabled `` — it runs `git rev-parse` to decide whether it is in a checkout at all |
+| `rustty-os` `autorelease::tests::{returns_closure_value, pool_drains_autoreleased_references}` | Objective-C runtime | `can't call foreign function `objc_autoreleasePoolPush`` / `objc_getClass` |
+
+4-criterion basis. (1) **Impossible, not slow.** (2) **Pass natively** in ci.sh's
+HARD `cargo test --workspace`. (3) **No uncovered unsafe path** — the `version`
+test contains no `unsafe` at all (it shells out and compares a string); the
+`autorelease` pair's `unsafe` is `msg_send!` into the ObjC runtime, which is an
+ASan/native question by construction, and the Rust side of the shim (`f()`
+pass-through on non-Darwin) has no memory surface. (4) **The alternative is
+vacuity**: dropping `version`'s `git rev-parse` probe re-opens the exact hole WS19
+T12 closed (a `commit_hash()` that returns `None` unconditionally would pass), and
+an autorelease pool that is stubbed out cannot demonstrate that it drains.
