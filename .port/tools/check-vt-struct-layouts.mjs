@@ -143,9 +143,10 @@ if (oracleKeys.size === 0) {
   process.exit(3);
 }
 const rusttyKeys = new Set(Object.keys(LAYOUT).map((k) => k.replace(/^Rustty/, "")));
-// Documented BEYOND-PIN residuals. rustty is pinned at 4749c4e93 and matches
-// that tree's registry EXACTLY; every row below is a registry change upstream
-// made inside 4749c4e93..6ad1fe7d8 and is a Phase 3 port item, not a defect.
+// Documented BEYOND-PIN residuals. The oracle sync point is `6ad1fe7d8` since
+// `P3-W10 T3` (2026-07-31; it was `4749c4e93` when this list was written), and
+// rustty matches that tree's registry EXACTLY; any row below would be a registry
+// change upstream made beyond the pin and a port item, not a defect.
 // Each row must name an owner and a trigger. The stale check underneath means
 // this list can only shrink: port the change and the row must be deleted.
 //

@@ -126,25 +126,38 @@ to hide that is precisely the R5 weakening the gate exists to prevent.
 
 **Read this before "fixing" a G3b `missing` count that went UP after a port lane.**
 
-`check_comment_coverage.py:34` resolves its reference side from `GHOSTTY_SRC`, defaulting
-to `/Users/gael/projects/ghostty/src` — the oracle **working tree, which is pinned at
-`4749c4e93`**. Consequence: when a lane ports a **beyond-pin** upstream state in which
+`check_comment_coverage.py` resolves its reference side from the hard-coded
+`/Users/gael/projects/ghostty/src` — the oracle **working tree** (the `GHOSTTY_SRC` env
+override was **deleted** by `P3-W0 T2 Step 6`; see the FORBIDDEN note below). Consequence:
+when a lane ports a **beyond-pin** upstream state in which
 upstream **DELETED** a comment, that sentence still exists on the reference side at the
 pin, so the gate reports it `missing`. WS7 D2's config lane went `5 → 9` for exactly this
 reason. **The rise is an artifact of the pin, not a fidelity regression.**
 
 **VERDICT [WS19 T2, 2026-07-29 — audit row N6].** **Advancing the pin in Phase 3 resolves
-this WHOLESALE, and is the only correct fix.** Once `GHOSTTY_SRC` is the resynced tree,
-the deleted sentences are absent from the reference side and the counts drop *by
+this WHOLESALE, and is the only correct fix.** Once the working tree is the resynced tree,
+the deleted sentences are absent from the reference side and those counts drop *by
 construction* — no per-file exception list, no gate change, no R5 exposure. Phase 3
 carries this as re-vet assertion **P3-RV2** (`.port/phase-3/README.md`).
+
+**CORRECTION [`P3-W10 T3`, 2026-07-31 — MEASURED].** The verdict above is right about the
+*mechanism* and wrong about the *net effect*, and the difference matters when you read a
+G3b number after an advance. An advance is **BIDIRECTIONAL**: the gate resolves its file
+list from the FIXED phase-0 `crate_map` and re-reads those same files at the newer SHA, so
+it removes the text upstream deleted **and adds the text upstream wrote** — all of which is
+`missing` unless a lane ported it. Advancing `4749c4e93 -> 6ad1fe7d8` moved G3b's total
+**218 -> 334**: `config 30->4`, `os 35->12`, `termio 23->14`, `bench 8->5` fell as predicted,
+while `vt 116->218`, `global 0->31`, `unicode 0->20`, `cli 2->11`, `vt-c 4->10`, `lib 0->5`,
+`simd 0->4` appeared. **Do not expect an advance to zero a row, and do not treat the rise as
+an artifact** — it is the resync's real comment-coverage debt. Full before/after, per-crate
+delta and per-file attribution of all 334: `.port/phase-3/w10/`.
 
 **FORBIDDEN: a per-file / per-lane `GHOSTTY_SRC` override.** That is precisely the spoof
 hole `.port/tools/ci.sh:114-129` deliberately killed for G1b — a reference path
 redirected away from what the gate actually reads yields a **vacuous green** (R5). Do not
 re-open it here.
 
-**Until the pin advances:** each lane records its own beyond-pin delta in its own report
+**Between advances:** each lane records its own beyond-pin delta in its own report
 (which file, which sentence, and the upstream commit that deleted it), so the residual is
 attributable rather than merely tolerated. A `missing` rise with **no** such attribution
 is a real regression and must be treated as one.
