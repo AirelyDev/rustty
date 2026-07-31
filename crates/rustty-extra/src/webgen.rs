@@ -223,7 +223,30 @@ mod tests {
     /// `config.mdx` carries the frontmatter + one ``## `field` `` per documented
     /// field, and undocumented fields are GROUPED under the preceding documented
     /// one (`main_config.zig:43-56`) rather than dropped.
+    /// MIRI EXCEPTION (measured 2026-07-31, criterion 2: intractable runtime).
+    /// Natively **0.03 s**; under Miri it did not complete in **1500 s** (25 min)
+    /// on an otherwise-idle macOS host — the process printed `running 1 test`
+    /// and produced no result before the bound. The cost is structural, not
+    /// incidental: the body runs `s.matches(&format!("\n## `{name}`\n")).count()`
+    /// once per public config field (206 of them) against the whole rendered
+    /// document, plus a `to_lowercase()` over it — O(fields x len) substring
+    /// scanning, which is trivial natively and brutal byte-by-byte under an
+    /// interpreter.
+    ///
+    /// It exercises **no `unsafe`**: the module is `String`/`Vec` formatting over
+    /// `rustty-config` metadata, so Miri has no UB surface here that the native
+    /// run does not already cover. Excluded from the Miri lane, NOT the native
+    /// suite.
+    ///
+    /// THIS IS THE THIRD TEST OF THIS FAMILY, and finding it took three tries
+    /// worth recording. The first fix excluded the two `mdgen` coverage tests and
+    /// was reported as unblocking the `rustty-extra` Miri lane; it did not — the
+    /// lane hung again here. Then two attempts to MEASURE this one were
+    /// themselves vacuous: `timeout` does not exist on macOS, so the first
+    /// returned success after 0 s having run nothing. A 0-second Miri run is
+    /// impossible, which is the only reason it was caught.
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn config_mdx_frontmatter_and_grouping() {
         let s = String::from_utf8(config_mdx()).unwrap();
         assert!(s.starts_with("---\ntitle: Reference\n"), "no frontmatter");
