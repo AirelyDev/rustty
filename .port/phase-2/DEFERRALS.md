@@ -834,13 +834,20 @@ termio/Exec constructs+starts Command while core already deps termio;
 reaches the reference's flat `Command` symbol). All 10 reference tests are
 ported LIVE (R1; `termio_command` MAP entry). Notes:
 
-- **GTK growth point (`RtPreExecInfo`/`RtPostForkInfo`).** The reference's
-  comptime `@hasDecl(apprt.runtime, "pre_exec"/"post_fork")` branches are
-  realized ONLY by the GTK apprt (ported last). Until GTK lands and
-  specializes these types IN PLACE, the trivial fallback structs
-  (`init(_: &Config) -> Self` on unit-like structs, needing only
-  rustty-config's `Config` type) are the definitions — marked at the types;
-  NOT added to rustty-apprt-api (blueprint §1). 0 tests affected.
+- **GTK growth point (`RtPreExecInfo`/`RtPostForkInfo`) — FILLED (V13,
+  branch `ws20-v13-preexec-wiring`).** The reference's comptime
+  `@hasDecl(apprt.runtime, "pre_exec"/"post_fork")` branches are realized ONLY
+  by the GTK apprt. Both types now carry the reference's REAL GTK fields
+  (`pre_exec.zig:11-23`, `post_fork.zig:15-31`) and their `init(&Config)` copies
+  them; `rustty_apprt::gtk::{pre_exec::PreExecInfo, post_fork::PostForkInfo}`
+  are re-exports OF these types, which is the reference's comptime identity
+  established from the lower crate (R4 forbids rustty-termio ->
+  rustty-apprt). The hook FUNCTIONS are installed from above by
+  `gtk::App::init` via `command::install_rt_hooks`, read back by
+  `exec.rs` at the `Command` construction site — the one divergence from the
+  comptime branch, documented in full in the seam PORT NOTE above
+  `command::RtPreExecInfo`. Still NOT in rustty-apprt-api (blueprint §1).
+  0 reference tests affected (3 rustty-margin KATs added).
 - **Windows spawn path (cfg-gated structural port, unverified).**
   `startWindows`, the windows `wait`/`Exit`/`pseudo_console`/`pid` branches,
   and the windows halves of the test literals are ported line-for-line under

@@ -17,16 +17,28 @@
 //! PID into a transient `systemd` scope with the configured resource limits."
 //! (`post_fork.zig:34-38`)
 //!
-//! PORT NOTE (integration seam): the reference's signature is `pub fn
+//! PORT NOTE (integration seam — V13). The reference's signature is `pub fn
 //! postFork(cmd: *Command) Command.PostForkError!void`, reading
-//! `cmd.rt_post_fork_info` (a comptime-selected field type,
-//! `Command.zig:154-161`) and `cmd.pid`. Rust has no comptime type selection and
-//! `rustty_termio::command::RtPostForkInfo` is still the empty growth-point
-//! struct, so [`post_fork`] takes the [`PostForkInfo`] and the child pid
-//! explicitly. Wiring `RtPostForkInfo = PostForkInfo` is a `rustty-termio`
-//! change (see the WS20 report).
+//! `cmd.rt_post_fork_info` — a comptime-selected field type
+//! (`Command.zig:148-155`) — and `cmd.pid`. Rust has no comptime type selection
+//! and R4 forbids the `rustty-termio` -> `rustty-apprt` edge that would let
+//! termio name this type, so the identity
+//! `RtPostForkInfo == apprt.runtime.post_fork.PostForkInfo` is established from
+//! the LOWER crate: [`PostForkInfo`] IS
+//! [`rustty_termio::command::RtPostForkInfo`], re-exported here under the
+//! reference's name (and [`PostForkError`] is likewise now the ONE
+//! `rustty_termio::command::PostForkError`, no longer a mirror of it). The full
+//! reasoning is in the seam PORT NOTE above `rustty_termio::command::RtPreExecInfo`.
+//!
+//! The hook FUNCTION half is [`rt_post_fork`] below — the `PostForkFn`-shaped
+//! adapter the apprt installs with `rustty_termio::command::install_rt_hooks`,
+//! this port's stand-in for `Exec.zig:1036`'s
+//! `if (comptime @hasDecl(apprt.runtime, "post_fork")) apprt.runtime.post_fork.postFork else null`.
+//! [`post_fork`] itself keeps taking the info and the pid EXPLICITLY, which is
+//! what lets its five failure arms be unit-tested without a live `Command`.
 
 use rustty_config::value_types::{GtkSingleInstance, LinuxCgroup};
+use rustty_termio::command::Command;
 
 use super::cgroup;
 
@@ -34,52 +46,36 @@ use super::cgroup;
 /// `std.log.scoped(.gtk_post_fork)`.
 const LOG_SCOPE: &str = "gtk_post_fork";
 
-/// PORTS: `Command.zig:101` `pub const PostForkError = error{PostForkError};`,
-/// the error set `postFork` returns.
+/// PORTS: `Command.zig:95` `pub const PostForkError = error{PostForkError};`,
+/// the error set `postFork` returns — THE one in `rustty-termio`, re-exported
+/// (V13 collapsed the mirror this module used to carry to dodge the crate edge).
+pub use rustty_termio::command::PostForkError;
+
+/// PORTS: `post_fork.zig:15-31` `pub const PostForkInfo` — see the module PORT
+/// NOTE: the type is DEFINED in `rustty-termio` (as the reference's
+/// `Command.RtPostForkInfo`, which the comptime branch makes the SAME type) and
+/// re-exported here under the reference's name.
+pub use rustty_termio::command::RtPostForkInfo as PostForkInfo;
+
+/// The `Command.PostForkFn`-shaped adapter the apprt installs into
+/// `rustty_termio::command::install_rt_hooks` — the reference's
+/// `apprt.runtime.post_fork.postFork` AS SEEN BY `Exec.zig:1036`. Its body is
+/// the `cmd.rt_post_fork_info` / `cmd.pid` reads the reference does inline
+/// (`post_fork.zig:41,53`).
 ///
-/// PORT NOTE: `rustty_termio::command::PostForkError` is the same unit marker;
-/// it is mirrored here rather than imported because `rustty-apprt` deliberately
-/// carries NO `[dependencies]` edge to `rustty-termio` (it reaches termio only
-/// transitively through `rustty_core::surface::Surface`). The two collapse into
-/// one when the `RtPostForkInfo` growth point is filled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PostForkError;
-
-impl core::fmt::Display for PostForkError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "error.PostForkError")
-    }
-}
-
-impl std::error::Error for PostForkError {}
-
-/// PORTS: `post_fork.zig:15-32` `pub const PostForkInfo`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PostForkInfo {
-    /// `gtk_single_instance: configpkg.Config.GtkSingleInstance` (`:16`).
-    pub gtk_single_instance: GtkSingleInstance,
-    /// `linux_cgroup: configpkg.Config.LinuxCgroup` (`:17`).
-    pub linux_cgroup: LinuxCgroup,
-    /// `linux_cgroup_hard_fail: bool` (`:18`).
-    pub linux_cgroup_hard_fail: bool,
-    /// `linux_cgroup_memory_limit: ?u64` (`:19`).
-    pub linux_cgroup_memory_limit: Option<u64>,
-    /// `linux_cgroup_processes_limit: ?u64` (`:20`).
-    pub linux_cgroup_processes_limit: Option<u64>,
-}
-
-impl PostForkInfo {
-    /// PORTS: `post_fork.zig:22-30` `init`.
-    #[must_use]
-    pub fn init(cfg: &rustty_config::Config) -> Self {
-        Self {
-            gtk_single_instance: cfg.gtk_single_instance,
-            linux_cgroup: cfg.linux_cgroup,
-            linux_cgroup_hard_fail: cfg.linux_cgroup_hard_fail,
-            linux_cgroup_memory_limit: cfg.linux_cgroup_memory_limit,
-            linux_cgroup_processes_limit: cfg.linux_cgroup_processes_limit,
-        }
-    }
+/// Runs in the PARENT (`Command.zig:197`), so it is free to allocate and log.
+///
+/// # Errors
+/// Forwards [`post_fork`]'s [`PostForkError`]; `Command::start` turns it into
+/// the reference's `error.PostForkError` surface-creation failure.
+pub fn rt_post_fork(cmd: &mut Command<'_>) -> Result<(), PostForkError> {
+    // `const pid: u32 = @intCast(cmd.pid orelse ...)` (`post_fork.zig:53`) — a
+    // Zig `@intCast` traps on a negative value, which a live child pid cannot
+    // be. The `orelse` arm (unknown pid) is `post_fork`'s own `None` case.
+    let pid = cmd
+        .pid
+        .map(|pid| u32::try_from(pid).expect("a child pid is non-negative"));
+    post_fork(&cmd.rt_post_fork_info, pid)
 }
 
 /// "If we are configured to do so, tell `systemd` to move the new child PID into

@@ -39,44 +39,60 @@
 //! No heap allocation, no `String`, no `Vec`, no `Mutex`, no `eprintln!`, no
 //! `std::fs`, no `format!` appears below this line.
 //!
-//! PORT NOTE (integration seam): the reference's signature is `pub fn
-//! preExec(cmd: *Command) ?u8` and it reads `cmd.rt_pre_exec_info`, a field
-//! whose TYPE is comptime-selected as `apprt.runtime.pre_exec.PreExecInfo`
-//! (`Command.zig:145-152`). Rust has no comptime type selection, and
-//! `rustty_termio::command::RtPreExecInfo` is still the empty growth-point
-//! struct. So [`pre_exec`] takes the [`PreExecInfo`] explicitly; the value is
-//! exactly what `cmd.rt_pre_exec_info` holds in the reference, captured in the
-//! parent before the fork. Wiring `RtPreExecInfo = PreExecInfo` is a
-//! `rustty-termio` change (see the WS20 report).
+//! PORT NOTE (integration seam — V13, the divergence and its exact shape). The
+//! reference's signature is `pub fn preExec(cmd: *Command) ?u8`, and it reads
+//! `cmd.rt_pre_exec_info`, a field whose TYPE is comptime-selected as
+//! `apprt.runtime.pre_exec.PreExecInfo` (`Command.zig:139-146`):
+//!
+//! ```zig
+//! pub const RtPreExecInfo = if (@hasDecl(apprt.runtime, "pre_exec"))
+//!     apprt.runtime.pre_exec.PreExecInfo
+//! else struct { pub inline fn init(_: *const configpkg.Config) @This() { return .{}; } };
+//! ```
+//!
+//! Rust has no comptime type selection, and R4 forbids the `rustty-termio` ->
+//! `rustty-apprt` edge that naming this type from termio would need (it would
+//! cycle: `rustty-apprt` -> `rustty-core` -> `rustty-termio`). So the identity
+//! `RtPreExecInfo == apprt.runtime.pre_exec.PreExecInfo` is established from the
+//! LOWER crate instead: [`PreExecInfo`] IS
+//! [`rustty_termio::command::RtPreExecInfo`], re-exported here under the
+//! reference's name. `PreExecInfo::init` likewise lives there
+//! (`rustty-termio` already depends on `rustty-config`, so it needs no new
+//! edge). Nothing about the FIELDS or `init` differs from `pre_exec.zig:11-23`.
+//!
+//! The hook FUNCTION half is [`rt_pre_exec`] below — the `PreExecFn`-shaped
+//! adapter the apprt installs with `rustty_termio::command::install_rt_hooks`,
+//! which is this port's stand-in for `Exec.zig:1034`'s
+//! `if (comptime @hasDecl(apprt.runtime, "pre_exec")) apprt.runtime.pre_exec.preExec else null`.
+//! [`pre_exec`] itself keeps taking the info EXPLICITLY: it is the
+//! async-signal-safe body, and a `&PreExecInfo` parameter is what lets it be
+//! unit-tested without a live `Command`.
 
 use rustty_config::value_types::{GtkSingleInstance, LinuxCgroup};
+use rustty_termio::command::Command;
 
-/// PORTS: `pre_exec.zig:11-24` `pub const PreExecInfo`.
+/// PORTS: `pre_exec.zig:11-23` `pub const PreExecInfo` — see the module PORT
+/// NOTE: the type is DEFINED in `rustty-termio` (as the reference's
+/// `Command.RtPreExecInfo`, which the comptime branch makes the SAME type) and
+/// re-exported here under the reference's name.
 ///
 /// A `Copy` snapshot of the three config fields the child needs, taken in the
 /// PARENT before the fork — the reference does the same (`Command.zig:92`
 /// stores it by value in `Command`), which is what makes the child-side reads
 /// allocation- and lock-free.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PreExecInfo {
-    /// `gtk_single_instance: configpkg.Config.GtkSingleInstance` (`:12`).
-    pub gtk_single_instance: GtkSingleInstance,
-    /// `linux_cgroup: configpkg.Config.LinuxCgroup` (`:13`).
-    pub linux_cgroup: LinuxCgroup,
-    /// `linux_cgroup_hard_fail: bool` (`:14`).
-    pub linux_cgroup_hard_fail: bool,
-}
+pub use rustty_termio::command::RtPreExecInfo as PreExecInfo;
 
-impl PreExecInfo {
-    /// PORTS: `pre_exec.zig:16-22` `init`.
-    #[must_use]
-    pub fn init(cfg: &rustty_config::Config) -> Self {
-        Self {
-            gtk_single_instance: cfg.gtk_single_instance,
-            linux_cgroup: cfg.linux_cgroup,
-            linux_cgroup_hard_fail: cfg.linux_cgroup_hard_fail,
-        }
-    }
+/// The `Command.PreExecFn`-shaped adapter the apprt installs into
+/// `rustty_termio::command::install_rt_hooks` — the reference's
+/// `apprt.runtime.pre_exec.preExec` AS SEEN BY `Exec.zig:1034`, whose whole body
+/// is the `cmd.rt_pre_exec_info` read the reference does inline.
+///
+/// # Safety / discipline
+/// Runs in the forked child, like [`pre_exec`]: a single `Copy` field read, then
+/// the async-signal-safe body.
+#[must_use]
+pub fn rt_pre_exec(cmd: &mut Command<'_>) -> Option<u8> {
+    pre_exec(&cmd.rt_pre_exec_info)
 }
 
 /// `log.err("gtk-single-instance is set to detect", .{})` (`pre_exec.zig:39`).

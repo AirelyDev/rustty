@@ -47,9 +47,11 @@
 // const windows = internal_os.windows;
 // const ProcessInfo = @import("../pty.zig").ProcessInfo;
 //
-// PORT NOTE: `xev` -> the crate::xev_seam D6 placeholder types; `apprt` is
-// reached only through the `Command.RtPreExecInfo/RtPostForkInfo` fallbacks
-// (crate::command, blueprint §1 — no apprt-api edge here); `crash`/`fastmem`
+// PORT NOTE: `xev` -> the crate::xev_seam D6 placeholder types; the reference's
+// `apprt` import is reached ONLY through `crate::command`'s
+// `RtPreExecInfo`/`RtPostForkInfo` + the `install_rt_hooks` registry (V13 — this
+// crate must never name rustty-apprt, R4; see the seam PORT NOTE above
+// `command::RtPreExecInfo`); `crash`/`fastmem`
 // are used only inside the D6-deferred ReadThread/queueWrite bodies (verbatim
 // comments below), so no `use` is bound for them; `Command` is the RELOCATED
 // crate::command (break #13b); `EnvMap` is the crate's stage-3
@@ -2598,6 +2600,12 @@ impl Subprocess {
 
             let rt_pre = self.rt_pre_exec_info;
             let rt_post = self.rt_post_fork_info;
+            // The reference resolves `@hasDecl(apprt.runtime, "pre_exec")` HERE,
+            // at comptime (`Exec.zig:1034,1036`). Rust cannot name the apprt from
+            // this crate (R4: it would cycle), so the pair is read from the
+            // process-global the apprt installs — see the seam PORT NOTE above
+            // `command::RtPreExecInfo`.
+            let rt_hooks = crate::command::rt_hooks();
             let self_ptr: *mut Subprocess = std::ptr::addr_of_mut!(*self);
 
             // If we can't access the cwd, then don't set any cwd and inherit.
@@ -2651,9 +2659,9 @@ impl Subprocess {
                 // .os_pre_exec = switch (comptime builtin.os.tag) { .windows => null, ... },
                 os_pre_exec: None,
                 // .rt_pre_exec = if (comptime @hasDecl(apprt.runtime, "pre_exec")) ... else null,
-                rt_pre_exec: None,
+                rt_pre_exec: rt_hooks.pre_exec,
                 rt_pre_exec_info: rt_pre,
-                rt_post_fork: None,
+                rt_post_fork: rt_hooks.post_fork,
                 rt_post_fork_info: rt_post,
                 // .data = self,
                 data: Some(self_ptr.cast::<std::ffi::c_void>()),
@@ -2767,6 +2775,12 @@ impl Subprocess {
             // the spawn Command and the stored pid-only handle.)
             let rt_pre = self.rt_pre_exec_info;
             let rt_post = self.rt_post_fork_info;
+            // The reference resolves `@hasDecl(apprt.runtime, "pre_exec")` HERE,
+            // at comptime (`Exec.zig:1034,1036`). Rust cannot name the apprt from
+            // this crate (R4: it would cycle), so the pair is read from the
+            // process-global the apprt installs — see the seam PORT NOTE above
+            // `command::RtPreExecInfo`.
+            let rt_hooks = crate::command::rt_hooks();
 
             // [ADV-FIX F4] derive the write-capable raw self-pointer BEFORE any
             // `&self.*` field borrow, so it and the shared `&self.env` are never
@@ -2952,13 +2966,14 @@ impl Subprocess {
                 // .os_pre_exec = switch (comptime builtin.os.tag) { .windows => null, else => ... },
                 os_pre_exec: Some(subprocess_pre_exec),
                 // .rt_pre_exec = if (comptime @hasDecl(apprt.runtime, "pre_exec")) apprt.runtime.pre_exec.preExec else null,
-                // (@hasDecl is comptime-false in this build — realized only by the
-                // GTK apprt, blueprint §1.)
-                rt_pre_exec: None,
+                // (the `@hasDecl` answer, installed from above by the apprt —
+                // `Some(rustty_apprt::gtk::pre_exec::rt_pre_exec)` under the GTK
+                // apprt, `None` under every other one.)
+                rt_pre_exec: rt_hooks.pre_exec,
                 // .rt_pre_exec_info = self.rt_pre_exec_info,
                 rt_pre_exec_info: rt_pre,
                 // .rt_post_fork = if (comptime @hasDecl(apprt.runtime, "post_fork")) apprt.runtime.post_fork.postFork else null,
-                rt_post_fork: None,
+                rt_post_fork: rt_hooks.post_fork,
                 // .rt_post_fork_info = self.rt_post_fork_info,
                 rt_post_fork_info: rt_post,
                 // .data = self,
@@ -5741,8 +5756,8 @@ mod tests {
             working_directory: None,
             resources_dir: None,
             term: b"xterm-256color".to_vec(),
-            rt_pre_exec_info: RtPreExecInfo,
-            rt_post_fork_info: RtPostForkInfo,
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
         };
 
         let mut subprocess = Subprocess::init(Global, cfg).expect("Subprocess::init");
@@ -5844,6 +5859,110 @@ mod tests {
         }
 
         // deinit is safe post-stop.
+        subprocess.deinit();
+    }
+
+    /// The counter the KAT's stand-in `postFork` bumps. Global because the hook
+    /// is a plain `fn` pointer (the reference's `PostForkFn` shape); the KAT
+    /// holds `FORK_KAT_SERIAL` and asserts on a DELTA, so a sibling spawn KAT
+    /// that also trips the hook cannot perturb it.
+    #[cfg(target_os = "macos")]
+    static KAT_POST_FORK_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// Stands in for `apprt.runtime.pre_exec.preExec` (`Exec.zig:1034`). Runs in
+    /// the FORKED CHILD, so it does nothing observable and does not exit.
+    #[cfg(target_os = "macos")]
+    fn kat_pre_exec(_cmd: &mut Command<'_>) -> Option<u8> {
+        None
+    }
+
+    /// Stands in for `apprt.runtime.post_fork.postFork` (`Exec.zig:1036`). Runs
+    /// in the PARENT (`Command::start`, `Command.zig:197`), so its effect is
+    /// visible to the KAT.
+    #[cfg(target_os = "macos")]
+    fn kat_post_fork(cmd: &mut Command<'_>) -> Result<(), crate::command::PostForkError> {
+        // The reference's `postFork` reads `cmd.pid` (`post_fork.zig:53`) — assert
+        // the parent-side handle really is populated by the time it is called.
+        assert!(cmd.pid.is_some(), "postFork runs in the parent, after fork");
+        KAT_POST_FORK_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    // KAT (rustty-only margin; V13) — THE `rt_*` HOOK WIRING.
+    //
+    // Proves that the hooks an apprt installs with
+    // `command::install_rt_hooks` actually reach the `Command` that `Subprocess::
+    // start` forks, i.e. that this file's `rt_pre_exec: rt_hooks.pre_exec` /
+    // `rt_post_fork: rt_hooks.post_fork` really are the port's answer to
+    // `Exec.zig:1034-1037`'s `@hasDecl(apprt.runtime, ...)`. Before V13 both
+    // fields were the literal `None` and NOTHING could call the (fully ported,
+    // fully unit-tested) GTK `preExec`/`postFork`.
+    //
+    // Only the POST-fork hook is observable from the test: `preExec` runs in the
+    // forked child, whose side effects die with the `exec` (that is the whole
+    // point of the reference's split). The two are set from the same
+    // `rt_hooks()` read at the same construction site, so the post-fork
+    // observation covers both wires.
+    //
+    // Real fork/exec + openpty -> Miri-excluded with its siblings; gated to
+    // macOS exactly like `subprocess_start_spawns_and_reaps` above (the spawn
+    // KATs run on the dev host). The code under test is NOT cfg'd — the same
+    // `rt_hooks()` read serves every platform.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn rt_hooks_reach_the_spawned_command() {
+        use allocator_api2::alloc::Global;
+        use std::sync::atomic::Ordering;
+
+        // Serialize with the other fork/pty KATs (see FORK_KAT_SERIAL).
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        // The apprt's job (`gtk::App::init` does exactly this call). Idempotent
+        // for the SAME pair, so re-running this KAT in a retry is fine.
+        crate::command::install_rt_hooks(crate::command::RtHooks {
+            pre_exec: Some(kat_pre_exec),
+            post_fork: Some(kat_post_fork),
+        });
+
+        let base = KAT_POST_FORK_CALLS.load(Ordering::SeqCst);
+
+        // `/bin/echo` — bounded output, self-terminating (no drainer needed for
+        // ~14 bytes, unlike the SIGHUP'd `login(1)` of the sibling KAT).
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Direct(vec![
+                b"/bin/echo".to_vec(),
+                b"rt-hooks-kat".to_vec(),
+            ])),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+
+        let mut subprocess = Subprocess::init(Global, cfg).expect("Subprocess::init");
+        let fds = subprocess.start(Global).expect("Subprocess::start");
+
+        // THE ASSERTION: the installed `postFork` ran, exactly once, during this
+        // `start`. (`None` here — the pre-V13 state — makes this 0.)
+        assert_eq!(
+            KAT_POST_FORK_CALLS.load(Ordering::SeqCst) - base,
+            1,
+            "the installed rt_post_fork hook must be called by Command::start"
+        );
+
+        subprocess.stop();
+        // SAFETY: `fds.read` is the live pty master this KAT owns; closing it
+        // once, after `stop()` reaped the child, leaks nothing.
+        unsafe {
+            libc::close(fds.read);
+        }
         subprocess.deinit();
     }
 
@@ -5989,8 +6108,8 @@ mod tests {
                 working_directory: None,
                 resources_dir: None,
                 term: b"xterm-256color".to_vec(),
-                rt_pre_exec_info: RtPreExecInfo,
-                rt_post_fork_info: RtPostForkInfo,
+                rt_pre_exec_info: RtPreExecInfo::default(),
+                rt_post_fork_info: RtPostForkInfo::default(),
             };
             let backend =
                 crate::backend::Backend::Exec(Exec::init(Global, exec_cfg).expect("Exec::init"));
@@ -6159,8 +6278,8 @@ mod tests {
             working_directory: None,
             resources_dir: None,
             term: b"xterm-256color".to_vec(),
-            rt_pre_exec_info: RtPreExecInfo,
-            rt_post_fork_info: RtPostForkInfo,
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
         };
         let mut exec = Exec::init(Global, cfg).expect("Exec::init");
 

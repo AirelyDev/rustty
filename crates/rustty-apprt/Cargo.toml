@@ -95,6 +95,20 @@ rustty-inspector = { workspace = true }
 # ImGui_ImplMetal_Shutdown). Vendored Dear ImGui + Dear Bindings C API leaf
 # (`links = "dcimgui"`); a lower-tier -sys crate (acyclic).
 dcimgui-sys = { workspace = true }
+# V13 (`gtk::{pre_exec,post_fork}`): `rustty_termio::command::{Command,
+# RtPreExecInfo, RtPostForkInfo, PostForkError, install_rt_hooks}`. The apprt is
+# the crate that OWNS the `rt_*` hook pair the reference picks at comptime
+# (`Exec.zig:1034-1037`), so it installs it into termio; the reverse edge
+# (rustty-termio -> rustty-apprt) is the one R4 forbids and it is NOT added —
+# see the seam PORT NOTE above `rustty_termio::command::RtPreExecInfo`. This
+# edge is DOWNWARD and already existed transitively (rustty-apprt ->
+# rustty-core -> rustty-termio); naming it directly is what Rust needs to `use`
+# the crate. It was already carried as a Linux dev-dependency for the
+# first-light KAT; that entry is now redundant and removed. Plain
+# (non-optional), like the other lower-tier crates here: on a macOS / default
+# build it is compiled but unreferenced (the sole consumers are
+# `#[cfg(all(target_os = "linux", feature = "gtk"))]`).
+rustty-termio = { workspace = true }
 rustty-config = { workspace = true }
 rustty-input = { workspace = true }
 # WS15 (GTK GlobalShortcuts): `Binding.Action::format` is generic over
@@ -357,14 +371,6 @@ glib = { version = "0.22" }
 # none of it.
 gtk4 = { version = "0.11", features = ["v4_14"] }
 libadwaita = { version = "0.9", features = ["v1_5"] }
-# `rustty-termio` in scope so the KAT can name `rustty_termio::Backend::Exec` when
-# it reaches the live surface's pty master fd (`io.backend` → `Exec.subprocess.pty`)
-# to write `echo rustty-first-light\n` into the shell — the `live_shell.rs`
-# round-trip shape. rustty-apprt does not depend on rustty-termio in `[dependencies]`
-# (it reaches termio only transitively through `rustty_core::surface::Surface`), so
-# the KAT's direct `Backend` match needs this dev edge; it resolves to the same
-# rustty-termio instance as the transitive one.
-rustty-termio = { workspace = true }
 # `rustty_vt::input::key_mods::Mods` in scope for the X11 winproto KATs
 # (`tests/gtk_x11_event_mods.rs`), which compare the dispatched modifier state.
 # Integration tests reach only dev-dependencies, not the lib's `[dependencies]`
