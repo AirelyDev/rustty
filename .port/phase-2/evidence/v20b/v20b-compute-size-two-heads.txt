@@ -1,0 +1,30 @@
+V20b — compute-size monitor clamp, GEOMETRY EFFECT, on a real compositor
+captured: 2026-07-31T01:55:29-07:00
+sway:     sway version 1.11
+compositor: a headless sway (WLR_BACKENDS=headless, WLR_HEADLESS_OUTPUTS=2) on
+            its own socket. The primary GNOME/mutter session was NOT touched.
+heads: HEADLESS-1 1920x1200 + HEADLESS-2 800x600
+uptime before:  01:55:02 up 1 day, 17:27,  2 users,  load average: 1.15, 0.67, 0.40
+uptime after :  01:55:29 up 1 day, 17:28,  2 users,  load average: 0.88, 0.64, 0.40
+
+--- arm 1 `exceeds` (clamp must be defeated) ---
+V20B arm=exceeds requested=1400x1000 small_head=800x600 (HEADLESS-2)
+V20B heads advertised by the compositor: [("HEADLESS-2", 800, 600), ("HEADLESS-1", 1920, 1200)]
+V20B before move: surface=1400x1000
+V20B swaymsg ["move", "workspace", "to", "output", "HEADLESS-2"] -> rc=Some(0) [
+V20B swaymsg ["output", "HEADLESS-1", "disable"] -> rc=Some(0) [
+V20B outputs now: HEADLESS-2:True:800x600 HEADLESS-1:False:0x0
+V20B after move to HEADLESS-2 (800x600) + re-request 1401x1001: surface=1400x1000
+V20B arm `exceeds` OK
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.72s
+
+--- arm 2 `fits` (contrasting control: handler must be a no-op) ---
+V20B arm=fits requested=640x480 small_head=800x600 (HEADLESS-2)
+V20B heads advertised by the compositor: [("HEADLESS-2", 800, 600), ("HEADLESS-1", 1920, 1200)]
+V20B before move: surface=640x480
+V20B swaymsg ["move", "workspace", "to", "output", "HEADLESS-2"] -> rc=Some(0) [
+V20B swaymsg ["output", "HEADLESS-1", "disable"] -> rc=Some(0) [
+V20B outputs now: HEADLESS-2:True:800x600 HEADLESS-1:False:0x0
+V20B after move to HEADLESS-2 (800x600) + re-request 641x481: surface=641x481
+V20B arm `fits` OK
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.75s
