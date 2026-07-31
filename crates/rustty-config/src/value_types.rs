@@ -22,7 +22,8 @@
 #![allow(clippy::enum_variant_names)]
 
 use rustty_args::args::{
-    parse_auto_struct, parse_bool, AutoStruct, Error, PackedStruct, ParseError, WHITESPACE,
+    parse_auto_struct, parse_bool, parse_field_int, AutoStruct, Error, PackedStruct, ParseError,
+    WHITESPACE,
 };
 use rustty_cfg_fmt::{
     format_entry_display, format_entry_packed_struct, format_entry_string, format_entry_void,
@@ -37,6 +38,138 @@ use rustty_vt::page::u21;
 // rustty-args `Target`/`AutoStruct` traits and the rustty-cfg-fmt `FormatEntry`
 // trait + standalone helpers, exactly as the leaf value-types (string/path/
 // RepeatableStringMap/...) already do.
+
+// PORTS: ghostty src/config/limit.zig (1092204df).
+//
+// PORT NOTE: the reference is `pub fn Limit(comptime T: type, comptime
+// default_value: T) type` — a comptime type constructor whose default lives in
+// the type. Rust const generics cannot be generic over their own type parameter
+// (`const DEFAULT: T` is rejected), so the default is carried as a `u128` const
+// parameter and converted back through [`LimitInt`]; `T` remains a real type
+// parameter, so the reference's `Limit(u16, 42)` is spelled `Limit<u16, 42>`.
+// `comptime std.debug.assert(@typeInfo(T) == .int)` is enforced by the
+// [`LimitInt`] bound, which is only implemented for integer types.
+
+/// `Limit(usize, 50_000_000)` — the `scrollback-limit-bytes` config type.
+pub type ScrollbackLimitBytes = Limit<usize, 50_000_000>;
+
+/// `Limit(usize, std.math.maxInt(usize))` — the `scrollback-limit-lines`
+/// config type. Its declared default IS the unlimited sentinel.
+pub type ScrollbackLimitLines = Limit<usize, { usize::MAX as u128 }>;
+
+/// The integer capability [`Limit`] needs: its maximum value (the `unlimited`
+/// sentinel), conversion from the `u128` const default, and CLI parsing.
+pub trait LimitInt: Copy + PartialEq + core::fmt::Display {
+    const LIMIT_MAX: Self;
+    fn from_default(v: u128) -> Self;
+    fn parse_limit(input: &[u8]) -> Result<Self, ParseError>;
+}
+
+macro_rules! impl_limit_int {
+    ($($t:ty),*) => {$(
+        impl LimitInt for $t {
+            const LIMIT_MAX: $t = <$t>::MAX;
+            fn from_default(v: u128) -> $t {
+                v as $t
+            }
+            fn parse_limit(input: &[u8]) -> Result<$t, ParseError> {
+                parse_field_int::<$t>(Some(input))
+            }
+        }
+    )*};
+}
+impl_limit_int!(u8, u16, u32, u64, usize);
+
+/// A configurable integer limit with a declared default and support for the
+/// special value `unlimited`.
+///
+/// Unlimited is stored as the maximum value of the integer type so the value
+/// remains directly comparable without optional unwrapping.
+// pub fn Limit(comptime T: type, comptime default_value: T) type {
+//     return struct { value: T = default_value; ... };
+// }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limit<T: LimitInt, const DEFAULT: u128> {
+    // value: T = default_value,
+    pub value: T,
+}
+
+impl<T: LimitInt, const DEFAULT: u128> Limit<T, DEFAULT> {
+    /// The limit initialized with its declared default value.
+    // pub const default: Self = .{};
+    pub fn default_value() -> Self {
+        Limit {
+            value: T::from_default(DEFAULT),
+        }
+    }
+
+    /// Parses an integer limit or the special value "unlimited".
+    // pub fn parseCLI(input_: ?[]const u8) !Self
+    pub fn parse_cli(input_: Option<&[u8]>) -> Result<Self, ParseError> {
+        // const input = input_ orelse return error.ValueRequired;
+        let input = input_.ok_or(Error::ValueRequired)?;
+        // if (std.mem.eql(u8, input, "unlimited")) {
+        //     return .{ .value = std.math.maxInt(T) };
+        // }
+        if input == b"unlimited" {
+            return Ok(Limit {
+                value: T::LIMIT_MAX,
+            });
+        }
+
+        // return .{ .value = std.fmt.parseInt(T, input, 0) catch
+        //     return error.InvalidValue };
+        Ok(Limit {
+            value: T::parse_limit(input).map_err(|_| Error::InvalidValue)?,
+        })
+    }
+
+    /// Formats the maximum integer value as "unlimited" and all other
+    /// values as integers.
+    // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
+    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        // if (self.value == std.math.maxInt(T)) {
+        //     try formatter.formatEntry([]const u8, "unlimited");
+        // } else {
+        //     try formatter.formatEntry(T, self.value);
+        // }
+        if self.value == T::LIMIT_MAX {
+            format_entry_string(name, b"unlimited", writer)
+        } else {
+            format_entry_display(name, &self.value, writer)
+        }
+    }
+
+    /// Returns the configured value, or null for the unlimited sentinel.
+    // pub fn optional(self: Self) ?T
+    pub fn optional(&self) -> Option<T> {
+        // if (self.value == std.math.maxInt(T)) return null;
+        // return self.value;
+        if self.value == T::LIMIT_MAX {
+            None
+        } else {
+            Some(self.value)
+        }
+    }
+
+    /// Returns an independent copy of this value for Config cloning.
+    // pub fn clone(self: Self, _: std.mem.Allocator) std.mem.Allocator.Error!Self
+    pub fn clone_in(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: LimitInt, const DEFAULT: u128> Default for Limit<T, DEFAULT> {
+    fn default() -> Self {
+        Self::default_value()
+    }
+}
+
+impl<T: LimitInt, const DEFAULT: u128> FormatEntry for Limit<T, DEFAULT> {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        Limit::format_entry(self, name, writer)
+    }
+}
 
 /// PORTS: `std.fs.max_path_bytes` — the platform maximum path length used to
 /// size stack path buffers (4096 on Linux/macOS).
@@ -6802,6 +6935,67 @@ impl FormatEntry for WindowPadding {
 mod tests {
     use super::*;
     use rustty_cfg_fmt::{entry_formatter, AllocatingWriter};
+
+    // -----------------------------------------------------------------------
+    // Limit
+    // -----------------------------------------------------------------------
+
+    // test "Limit default and parsing"
+    #[test]
+    fn limit_default_and_parsing() {
+        // const TestLimit = Limit(usize, 42);
+        type TestLimit = Limit<usize, 42>;
+
+        // try testing.expectEqual(@as(usize, 42), TestLimit.default.value);
+        assert_eq!(42usize, TestLimit::default_value().value);
+        // try testing.expectEqual(@as(usize, 123), (try TestLimit.parseCLI("123")).value);
+        assert_eq!(123usize, TestLimit::parse_cli(Some(b"123")).unwrap().value);
+        // try testing.expectEqual(std.math.maxInt(usize), (try TestLimit.parseCLI("unlimited")).value);
+        assert_eq!(
+            usize::MAX,
+            TestLimit::parse_cli(Some(b"unlimited")).unwrap().value
+        );
+        // try testing.expectError(error.InvalidValue, TestLimit.parseCLI("invalid"));
+        assert_eq!(
+            Err(Error::InvalidValue),
+            TestLimit::parse_cli(Some(b"invalid"))
+        );
+    }
+
+    // test "Limit optional"
+    #[test]
+    fn limit_optional() {
+        // const TestLimit = Limit(u16, 42);
+        type TestLimit = Limit<u16, 42>;
+
+        // try testing.expectEqual(@as(?u16, 42), (TestLimit{}).optional());
+        assert_eq!(Some(42u16), TestLimit::default_value().optional());
+        // try testing.expectEqual(@as(?u16, null), (TestLimit{ .value = std.math.maxInt(u16) }).optional());
+        assert_eq!(None, (TestLimit { value: u16::MAX }).optional());
+    }
+
+    // test "Limit formatting"
+    #[test]
+    fn limit_formatting() {
+        type TestLimit = Limit<usize, 42>;
+
+        {
+            let mut buf = AllocatingWriter::init();
+            // try (TestLimit{ .value = 123 }).formatEntry(formatterpkg.entryFormatter("limit", &buf.writer));
+            let mut f = entry_formatter(b"limit", &mut buf);
+            f.format_entry(&TestLimit { value: 123 }).unwrap();
+            // try testing.expectEqualStrings("limit = 123\n", buf.written());
+            assert_eq!(b"limit = 123\n".as_slice(), buf.written());
+        }
+
+        {
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"limit", &mut buf);
+            f.format_entry(&TestLimit { value: usize::MAX }).unwrap();
+            // try testing.expectEqualStrings("limit = unlimited\n", buf.written());
+            assert_eq!(b"limit = unlimited\n".as_slice(), buf.written());
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Color

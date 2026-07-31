@@ -3,7 +3,7 @@
 //! harness over ghostty `src/terminal/PageList.zig`).
 //!
 //! WORKLOAD (identical to the Zig bench `main.zig` `workload()`; one iteration):
-//!   `PageList::init(80, 24, max = 1 GiB)`
+//!   `PageList::init(Options { max_size: Some(1 GiB), ..Options::new(80, 24) })`
 //!    -> `grow()` until `total_rows >= 2000` (forces page allocs)
 //!    -> scroll across the viewport (`scroll(.{ .row = r })` for every r, then
 //!       `.active`)
@@ -36,7 +36,7 @@ use rustty_vt::pagelist::access::Clone as CloneOpts;
 use rustty_vt::pagelist::page_tracking;
 use rustty_vt::pagelist::resize::Resize;
 use rustty_vt::pagelist::scroll::Scroll;
-use rustty_vt::pagelist::PageList;
+use rustty_vt::pagelist::{Options, PageList};
 use rustty_vt::point;
 
 /// `max_size` — matches the Zig bench (`large_max: usize = 1024*1024*1024`).
@@ -47,8 +47,16 @@ const TARGET_ROWS: usize = 2000;
 
 /// One full workload iteration — the EXACT Zig bench `workload()`.
 fn workload() {
-    // var pl = try PageList.init(alloc, 80, 24, large_max);
-    let mut pl = PageList::init(80, 24, Some(LARGE_MAX)).expect("init");
+    // var pl = try PageList.init(alloc, .{
+    //     .cols = 80,
+    //     .rows = 24,
+    //     .max_size = large_max,
+    // });
+    let mut pl = PageList::init(Options {
+        max_size: Some(LARGE_MAX),
+        ..Options::new(80, 24)
+    })
+    .expect("init");
 
     // grow to ~2000 total rows (start at 24 active):
     // while (pl.total_rows < target_rows) _ = try pl.grow();
@@ -117,7 +125,11 @@ fn workload_accounting(item_size: usize) -> usize {
         );
     };
 
-    let mut pl = PageList::init(80, 24, Some(LARGE_MAX)).expect("init");
+    let mut pl = PageList::init(Options {
+        max_size: Some(LARGE_MAX),
+        ..Options::new(80, 24)
+    })
+    .expect("init");
     sample(&mut peak);
     stage("init", &pl);
 

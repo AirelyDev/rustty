@@ -679,15 +679,12 @@ pub unsafe fn zig_terminal(terminal_: Terminal) -> *mut ZigTerminal {
     unsafe { (*terminal_).terminal }
 }
 
-/// C: GhosttyTerminalOptions -> RusttyTerminalOptions (R2)
-// pub const Options = extern struct { cols, rows, max_scrollback };
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Options {
-    pub cols: size::CellCountInt,
-    pub rows: size::CellCountInt,
-    pub max_scrollback: usize,
-}
+// PORT NOTE (oracle 03d5fa268): `GhosttyTerminalOptions` (rustty:
+// `RusttyTerminalOptions`) was REMOVED from the ABI entirely. `terminal_new`
+// now takes `cols`/`rows` directly and the scrollback limits moved to
+// `terminal_set` options 27/28. The `types.rs` struct table asserts the name is
+// GONE from the emitted JSON (`!root.contains("RusttyTerminalOptions")`), so a
+// re-introduction cannot pass silently.
 
 // const NewError = error{ InvalidValue, OutOfMemory };
 
@@ -699,8 +696,13 @@ enum NewError {
     OutOfMemory,
 }
 
-// pub fn new(alloc_: ?*const CAllocator, result: *Terminal, opts: Options) ... {
-//     result.* = new_(alloc_, opts) catch |err| {
+// pub fn new(
+//     alloc_: ?*const CAllocator,
+//     result: *Terminal,
+//     cols: size.CellCountInt,
+//     rows: size.CellCountInt,
+// ) ... {
+//     result.* = new_(alloc_, cols, rows) catch |err| {
 //         result.* = null;
 //         return switch (err) {
 //             error.InvalidValue => .invalid_value,
@@ -712,10 +714,15 @@ enum NewError {
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be a
 /// valid writable pointer to a `Terminal`.
-pub unsafe fn new(alloc_: *const CAllocator, result: *mut Terminal, opts: Options) -> Result {
+pub unsafe fn new(
+    alloc_: *const CAllocator,
+    result: *mut Terminal,
+    cols: size::CellCountInt,
+    rows: size::CellCountInt,
+) -> Result {
     // SAFETY: `alloc_` validity and `result` writability are caller contracts.
     let alloc_ref = unsafe { alloc_.as_ref() };
-    match new_(alloc_ref, opts) {
+    match new_(alloc_ref, cols, rows) {
         Ok(wrapper) => {
             unsafe { *result = wrapper };
             Result::Success
@@ -730,14 +737,18 @@ pub unsafe fn new(alloc_: *const CAllocator, result: *mut Terminal, opts: Option
     }
 }
 
-// fn new_(alloc_: ?*const CAllocator, opts: Options) NewError!*TerminalWrapper {
-//     if (opts.cols == 0 or opts.rows == 0) return error.InvalidValue;
+// fn new_(
+//     alloc_: ?*const CAllocator,
+//     cols: size.CellCountInt,
+//     rows: size.CellCountInt,
+// ) NewError!*TerminalWrapper {
+//     if (cols == 0 or rows == 0) return error.InvalidValue;
 //     const alloc = lib.alloc.default(alloc_);
 //     const t = alloc.create(ZigTerminal) catch return error.OutOfMemory;
 //     errdefer alloc.destroy(t);
 //     const wrapper = alloc.create(TerminalWrapper) catch return error.OutOfMemory;
 //     errdefer alloc.destroy(wrapper);
-//     t.* = try .init(alloc, .{ .cols, .rows, .max_scrollback });
+//     t.* = try .init(alloc, .{ .cols = cols, .rows = rows });
 //     errdefer t.deinit(alloc);
 //     t.flags.shell_redraws_prompt = .false;
 //     var handler: Stream.Handler = t.vtHandler();
@@ -753,9 +764,13 @@ pub unsafe fn new(alloc_: *const CAllocator, result: *mut Terminal, opts: Option
 // the wrapper and terminal storage are `Box::into_raw`'d on the Rust global heap
 // per the signed-off D3 storage plan. The two `errdefer`s become explicit hand
 // unwinds (Box drops + `deinit`) on each fallible step.
-fn new_(alloc_: Option<&CAllocator>, opts: Options) -> std::result::Result<Terminal, NewError> {
-    // if (opts.cols == 0 or opts.rows == 0) return error.InvalidValue;
-    if opts.cols == 0 || opts.rows == 0 {
+fn new_(
+    alloc_: Option<&CAllocator>,
+    cols: size::CellCountInt,
+    rows: size::CellCountInt,
+) -> std::result::Result<Terminal, NewError> {
+    // if (cols == 0 or rows == 0) return error.InvalidValue;
+    if cols == 0 || rows == 0 {
         return Err(NewError::InvalidValue);
     }
 
@@ -773,9 +788,14 @@ fn new_(alloc_: Option<&CAllocator>, opts: Options) -> std::result::Result<Termi
     let mut terminal = match ZigTerminal::init(
         gpa,
         ZigTerminalOptions {
-            cols: opts.cols,
-            rows: opts.rows,
-            max_scrollback: opts.max_scrollback,
+            cols,
+            rows,
+            // PORT NOTE: the reference relies on `Terminal.Options`'s own
+            // `max_scrollback_bytes = 10_000` / `max_scrollback_lines = null`
+            // defaults here; rustty-vt has no `Default` for `Options`, so they
+            // are written out (see the note on the remaining fields below).
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             // PORT NOTE: the reference relies on the `Options` field defaults for
             // the remaining fields. rustty-vt has no `Default` for `Options`; we
             // replicate the (ghostty-artifact) defaults that rustty-vt's source
@@ -980,6 +1000,8 @@ pub enum Option_ {
     GlyphProtocol = 24,
     PwdChanged = 25,
     ClipboardWrite = 26,
+    ScrollbackMaxBytes = 27,
+    ScrollbackMaxLines = 28,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -1002,7 +1024,11 @@ pub enum Option_ {
     //         .kitty_image_medium_shared_mem,
     //         .glyph_protocol,
     //         => ?*const bool,
-    //         .apc_max_bytes, .apc_max_bytes_kitty => ?*const usize,
+    //         .apc_max_bytes,
+    //         .apc_max_bytes_kitty,
+    //         .scrollback_max_bytes,
+    //         .scrollback_max_lines,
+    //         => ?*const usize,
     //         .selection => ?*const selection_c.CSelection,
     //         .default_cursor_style => ?*const TerminalCursorStyle,
     //         .default_cursor_blink => ?*const bool,
@@ -1444,6 +1470,32 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 unsafe { (*t).modes.set(modes::Mode::CursorBlinking, blink) };
             }
         }
+
+        // .scrollback_max_bytes => wrapper.terminal.setScrollbackMaxBytes(
+        //     if (value) |ptr| ptr.* else null,
+        // ),
+        Option_::ScrollbackMaxBytes => {
+            let ptr = value as *const usize;
+            let max = if ptr.is_null() {
+                None
+            } else {
+                Some(unsafe { *ptr })
+            };
+            unsafe { (*t).set_scrollback_max_bytes(max) };
+        }
+
+        // .scrollback_max_lines => wrapper.terminal.setScrollbackMaxLines(
+        //     if (value) |ptr| ptr.* else null,
+        // ),
+        Option_::ScrollbackMaxLines => {
+            let ptr = value as *const usize;
+            let max = if ptr.is_null() {
+                None
+            } else {
+                Some(unsafe { *ptr })
+            };
+            unsafe { (*t).set_scrollback_max_lines(max) };
+        }
     }
 
     // return .success;
@@ -1804,6 +1856,12 @@ pub enum TerminalData {
     KittyGraphics = 30,
     Selection = 31,
     ViewportActive = 32,
+    // PORT NOTE: `vt_processing_error = 33` (oracle `439d35e27`) is NOT yet
+    // ported — it needs `stream.handler.semantic_failure`, which is owned by
+    // `P3-W4 T5`. The discriminant is deliberately LEFT AS A GAP so 34/35 keep
+    // the oracle's ABI numbering; do not renumber to close it.
+    ScrollbackMaxBytes = 34,
+    ScrollbackMaxLines = 35,
     // /// Output type expected for querying the data of the given kind.
     // pub fn OutType(comptime self: TerminalData) type {
     //     return switch (self) {
@@ -1815,7 +1873,11 @@ pub enum TerminalData {
     //         .scrollbar => TerminalScrollbar,
     //         .cursor_style => style_c.Style,
     //         .title, .pwd => lib.String,
-    //         .total_rows, .scrollback_rows => usize,
+    //         .total_rows,
+    //         .scrollback_rows,
+    //         .scrollback_max_bytes,
+    //         .scrollback_max_lines,
+    //         => usize,
     //         .width_px, .height_px => u32,
     //         .color_foreground,
     //         .color_background,
@@ -1954,6 +2016,37 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
                 rustty_vt::pagelist::Viewport::Active
             )
         },
+
+        // .scrollback_max_bytes => {
+        //     const max = t.screens.get(.primary).?.pages.limits.bytes.explicit;
+        //     if (max == std.math.maxInt(usize)) return .no_value;
+        //     out.* = max;
+        // },
+        TerminalData::ScrollbackMaxBytes => {
+            let primary: *mut rustty_vt::screen::Screen = unsafe {
+                (*t).screens
+                    .get(rustty_vt::screen_set::Key::Primary)
+                    .unwrap()
+            };
+            let max = unsafe { (*primary).pages.limits.bytes.explicit };
+            if max == usize::MAX {
+                return Result::NoValue;
+            }
+            unsafe { *(out as *mut usize) = max };
+        }
+        // .scrollback_max_lines => { ... same, .lines.explicit ... },
+        TerminalData::ScrollbackMaxLines => {
+            let primary: *mut rustty_vt::screen::Screen = unsafe {
+                (*t).screens
+                    .get(rustty_vt::screen_set::Key::Primary)
+                    .unwrap()
+            };
+            let max = unsafe { (*primary).pages.limits.lines.explicit };
+            if max == usize::MAX {
+                return Result::NoValue;
+            }
+            unsafe { *(out as *mut usize) = max };
+        }
 
         // .scrollbar => out.* = t.screens.active.pages.scrollbar().cval(),
         TerminalData::Scrollbar => unsafe {
@@ -2427,20 +2520,9 @@ mod tests {
         alloc: &CAllocator,
         cols: size::CellCountInt,
         rows: size::CellCountInt,
-        sb: usize,
     ) -> (Result, Terminal) {
         let mut t: Terminal = std::ptr::null_mut();
-        let r = unsafe {
-            new(
-                alloc as *const CAllocator,
-                &mut t,
-                Options {
-                    cols,
-                    rows,
-                    max_scrollback: sb,
-                },
-            )
-        };
+        let r = unsafe { new(alloc as *const CAllocator, &mut t, cols, rows) };
         (r, t)
     }
 
@@ -2456,17 +2538,9 @@ mod tests {
         with_test_allocator(|alloc| {
             // var t: Terminal = null;
             let mut t: Terminal = std::ptr::null_mut();
-            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ .cols=80, .rows=24, .max_scrollback=10_000 }));
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, 80, 24));
             assert_eq!(Result::Success, unsafe {
-                new(
-                    alloc as *const CAllocator,
-                    &mut t,
-                    Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 10_000,
-                    },
-                )
+                new(alloc as *const CAllocator, &mut t, 80, 24)
             });
             // try testing.expect(t != null);
             assert!(!t.is_null());
@@ -2482,31 +2556,172 @@ mod tests {
             let mut t: Terminal = std::ptr::null_mut();
             // cols == 0
             assert_eq!(Result::InvalidValue, unsafe {
-                new(
-                    alloc as *const CAllocator,
-                    &mut t,
-                    Options {
-                        cols: 0,
-                        rows: 24,
-                        max_scrollback: 10_000,
-                    },
-                )
+                new(alloc as *const CAllocator, &mut t, 0, 24)
             });
             assert!(t.is_null());
 
             // rows == 0
             assert_eq!(Result::InvalidValue, unsafe {
-                new(
-                    alloc as *const CAllocator,
-                    &mut t,
-                    Options {
-                        cols: 80,
-                        rows: 0,
-                        max_scrollback: 10_000,
-                    },
-                )
+                new(alloc as *const CAllocator, &mut t, 80, 0)
             });
             assert!(t.is_null());
+        });
+    }
+
+    // test "set scrollback limits"
+    #[test]
+    fn set_scrollback_limits() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 3);
+            assert_eq!(Result::Success, new_result);
+
+            // const primary = t.?.terminal.screens.get(.primary).?;
+            let primary: *mut rustty_vt::screen::Screen = unsafe {
+                (*(*t).terminal)
+                    .screens
+                    .get(rustty_vt::screen_set::Key::Primary)
+                    .unwrap()
+            };
+
+            let max_bytes: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ScrollbackMaxBytes,
+                    &max_bytes as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(0usize, unsafe { (*primary).pages.limits.bytes.explicit });
+            assert!(unsafe { (*primary).no_scrollback });
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ScrollbackMaxBytes, std::ptr::null())
+            });
+            assert_eq!(usize::MAX, unsafe {
+                (*primary).pages.limits.bytes.explicit
+            });
+            assert!(!unsafe { (*primary).no_scrollback });
+
+            let max_lines: usize = 12;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ScrollbackMaxLines,
+                    &max_lines as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(max_lines, unsafe { (*primary).pages.limits.lines.explicit });
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ScrollbackMaxLines, std::ptr::null())
+            });
+            assert_eq!(usize::MAX, unsafe {
+                (*primary).pages.limits.lines.explicit
+            });
+
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get configured scrollback limits"
+    #[test]
+    fn get_configured_scrollback_limits() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 3);
+            assert_eq!(Result::Success, new_result);
+
+            let mut value: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackMaxBytes,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(10_000usize, value);
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackMaxLines,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+
+            let max_bytes: usize = 0;
+            let max_lines: usize = 12;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ScrollbackMaxBytes,
+                    &max_bytes as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ScrollbackMaxLines,
+                    &max_lines as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackMaxBytes,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(max_bytes, value);
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackMaxLines,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(max_lines, value);
+
+            // The configured limits belong to the primary screen and remain
+            // readable while an alternate screen is active.
+            unsafe { vt_write(t, b"\x1b[?1049h".as_ptr(), 8) };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackMaxBytes,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(max_bytes, value);
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackMaxLines,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(max_lines, value);
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ScrollbackMaxBytes, std::ptr::null())
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ScrollbackMaxLines, std::ptr::null())
+            });
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackMaxBytes,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackMaxLines,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+
+            unsafe { free(t) };
         });
     }
 
@@ -2521,7 +2736,7 @@ mod tests {
     fn scroll_viewport_test() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 5, 2, 10_000);
+            let (new_result, t) = new_t(alloc, 5, 2);
             assert_eq!(Result::Success, new_result);
 
             let mut viewport_active: bool = false;
@@ -2624,7 +2839,7 @@ mod tests {
     #[test]
     fn scroll_viewport_row_test() {
         with_test_allocator(|alloc| {
-            let (new_result, t) = new_t(alloc, 5, 2, 10_000);
+            let (new_result, t) = new_t(alloc, 5, 2);
             assert_eq!(Result::Success, new_result);
 
             // Write 4 rows so rows "1" and "2" are pushed into scrollback:
@@ -2726,7 +2941,7 @@ mod tests {
     #[test]
     fn scroll_viewport_row_alt_screen_test() {
         with_test_allocator(|alloc| {
-            let (new_result, t) = new_t(alloc, 5, 2, 10_000);
+            let (new_result, t) = new_t(alloc, 5, 2);
             assert_eq!(Result::Success, new_result);
 
             // Enter the alternate screen, which has no scrollback.
@@ -2804,7 +3019,7 @@ mod tests {
                 )
             });
 
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // try testing.expectEqual(Result.invalid_value, compression_activity(t, null));
@@ -2833,7 +3048,7 @@ mod tests {
     #[test]
     fn compression_activity_and_incremental_scheduling() {
         with_test_allocator(|alloc| {
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // var initial_activity: u64 = undefined;
@@ -2923,7 +3138,7 @@ mod tests {
     fn reset_test() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
@@ -2945,7 +3160,7 @@ mod tests {
     fn resize_test() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::Success, unsafe { resize(t, 40, 12, 9, 18) });
@@ -2968,7 +3183,7 @@ mod tests {
     fn resize_invalid_value() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::InvalidValue, unsafe { resize(t, 0, 24, 9, 18) });
@@ -2982,7 +3197,7 @@ mod tests {
     fn resize_shrinks_both_axes_with_cursor_at_bottom() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // CSI 24;1H -> park the cursor on the bottom row (1-based).
@@ -3003,7 +3218,7 @@ mod tests {
     fn mode_get_and_mode_set() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut value: bool = false;
@@ -3076,7 +3291,7 @@ mod tests {
     fn mode_get_unknown_mode() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut value: bool = false;
@@ -3097,7 +3312,7 @@ mod tests {
     fn mode_set_unknown_mode() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let unknown = modes::ModeTag {
@@ -3115,7 +3330,7 @@ mod tests {
     fn vt_write_test() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
@@ -3130,7 +3345,7 @@ mod tests {
     fn vt_write_split_escape_sequence() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // Write "Hello" in bold by splitting the CSI bold sequence across two writes.
@@ -3150,7 +3365,7 @@ mod tests {
     fn vt_write_split_combining_mark_after_base_at_right_edge() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 2, 2, 0);
+            let (new_result, t) = new_t(alloc, 2, 2);
             assert_eq!(Result::Success, new_result);
 
             // Put "å" in the final column, then send its combining low line in a
@@ -3168,7 +3383,7 @@ mod tests {
     fn get_cols_and_rows() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut cols: size::CellCountInt = 0;
@@ -3190,7 +3405,7 @@ mod tests {
     fn get_cursor_position() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
@@ -3227,7 +3442,7 @@ mod tests {
     fn get_cursor_visible() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut visible: bool = false;
@@ -3266,7 +3481,7 @@ mod tests {
     fn get_active_screen() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut screen: TerminalScreen = TerminalScreen::Primary;
@@ -3287,7 +3502,7 @@ mod tests {
     fn get_kitty_keyboard_flags() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut flags: u8 = 0;
@@ -3320,7 +3535,7 @@ mod tests {
     fn get_mouse_tracking() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut tracking: bool = false;
@@ -3390,7 +3605,7 @@ mod tests {
     fn get_total_rows() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut total: usize = 0;
@@ -3411,7 +3626,7 @@ mod tests {
     fn get_scrollback_rows() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 3, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 3);
             assert_eq!(Result::Success, new_result);
 
             let mut scrollback: usize = 0;
@@ -3450,7 +3665,7 @@ mod tests {
     fn get_invalid() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::InvalidValue, unsafe {
@@ -3465,7 +3680,7 @@ mod tests {
     fn get_multi_null_keys_returns_invalid_value() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut cols: size::CellCountInt = 0;
@@ -3506,7 +3721,7 @@ mod tests {
     fn write_pty_trampoline_round_trip() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe {
                 #[allow(static_mut_refs)]
@@ -3568,7 +3783,7 @@ mod tests {
     fn set_default_cursor_style_and_blink() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // var default_style: TerminalCursorStyle = .bar;
@@ -3632,7 +3847,7 @@ mod tests {
     fn set_and_get_selection() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
@@ -3705,7 +3920,7 @@ mod tests {
     fn selection_derivation_helpers() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"  Hello  \r\nWorld");
@@ -3819,7 +4034,7 @@ mod tests {
     fn selection_adjust_mutates_snapshot_end() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
@@ -3870,7 +4085,7 @@ mod tests {
     fn selection_order_and_selection_ordered() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello\r\nWorld");
@@ -3925,7 +4140,7 @@ mod tests {
     fn selection_contains_test() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello\r\nWorld");
@@ -3977,10 +4192,10 @@ mod tests {
     fn selection_equal_test() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             // try testing.expectEqual(Result.success, new(&test_allocator, &other_t, .{ ... }));
-            let (new_result, other_t) = new_t(alloc, 80, 24, 0);
+            let (new_result, other_t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
@@ -4066,7 +4281,7 @@ mod tests {
     fn selection_order_invalid_values() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut order = crate::selection::Order::Forward;
@@ -4085,7 +4300,7 @@ mod tests {
     fn grid_ref_test() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
@@ -4128,7 +4343,7 @@ mod tests {
     fn point_from_grid_ref_roundtrip_active() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
@@ -4155,7 +4370,7 @@ mod tests {
     fn point_from_grid_ref_roundtrip_viewport() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
@@ -4180,7 +4395,7 @@ mod tests {
     fn point_from_grid_ref_history_ref_to_active_returns_no_value() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 4, 10_000);
+            let (new_result, t) = new_t(alloc, 80, 4);
             assert_eq!(Result::Success, new_result);
 
             // Write enough lines to push content into scrollback
@@ -4228,7 +4443,7 @@ mod tests {
     fn point_from_grid_ref_null_node() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let ref_ = CGridRef::default();
@@ -4263,7 +4478,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe {
                 LAST_DATA = None;
@@ -4311,7 +4526,7 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe {
                 LAST_DATA = None;
@@ -4344,7 +4559,7 @@ mod tests {
     fn set_write_pty_without_callback_ignores_queries() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             // Without setting a callback, DECRQM should be silently ignored (no crash)
             vtw(t, b"\x1B[?7$p");
@@ -4362,7 +4577,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { CALLED = false };
 
@@ -4394,7 +4609,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe {
                 BELL_COUNT = 0;
@@ -4433,7 +4648,7 @@ mod tests {
     fn bell_without_callback_is_silent() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             // BEL without a callback should not crash
             vtw(t, b"\x07");
@@ -4459,7 +4674,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -4488,7 +4703,7 @@ mod tests {
     fn enquiry_without_callback_is_silent() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             // ENQ without a callback should not crash
             vtw(t, b"\x05");
@@ -4514,7 +4729,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -4550,7 +4765,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -4588,7 +4803,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe {
                 TITLE_COUNT = 0;
@@ -4626,7 +4841,7 @@ mod tests {
     fn title_changed_without_callback_is_silent() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             // OSC 2 without a callback should not crash
             vtw(t, b"\x1B]2;Hello\x1B\\");
@@ -4648,7 +4863,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe {
                 PWD_COUNT = 0;
@@ -4731,7 +4946,7 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe {
                 COUNT = 0;
@@ -4871,7 +5086,7 @@ mod tests {
     fn pwd_changed_without_callback_is_silent() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             // OSC 7 without a callback should not crash, but should still set the pwd
             vtw(t, b"\x1B]7;file:///tmp\x1B\\");
@@ -4908,7 +5123,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -4937,7 +5152,7 @@ mod tests {
     fn size_without_callback_is_silent() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             // CSI 18 t without a size callback should not crash
             vtw(t, b"\x1B[18t");
@@ -4977,7 +5192,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -5032,7 +5247,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -5087,7 +5302,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -5122,7 +5337,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -5157,7 +5372,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -5186,7 +5401,7 @@ mod tests {
     fn set_and_get_title() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // No title set yet — should return empty string
@@ -5249,7 +5464,7 @@ mod tests {
     fn set_and_get_pwd() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // No pwd set yet — should return empty string
@@ -5296,7 +5511,7 @@ mod tests {
     fn get_title_set_via_vt_write() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // Set title via OSC 2
@@ -5321,7 +5536,7 @@ mod tests {
     fn resize_updates_pixel_dimensions() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
@@ -5338,7 +5553,7 @@ mod tests {
     fn resize_pixel_overflow_saturates() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::Success, unsafe {
@@ -5357,7 +5572,7 @@ mod tests {
     fn resize_disables_synchronized_output() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let zt = unsafe { (*t).terminal };
@@ -5380,7 +5595,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
@@ -5420,7 +5635,7 @@ mod tests {
 
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             unsafe { CALLED = false };
 
@@ -5440,7 +5655,7 @@ mod tests {
     fn resize_in_band_report_without_write_pty_callback() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // Enable mode 2048 but don't set a write_pty callback — should not crash
@@ -5467,7 +5682,7 @@ mod tests {
     fn resize_zero_cols() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             assert_eq!(Result::InvalidValue, unsafe { resize(t, 0, 40, 9, 18) });
             unsafe { free(t) };
@@ -5479,7 +5694,7 @@ mod tests {
     fn resize_zero_rows() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             assert_eq!(Result::InvalidValue, unsafe { resize(t, 100, 0, 9, 18) });
             unsafe { free(t) };
@@ -5491,7 +5706,7 @@ mod tests {
     fn grid_ref_out_of_bounds() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut out_ref = CGridRef::default();
@@ -5507,7 +5722,7 @@ mod tests {
     fn set_and_get_color_foreground() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // Initially unset
@@ -5562,7 +5777,7 @@ mod tests {
     fn set_and_get_color_background() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
@@ -5614,7 +5829,7 @@ mod tests {
     fn set_and_get_color_cursor() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
@@ -5662,7 +5877,7 @@ mod tests {
     fn set_and_get_color_palette() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             // Get default palette
@@ -5718,7 +5933,7 @@ mod tests {
     fn get_color_default_vs_effective_with_override() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let zt = unsafe { (*t).terminal };
@@ -5830,7 +6045,7 @@ mod tests {
     fn get_color_default_returns_no_value_when_unset() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
@@ -5864,7 +6079,7 @@ mod tests {
     fn get_color_palette_default_vs_current() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let zt = unsafe { (*t).terminal };
@@ -5930,7 +6145,7 @@ mod tests {
     fn set_color_sets_dirty_flag() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let zt = unsafe { (*t).terminal };
@@ -5958,7 +6173,7 @@ mod tests {
     fn set_glyph_protocol_disables_apc_handling_and_clears_glossary() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let register = b"\x1B_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1B\\";
@@ -6001,7 +6216,7 @@ mod tests {
     fn get_multi_success() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut cols: u16 = 0;
@@ -6034,7 +6249,7 @@ mod tests {
     fn get_multi_error_sets_out_written() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
-            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
             let mut cols: u16 = 0;

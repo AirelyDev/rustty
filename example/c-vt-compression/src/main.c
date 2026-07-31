@@ -30,12 +30,14 @@ static bool compression_idle_step(RusttyTerminal terminal) {
 
 int main(void) {
   RusttyTerminal terminal;
-  RusttyTerminalOptions opts = {
-    .cols = 80,
-    .rows = 24,
-    .max_scrollback = 10 * 1024 * 1024,
-  };
-  RusttyResult result = rustty_terminal_new(NULL, &terminal, opts);
+  RusttyResult result = rustty_terminal_new(NULL, &terminal, 80, 24);
+  assert(result == RUSTTY_SUCCESS);
+
+  size_t max_scrollback_bytes = 10 * 1024 * 1024;
+  result = rustty_terminal_set(
+      terminal,
+      RUSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+      &max_scrollback_bytes);
   assert(result == RUSTTY_SUCCESS);
 
   //! [compression-activity]

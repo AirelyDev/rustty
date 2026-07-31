@@ -2144,11 +2144,12 @@ mod tests {
 
     // PORT NOTE: see search/screen.rs — supplies the Zig `Options` field defaults
     // the reference relies on implicitly for `Terminal.init`.
-    fn terminal_opts(cols: u16, rows: u16, max_scrollback: usize) -> TerminalOptions {
+    fn terminal_opts(cols: u16, rows: u16, max_scrollback_bytes: usize) -> TerminalOptions {
         TerminalOptions {
             cols,
             rows,
-            max_scrollback,
+            max_scrollback_bytes: Some(max_scrollback_bytes),
+            max_scrollback_lines: None,
             colors: Colors {
                 background: DynamicRGB::UNSET,
                 foreground: DynamicRGB::UNSET,

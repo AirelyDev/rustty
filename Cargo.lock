@@ -1593,6 +1593,7 @@ dependencies = [
  "allocator-api2",
  "libc",
  "rustty-apprt-api",
+ "rustty-args",
  "rustty-build-config",
  "rustty-config",
  "rustty-crash",

@@ -1170,15 +1170,7 @@ mod tests {
             // var t: terminal_c.Terminal = null;
             let mut t: terminal::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut t,
-                    terminal::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut t, 80, 24)
             });
             // defer terminal_c.free(t);
 
@@ -1265,15 +1257,7 @@ mod tests {
         with_test_allocator(|alloc| {
             let mut t: terminal::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut t,
-                    terminal::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut t, 80, 24)
             });
 
             // terminal_c.vt_write(t, "Hello World", 11);
@@ -1336,15 +1320,7 @@ mod tests {
         with_test_allocator(|alloc| {
             let mut t: terminal::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut t,
-                    terminal::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut t, 80, 24)
             });
 
             // var out_ptr: ?[*]u8 = @ptrFromInt(1); var out_len: usize = 123;

@@ -25,12 +25,7 @@ static uint32_t codepoint_at_tracked_ref(RusttyTrackedGridRef tracked) {
 
 int main() {
   RusttyTerminal terminal;
-  RusttyTerminalOptions opts = {
-    .cols = 8,
-    .rows = 3,
-    .max_scrollback = 100,
-  };
-  RusttyResult result = rustty_terminal_new(NULL, &terminal, opts);
+  RusttyResult result = rustty_terminal_new(NULL, &terminal, 8, 3);
   assert(result == RUSTTY_SUCCESS);
 
   const char *text = "alpha\r\n"

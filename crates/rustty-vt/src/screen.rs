@@ -52,7 +52,7 @@ use crate::osc;
 use crate::page as pagepkg;
 use crate::page::u21;
 use crate::page::{Cell, Page, Row};
-use crate::pagelist::{self, OutOfMemory, PageList, Pin};
+use crate::pagelist::{self, Key, OutOfMemory, PageList, Pin};
 use crate::point;
 use crate::selection;
 use crate::selection::Selection;
@@ -357,9 +357,15 @@ pub struct Options {
     pub cols: size::CellCountInt,
     pub rows: size::CellCountInt,
 
-    /// The maximum size of scrollback in bytes. Zero means unlimited. Any
-    /// other value will be clamped to support a minimum of the active area.
-    pub max_scrollback: usize,
+    /// The maximum size of scrollback in bytes. Null is unlimited, zero
+    /// disables scrollback, and any other value is clamped to support a
+    /// minimum of the active area.
+    pub max_scrollback_bytes: Option<usize>,
+
+    /// The maximum number of physical scrollback rows, excluding the active
+    /// area. Null is unlimited. The effective limit permits at least one
+    /// standard page and only complete historical pages are pruned.
+    pub max_scrollback_lines: Option<usize>,
 
     /// The total storage limit for Kitty images in bytes for this
     /// screen. Kitty image storage is per-screen.
@@ -382,17 +388,18 @@ impl Options {
         // pub const default: Options = .{
         //     .cols = 80,
         //     .rows = 24,
-        //     .max_scrollback = 0,
+        //     .max_scrollback_bytes = 0,
         // };
         // PORT NOTE: the reference `Options.default` only sets cols/rows/
-        // max_scrollback; the remaining fields take their struct-default values
+        // max_scrollback_bytes; the remaining fields take their struct-default values
         // (kitty_image_storage_limit per artifact; kitty_image_loading_limits
         // `.direct`). The kitty graphics fields are the deferred placeholders
         // (kitty graphics is DEFERRED to vt-12), so they default trivially here.
         Options {
             cols: 80,
             rows: 24,
-            max_scrollback: 0,
+            max_scrollback_bytes: Some(0),
+            max_scrollback_lines: None,
             kitty_image_storage_limit: 0,
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }
@@ -598,19 +605,25 @@ pub struct DumpStringOptions {
 impl Screen {
     /// Initialize a new screen.
     ///
-    /// max_scrollback is the amount of scrollback to keep in bytes. This
+    /// max_scrollback_bytes is the amount of scrollback to keep in bytes. This
     /// will be rounded UP to the nearest page size because our minimum allocation
     /// size is that anyways.
     ///
     /// If max scrollback is 0, then no scrollback is kept at all.
     pub fn init(alloc: Allocator, opts: Options) -> Result<Screen, OutOfMemory> {
         // Initialize our backing pages.
-        // var pages = try PageList.init(alloc, opts.cols, opts.rows, opts.max_scrollback);
+        // var pages = try PageList.init(alloc, .{
+        //     .cols = opts.cols,
+        //     .rows = opts.rows,
+        //     .max_size = opts.max_scrollback_bytes,
+        //     .max_lines = opts.max_scrollback_lines,
+        // });
         // errdefer pages.deinit();
-        // PORT NOTE: the reference `PageList.init` takes `?usize` and Zig coerces
-        // the `usize` `opts.max_scrollback` into `Some(..)`; `0` therefore becomes
-        // `Some(0)` (the no-scrollback case is captured by `no_scrollback` below).
-        let mut pages = PageList::init(opts.cols, opts.rows, Some(opts.max_scrollback))?;
+        let mut pages = PageList::init(pagelist::Options {
+            max_size: opts.max_scrollback_bytes,
+            max_lines: opts.max_scrollback_lines,
+            ..pagelist::Options::new(opts.cols, opts.rows)
+        })?;
 
         // Create our tracked pin for the cursor.
         // const page_pin = try pages.trackPin(.{ .node = pages.pages.first.? });
@@ -636,7 +649,7 @@ impl Screen {
         let mut result: Screen = Screen {
             alloc,
             pages,
-            no_scrollback: opts.max_scrollback == 0,
+            no_scrollback: opts.max_scrollback_bytes == Some(0),
             cursor: Cursor {
                 x: 0,
                 y: 0,
@@ -4678,7 +4691,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4691,7 +4705,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4722,7 +4737,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4734,7 +4750,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 2048,
+                max_scrollback_bytes: Some(2048),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4805,7 +4822,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4818,7 +4836,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4842,7 +4861,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4854,7 +4874,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4885,7 +4906,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4897,7 +4919,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 2048,
+                max_scrollback_bytes: Some(2048),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4968,7 +4991,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -4989,7 +5013,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5018,7 +5043,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5039,7 +5065,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5068,7 +5095,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 24,
-                max_scrollback: 1000,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5100,7 +5128,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 24,
-                max_scrollback: 1000,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5130,7 +5159,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 24,
-                max_scrollback: 1000,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5160,7 +5190,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 3,
-                max_scrollback: 1,
+                max_scrollback_bytes: Some(1),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5224,7 +5255,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 3,
-                max_scrollback: 1,
+                max_scrollback_bytes: Some(1),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5279,7 +5311,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 3,
-                max_scrollback: 1,
+                max_scrollback_bytes: Some(1),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5345,7 +5378,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 3,
-                max_scrollback: 1,
+                max_scrollback_bytes: Some(1),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5439,6 +5473,92 @@ mod tests {
     // `dumpStringAlloc`, which lands here in vt-11b alongside the formatter
     // production code.
 
+    // ref: test "Screen forwards optional scrollback limits"
+    #[test]
+    fn screen_forwards_optional_scrollback_limits() {
+        let max_lines: usize = 123;
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback_bytes: None,
+                max_scrollback_lines: Some(max_lines),
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(usize::MAX, s.pages.limits.bytes.explicit);
+        assert_eq!(max_lines, s.pages.limits.lines.explicit);
+        assert!(!s.no_scrollback);
+
+        s.deinit();
+    }
+
+    // PORT NOTE (rustty-only guard, `P3-W3` T2 Step 3): `10bc43420` makes the
+    // byte limit OPTIONAL, so `Some(0)` ("disable scrollback") and `None`
+    // ("unlimited") are now two DIFFERENT encodings where the pinned tree had
+    // only one `usize` and no way to say "unlimited" at all. A two-case test
+    // cannot tell the new encoding from the old, so this asserts all THREE
+    // behaviours against the same growth workload.
+    #[test]
+    fn screen_scrollback_bytes_zero_none_and_finite_are_distinct() {
+        fn sopts(bytes: Option<usize>) -> Options {
+            Options {
+                cols: 80,
+                rows: 1,
+                max_scrollback_bytes: bytes,
+                max_scrollback_lines: None,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            }
+        }
+
+        // (a) Some(0) DISABLES scrollback: the screen reports no_scrollback and
+        //     the pagelist keeps only its structural minimum.
+        let mut zero = Screen::init(Allocator, sopts(Some(0))).unwrap();
+        assert!(zero.no_scrollback);
+        assert_eq!(0usize, zero.pages.limits.bytes.explicit);
+
+        let page_rows: usize =
+            unsafe { crate::pagelist::Node::capacity(zero.pages.pages.first) }.rows as usize;
+        let grow: usize = 20 * page_rows;
+        zero.pages.grow_rows(grow).unwrap();
+        assert!(zero.pages.page_size <= zero.pages.limits.max(Key::Bytes));
+        let zero_rows = zero.pages.total_rows;
+
+        // (b) None is UNLIMITED: scrollback is enabled and growth is unbounded.
+        let mut unlimited = Screen::init(Allocator, sopts(None)).unwrap();
+        assert!(!unlimited.no_scrollback);
+        assert_eq!(usize::MAX, unlimited.pages.limits.bytes.explicit);
+        unlimited.pages.grow_rows(grow).unwrap();
+        assert_eq!(grow + 1, unlimited.pages.total_rows);
+        let unlimited_rows = unlimited.pages.total_rows;
+
+        // (c) Some(n) PRUNES at n: scrollback is enabled but bounded.
+        let bounded_limit = 2 * zero.pages.limits.bytes.min;
+        let mut bounded = Screen::init(Allocator, sopts(Some(bounded_limit))).unwrap();
+        assert!(!bounded.no_scrollback);
+        assert_eq!(bounded_limit, bounded.pages.limits.bytes.explicit);
+        bounded.pages.grow_rows(grow).unwrap();
+        assert!(bounded.pages.page_size <= bounded.pages.limits.max(Key::Bytes));
+        let bounded_rows = bounded.pages.total_rows;
+
+        // The three encodings must be strictly ordered; any two of them
+        // collapsing would mean the optional encoding is not being honored.
+        assert!(zero_rows < bounded_rows, "{zero_rows} < {bounded_rows}");
+        assert!(
+            bounded_rows < unlimited_rows,
+            "{bounded_rows} < {unlimited_rows}"
+        );
+
+        bounded.deinit();
+        unlimited.deinit();
+        zero.deinit();
+    }
+
     // test "Screen read and write"
     #[test]
     fn screen_read_and_write() {
@@ -5447,7 +5567,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 24,
-                max_scrollback: 1000,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5475,7 +5596,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 24,
-                max_scrollback: 1000,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5503,7 +5625,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 2,
-                max_scrollback: 1000,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5541,7 +5664,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 2,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5579,7 +5703,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 2,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5614,7 +5739,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5629,7 +5755,8 @@ mod tests {
             Options {
                 cols: 10,
                 rows: 10,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -5661,14 +5788,15 @@ mod tests {
     fn mkscreen(
         cols: size::CellCountInt,
         rows: size::CellCountInt,
-        max_scrollback: usize,
+        max_scrollback_bytes: usize,
     ) -> Screen {
         Screen::init(
             Allocator,
             Options {
                 cols,
                 rows,
-                max_scrollback,
+                max_scrollback_bytes: Some(max_scrollback_bytes),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -9311,21 +9439,22 @@ mod tests {
     }
 
     // PORT NOTE: `init` helper mirroring the reference's
-    // `try init(alloc, .{ .cols, .rows, .max_scrollback })`. The kitty image
+    // `try init(alloc, .{ .cols, .rows, .max_scrollback_bytes })`. The kitty image
     // limit fields are not exercised by these tests (kitty graphics is deferred
     // to vt-12); they take the same defaults used by every other test in this
     // module.
     fn clone_clear_init(
         cols: size::CellCountInt,
         rows: size::CellCountInt,
-        max_scrollback: usize,
+        max_scrollback_bytes: usize,
     ) -> Screen {
         Screen::init(
             Allocator,
             Options {
                 cols,
                 rows,
-                max_scrollback,
+                max_scrollback_bytes: Some(max_scrollback_bytes),
+                max_scrollback_lines: None,
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
@@ -10364,7 +10493,8 @@ mod tests {
             Options {
                 cols: 2,
                 rows: 1,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 ..Options::default()
             },
         )
@@ -10404,7 +10534,8 @@ mod tests {
             Options {
                 cols: 4,
                 rows: 2,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 ..Options::default()
             },
         )
@@ -10460,7 +10591,8 @@ mod tests {
             Options {
                 cols: 4,
                 rows: 1,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 ..Options::default()
             },
         )
@@ -10506,7 +10638,8 @@ mod tests {
             Options {
                 cols: 80,
                 rows: 24,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 ..Options::default()
             },
         )
@@ -10569,7 +10702,8 @@ mod tests {
             Options {
                 cols: 8,
                 rows: 1,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 ..Options::default()
             },
         )
@@ -10620,7 +10754,8 @@ mod tests {
             Options {
                 cols: 8,
                 rows: 1,
-                max_scrollback: 0,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
                 ..Options::default()
             },
         )

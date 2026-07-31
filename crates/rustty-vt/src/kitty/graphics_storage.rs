@@ -1196,7 +1196,7 @@ mod tests {
     use crate::terminal::Terminal;
 
     // PORT NOTE: the tests construct `terminal.Terminal.init(alloc, .{ .cols, .rows })`
-    // relying on the reference `Terminal.Options` field defaults (`max_scrollback`,
+    // relying on the reference `Terminal.Options` field defaults (`max_scrollback_bytes`,
     // `colors = .default`, `default_modes = .{}`, kitty limits). Rust `Options` has
     // no field defaults, so this helper supplies them verbatim, mirroring the
     // reference `Options` declaration (see terminal.rs's test `opts` helper).
@@ -1204,7 +1204,8 @@ mod tests {
         crate::terminal::Options {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: crate::terminal::Colors::default(),
             default_modes: crate::modes::ModePacked::default(),
             kitty_image_storage_limit: 320 * 1000 * 1000,

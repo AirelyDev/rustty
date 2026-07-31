@@ -157,7 +157,7 @@ impl PageList {
         // it always has SOME extra space (due to the way we allocate by page).
         // So even with no scrollback we have some growth. It is architecturally
         // much simpler to just hide that for no-scrollback cases.
-        if self.explicit_max_size == 0 {
+        if self.limits.bytes.explicit == 0 {
             return Scrollbar {
                 total: self.rows as usize,
                 offset: 0,
@@ -242,8 +242,12 @@ impl PageList {
     ///
     /// This is unit tested transitively through other tests such as
     /// eraseRows.
-    #[allow(dead_code)]
     pub(crate) fn fixup_viewport(&mut self, removed: usize) {
+        // Page removal can mark every pin on the removed page as garbage. The
+        // viewport pin is an internal navigation anchor that is always remapped,
+        // so it remains valid after the removal.
+        unsafe { (*self.viewport_pin).garbage = false };
+
         match self.viewport {
             Viewport::Active => {}
 
@@ -282,7 +286,7 @@ impl PageList {
     ///
     /// This may allocate, but also may not if our current page has more
     /// capacity we can use. This will prune scrollback if necessary to
-    /// adhere to max_size.
+    /// adhere to max_size and max_lines.
     ///
     /// This returns the newly allocated page node if there is one.
     pub fn grow(&mut self) -> Result<Option<*mut Node>, super::OutOfMemory> {
@@ -301,6 +305,9 @@ impl PageList {
             // Increase our total rows by one
             self.total_rows += 1;
 
+            // Growing inside the last page moves the active boundary without
+            // allocating; that alone can make the first page wholly historical.
+            self.enforce_limit(super::Key::Lines);
             self.assert_integrity();
             return Ok(None);
         }
@@ -321,7 +328,7 @@ impl PageList {
         // initial allocation.
         if !self.pages.first.is_null()
             && !core::ptr::eq(self.pages.first, self.pages.last)
-            && self.page_size + super::std_size() > self.max_size()
+            && self.page_size + super::std_size() > self.limits.max(super::Key::Bytes)
         {
             // prune:
             let first = unsafe { self.pages.pop_first() };
@@ -421,6 +428,10 @@ impl PageList {
             // we're reusing an existing page so nothing has changed.
 
             unsafe { (*super::Node::page(first)).assert_integrity() };
+
+            // Byte-limit recycling may leave history above the independent line
+            // limit, so enforce it after the recycled page becomes the new tail.
+            self.enforce_limit(super::Key::Lines);
             self.assert_integrity();
             return Ok(Some(first));
         }
@@ -448,6 +459,9 @@ impl PageList {
         // Record the increased row count
         self.total_rows += 1;
 
+        // Appending a page can cross the line limit and can make the oldest
+        // active-boundary page wholly historical.
+        self.enforce_limit(super::Key::Lines);
         self.assert_integrity();
         Ok(Some(next_node))
     }

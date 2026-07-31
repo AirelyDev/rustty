@@ -62,15 +62,7 @@ fn selection_gesture_lifecycle_and_get() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
         // defer terminal_c.free(terminal);
 
@@ -152,15 +144,7 @@ fn selection_gesture_get_multi() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -212,15 +196,7 @@ fn selection_gesture_get_multi_returns_first_failing_index() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -426,15 +402,7 @@ fn selection_gesture_event_applies_press() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -500,15 +468,7 @@ fn selection_gesture_event_press_requires_ref() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -537,15 +497,7 @@ fn selection_gesture_event_null_output_still_reports_no_selection() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -585,15 +537,7 @@ fn selection_gesture_event_applies_release() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -670,15 +614,7 @@ fn selection_gesture_release_without_ref_marks_dragged() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -737,15 +673,7 @@ fn selection_gesture_event_applies_drag() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let input = b"abcde";
@@ -853,15 +781,7 @@ fn selection_gesture_drag_requires_ref_and_geometry() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -919,15 +839,7 @@ fn selection_gesture_event_applies_autoscroll_tick() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         // terminal_c.vt_write(terminal, "abcde\r\nfghij", 12);
@@ -1067,15 +979,7 @@ fn selection_gesture_autoscroll_tick_requires_viewport_and_geometry() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();
@@ -1128,15 +1032,7 @@ fn selection_gesture_event_applies_deep_press() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let input = b"abcde";
@@ -1212,15 +1108,7 @@ fn selection_gesture_deep_press_without_active_anchor_returns_no_value() {
     with_test_allocator(|alloc| {
         let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            terminal_c::new(
-                alloc,
-                &mut terminal,
-                terminal_c::Options {
-                    cols: 5,
-                    rows: 2,
-                    max_scrollback: 10_000,
-                },
-            )
+            terminal_c::new(alloc, &mut terminal, 5, 2)
         });
 
         let mut gesture: Gesture = std::ptr::null_mut();

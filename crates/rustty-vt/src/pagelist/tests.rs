@@ -26,7 +26,10 @@ use super::compress::{CompressionMode, IncrementalCompressionResult};
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
-use super::{std_capacity, std_size, NodeData, Owned, PageList, Pin, Storage, Viewport};
+use super::{
+    std_capacity, std_size, IntegrityError, Key, Limits, NodeData, Options, Owned, PageList, Pin,
+    Storage, Viewport,
+};
 use crate::page::{Capacity, Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
@@ -93,7 +96,7 @@ fn pin_eql(expected: Pin, got: Pin) -> bool {
 // ref: test "PageList"
 #[test]
 fn pagelist() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     assert!(s.viewport == super::Viewport::Active);
     assert!(!s.pages.first.is_null());
@@ -165,7 +168,10 @@ fn pagelist_init_error() {
         // try std.testing.expectError(error.OutOfMemory, init(...));
         // PORT NOTE: `PageList` has no `Debug`, so we use `matches!` rather than
         // `assert_eq!` (which would require `Debug` on the `Ok` type).
-        assert!(matches!(PageList::init(80, 24, None), Err(OutOfMemory)));
+        assert!(matches!(
+            PageList::init(Options::new(80, 24)),
+            Err(OutOfMemory)
+        ));
         INIT_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
     }
 
@@ -183,7 +189,10 @@ fn pagelist_init_error() {
         } else {
             std_capacity().max_cols().unwrap() + 1
         };
-        assert!(matches!(PageList::init(cols, 24, None), Err(OutOfMemory)));
+        assert!(matches!(
+            PageList::init(Options::new(cols, 24)),
+            Err(OutOfMemory)
+        ));
         INIT_PAGES_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
     }
 
@@ -195,11 +204,10 @@ fn pagelist_init_error() {
     for tag in [InitPagesFp::PageBufNonStd] {
         INIT_PAGES_TW.with(|tw| tw.borrow_mut().errorAfter(tag, OutOfMemory, 1));
         assert!(matches!(
-            PageList::init(
+            PageList::init(Options::new(
                 std_capacity().max_cols().unwrap() + 1,
-                std_capacity().rows + 1,
-                None,
-            ),
+                std_capacity().rows + 1
+            )),
             Err(OutOfMemory)
         ));
         INIT_PAGES_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
@@ -209,7 +217,7 @@ fn pagelist_init_error() {
 // ref: test "PageList pointFromPin active no history"
 #[test]
 fn pagelist_pointFromPin_active_no_history() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     {
         assert_eq!(
@@ -248,7 +256,7 @@ fn pagelist_pointFromPin_active_no_history() {
 // ref: test "PageList pointFromPin active with history"
 #[test]
 fn pagelist_pointFromPin_active_with_history() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(30).unwrap();
 
     {
@@ -288,7 +296,7 @@ fn pagelist_pointFromPin_active_with_history() {
 // ref: test "PageList pointFromPin active from prior page"
 #[test]
 fn pagelist_pointFromPin_active_from_prior_page() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     // Grow so we take up at least 5 pages.
     let page_cap = unsafe { super::Node::capacity(s.pages.last).rows };
     let mut cur_page = s.pages.last;
@@ -339,7 +347,7 @@ fn pagelist_pointFromPin_active_from_prior_page() {
 // ref: test "PageList pointFromPin traverse pages"
 #[test]
 fn pagelist_pointFromPin_traverse_pages() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up at least 2 pages.
     let page_cap = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -398,7 +406,11 @@ fn pagelist_pointFromPin_traverse_pages() {
 // ref: test "PageList scroll with max_size 0 no history"
 #[test]
 fn pagelist_scroll_with_max_size_0_no_history() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     s.grow_rows(10).unwrap();
 
@@ -426,7 +438,7 @@ fn pagelist_scroll_with_max_size_0_no_history() {
 // ref: test "PageList scroll top"
 #[test]
 fn pagelist_scroll_top() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     {
@@ -498,7 +510,7 @@ fn pagelist_scroll_top() {
 // ref: test "PageList scroll delta row back"
 #[test]
 fn pagelist_scroll_delta_row_back() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     {
@@ -563,7 +575,7 @@ fn pagelist_scroll_delta_row_back() {
 // ref: test "PageList scroll delta row back overflow"
 #[test]
 fn pagelist_scroll_delta_row_back_overflow() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     {
@@ -617,7 +629,7 @@ fn pagelist_scroll_delta_row_back_overflow() {
 // ref: test "PageList scroll delta row forward"
 #[test]
 fn pagelist_scroll_delta_row_forward() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     {
@@ -672,7 +684,7 @@ fn pagelist_scroll_delta_row_forward() {
 // ref: test "PageList scroll delta row forward into active"
 #[test]
 fn pagelist_scroll_delta_row_forward_into_active() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     s.scroll(Scroll::DeltaRow(2));
 
@@ -716,7 +728,7 @@ fn pagelist_init_rows_across_two_pages() {
     };
 
     // Init
-    let mut s = PageList::init(cap.cols, rows, None).unwrap();
+    let mut s = PageList::init(Options::new(cap.cols, rows)).unwrap();
     assert!(s.viewport == super::Viewport::Active);
     assert!(!s.pages.first.is_null());
     assert_eq!(s.rows as usize, s.total_rows());
@@ -743,7 +755,7 @@ fn pagelist_init_more_than_max_cols() {
     // Initialize with more columns than we can fit in our standard
     // capacity. This is going to force us to go to a non-standard page
     // immediately.
-    let mut s = PageList::init(std_capacity().max_cols().unwrap() + 1, 80, None).unwrap();
+    let mut s = PageList::init(Options::new(std_capacity().max_cols().unwrap() + 1, 80)).unwrap();
 
     assert!(s.viewport == super::Viewport::Active);
     assert_eq!(s.rows as usize, s.total_rows());
@@ -771,7 +783,7 @@ fn pagelist_init_more_than_max_cols() {
 // ref: test "PageList active after grow"
 #[test]
 fn pagelist_active_after_grow() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
 
     s.grow_rows(10).unwrap();
@@ -820,7 +832,11 @@ fn pagelist_grow_allows_exceeding_max_size_for_active_area() {
     let cap = std_capacity()
         .adjust(crate::page::Adjustment { cols: Some(5) })
         .unwrap();
-    let mut s = PageList::init(5, cap.rows, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(5, cap.rows)
+    })
+    .unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
 
     // Grow once because we guarantee at least two pages of
@@ -861,7 +877,7 @@ fn pagelist_grow_allows_exceeding_max_size_for_active_area() {
 #[test]
 fn pagelist_grow_prune_required_with_a_single_page() {
     // Need scrollback > 0 to have a scrollbar to test
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // This block is all test setup. There is nothing required about this
     // behavior during a refactor. This is setting up a scenario that is
@@ -927,7 +943,11 @@ fn pagelist_grow_prune_required_with_a_single_page() {
 // inside the 20-min Miri budget (criterion 3 coverage for rows 8-13).
 #[test]
 fn pagelist_grow_prune_miri_tractable() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // Fill page 1 to capacity surgically (constant-time).
     unsafe {
@@ -987,7 +1007,11 @@ fn pagelist_grow_prune_miri_tractable() {
 // ref: test "PageList scrollbar with max_size 0 after grow"
 #[test]
 fn pagelist_scrollbar_with_max_size_0_after_grow() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // Grow some rows (simulates normal terminal output)
     s.grow_rows(10).unwrap();
@@ -1006,7 +1030,7 @@ fn pagelist_scrollbar_with_max_size_0_after_grow() {
 // ref: test "PageList grow fit in capacity"
 #[test]
 fn pagelist_grow_fit_in_capacity() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // So we know we're using capacity to grow
     {
@@ -1034,7 +1058,7 @@ fn pagelist_grow_fit_in_capacity() {
 )]
 #[test]
 fn pagelist_grow_allocate() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow to capacity
     let last_node = s.pages.last;
@@ -1077,7 +1101,11 @@ fn pagelist_grow_allocate() {
 // ref: test "PageList increaseCapacity to increase styles"
 #[test]
 fn pagelist_increaseCapacity_to_increase_styles() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
 
     let original_styles_cap = unsafe { super::Node::capacity(s.pages.first).styles };
 
@@ -1123,7 +1151,11 @@ fn pagelist_increaseCapacity_to_increase_styles() {
 // ref: test "PageList increaseCapacity to increase graphemes"
 #[test]
 fn pagelist_increaseCapacity_to_increase_graphemes() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
 
     let original_cap = unsafe { super::Node::capacity(s.pages.first).grapheme_bytes };
 
@@ -1165,7 +1197,11 @@ fn pagelist_increaseCapacity_to_increase_graphemes() {
 // ref: test "PageList increaseCapacity to increase hyperlinks"
 #[test]
 fn pagelist_increaseCapacity_to_increase_hyperlinks() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
 
     let original_cap = unsafe { super::Node::capacity(s.pages.first).hyperlink_bytes };
 
@@ -1207,7 +1243,11 @@ fn pagelist_increaseCapacity_to_increase_hyperlinks() {
 // ref: test "PageList increaseCapacity to increase string_bytes"
 #[test]
 fn pagelist_increaseCapacity_to_increase_string_bytes() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
 
     let original_cap = unsafe { super::Node::capacity(s.pages.first).string_bytes };
 
@@ -1249,7 +1289,11 @@ fn pagelist_increaseCapacity_to_increase_string_bytes() {
 // ref: test "PageList increaseCapacity tracked pins"
 #[test]
 fn pagelist_increaseCapacity_tracked_pins() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
 
     // Create a tracked pin on the first page
     let tracked = s
@@ -1279,7 +1323,11 @@ fn pagelist_increaseCapacity_tracked_pins() {
 // ref: test "PageList increaseCapacity returns OutOfSpace at max capacity"
 #[test]
 fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
 
     // Keep increasing styles capacity until we get OutOfSpace
     let max_styles = size::StyleCountInt::MAX;
@@ -1307,7 +1355,7 @@ fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
 )]
 #[test]
 fn pagelist_increaseCapacity_multi_page() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow to create a second page
     let page1_node = s.pages.last;
@@ -1347,7 +1395,11 @@ fn pagelist_increaseCapacity_multi_page() {
 // ref: test "PageList increaseCapacity preserves dirty flag"
 #[test]
 fn pagelist_increaseCapacity_preserves_dirty_flag() {
-    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 4)
+    })
+    .unwrap();
 
     // Set page dirty flag and mark some rows as dirty
     let new_node = {
@@ -1392,7 +1444,7 @@ fn pagelist_increaseCapacity_preserves_dirty_flag() {
 // ref: test "PageList reset"
 #[test]
 fn pagelist_reset() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.reset();
     assert!(s.viewport == super::Viewport::Active);
     assert!(!s.pages.first.is_null());
@@ -1450,7 +1502,7 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
 
     // Fresh pool slot: the very first page handed out at init is lazily
     // OS-zeroed mmap memory (no eager memset); every active cell reads empty.
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert_eq!(
         unsafe { (*super::Node::page(s.pages.first)).memory_len },
         std_size()
@@ -1484,7 +1536,11 @@ fn pagelist_fresh_page_buffer_is_observably_zero() {
 )]
 #[test]
 fn pagelist_only_reset_advances_the_serial_epoch() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     let epoch0 = s.page_serial_epoch;
     fill_compressible_history(&mut s, 4);
     assert_eq!(
@@ -1506,7 +1562,7 @@ fn pagelist_only_reset_advances_the_serial_epoch() {
 // ref: test "PageList reset invalidates stale untracked refs even if node memory is reused"
 #[test]
 fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     let old_serial = unsafe { (*s.pages.first).serial };
     assert!(old_serial >= s.page_serial_epoch);
@@ -1547,7 +1603,7 @@ fn pagelist_reset_across_two_pages() {
     };
 
     // Init
-    let mut s = PageList::init(cap.cols, rows, None).unwrap();
+    let mut s = PageList::init(Options::new(cap.cols, rows)).unwrap();
     s.reset();
     assert!(s.viewport == super::Viewport::Active);
     assert!(!s.pages.first.is_null());
@@ -1559,7 +1615,7 @@ fn pagelist_reset_across_two_pages() {
 // ref: test "PageList reset moves tracked pins and marks them as garbage"
 #[test]
 fn pagelist_reset_moves_tracked_pins_and_marks_them_as_garbage() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Create a tracked pin into the active area
     let p = s
@@ -1584,7 +1640,7 @@ fn pagelist_reset_moves_tracked_pins_and_marks_them_as_garbage() {
 // ref: test "PageList clears history"
 #[test]
 fn pagelist_clears_history() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(30).unwrap();
     s.reset();
     assert!(s.viewport == super::Viewport::Active);
@@ -1618,7 +1674,11 @@ fn pagelist_clears_history() {
 fn pagelist_grow_reuses_non_standard_page_without_leak() {
     // Create a PageList with 3 * std_size max so we can fit multiple pages
     // but will still trigger reuse.
-    let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(3 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // Increase the first page capacity to make it non-standard (larger than std_size).
     while unsafe { (*super::Node::page(s.pages.first)).memory_len } <= std_size() {
@@ -1641,7 +1701,7 @@ fn pagelist_grow_reuses_non_standard_page_without_leak() {
     assert!(!core::ptr::eq(s.pages.first, s.pages.last));
 
     // Continue growing until we exceed max_size AND the last page is full
-    while s.page_size + std_size() <= s.max_size()
+    while s.page_size + std_size() <= s.limits.max(Key::Bytes)
         || unsafe { super::Node::rows(s.pages.last) < super::Node::capacity(s.pages.last).rows }
     {
         let _ = s.grow().unwrap();
@@ -1717,7 +1777,11 @@ fn pagelist_grow_non_standard_page_prune_protection() {
 
     // This is kind of magic and likely depends on std_size.
     let rows_count = 600;
-    let mut s = PageList::init(80, rows_count, Some(std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(std_size()),
+        ..Options::new(80, rows_count)
+    })
+    .unwrap();
 
     // Make the first page non-standard
     while unsafe { (*super::Node::page(s.pages.first)).memory_len } <= std_size() {
@@ -1759,7 +1823,7 @@ fn pagelist_grow_non_standard_page_prune_protection() {
 
     // Verify prune path conditions are met
     assert!(!core::ptr::eq(s.pages.first, s.pages.last));
-    assert!(s.page_size + std_size() > s.max_size());
+    assert!(s.page_size + std_size() > s.limits.max(Key::Bytes));
     assert!(s.total_rows() >= s.rows as usize);
 
     // Verify last page is at capacity (so grow must prune or allocate new)
@@ -1779,7 +1843,11 @@ fn pagelist_grow_non_standard_page_prune_protection() {
 // ref: test "PageList compact pool page produces exact-size heap page"
 #[test]
 fn pagelist_compact_pool_page_produces_exact_size_heap_page() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // A freshly created page is pool-owned at std_size.
     let node = s.pages.first;
@@ -1811,7 +1879,7 @@ fn pagelist_compact_pool_page_produces_exact_size_heap_page() {
 // ref: test "PageList compact then grow allocates new page"
 #[test]
 fn pagelist_compact_then_grow_allocates_new_page() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Compact the only page. It now has no spare row capacity.
     let node = s.compact(s.pages.first).unwrap().unwrap();
@@ -1832,7 +1900,11 @@ fn pagelist_compact_then_grow_allocates_new_page() {
 // ref: test "PageList compact then reset frees heap pages"
 #[test]
 fn pagelist_compact_then_reset_frees_heap_pages() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // Compact the only page so the list contains a sub-std_size heap-owned
     // page.
@@ -1852,7 +1924,7 @@ fn pagelist_compact_then_reset_frees_heap_pages() {
 // ref: test "PageList compact then clone"
 #[test]
 fn pagelist_compact_then_clone() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Write a marker so we can verify contents survive.
     {
@@ -1892,7 +1964,7 @@ fn pagelist_compact_then_clone() {
 )]
 #[test]
 fn pagelist_compact_oversized_page() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow until we have multiple pages
     let page1_node = s.pages.first;
@@ -2059,7 +2131,7 @@ fn expect_live_page_serials_valid_for_test(s: &PageList) {
 )]
 #[test]
 fn pagelist_row_erasure_renews_affected_page_generations() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     while s.total_pages() < 2 {
         let _ = s.grow().unwrap();
     }
@@ -2094,7 +2166,7 @@ fn pagelist_row_erasure_renews_affected_page_generations() {
 /// PORTS: oracle dd956f37c `test "PageList trailing row truncation renews page generation"`
 #[test]
 fn pagelist_trailing_row_truncation_renews_page_generation() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     let node = s.pages.last;
     let old_serial = unsafe { (*node).serial };
@@ -2115,7 +2187,11 @@ fn pagelist_trailing_row_truncation_renews_page_generation() {
 )]
 #[test]
 fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 4);
 
     let before = s.memory_stats();
@@ -2152,7 +2228,11 @@ fn pagelist_memory_stats_accounts_compressed_and_resident_bytes() {
 )]
 #[test]
 fn pagelist_compress_incremental_converges_to_complete() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 6);
 
     let mut steps = 0usize;
@@ -2183,7 +2263,11 @@ fn pagelist_compress_incremental_converges_to_complete() {
 )]
 #[test]
 fn pagelist_compress_drain_finishes_in_one_call() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 6);
     assert_eq!(
         s.compress(CompressionMode::Drain),
@@ -2203,7 +2287,11 @@ fn pagelist_compress_drain_finishes_in_one_call() {
 )]
 #[test]
 fn pagelist_mutations_mark_compression_activity() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     let before = s.page_compression.activity_serial;
     fill_compressible_history(&mut s, 2);
     assert_ne!(s.page_compression.activity_serial, before);
@@ -2223,7 +2311,11 @@ fn pagelist_mutations_mark_compression_activity() {
 )]
 #[test]
 fn pagelist_compress_incremental_restarts_after_list_mutation() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 6);
     assert_eq!(
         s.compress(CompressionMode::Incremental),
@@ -2249,7 +2341,11 @@ fn pagelist_compress_incremental_restarts_after_list_mutation() {
 )]
 #[test]
 fn pagelist_compress_full_mode_leaves_no_continuation() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 4);
 
     assert_eq!(
@@ -2274,7 +2370,11 @@ fn pagelist_compress_full_mode_leaves_no_continuation() {
 )]
 #[test]
 fn pagelist_compress_page_round_trips_a_cold_history_page() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 3);
 
     let node = s.pages.first;
@@ -2308,7 +2408,11 @@ fn pagelist_compress_page_round_trips_a_cold_history_page() {
 )]
 #[test]
 fn pagelist_compress_page_rejects_an_already_compressed_node() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 3);
     let node = s.pages.first;
     assert!(s.compress_page(node));
@@ -2335,7 +2439,11 @@ fn pagelist_compress_page_rejects_an_already_compressed_node() {
 fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
     use rustty_util::tripwire::ResetMode;
 
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 3);
 
     let node = s.pages.first;
@@ -2374,7 +2482,11 @@ fn pagelist_compress_page_decommit_failure_leaves_the_page_resident() {
 )]
 #[test]
 fn pagelist_compress_full_leaves_viewport_and_active_resident() {
-    let mut s = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(10 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     fill_compressible_history(&mut s, 4);
 
     s.compress_full();
@@ -2407,7 +2519,7 @@ fn pagelist_compress_full_leaves_viewport_and_active_resident() {
 /// traversal keeps its progress.
 #[test]
 fn pagelist_replacements_preserve_compression_continuation_and_mark_activity() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     let state = super::compress::IncrementalCompressionState {
         flags: super::compress::IncrementalCompressionFlags {
@@ -2441,7 +2553,11 @@ fn pagelist_replacements_preserve_compression_continuation_and_mark_activity() {
 )]
 #[test]
 fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
-    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(2 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     while s.total_pages() < 2 {
         let _ = s.grow().unwrap();
@@ -2474,7 +2590,11 @@ fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
 )]
 #[test]
 fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
-    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(2 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     while s.total_pages() < 2 {
         let _ = s.grow().unwrap();
@@ -2505,7 +2625,7 @@ fn pagelist_bounded_pruning_after_partial_erase_preserves_live_serials() {
 )]
 #[test]
 fn pagelist_partial_erase_restarts_compression_before_continuation() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     fill_compressible_history(
         &mut s,
         super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED + 2,
@@ -2556,7 +2676,11 @@ fn pagelist_partial_erase_restarts_compression_before_continuation() {
 )]
 #[test]
 fn pagelist_repeated_bounded_pruning_after_split_preserves_live_serials() {
-    let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(3 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     let epoch = s.page_serial_epoch;
     while s.total_pages() < 3 {
@@ -2598,7 +2722,11 @@ fn pagelist_repeated_bounded_pruning_after_split_preserves_live_serials() {
 )]
 #[test]
 fn pagelist_bounded_pruning_after_front_replacement_preserves_live_serials() {
-    let mut s = PageList::init(80, 24, Some(2 * std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(2 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     while s.total_pages() < 2 {
         let _ = s.grow().unwrap();
@@ -2624,7 +2752,11 @@ fn pagelist_bounded_pruning_after_front_replacement_preserves_live_serials() {
 )]
 #[test]
 fn pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials() {
-    let mut s = PageList::init(80, 24, Some(3 * std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(3 * std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     while s.total_pages() < 3 {
         let _ = s.grow().unwrap();
@@ -2648,7 +2780,11 @@ fn pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials() {
 /// and yields identical bytes; `page()` transparently restores.
 #[test]
 fn pagelist_node_restore_preserve_recovers_the_same_mapping() {
-    let mut s = PageList::init(20, 5, Some(1000)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(1000),
+        ..Options::new(20, 5)
+    })
+    .unwrap();
     let node = s.pages.first;
     unsafe {
         let page = super::Node::page(node);
@@ -2681,7 +2817,11 @@ fn pagelist_node_restore_preserve_recovers_the_same_mapping() {
 /// `page_preserving_state` reads a compressed node WITHOUT restoring it.
 #[test]
 fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
-    let mut s = PageList::init(20, 5, Some(1000)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(1000),
+        ..Options::new(20, 5)
+    })
+    .unwrap();
     let node = s.pages.first;
     unsafe {
         let page = super::Node::page(node);
@@ -2725,7 +2865,11 @@ fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
 /// the pool.
 #[test]
 fn pagelist_node_ownership_is_explicit() {
-    let mut s = PageList::init(80, 24, Some(1000)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(1000),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     // Every page allocated for a standard-capacity list is pool owned.
     let mut it = s.pages.first;
     while !it.is_null() {
@@ -2740,7 +2884,11 @@ fn pagelist_node_ownership_is_explicit() {
 /// the memory length.
 #[test]
 fn pagelist_oversized_page_is_heap_owned() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // Increase capacity until the layout no longer fits a pool item.
     let mut node = s.pages.first;
@@ -2819,7 +2967,7 @@ fn pagelist_decommit_pool_item_zeroes_the_dirty_region() {
 )]
 #[test]
 fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Create a page and scribble over its entire backing memory, then destroy
     // it so the buffer returns to the pool free list.
@@ -2862,7 +3010,11 @@ fn pagelist_destroyed_pool_page_reuse_is_zeroed() {
 // ref: test "PageList compact after increaseCapacity"
 #[test]
 fn pagelist_compact_after_increase_capacity() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     let mut node = s.pages.first;
 
@@ -2888,7 +3040,11 @@ fn pagelist_compact_after_increase_capacity() {
 // ref: test "PageList split at middle row"
 #[test]
 fn pagelist_split_at_middle_row() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -2941,7 +3097,11 @@ fn pagelist_split_at_middle_row() {
 // ref: test "PageList split at row 0 is no-op"
 #[test]
 fn pagelist_split_at_row_0_is_no_op() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -2980,7 +3140,11 @@ fn pagelist_split_at_row_0_is_no_op() {
 // ref: test "PageList split at last row"
 #[test]
 fn pagelist_split_at_last_row() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -3026,7 +3190,11 @@ fn pagelist_split_at_last_row() {
 #[test]
 fn pagelist_split_single_row_page_returns_OutOfSpace() {
     // Initialize with 1 row
-    let mut s = PageList::init(10, 1, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 1)
+    })
+    .unwrap();
 
     let split_pin = Pin {
         node: s.pages.first,
@@ -3044,7 +3212,11 @@ fn pagelist_split_single_row_page_returns_OutOfSpace() {
 // ref: test "PageList split moves tracked pins"
 #[test]
 fn pagelist_split_moves_tracked_pins() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Track a pin at row 7
     let tracked = s
@@ -3081,7 +3253,11 @@ fn pagelist_split_moves_tracked_pins() {
 // ref: test "PageList split tracked pin before split point unchanged"
 #[test]
 fn pagelist_split_tracked_pin_before_split_point_unchanged() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     let original_node = s.pages.first;
 
@@ -3117,7 +3293,11 @@ fn pagelist_split_tracked_pin_before_split_point_unchanged() {
 // ref: test "PageList split tracked pin at split point moves to new page"
 #[test]
 fn pagelist_split_tracked_pin_at_split_point_moves_to_new_page() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     let original_node = s.pages.first;
 
@@ -3156,7 +3336,11 @@ fn pagelist_split_tracked_pin_at_split_point_moves_to_new_page() {
 // ref: test "PageList split multiple tracked pins across regions"
 #[test]
 fn pagelist_split_multiple_tracked_pins_across_regions() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     let original_node = s.pages.first;
 
@@ -3235,7 +3419,11 @@ fn pagelist_split_multiple_tracked_pins_across_regions() {
 // ref: test "PageList split tracked viewport_pin in split region moves correctly"
 #[test]
 fn pagelist_split_tracked_viewport_pin_in_split_region_moves_correctly() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     let original_node = s.pages.first;
 
@@ -3271,7 +3459,11 @@ fn pagelist_split_tracked_viewport_pin_in_split_region_moves_correctly() {
 #[test]
 fn pagelist_split_middle_page_preserves_linked_list_order() {
     // Create a single page with 12 rows
-    let mut s = PageList::init(10, 12, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 12)
+    })
+    .unwrap();
 
     // Split at row 4 to create: page1 (rows 0-3), page2 (rows 4-11)
     let first_node = s.pages.first;
@@ -3330,7 +3522,11 @@ fn pagelist_split_middle_page_preserves_linked_list_order() {
 #[test]
 fn pagelist_split_last_page_makes_new_page_the_last() {
     // Create a single page with 10 rows
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Split to create 2 pages first
     let first_node = s.pages.first;
@@ -3373,7 +3569,11 @@ fn pagelist_split_last_page_makes_new_page_the_last() {
 #[test]
 fn pagelist_split_first_page_keeps_original_as_first() {
     // Create 2 pages by splitting
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     let original_first = s.pages.first;
     let split_pin1 = Pin {
@@ -3416,7 +3616,11 @@ fn pagelist_split_first_page_keeps_original_as_first() {
 // ref: test "PageList split preserves wrap flags"
 #[test]
 fn pagelist_split_preserves_wrap_flags() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -3479,7 +3683,11 @@ fn pagelist_split_preserves_wrap_flags() {
 // ref: test "PageList split preserves styled cells"
 #[test]
 fn pagelist_split_preserves_styled_cells() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -3562,7 +3770,11 @@ fn pagelist_split_preserves_styled_cells() {
 // exists. Debug-only; it still runs and passes there.
 #[cfg_attr(not(debug_assertions), ignore)]
 fn pagelist_erase_row_error_path_runs_integrity_gate() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Give the (future) second page's top row a styled cell, then split so
     // pages.first (rows 0-4) has a next page whose row 0 carries the style.
@@ -3639,7 +3851,11 @@ fn pagelist_erase_row_error_path_runs_integrity_gate() {
 // ref: test "PageList split preserves grapheme clusters"
 #[test]
 fn pagelist_split_preserves_grapheme_clusters() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -3700,7 +3916,11 @@ fn pagelist_split_preserves_grapheme_clusters() {
 // ref: test "PageList split preserves hyperlinks"
 #[test]
 fn pagelist_split_preserves_hyperlinks() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     let hyperlink_id = {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -3765,7 +3985,7 @@ fn pagelist_split_preserves_hyperlinks() {
 // ref: test "PageList scroll delta row back without space preserves active"
 #[test]
 fn pagelist_scroll_delta_row_back_without_space_preserves_active() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.scroll(Scroll::DeltaRow(-1));
 
     {
@@ -3793,7 +4013,7 @@ fn pagelist_scroll_delta_row_back_without_space_preserves_active() {
 // ref: test "PageList scroll to pin"
 #[test]
 fn pagelist_scroll_to_pin() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     s.scroll(Scroll::Pin(
@@ -3846,7 +4066,7 @@ fn pagelist_scroll_to_pin() {
 // ref: test "PageList scroll to pin in active"
 #[test]
 fn pagelist_scroll_to_pin_in_active() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     s.scroll(Scroll::Pin(
@@ -3877,7 +4097,7 @@ fn pagelist_scroll_to_pin_in_active() {
 // ref: test "PageList scroll to pin at top"
 #[test]
 fn pagelist_scroll_to_pin_at_top() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     s.scroll(Scroll::Pin(
@@ -3910,7 +4130,7 @@ fn pagelist_scroll_to_pin_at_top() {
 // ref: test "PageList scroll to row 0"
 #[test]
 fn pagelist_scroll_to_row_0() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     {
@@ -3965,7 +4185,7 @@ fn pagelist_scroll_to_row_0() {
 // ref: test "PageList scroll to row in scrollback"
 #[test]
 fn pagelist_scroll_to_row_in_scrollback() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(20).unwrap();
 
     {
@@ -4019,7 +4239,7 @@ fn pagelist_scroll_to_row_in_scrollback() {
 // ref: test "PageList scroll to row in middle"
 #[test]
 fn pagelist_scroll_to_row_in_middle() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(50).unwrap();
 
     let total = s.total_rows;
@@ -4080,7 +4300,7 @@ fn pagelist_scroll_to_row_in_middle() {
 // ref: test "PageList scroll to row at active boundary"
 #[test]
 fn pagelist_scroll_to_row_at_active_boundary() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(20).unwrap();
 
     let active_start = s.total_rows - s.rows as usize;
@@ -4131,7 +4351,7 @@ fn pagelist_scroll_to_row_at_active_boundary() {
 // ref: test "PageList scroll to row beyond active"
 #[test]
 fn pagelist_scroll_to_row_beyond_active() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
 
     s.scroll(Scroll::Row(1000));
@@ -4161,7 +4381,7 @@ fn pagelist_scroll_to_row_beyond_active() {
 // ref: test "PageList scroll to row without scrollback"
 #[test]
 fn pagelist_scroll_to_row_without_scrollback() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     s.scroll(Scroll::Row(5));
 
@@ -4190,7 +4410,7 @@ fn pagelist_scroll_to_row_without_scrollback() {
 // ref: test "PageList scroll to row then delta"
 #[test]
 fn pagelist_scroll_to_row_then_delta() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(30).unwrap();
 
     s.scroll(Scroll::Row(10));
@@ -4262,7 +4482,7 @@ fn pagelist_scroll_to_row_then_delta() {
 // ref: test "PageList scroll to row with cache fast path down"
 #[test]
 fn pagelist_scroll_to_row_with_cache_fast_path_down() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(50).unwrap();
 
     s.scroll(Scroll::Row(10));
@@ -4334,7 +4554,7 @@ fn pagelist_scroll_to_row_with_cache_fast_path_down() {
 // ref: test "PageList scroll to row with cache fast path up"
 #[test]
 fn pagelist_scroll_to_row_with_cache_fast_path_up() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(50).unwrap();
 
     s.scroll(Scroll::Row(30));
@@ -4406,7 +4626,7 @@ fn pagelist_scroll_to_row_with_cache_fast_path_up() {
 // ref: test "PageList scroll clear"
 #[test]
 fn pagelist_scroll_clear() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     {
         let cell = s
@@ -4441,7 +4661,7 @@ fn pagelist_scroll_clear() {
 // ref: test "PageList: jump zero prompts"
 #[test]
 fn pagelist_jump_zero_prompts() {
-    let mut s = PageList::init(5, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(5, 3)).unwrap();
     s.grow_rows(3).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
@@ -4476,7 +4696,7 @@ fn pagelist_jump_zero_prompts() {
 // ref: test "Screen: jump back one prompt"
 #[test]
 fn screen_jump_back_one_prompt() {
-    let mut s = PageList::init(5, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(5, 3)).unwrap();
     s.grow_rows(3).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
@@ -4571,7 +4791,7 @@ fn screen_jump_back_one_prompt() {
 // ref: test "Screen: jump forward prompt skips multiline continuation"
 #[test]
 fn screen_jump_forward_prompt_skips_multiline_continuation() {
-    let mut s = PageList::init(5, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(5, 3)).unwrap();
     s.grow_rows(7).unwrap();
 
     // Multiline prompt on rows 1-3.
@@ -4643,6 +4863,615 @@ fn screen_jump_forward_prompt_skips_multiline_continuation() {
     s.deinit();
 }
 
+// ref: test "PageList set max bytes prunes immediately and can be raised"
+#[test]
+fn pagelist_set_max_bytes_prunes_immediately_and_can_be_raised() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+
+    let mut s = PageList::init(Options {
+        max_size: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    // Build four complete pages of history followed by the active row.
+    s.grow_rows(4 * page_rows).unwrap();
+    assert_eq!(5usize, s.total_pages());
+
+    let removed = s.pages.first;
+    let retained = unsafe { (*s.pages.last).prev };
+    let removed_pin = s
+        .track_pin(Pin {
+            node: removed,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+    let retained_pin = s
+        .track_pin(Pin {
+            node: retained,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+
+    s.scroll(Scroll::Pin(unsafe { (*retained_pin).pin_copy() }));
+    assert_eq!(3 * page_rows, s.scrollbar().offset);
+
+    // The active-area minimum is two pages. Lowering below that immediately
+    // removes all older complete historical pages.
+    s.set_max_bytes(Some(std_size()));
+    assert_eq!(std_size(), s.limits.bytes.explicit);
+    assert_eq!(2 * std_size(), s.limits.max(Key::Bytes));
+    assert_eq!(s.limits.max(Key::Bytes), s.page_size);
+    assert_eq!(2usize, s.total_pages());
+    assert_eq!(page_rows, s.total_rows - s.rows as usize);
+    assert!(core::ptr::eq(retained, s.pages.first));
+    assert!(core::ptr::eq(retained, unsafe { (*removed_pin).node }));
+    assert!(unsafe { (*removed_pin).garbage });
+    assert!(core::ptr::eq(retained, unsafe { (*retained_pin).node }));
+    assert!(!unsafe { (*retained_pin).garbage });
+    assert_eq!(0usize, s.scrollbar().offset);
+
+    // Raising the limit doesn't allocate or otherwise change retained data,
+    // but subsequent growth can exceed the previous effective limit.
+    let limited_size = s.page_size;
+    let limited_rows = s.total_rows;
+    s.set_max_bytes(Some(8 * std_size()));
+    assert_eq!(limited_size, s.page_size);
+    assert_eq!(limited_rows, s.total_rows);
+    s.grow_rows(2 * page_rows).unwrap();
+    assert!(s.page_size > limited_size);
+
+    // Null restores unlimited growth and likewise preserves current data.
+    let raised_size = s.page_size;
+    let raised_rows = s.total_rows;
+    s.set_max_bytes(None);
+    assert_eq!(usize::MAX, s.limits.bytes.explicit);
+    assert_eq!(raised_size, s.page_size);
+    assert_eq!(raised_rows, s.total_rows);
+    s.grow_rows(5 * page_rows).unwrap();
+    assert!(s.page_size > 8 * std_size());
+
+    s.untrack_pin(retained_pin);
+    s.untrack_pin(removed_pin);
+    s.deinit();
+}
+
+// ref: test "PageList set max bytes zero preserves active boundary"
+#[test]
+fn pagelist_set_max_bytes_zero_preserves_active_boundary() {
+    let mut s = PageList::init(Options {
+        max_size: None,
+        ..Options::new(80, 1)
+    })
+    .unwrap();
+
+    // Make the sole page larger than the effective zero-byte limit. Its first
+    // row will be history, but the same indivisible page also contains active.
+    while s.page_size <= s.limits.bytes.min {
+        let _ = s
+            .increase_capacity(s.pages.first, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+    let _ = s.grow().unwrap();
+    assert_eq!(1usize, s.total_pages());
+    assert!(core::ptr::eq(
+        s.pages.first,
+        s.get_top_left(point::Tag::Active).node
+    ));
+    assert!(s.get_top_left(point::Tag::Active).y > 0);
+
+    s.scroll(Scroll::Top);
+    assert!(s.viewport == super::Viewport::Top);
+
+    s.set_max_bytes(Some(0));
+    assert_eq!(0usize, s.limits.bytes.explicit);
+    assert!(s.page_size > s.limits.max(Key::Bytes));
+    assert_eq!(1usize, s.total_pages());
+    assert!(s.viewport == super::Viewport::Active);
+    assert_eq!(
+        Scrollbar {
+            total: s.rows as usize,
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    // No-scrollback mode cannot be moved back into the retained boundary row.
+    s.scroll(Scroll::Top);
+    assert!(s.viewport == super::Viewport::Active);
+
+    s.deinit();
+}
+
+// ref: test "PageList set max lines prunes immediately and can be raised"
+#[test]
+fn pagelist_set_max_lines_prunes_immediately_and_can_be_raised() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+    let lowered_lines = page_rows + page_rows / 2;
+
+    let mut s = PageList::init(Options {
+        max_size: None,
+        max_lines: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    s.grow_rows(4 * page_rows).unwrap();
+    assert_eq!(5usize, s.total_pages());
+
+    let removed = s.pages.first;
+    let retained = unsafe { (*s.pages.last).prev };
+    let removed_pin = s
+        .track_pin(Pin {
+            node: removed,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+    let retained_pin = s
+        .track_pin(Pin {
+            node: retained,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+
+    s.scroll(Scroll::Pin(unsafe { (*retained_pin).pin_copy() }));
+    assert_eq!(3 * page_rows, s.scrollbar().offset);
+
+    // Whole-page enforcement undershoots a non-page-aligned line limit.
+    s.set_max_lines(Some(lowered_lines));
+    assert_eq!(lowered_lines, s.limits.lines.explicit);
+    assert_eq!(lowered_lines, s.limits.max(Key::Lines));
+    assert_eq!(page_rows, s.total_rows - s.rows as usize);
+    assert_eq!(2usize, s.total_pages());
+    assert!(core::ptr::eq(retained, s.pages.first));
+    assert!(core::ptr::eq(retained, unsafe { (*removed_pin).node }));
+    assert!(unsafe { (*removed_pin).garbage });
+    assert!(core::ptr::eq(retained, unsafe { (*retained_pin).node }));
+    assert!(!unsafe { (*retained_pin).garbage });
+    assert_eq!(0usize, s.scrollbar().offset);
+
+    let limited_size = s.page_size;
+    let limited_rows = s.total_rows;
+    s.set_max_lines(Some(4 * page_rows));
+    assert_eq!(limited_size, s.page_size);
+    assert_eq!(limited_rows, s.total_rows);
+    s.grow_rows(2 * page_rows).unwrap();
+    assert!(s.total_rows - s.rows as usize > lowered_lines);
+
+    let raised_size = s.page_size;
+    let raised_rows = s.total_rows;
+    s.set_max_lines(None);
+    assert_eq!(usize::MAX, s.limits.lines.explicit);
+    assert_eq!(raised_size, s.page_size);
+    assert_eq!(raised_rows, s.total_rows);
+    s.grow_rows(3 * page_rows).unwrap();
+    assert!(s.total_rows - s.rows as usize > 4 * page_rows);
+
+    s.untrack_pin(retained_pin);
+    s.untrack_pin(removed_pin);
+    s.deinit();
+}
+
+// ref: test "PageList set max limits remain independent"
+#[test]
+fn pagelist_set_max_limits_remain_independent() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+    let byte_limit = 3 * std_size();
+    let line_limit = page_rows / 2;
+
+    let mut s = PageList::init(Options {
+        max_size: None,
+        max_lines: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    s.grow_rows(4 * page_rows).unwrap();
+
+    // The byte setter leaves the line limit unlimited.
+    s.set_max_bytes(Some(byte_limit));
+    assert_eq!(byte_limit, s.limits.bytes.explicit);
+    assert_eq!(usize::MAX, s.limits.lines.explicit);
+    assert_eq!(3usize, s.total_pages());
+    assert_eq!(2 * page_rows, s.total_rows - s.rows as usize);
+
+    // The smaller runtime line limit prunes one more complete page without
+    // changing the configured byte limit. Its effective value is raised to
+    // the existing one-page minimum.
+    s.set_max_lines(Some(line_limit));
+    assert_eq!(byte_limit, s.limits.bytes.explicit);
+    assert_eq!(line_limit, s.limits.lines.explicit);
+    assert_eq!(page_rows, s.limits.max(Key::Lines));
+    assert_eq!(2usize, s.total_pages());
+    assert_eq!(page_rows, s.total_rows - s.rows as usize);
+
+    // Removing only the line limit leaves byte enforcement in effect.
+    s.set_max_lines(None);
+    s.grow_rows(3 * page_rows).unwrap();
+    assert_eq!(byte_limit, s.page_size);
+    assert_eq!(3usize, s.total_pages());
+    assert!(s.total_rows - s.rows as usize > page_rows);
+
+    s.deinit();
+}
+
+// PORT NOTE (rustty-only guard, `P3-W3` T3 Step 4 / re-vet row `P3-RV1`): the
+// sibling of `pagelist_replacements_preserve_compression_continuation_and_mark_activity`
+// for the ELEVENTH `mark_activity` site, the one inside `enforce_limit`. Trimming
+// scrollback mutates the node set under an in-flight incremental compression
+// traversal, so the activity token must be bumped while the traversal
+// continuation (`last_serial`/`next_serial`) and its flags are preserved.
+//
+// The second half is what pins the oracle's exact placement: `f4c68d65e` bumps
+// activity on the FIRST ACTUAL REMOVAL (`if (removed == 0)`), not on entry — an
+// `enforce` that finds the limit exceeded but immediately hits the
+// active-boundary `break` must NOT invalidate the traversal.
+#[test]
+fn pagelist_enforce_limit_marks_activity_and_preserves_continuation() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+
+    let mut s = PageList::init(Options {
+        max_size: None,
+        max_lines: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+    s.grow_rows(4 * page_rows).unwrap();
+
+    let state = super::compress::IncrementalCompressionState {
+        flags: super::compress::IncrementalCompressionFlags {
+            did_compress: false,
+            verifying: true,
+        },
+        activity_serial: 42,
+        last_serial: Some(7),
+        next_serial: 8,
+    };
+
+    // (a) An enforcement that actually removes pages bumps activity_serial and
+    //     preserves the continuation.
+    s.page_compression = state;
+    s.set_max_lines(Some(page_rows));
+    assert_eq!(
+        super::compress::IncrementalCompressionState {
+            activity_serial: 43,
+            ..state
+        },
+        s.page_compression
+    );
+
+    // (b) A second enforcement that removes NOTHING (already at the limit)
+    //     leaves the whole compression state alone.
+    s.page_compression = state;
+    s.set_max_lines(Some(page_rows));
+    assert_eq!(state, s.page_compression);
+
+    s.deinit();
+
+    // (c) An enforcement that IS exceeded but whose only over-limit page is the
+    //     active-boundary page breaks out having removed nothing, and must not
+    //     bump activity. This is the case that distinguishes the oracle's
+    //     `if (removed == 0)` placement from a bump on entry: the single page
+    //     below is larger than the zero-byte effective limit AND contains the
+    //     active area, so `exceeded(.bytes)` is true while the prune loop
+    //     removes nothing.
+    let mut b = PageList::init(Options {
+        max_size: None,
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+    while b.page_size <= b.limits.bytes.min {
+        let _ = b
+            .increase_capacity(b.pages.first, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+    let _ = b.grow().unwrap();
+    assert_eq!(1usize, b.total_pages());
+    assert!(core::ptr::eq(
+        b.pages.first,
+        b.get_top_left(point::Tag::Active).node
+    ));
+
+    b.page_compression = state;
+    b.set_max_bytes(Some(0));
+    assert!(b.limits.exceeded(&b, Key::Bytes));
+    assert_eq!(1usize, b.total_pages());
+    assert_eq!(state, b.page_compression);
+
+    b.deinit();
+}
+
+// PORT NOTE (rustty-only guard, `P3-W3` T1 Step 4): `5b2d3b7df` adds
+// `IntegrityError.MaxLinesExceeded` but no upstream test reaches it — every
+// oracle path that can exceed the line limit calls `enforceMaxLines` first, so
+// the variant would be decoration. This test manufactures the exact forbidden
+// state (a complete historical page past the limit while the oldest page is NOT
+// the active-boundary page) behind `pause_integrity_checks` and asserts the
+// check fires. Requires `debug_assertions`: `verify_integrity` is a no-op
+// without them.
+#[cfg_attr(not(debug_assertions), ignore)]
+#[test]
+fn pagelist_integrity_detects_max_lines_exceeded() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+
+    let mut s = PageList::init(Options {
+        max_lines: Some(page_rows),
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    // Right at the limit: one complete historical page plus the active row.
+    s.grow_rows(page_rows).unwrap();
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    // Append a second complete page behind the caller's back with integrity
+    // checks paused, so no enforcement path runs. The oldest page is now
+    // wholly historical AND the history exceeds the limit.
+    s.pause_integrity_checks(true);
+    let node = s
+        .create_page(super::CreatePage::new(PageList::initial_capacity(cols)))
+        .unwrap();
+    let node_rows = unsafe { super::Node::capacity(node).rows };
+    unsafe { (*super::Node::page(node)).size.rows = node_rows };
+    unsafe { s.pages.append(node) };
+    s.total_rows += node_rows as usize;
+    s.pause_integrity_checks(false);
+
+    assert_eq!(Err(IntegrityError::MaxLinesExceeded), s.verify_integrity());
+
+    // Raising the limit back to unlimited restores a valid list so `deinit`'s
+    // own integrity assertion holds.
+    s.limits.lines.explicit = usize::MAX;
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.deinit();
+}
+
+// ref: test "PageList max lines uses one-page minimum"
+#[test]
+fn pagelist_max_lines_uses_one_page_minimum() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+
+    let mut s = PageList::init(Options {
+        max_lines: Some(page_rows / 2),
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    assert_eq!(page_rows, s.limits.max(Key::Lines));
+
+    // The requested limit is below one page, so a complete page of history
+    // remains valid.
+    s.grow_rows(page_rows).unwrap();
+    assert_eq!(page_rows, s.total_rows - s.rows as usize);
+    assert_eq!(2usize, s.total_pages());
+
+    let first = s.pages.first;
+    let old_page_size = s.page_size;
+
+    // One more row puts us over the effective limit. The now-complete
+    // historical page is removed rather than partially trimmed.
+    let _ = s.grow().unwrap();
+    assert_eq!(1usize, s.total_rows - s.rows as usize);
+    assert_eq!(1usize, s.total_pages());
+    assert!(!core::ptr::eq(s.pages.first, first));
+    // PORT NOTE: the reference `PagePool.item_size` is `std_size()` here.
+    assert_eq!(old_page_size - std_size(), s.page_size);
+
+    s.deinit();
+}
+
+// ref: test "PageList max lines does not round larger limits"
+#[test]
+fn pagelist_max_lines_does_not_round_larger_limits() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+    let max_lines = page_rows + page_rows / 2;
+
+    let mut s = PageList::init(Options {
+        max_lines: Some(max_lines),
+        ..Options::new(cols, 1)
+    })
+    .unwrap();
+
+    assert_eq!(max_lines, s.limits.max(Key::Lines));
+    s.grow_rows(max_lines).unwrap();
+    assert_eq!(max_lines, s.total_rows - s.rows as usize);
+
+    let first = s.pages.first;
+    let retained = unsafe { (*first).next };
+    let removed_pin = s
+        .track_pin(Pin {
+            node: first,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+    let retained_pin = s
+        .track_pin(Pin {
+            node: retained,
+            y: 0,
+            x: 0,
+            garbage: false,
+        })
+        .unwrap();
+
+    s.scroll(Scroll::Pin(unsafe { (*retained_pin).pin_copy() }));
+    assert_eq!(page_rows, s.scrollbar().offset);
+
+    let old_page_size = s.page_size;
+    let _ = s.grow().unwrap();
+
+    // Whole-page pruning undershoots the requested limit without rounding it.
+    assert_eq!(max_lines + 1 - page_rows, s.total_rows - s.rows as usize);
+    assert!(core::ptr::eq(retained, s.pages.first));
+    assert!(core::ptr::eq(retained, unsafe { (*removed_pin).node }));
+    assert!(unsafe { (*removed_pin).garbage });
+    assert!(core::ptr::eq(retained, unsafe { (*retained_pin).node }));
+    assert!(!unsafe { (*retained_pin).garbage });
+    assert_eq!(0usize, s.scrollbar().offset);
+    assert_eq!(old_page_size - std_size(), s.page_size);
+
+    s.untrack_pin(retained_pin);
+    s.untrack_pin(removed_pin);
+    s.deinit();
+}
+
+// ref: test "PageList max lines and max size enforce the smaller limit"
+#[test]
+fn pagelist_max_lines_and_max_size_enforce_the_smaller_limit() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+
+    // A line limit of one page keeps the logical allocation below a much
+    // larger byte limit.
+    {
+        let mut s = PageList::init(Options {
+            max_size: Some(8 * std_size()),
+            max_lines: Some(page_rows),
+            ..Options::new(cols, 1)
+        })
+        .unwrap();
+
+        s.grow_rows(4 * page_rows).unwrap();
+        assert!(s.total_rows - s.rows as usize <= s.limits.max(Key::Lines));
+        assert!(s.total_pages() <= 2);
+        assert!(s.page_size < s.limits.max(Key::Bytes));
+
+        s.deinit();
+    }
+
+    // A two-page byte limit prunes before the larger line limit is reached.
+    {
+        let mut s = PageList::init(Options {
+            max_size: Some(std_size()),
+            max_lines: Some(4 * page_rows),
+            ..Options::new(cols, 1)
+        })
+        .unwrap();
+
+        s.grow_rows(2 * page_rows).unwrap();
+        assert!(s.total_rows - (s.rows as usize) < s.limits.max(Key::Lines));
+        assert_eq!(s.limits.max(Key::Bytes), s.page_size);
+
+        s.deinit();
+    }
+}
+
+// ref: test "PageList max lines applies to resize and clone"
+#[test]
+fn pagelist_max_lines_applies_to_resize_and_clone() {
+    let cols: size::CellCountInt = 80;
+    let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
+
+    let mut s = PageList::init(Options {
+        max_lines: Some(page_rows),
+        ..Options::new(cols, 2)
+    })
+    .unwrap();
+
+    s.grow_rows(page_rows).unwrap();
+    assert_eq!(page_rows, s.total_rows - s.rows as usize);
+
+    // Prevent row shrinking from trimming the trailing active row instead of
+    // turning it into history.
+    let cell = s
+        .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+        .unwrap();
+    unsafe { *cell.cell = cell_codepoint('A' as u32) };
+
+    s.resize(Resize {
+        rows: Some(1),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(1usize, s.total_rows - s.rows as usize);
+
+    let new_cols: size::CellCountInt = cols + 1;
+    s.resize(Resize {
+        cols: Some(new_cols),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(Limits::min_max_lines(new_cols), s.limits.lines.min);
+
+    // Exercise the same active-row shrink through the reflow path. Reflow
+    // completes before the newly historical complete page is pruned.
+    {
+        let mut reflowed = PageList::init(Options {
+            max_lines: Some(page_rows),
+            ..Options::new(cols, 2)
+        })
+        .unwrap();
+
+        reflowed.grow_rows(page_rows).unwrap();
+        let active_cell = reflowed
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+            .unwrap();
+        unsafe { *active_cell.cell = cell_codepoint('A' as u32) };
+
+        reflowed
+            .resize(Resize {
+                cols: Some(new_cols),
+                rows: Some(1),
+                reflow: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(Limits::min_max_lines(new_cols), reflowed.limits.lines.min);
+        assert!(
+            reflowed.total_rows - reflowed.rows as usize <= reflowed.limits.max(Key::Lines)
+                || core::ptr::eq(
+                    reflowed.pages.first,
+                    reflowed.get_top_left(point::Tag::Active).node
+                )
+        );
+
+        reflowed.deinit();
+    }
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut cloned = s.clone(&mut opts).unwrap();
+
+    assert_eq!(s.limits.lines.explicit, cloned.limits.lines.explicit);
+    assert_eq!(s.limits.lines.min, cloned.limits.lines.min);
+    assert_eq!(s.limits.max(Key::Lines), cloned.limits.max(Key::Lines));
+
+    cloned.grow_rows(2 * cloned.limits.max(Key::Lines)).unwrap();
+    assert!(
+        cloned.total_rows - cloned.rows as usize <= cloned.limits.max(Key::Lines)
+            || core::ptr::eq(
+                cloned.pages.first,
+                cloned.get_top_left(point::Tag::Active).node
+            )
+    );
+
+    cloned.deinit();
+    s.deinit();
+}
+
 // ref: test "PageList grow prune scrollback"
 #[cfg_attr(
     all(miri, debug_assertions),
@@ -4651,7 +5480,11 @@ fn screen_jump_forward_prompt_skips_multiline_continuation() {
 #[test]
 fn pagelist_grow_prune_scrollback() {
     // Use std_size to limit scrollback so pruning is triggered.
-    let mut s = PageList::init(80, 24, Some(std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // Grow to capacity
     let page1_node = s.pages.last;
@@ -4746,7 +5579,11 @@ fn pagelist_grow_prune_scrollback() {
 #[test]
 fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
     // Use std_size to limit scrollback so pruning is triggered.
-    let mut s = PageList::init(80, 24, Some(std_size())).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(std_size()),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // Grow to capacity of first page
     let page1_node = s.pages.last;
@@ -4821,7 +5658,7 @@ fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
 )]
 #[test]
 fn pagelist_eraseRows_invalidates_viewport_offset_cache() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up several pages worth of history
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -4883,7 +5720,7 @@ fn pagelist_eraseRows_invalidates_viewport_offset_cache() {
 )]
 #[test]
 fn pagelist_eraseRow_invalidates_viewport_offset_cache() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up several pages worth of history
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -4942,7 +5779,7 @@ fn pagelist_eraseRow_invalidates_viewport_offset_cache() {
 )]
 #[test]
 fn pagelist_eraseRowBounded_invalidates_viewport_offset_cache() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up several pages worth of history
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -5002,7 +5839,7 @@ fn pagelist_eraseRowBounded_invalidates_viewport_offset_cache() {
 )]
 #[test]
 fn pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up several pages worth of history
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -5066,7 +5903,7 @@ fn pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache() {
 )]
 #[test]
 fn pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up several pages worth of history
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -5132,7 +5969,7 @@ fn pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache() 
 )]
 #[test]
 fn pagelist_eraseRowBounded_exhausts_pages_invalidates_viewport_offset_cache() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up several pages worth of history
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -5196,7 +6033,11 @@ fn pagelist_eraseRowBounded_exhausts_pages_invalidates_viewport_offset_cache() {
 // ref: test "PageList increaseCapacity after col shrink"
 #[test]
 fn pagelist_increaseCapacity_after_col_shrink() {
-    let mut s = PageList::init(10, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 2)
+    })
+    .unwrap();
 
     // Shrink columns
     s.resize(super::resize::Resize {
@@ -5232,7 +6073,7 @@ fn pagelist_increaseCapacity_after_col_shrink() {
 // ref: test "PageList pageIterator single page"
 #[test]
 fn pagelist_pageIterator_single_page() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // The viewport should be within a single page
     assert!(unsafe { (*s.pages.first).next.is_null() });
@@ -5259,7 +6100,7 @@ fn pagelist_pageIterator_single_page() {
 // ref: test "PageList pageIterator two pages"
 #[test]
 fn pagelist_pageIterator_two_pages() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow to capacity
     let page1_node = s.pages.last;
@@ -5302,7 +6143,7 @@ fn pagelist_pageIterator_two_pages() {
 // ref: test "PageList pageIterator history two pages"
 #[test]
 fn pagelist_pageIterator_history_two_pages() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow to capacity
     let page1_node = s.pages.last;
@@ -5339,7 +6180,7 @@ fn pagelist_pageIterator_history_two_pages() {
 // ref: test "PageList pageIterator reverse single page"
 #[test]
 fn pagelist_pageIterator_reverse_single_page() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // The viewport should be within a single page
     assert!(unsafe { (*s.pages.first).next.is_null() });
@@ -5366,7 +6207,7 @@ fn pagelist_pageIterator_reverse_single_page() {
 // ref: test "PageList pageIterator reverse two pages"
 #[test]
 fn pagelist_pageIterator_reverse_two_pages() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow to capacity
     let page1_node = s.pages.last;
@@ -5413,7 +6254,7 @@ fn pagelist_pageIterator_reverse_two_pages() {
 // ref: test "PageList pageIterator reverse history two pages"
 #[test]
 fn pagelist_pageIterator_reverse_history_two_pages() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow to capacity
     let page1_node = s.pages.last;
@@ -5450,7 +6291,11 @@ fn pagelist_pageIterator_reverse_history_two_pages() {
 // ref: test "PageList cellIterator"
 #[test]
 fn pagelist_cellIterator() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
@@ -5503,7 +6348,11 @@ fn pagelist_cellIterator() {
 // ref: test "PageList cellIterator reverse"
 #[test]
 fn pagelist_cellIterator_reverse() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
@@ -5556,7 +6405,11 @@ fn pagelist_cellIterator_reverse() {
 // ref: test "PageList promptIterator left_up"
 #[test]
 fn pagelist_promptIterator_left_up() {
-    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
     // Normal prompt
@@ -5617,7 +6470,11 @@ fn pagelist_promptIterator_left_up() {
 // ref: test "PageList promptIterator right_down"
 #[test]
 fn pagelist_promptIterator_right_down() {
-    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
     // Normal prompt
@@ -5678,7 +6535,11 @@ fn pagelist_promptIterator_right_down() {
 // ref: test "PageList promptIterator right_down continuation at start"
 #[test]
 fn pagelist_promptIterator_right_down_continuation_at_start() {
-    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -5725,7 +6586,11 @@ fn pagelist_promptIterator_right_down_continuation_at_start() {
 // ref: test "PageList promptIterator right_down with prompt before continuation"
 #[test]
 fn pagelist_promptIterator_right_down_with_prompt_before_continuation() {
-    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -5768,7 +6633,11 @@ fn pagelist_promptIterator_right_down_with_prompt_before_continuation() {
 // ref: test "PageList promptIterator right_down limit inclusive"
 #[test]
 fn pagelist_promptIterator_right_down_limit_inclusive() {
-    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -5804,7 +6673,11 @@ fn pagelist_promptIterator_right_down_limit_inclusive() {
 // ref: test "PageList promptIterator left_up limit inclusive"
 #[test]
 fn pagelist_promptIterator_left_up_limit_inclusive() {
-    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -5841,7 +6714,11 @@ fn pagelist_promptIterator_left_up_limit_inclusive() {
 // ref: test "PageList highlightSemanticContent prompt"
 #[test]
 fn pagelist_highlightSemanticContent_prompt() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -5894,7 +6771,11 @@ fn pagelist_highlightSemanticContent_prompt() {
 // ref: test "PageList highlightSemanticContent prompt with output"
 #[test]
 fn pagelist_highlightSemanticContent_prompt_with_output() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -5956,7 +6837,11 @@ fn pagelist_highlightSemanticContent_prompt_with_output() {
 // ref: test "PageList highlightSemanticContent prompt multiline"
 #[test]
 fn pagelist_highlightSemanticContent_prompt_multiline() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6011,7 +6896,11 @@ fn pagelist_highlightSemanticContent_prompt_multiline() {
 // ref: test "PageList highlightSemanticContent prompt only"
 #[test]
 fn pagelist_highlightSemanticContent_prompt_only() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6056,7 +6945,11 @@ fn pagelist_highlightSemanticContent_prompt_only() {
 // ref: test "PageList highlightSemanticContent prompt to end of screen"
 #[test]
 fn pagelist_highlightSemanticContent_prompt_to_end_of_screen() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6103,7 +6996,11 @@ fn pagelist_highlightSemanticContent_prompt_to_end_of_screen() {
 // ref: test "PageList highlightSemanticContent input basic"
 #[test]
 fn pagelist_highlightSemanticContent_input_basic() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6157,7 +7054,11 @@ fn pagelist_highlightSemanticContent_input_basic() {
 // ref: test "PageList highlightSemanticContent input with output"
 #[test]
 fn pagelist_highlightSemanticContent_input_with_output() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6219,7 +7120,11 @@ fn pagelist_highlightSemanticContent_input_with_output() {
 // ref: test "PageList highlightSemanticContent input multiline with continuation"
 #[test]
 fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6291,7 +7196,11 @@ fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
 // ref: test "PageList highlightSemanticContent input no input returns null"
 #[test]
 fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6336,7 +7245,11 @@ fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
 // ref: test "PageList highlightSemanticContent input to end of screen"
 #[test]
 fn pagelist_highlightSemanticContent_input_to_end_of_screen() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6383,7 +7296,11 @@ fn pagelist_highlightSemanticContent_input_to_end_of_screen() {
 // ref: test "PageList highlightSemanticContent input prompt only returns null"
 #[test]
 fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6429,7 +7346,11 @@ fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
 // ref: test "PageList highlightSemanticContent output basic"
 #[test]
 fn pagelist_highlightSemanticContent_output_basic() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6497,7 +7418,11 @@ fn pagelist_highlightSemanticContent_output_basic() {
 // ref: test "PageList highlightSemanticContent output multiline"
 #[test]
 fn pagelist_highlightSemanticContent_output_multiline() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6581,7 +7506,11 @@ fn pagelist_highlightSemanticContent_output_multiline() {
 // ref: test "PageList highlightSemanticContent output stops at next prompt"
 #[test]
 fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6659,7 +7588,11 @@ fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
 // ref: test "PageList highlightSemanticContent output to end of screen"
 #[test]
 fn pagelist_highlightSemanticContent_output_to_end_of_screen() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6726,7 +7659,11 @@ fn pagelist_highlightSemanticContent_output_to_end_of_screen() {
 // ref: test "PageList highlightSemanticContent output no output returns null"
 #[test]
 fn pagelist_highlightSemanticContent_output_no_output_returns_null() {
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6783,7 +7720,11 @@ fn pagelist_highlightSemanticContent_output_skips_empty_cells() {
     // Tests that empty cells with default .output semantic content are
     // not selected as output. This can happen when a prompt/input line
     // doesn't fill the entire row - trailing cells have default .output.
-    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 20)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -6857,7 +7798,7 @@ fn pagelist_highlightSemanticContent_output_skips_empty_cells() {
 // ref: test "PageList erase"
 #[test]
 fn pagelist_erase() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert_eq!(1_usize, s.total_pages());
 
     // Grow so we take up at least 5 pages.
@@ -6891,7 +7832,7 @@ fn pagelist_erase() {
 // ref: test "PageList erase reaccounts page size"
 #[test]
 fn pagelist_erase_reaccounts_page_size() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     let start_size = s.page_size;
 
     // Grow so we take up at least 5 pages.
@@ -6918,7 +7859,7 @@ fn pagelist_erase_reaccounts_page_size() {
 // ref: test "PageList erase row with tracked pin resets to top-left"
 #[test]
 fn pagelist_erase_row_with_tracked_pin_resets_to_top_left() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up at least 5 pages.
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -6960,7 +7901,7 @@ fn pagelist_erase_row_with_tracked_pin_resets_to_top_left() {
 // ref: test "PageList erase row with tracked pin shifts"
 #[test]
 fn pagelist_erase_row_with_tracked_pin_shifts() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Put a tracked pin in the history
     let p = s
@@ -6986,7 +7927,7 @@ fn pagelist_erase_row_with_tracked_pin_shifts() {
 // ref: test "PageList erase row with tracked pin is erased"
 #[test]
 fn pagelist_erase_row_with_tracked_pin_is_erased() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Put a tracked pin in the history
     let p = s
@@ -7012,7 +7953,7 @@ fn pagelist_erase_row_with_tracked_pin_is_erased() {
 // ref: test "PageList erase resets viewport to active if moves within active"
 #[test]
 fn pagelist_erase_resets_viewport_to_active_if_moves_within_active() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up at least 5 pages.
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -7041,7 +7982,7 @@ fn pagelist_erase_resets_viewport_to_active_if_moves_within_active() {
 // ref: test "PageList erase resets viewport if inside erased page but not active"
 #[test]
 fn pagelist_erase_resets_viewport_if_inside_erased_page_but_not_active() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up at least 5 pages.
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -7073,7 +8014,7 @@ fn pagelist_erase_resets_viewport_if_inside_erased_page_but_not_active() {
 // ref: test "PageList erase resets viewport to active if top is inside active"
 #[test]
 fn pagelist_erase_resets_viewport_to_active_if_top_is_inside_active() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Grow so we take up at least 5 pages.
     let page_cap_rows = unsafe { super::Node::capacity(s.pages.last).rows };
@@ -7101,7 +8042,7 @@ fn pagelist_erase_resets_viewport_to_active_if_top_is_inside_active() {
 // ref: test "PageList erase active regrows automatically"
 #[test]
 fn pagelist_erase_active_regrows_automatically() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert!(s.total_rows() == s.rows as usize);
     s.erase_active(10);
     assert!(s.total_rows() == s.rows as usize);
@@ -7112,7 +8053,7 @@ fn pagelist_erase_active_regrows_automatically() {
 // ref: test "PageList erase a one-row active"
 #[test]
 fn pagelist_erase_a_one_row_active() {
-    let mut s = PageList::init(10, 1, None).unwrap();
+    let mut s = PageList::init(Options::new(10, 1)).unwrap();
     assert_eq!(1_usize, s.total_pages());
 
     // Write our letter
@@ -7143,7 +8084,7 @@ fn pagelist_erase_a_one_row_active() {
 // ref: test "PageList eraseRowBounded less than full row"
 #[test]
 fn pagelist_eraseRowBounded_less_than_full_row() {
-    let mut s = PageList::init(80, 10, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 10)).unwrap();
 
     // Pins
     let p_top = s
@@ -7196,7 +8137,7 @@ fn pagelist_eraseRowBounded_less_than_full_row() {
 // ref: test "PageList eraseRowBounded with pin at top"
 #[test]
 fn pagelist_eraseRowBounded_with_pin_at_top() {
-    let mut s = PageList::init(80, 10, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 10)).unwrap();
 
     // Pins
     let p_top = s
@@ -7227,7 +8168,7 @@ fn pagelist_eraseRowBounded_with_pin_at_top() {
 // ref: test "PageList eraseRowBounded full rows single page"
 #[test]
 fn pagelist_eraseRowBounded_full_rows_single_page() {
-    let mut s = PageList::init(80, 10, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 10)).unwrap();
 
     // Pins
     let p_in = s
@@ -7270,7 +8211,7 @@ fn pagelist_eraseRowBounded_full_rows_single_page() {
 // ref: test "PageList eraseRowBounded full rows two pages"
 #[test]
 fn pagelist_eraseRowBounded_full_rows_two_pages() {
-    let mut s = PageList::init(80, 10, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 10)).unwrap();
 
     // Grow to two pages so our active area straddles
     {
@@ -7380,7 +8321,7 @@ fn pagelist_eraseRowBounded_full_rows_two_pages() {
 // ref: test "PageList clone"
 #[test]
 fn pagelist_clone() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
 
     let mut opts = super::access::Clone {
@@ -7398,7 +8339,7 @@ fn pagelist_clone() {
 // ref: test "PageList clone partial trimmed right"
 #[test]
 fn pagelist_clone_partial_trimmed_right() {
-    let mut s = PageList::init(80, 20, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 20)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
     s.grow_rows(30).unwrap();
 
@@ -7417,7 +8358,7 @@ fn pagelist_clone_partial_trimmed_right() {
 // ref: test "PageList clone partial trimmed left"
 #[test]
 fn pagelist_clone_partial_trimmed_left() {
-    let mut s = PageList::init(80, 20, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 20)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
     s.grow_rows(30).unwrap();
 
@@ -7436,7 +8377,7 @@ fn pagelist_clone_partial_trimmed_left() {
 // ref: test "PageList clone partial trimmed left reclaims styles"
 #[test]
 fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
-    let mut s = PageList::init(80, 20, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 20)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
     s.grow_rows(30).unwrap();
 
@@ -7505,7 +8446,7 @@ fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
 // ref: test "PageList clone partial trimmed both"
 #[test]
 fn pagelist_clone_partial_trimmed_both() {
-    let mut s = PageList::init(80, 20, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 20)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
     s.grow_rows(30).unwrap();
 
@@ -7524,7 +8465,7 @@ fn pagelist_clone_partial_trimmed_both() {
 // ref: test "PageList clone less than active"
 #[test]
 fn pagelist_clone_less_than_active() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
 
     let mut opts = super::access::Clone {
@@ -7542,7 +8483,7 @@ fn pagelist_clone_less_than_active() {
 // ref: test "PageList clone remap tracked pin"
 #[test]
 fn pagelist_clone_remap_tracked_pin() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
 
     // Put a tracked pin in the screen
@@ -7576,7 +8517,7 @@ fn pagelist_clone_remap_tracked_pin() {
 // ref: test "PageList clone remap tracked pin not in cloned area"
 #[test]
 fn pagelist_clone_remap_tracked_pin_not_in_cloned_area() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
 
     // Put a tracked pin in the screen
@@ -7605,7 +8546,7 @@ fn pagelist_clone_remap_tracked_pin_not_in_cloned_area() {
 // ref: test "PageList clone full dirty"
 #[test]
 fn pagelist_clone_full_dirty() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
     assert_eq!(s.rows as usize, s.total_rows());
 
     // Mark a row as dirty
@@ -7639,7 +8580,11 @@ fn pagelist_clone_full_dirty() {
 // ref: test "PageList resize (no reflow) more rows"
 #[test]
 fn pagelist_resize_no_reflow_more_rows() {
-    let mut s = PageList::init(10, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 3)
+    })
+    .unwrap();
     assert_eq!(3usize, s.total_rows());
 
     // Put a tracked pin in the history
@@ -7682,7 +8627,7 @@ fn pagelist_resize_no_reflow_more_rows() {
 // ref: test "PageList resize (no reflow) more rows with history"
 #[test]
 fn pagelist_resize_no_reflow_more_rows_with_history() {
-    let mut s = PageList::init(10, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(10, 3)).unwrap();
     s.grow_rows(50).unwrap();
     {
         let pt = s
@@ -7731,7 +8676,11 @@ fn pagelist_resize_no_reflow_more_rows_with_history() {
 // ref: test "PageList resize (no reflow) less rows"
 #[test]
 fn pagelist_resize_no_reflow_less_rows() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
     assert_eq!(10usize, s.total_rows());
 
     // This is required for our writing below to work
@@ -7769,7 +8718,11 @@ fn pagelist_resize_no_reflow_less_rows() {
 // ref: test "PageList resize (no reflow) one rows"
 #[test]
 fn pagelist_resize_no_reflow_one_rows() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
     assert_eq!(10usize, s.total_rows());
 
     // This is required for our writing below to work
@@ -7807,7 +8760,11 @@ fn pagelist_resize_no_reflow_one_rows() {
 // ref: test "PageList resize (no reflow) less rows cursor on bottom"
 #[test]
 fn pagelist_resize_no_reflow_less_rows_cursor_on_bottom() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
     assert_eq!(10usize, s.total_rows());
 
     // This is required for our writing below to work
@@ -7874,7 +8831,11 @@ fn pagelist_resize_no_reflow_less_rows_cursor_on_bottom() {
 // ref: test "PageList resize (no reflow) less rows cursor in scrollback"
 #[test]
 fn pagelist_resize_no_reflow_less_rows_cursor_in_scrollback() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
     assert_eq!(10usize, s.total_rows());
 
     // This is required for our writing below to work
@@ -7942,7 +8903,11 @@ fn pagelist_resize_no_reflow_less_rows_cursor_in_scrollback() {
 // ref: test "PageList resize (no reflow) less rows trims blank lines"
 #[test]
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines() {
-    let mut s = PageList::init(10, 5, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 5)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -8014,7 +8979,11 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines() {
 // ref: test "PageList resize (no reflow) less rows trims blank lines cursor in blank line"
 #[test]
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() {
-    let mut s = PageList::init(10, 5, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 5)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -8069,7 +9038,11 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() 
 )]
 #[test]
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
-    let mut s = PageList::init(100, 5, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(100, 5)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -8111,7 +9084,11 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
 // ref: test "PageList resize (no reflow) more rows extends blank lines"
 #[test]
 fn pagelist_resize_no_reflow_more_rows_extends_blank_lines() {
-    let mut s = PageList::init(10, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 3)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
 
@@ -8157,7 +9134,11 @@ fn pagelist_resize_no_reflow_more_rows_contains_viewport() {
     // When the rows are increased we need to make sure that the viewport
     // doesn't end up below the active area if it's currently in pin mode.
 
-    let mut s = PageList::init(5, 5, Some(1)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(1),
+        ..Options::new(5, 5)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
 
     // Make it so we have scrollback
@@ -8191,7 +9172,11 @@ fn pagelist_resize_no_reflow_more_rows_contains_viewport() {
 // ref: test "PageList resize (no reflow) less cols"
 #[test]
 fn pagelist_resize_no_reflow_less_cols() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Resize
     s.resize(Resize {
@@ -8220,7 +9205,11 @@ fn pagelist_resize_no_reflow_less_cols() {
 // ref: test "PageList resize (no reflow) less cols pin in trimmed cols"
 #[test]
 fn pagelist_resize_no_reflow_less_cols_pin_in_trimmed_cols() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Put a tracked pin in the history
     let p = s
@@ -8263,7 +9252,11 @@ fn pagelist_resize_no_reflow_less_cols_pin_in_trimmed_cols() {
 // ref: test "PageList resize (no reflow) less cols clears graphemes"
 #[test]
 fn pagelist_resize_no_reflow_less_cols_clears_graphemes() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Add a grapheme.
     let page = unsafe { super::Node::page(s.pages.first) };
@@ -8305,7 +9298,11 @@ fn pagelist_resize_no_reflow_less_cols_clears_graphemes() {
 // ref: test "PageList resize (no reflow) more cols"
 #[test]
 fn pagelist_resize_no_reflow_more_cols() {
-    let mut s = PageList::init(5, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(5, 3)
+    })
+    .unwrap();
 
     // Resize
     s.resize(Resize {
@@ -8334,7 +9331,11 @@ fn pagelist_resize_no_reflow_more_cols() {
 // ref: test "PageList resize (no reflow) more cols with spacer head"
 #[test]
 fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
-    let mut s = PageList::init(2, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 3)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -8415,7 +9416,11 @@ fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
 // ref: test "PageList resize (no reflow) grow cols fast path with spacer head"
 #[test]
 fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
-    let mut s = PageList::init(10, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 3)
+    })
+    .unwrap();
 
     // Shrink to 5 cols. The page keeps capacity for 10 cols.
     s.resize(Resize {
@@ -8513,7 +9518,11 @@ fn pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page() {
             .rows
             >= rows
     );
-    let mut s = PageList::init(cols, rows, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(cols, rows)
+    })
+    .unwrap();
 
     // Then we need to resize our cols so that our rows per page shrinks.
     // This will force our resize to split our rows across two pages.
@@ -8614,7 +9623,11 @@ fn pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page() {
 // ref: test "PageList resize (no reflow) less cols then more cols"
 #[test]
 fn pagelist_resize_no_reflow_less_cols_then_more_cols() {
-    let mut s = PageList::init(5, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(5, 3)
+    })
+    .unwrap();
 
     // Resize less
     s.resize(Resize {
@@ -8652,7 +9665,11 @@ fn pagelist_resize_no_reflow_less_cols_then_more_cols() {
 // ref: test "PageList resize (no reflow) less rows and cols"
 #[test]
 fn pagelist_resize_no_reflow_less_rows_and_cols() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Resize less
     s.resize(Resize {
@@ -8682,7 +9699,11 @@ fn pagelist_resize_no_reflow_less_rows_and_cols() {
 // ref: test "PageList resize less rows and cols cursor at bottom"
 #[test]
 fn pagelist_resize_less_rows_and_cols_cursor_at_bottom() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     let cursor_pin = s
         .track_pin(
@@ -8727,7 +9748,7 @@ fn pagelist_resize_less_rows_and_cols_cursor_at_bottom() {
 // ref: test "PageList resize less rows and cols cursor near top pushed to scrollback"
 #[test]
 fn pagelist_resize_less_rows_and_cols_cursor_near_top_pushed_to_scrollback() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     // Fill every active row with non-blank content so that shrinking rows
     // can't trim trailing blank lines and instead pushes the top rows into
@@ -8796,7 +9817,11 @@ fn pagelist_resize_less_rows_and_cols_cursor_near_top_pushed_to_scrollback() {
 // ref: test "PageList resize (no reflow) more rows and less cols"
 #[test]
 fn pagelist_resize_no_reflow_more_rows_and_less_cols() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Resize less
     s.resize(Resize {
@@ -8831,7 +9856,11 @@ fn pagelist_resize_no_reflow_more_rows_and_less_cols() {
 )]
 #[test]
 fn pagelist_resize_more_rows_and_cols_doesnt_fit_in_single_std_page() {
-    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 10)
+    })
+    .unwrap();
 
     // Resize to a size that requires more than one page to fit our rows.
     let new_cols = 600;
@@ -8860,7 +9889,11 @@ fn pagelist_resize_more_rows_and_cols_doesnt_fit_in_single_std_page() {
 // ref: test "PageList resize (no reflow) empty screen"
 #[test]
 fn pagelist_resize_no_reflow_empty_screen() {
-    let mut s = PageList::init(5, 5, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(5, 5)
+    })
+    .unwrap();
 
     // Resize
     s.resize(Resize {
@@ -8906,7 +9939,7 @@ fn pagelist_resize_no_reflow_more_cols_forces_smaller_cap() {
     assert!(cap2.rows < cap.rows);
 
     // Create initial cap, fits in one page
-    let mut s = PageList::init(cap.cols, cap.rows, None).unwrap();
+    let mut s = PageList::init(Options::new(cap.cols, cap.rows)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -8951,7 +9984,7 @@ fn pagelist_resize_no_reflow_more_cols_forces_smaller_cap() {
 // ref: test "PageList resize (no reflow) more rows adds blank rows if cursor at bottom"
 #[test]
 fn pagelist_resize_no_reflow_more_rows_adds_blank_rows_if_cursor_at_bottom() {
-    let mut s = PageList::init(5, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(5, 3)).unwrap();
 
     // Grow to 5 total rows, simulating 3 active + 2 scrollback
     s.grow_rows(2).unwrap();
@@ -9052,7 +10085,11 @@ fn pagelist_resize_no_reflow_more_rows_adds_blank_rows_if_cursor_at_bottom() {
 // ref: test "PageList resize reflow more cols no wrapped rows"
 #[test]
 fn pagelist_resize_reflow_more_cols_no_wrapped_rows() {
-    let mut s = PageList::init(5, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(5, 3)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -9096,7 +10133,11 @@ fn pagelist_resize_reflow_more_cols_no_wrapped_rows() {
 // ref: test "PageList resize reflow more cols wrapped rows"
 #[test]
 fn pagelist_resize_reflow_more_cols_wrapped_rows() {
-    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 4)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -9163,7 +10204,7 @@ fn pagelist_resize_reflow_more_cols_wrapped_rows() {
 // ref: test "PageList resize reflow invalidates viewport offset cache"
 #[test]
 fn pagelist_resize_reflow_invalidates_viewport_offset_cache() {
-    let mut s = PageList::init(2, 4, None).unwrap();
+    let mut s = PageList::init(Options::new(2, 4)).unwrap();
     s.grow_rows(20).unwrap();
 
     {
@@ -9248,7 +10289,7 @@ fn pagelist_resize_reflow_more_cols_creates_multiple_pages() {
         }
     };
 
-    let mut s = PageList::init(cap.cols, cap.rows, None).unwrap();
+    let mut s = PageList::init(Options::new(cap.cols, cap.rows)).unwrap();
 
     // Wrap every other row so every line is wrapped for reflow
     {
@@ -9311,7 +10352,11 @@ fn pagelist_resize_reflow_more_cols_creates_multiple_pages() {
 // ref: test "PageList resize reflow more cols wrap across page boundary"
 #[test]
 fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary() {
-    let mut s = PageList::init(2, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 10)
+    })
+    .unwrap();
     assert_eq!(1usize, s.total_pages());
 
     // Grow to the capacity of the first page.
@@ -9416,7 +10461,11 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary() {
 // ref: test "PageList resize reflow more cols wrap across page boundary cursor in second page"
 #[test]
 fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary_cursor_in_second_page() {
-    let mut s = PageList::init(2, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 10)
+    })
+    .unwrap();
     assert_eq!(1usize, s.total_pages());
 
     // Grow to the capacity of the first page.
@@ -9520,7 +10569,7 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary_cursor_in_second_p
 // ref: test "PageList resize reflow less cols wrap across page boundary cursor in second page"
 #[test]
 fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_page() {
-    let mut s = PageList::init(5, 10, None).unwrap();
+    let mut s = PageList::init(Options::new(5, 10)).unwrap();
     assert_eq!(1usize, s.total_pages());
 
     // Grow to the capacity of the first page.
@@ -9698,7 +10747,11 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
 // ref: test "PageList resize reflow more cols cursor in wrapped row"
 #[test]
 fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row() {
-    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 4)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
     {
@@ -9757,7 +10810,11 @@ fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row() {
 // ref: test "PageList resize reflow more cols cursor in not wrapped row"
 #[test]
 fn pagelist_resize_reflow_more_cols_cursor_in_not_wrapped_row() {
-    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 4)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
     {
@@ -9816,7 +10873,11 @@ fn pagelist_resize_reflow_more_cols_cursor_in_not_wrapped_row() {
 // ref: test "PageList resize reflow more cols cursor in wrapped row that isn't unwrapped"
 #[test]
 fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row_that_isnt_unwrapped() {
-    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 4)
+    })
+    .unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     let page = unsafe { super::Node::page(s.pages.first) };
     {
@@ -9890,7 +10951,11 @@ fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row_that_isnt_unwrapped() 
 // ref: test "PageList resize reflow more cols no reflow preserves semantic prompt"
 #[test]
 fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
-    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 4)
+    })
+    .unwrap();
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -9925,7 +10990,11 @@ fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
 )]
 #[test]
 fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
-    let mut s = PageList::init(2, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 10)
+    })
+    .unwrap();
     assert_eq!(1usize, s.total_pages());
 
     // Grow to the capacity of the first page and add
@@ -10043,7 +11112,11 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
 )]
 #[test]
 fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
-    let mut s = PageList::init(2, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 10)
+    })
+    .unwrap();
     assert_eq!(1usize, s.total_pages());
 
     // Grow to the capacity of the first page and add
@@ -10138,7 +11211,11 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
 )]
 #[test]
 fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
-    let mut s = PageList::init(std_capacity().styles - 1, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(std_capacity().styles - 1, 10)
+    })
+    .unwrap();
     assert_eq!(1usize, s.total_pages());
 
     // Grow to the capacity of the first page and add
@@ -10235,7 +11312,11 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
 // ref: test "PageList resize reflow more cols unwrap wide spacer head"
 #[test]
 fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -10312,7 +11393,11 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
 // ref: test "PageList resize reflow more cols unwrap wide spacer head across two rows"
 #[test]
 fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
-    let mut s = PageList::init(2, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 3)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -10418,7 +11503,11 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
 // ref: test "PageList resize reflow more cols unwrap still requires wide spacer head"
 #[test]
 fn pagelist_resize_reflow_more_cols_unwrap_still_requires_wide_spacer_head() {
-    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -10503,7 +11592,11 @@ fn pagelist_resize_reflow_more_cols_unwrap_still_requires_wide_spacer_head() {
 // ref: test "PageList resize reflow less cols no reflow preserves semantic prompt"
 #[test]
 fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt() {
-    let mut s = PageList::init(4, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 4)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -10554,7 +11647,11 @@ fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt() {
 // ref: test "PageList resize reflow less cols no reflow preserves semantic prompt on first line"
 #[test]
 fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt_on_first_line() {
-    let mut s = PageList::init(4, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 4)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -10585,7 +11682,11 @@ fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt_on_first
 // ref: test "PageList resize reflow less cols wrap preserves semantic prompt"
 #[test]
 fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
-    let mut s = PageList::init(4, 4, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 4)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -10616,7 +11717,11 @@ fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
 // ref: test "PageList resize reflow less cols no wrapped rows"
 #[test]
 fn pagelist_resize_reflow_less_cols_no_wrapped_rows() {
-    let mut s = PageList::init(10, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(10, 3)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
@@ -10664,7 +11769,7 @@ fn pagelist_resize_reflow_less_cols_no_wrapped_rows() {
 // ref: test "PageList resize reflow less cols wrapped rows"
 #[test]
 fn pagelist_resize_reflow_less_cols_wrapped_rows() {
-    let mut s = PageList::init(4, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(4, 2)).unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
@@ -10741,7 +11846,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows() {
 // ref: test "PageList resize reflow less cols wrapped rows with graphemes"
 #[test]
 fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
-    let mut s = PageList::init(4, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(4, 2)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -10835,7 +11940,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
 // ref: test "PageList resize reflow less cols cursor in wrapped row"
 #[test]
 fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_row() {
-    let mut s = PageList::init(4, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(4, 2)).unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows as usize {
@@ -10878,7 +11983,11 @@ fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_row() {
 // ref: test "PageList resize reflow less cols wraps spacer head"
 #[test]
 fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
-    let mut s = PageList::init(4, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 3)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -10977,7 +12086,7 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
 // ref: test "PageList resize reflow less cols cursor goes to scrollback"
 #[test]
 fn pagelist_resize_reflow_less_cols_cursor_goes_to_scrollback() {
-    let mut s = PageList::init(4, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(4, 2)).unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
@@ -11017,7 +12126,7 @@ fn pagelist_resize_reflow_less_cols_cursor_goes_to_scrollback() {
 // ref: test "PageList resize reflow less cols cursor in unchanged row"
 #[test]
 fn pagelist_resize_reflow_less_cols_cursor_in_unchanged_row() {
-    let mut s = PageList::init(4, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(4, 2)).unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
@@ -11060,7 +12169,7 @@ fn pagelist_resize_reflow_less_cols_cursor_in_unchanged_row() {
 // ref: test "PageList resize reflow less cols cursor in blank cell"
 #[test]
 fn pagelist_resize_reflow_less_cols_cursor_in_blank_cell() {
-    let mut s = PageList::init(6, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(6, 2)).unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
@@ -11103,7 +12212,7 @@ fn pagelist_resize_reflow_less_cols_cursor_in_blank_cell() {
 // ref: test "PageList resize reflow less cols cursor in final blank cell"
 #[test]
 fn pagelist_resize_reflow_less_cols_cursor_in_final_blank_cell() {
-    let mut s = PageList::init(6, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(6, 2)).unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
@@ -11146,7 +12255,7 @@ fn pagelist_resize_reflow_less_cols_cursor_in_final_blank_cell() {
 // ref: test "PageList resize reflow less cols cursor in wrapped blank cell"
 #[test]
 fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_blank_cell() {
-    let mut s = PageList::init(6, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(6, 2)).unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
@@ -11189,7 +12298,11 @@ fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_blank_cell() {
 // ref: test "PageList resize reflow less cols blank lines"
 #[test]
 fn pagelist_resize_reflow_less_cols_blank_lines() {
-    let mut s = PageList::init(4, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 3)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..1 {
@@ -11240,7 +12353,11 @@ fn pagelist_resize_reflow_less_cols_blank_lines() {
 // ref: test "PageList resize reflow less cols blank lines between"
 #[test]
 fn pagelist_resize_reflow_less_cols_blank_lines_between() {
-    let mut s = PageList::init(4, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 3)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     {
@@ -11303,7 +12420,11 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between() {
 // ref: test "PageList resize reflow less cols blank lines between no scrollback"
 #[test]
 fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
-    let mut s = PageList::init(5, 3, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(5, 3)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     {
@@ -11363,7 +12484,11 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
 // ref: test "PageList resize reflow less cols cursor not on last line preserves location"
 #[test]
 fn pagelist_resize_reflow_less_cols_cursor_not_on_last_line_preserves_location() {
-    let mut s = PageList::init(5, 5, Some(1)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(1),
+        ..Options::new(5, 5)
+    })
+    .unwrap();
     assert!(s.pages.first == s.pages.last);
     let page = unsafe { super::Node::page(s.pages.first) };
     for y in 0..s.rows {
@@ -11422,7 +12547,11 @@ fn pagelist_resize_reflow_less_cols_cursor_not_on_last_line_preserves_location()
 // ref: test "PageList resize reflow less cols copy style"
 #[test]
 fn pagelist_resize_reflow_less_cols_copy_style() {
-    let mut s = PageList::init(4, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 2)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -11492,7 +12621,11 @@ fn pagelist_resize_reflow_less_cols_copy_style() {
 // ref: test "PageList resize reflow less cols to eliminate a wide char"
 #[test]
 fn pagelist_resize_reflow_less_cols_to_eliminate_a_wide_char() {
-    let mut s = PageList::init(2, 1, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 1)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -11542,7 +12675,11 @@ fn pagelist_resize_reflow_less_cols_to_eliminate_a_wide_char() {
 // ref: test "PageList resize reflow less cols to wrap a wide char"
 #[test]
 fn pagelist_resize_reflow_less_cols_to_wrap_a_wide_char() {
-    let mut s = PageList::init(3, 1, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(3, 1)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -11614,7 +12751,11 @@ fn pagelist_resize_reflow_less_cols_to_wrap_a_wide_char() {
 // ref: test "PageList resize reflow less cols to wrap a multi-codepoint grapheme with a spacer head"
 #[test]
 fn pagelist_resize_reflow_less_cols_to_wrap_a_multi_codepoint_grapheme_with_a_spacer_head() {
-    let mut s = PageList::init(4, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 2)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -11751,7 +12892,11 @@ fn pagelist_resize_reflow_less_cols_to_wrap_a_multi_codepoint_grapheme_with_a_sp
 fn pagelist_resize_reflow_less_cols_copy_kitty_placeholder() {
     const KITTY_PLACEHOLDER: u32 = 0x10EEEE;
 
-    let mut s = PageList::init(4, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 2)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -11800,7 +12945,11 @@ fn pagelist_resize_reflow_less_cols_copy_kitty_placeholder() {
 fn pagelist_resize_reflow_more_cols_clears_kitty_placeholder() {
     const KITTY_PLACEHOLDER: u32 = 0x10EEEE;
 
-    let mut s = PageList::init(4, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 2)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -11857,7 +13006,11 @@ fn pagelist_resize_reflow_more_cols_clears_kitty_placeholder() {
 fn pagelist_resize_reflow_wrap_moves_kitty_placeholder() {
     const KITTY_PLACEHOLDER: u32 = 0x10EEEE;
 
-    let mut s = PageList::init(4, 2, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 2)
+    })
+    .unwrap();
     {
         assert!(s.pages.first == s.pages.last);
         let page = unsafe { super::Node::page(s.pages.first) };
@@ -11910,7 +13063,11 @@ fn pagelist_resize_reflow_wrap_moves_kitty_placeholder() {
 fn pagelist_resize_reflow_grapheme_map_capacity_exceeded() {
     // This test verifies that when reflowing content with many graphemes,
     // the grapheme map capacity is correctly increased when needed.
-    let mut s = PageList::init(4, 10, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 10)
+    })
+    .unwrap();
     assert_eq!(1usize, s.total_pages());
 
     // Get the grapheme capacity from the page. We need more than this many
@@ -12007,7 +13164,7 @@ fn pagelist_resize_grow_cols_with_unwrap_fixes_viewport_pin() {
     // The plan is to pin viewport in history, then grow columns to unwrap rows.
     // The unwrap reduces total_rows, but the tracked pin moves to a position
     // that no longer has enough rows below it for the viewport height.
-    let mut s = PageList::init(2, 10, None).unwrap();
+    let mut s = PageList::init(Options::new(2, 10)).unwrap();
 
     // Make sure we have some history, in this case we have 30 rows of history
     s.grow_rows(30).unwrap();
@@ -12078,7 +13235,7 @@ fn pagelist_resize_no_reflow_more_cols_remaps_pins_in_backfill_path() {
     let cap = std_capacity()
         .adjust(crate::page::Adjustment { cols: Some(cols) })
         .unwrap();
-    let mut s = PageList::init(cols, cap.rows, None).unwrap();
+    let mut s = PageList::init(Options::new(cols, cap.rows)).unwrap();
 
     // Grow until we have two pages.
     while s.pages.first == s.pages.last {
@@ -12180,7 +13337,7 @@ use super::page_tracking::PageLeakScope;
 fn pagelist_pagepool_no_leak_grow_and_scroll() {
     let scope = PageLeakScope::new();
     {
-        let mut s = PageList::init(80, 24, None).unwrap();
+        let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
         // Grow until we have at least several pages chained, forcing real page
         // allocations from the pool.
@@ -12223,7 +13380,7 @@ fn pagelist_pagepool_no_leak_grow_and_scroll() {
 fn pagelist_pagepool_no_leak_clone_many_pages() {
     let scope = PageLeakScope::new();
     {
-        let mut s = PageList::init(80, 24, None).unwrap();
+        let mut s = PageList::init(Options::new(80, 24)).unwrap();
         // Grow a large scrollback so the clone copies many pages.
         s.grow_rows(500).unwrap();
 
@@ -12259,7 +13416,7 @@ fn pagelist_pagepool_no_leak_clone_many_pages() {
 fn pagelist_pagepool_no_leak_resize_reflow() {
     let scope = PageLeakScope::new();
     {
-        let mut s = PageList::init(80, 24, None).unwrap();
+        let mut s = PageList::init(Options::new(80, 24)).unwrap();
         s.grow_rows(300).unwrap();
 
         // Fill rows with content so reflow actually has to move/repack cells
@@ -12322,7 +13479,7 @@ fn pagelist_pagepool_no_leak_resize_reflow() {
 fn pagelist_pagepool_no_leak_reset_then_deinit() {
     let scope = PageLeakScope::new();
     {
-        let mut s = PageList::init(80, 24, None).unwrap();
+        let mut s = PageList::init(Options::new(80, 24)).unwrap();
         s.grow_rows(200).unwrap();
         assert!(scope.delta_allocs() > 0);
 
@@ -12346,7 +13503,7 @@ fn pagelist_pagepool_no_leak_reset_then_deinit() {
 // `MaybeUninit`. Every page here is a real page built with `create_page`,
 // exactly as the mixed-width arm of the reference fixture does.
 fn mixed_width_pin_list_for_test() -> PageList {
-    let mut result = PageList::init(2, 1, None).unwrap();
+    let mut result = PageList::init(Options::new(2, 1)).unwrap();
 
     // This deliberately constructs a layout that normal PageList operations
     // do not expose yet. Keep integrity checks paused through deinit so the
@@ -12374,7 +13531,7 @@ fn mixed_width_pin_list_for_test() -> PageList {
 // ref: test "PageList Pin rightWrap exact row multiple"
 #[test]
 fn pagelist_pin_rightWrap_exact_row_multiple() {
-    let mut s = PageList::init(10, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(10, 3)).unwrap();
 
     let start = s
         .pin(point::Point::Active(point::Coordinate { x: 5, y: 0 }))
@@ -12393,7 +13550,7 @@ fn pagelist_pin_rightWrap_exact_row_multiple() {
 // ref: test "PageList Pin leftWrap exact row multiple"
 #[test]
 fn pagelist_pin_leftWrap_exact_row_multiple() {
-    let mut s = PageList::init(10, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(10, 3)).unwrap();
 
     let start = s
         .pin(point::Point::Active(point::Coordinate { x: 5, y: 2 }))
@@ -12412,7 +13569,7 @@ fn pagelist_pin_leftWrap_exact_row_multiple() {
 // ref: test "PageList Pin rightWrap maximum distance"
 #[test]
 fn pagelist_pin_rightWrap_maximum_distance() {
-    let mut s = PageList::init(1, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(1, 3)).unwrap();
 
     let start = s
         .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
@@ -12425,7 +13582,7 @@ fn pagelist_pin_rightWrap_maximum_distance() {
 // ref: test "PageList Pin leftWrap maximum distance"
 #[test]
 fn pagelist_pin_leftWrap_maximum_distance() {
-    let mut s = PageList::init(1, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(1, 3)).unwrap();
 
     let start = s
         .pin(point::Point::Active(point::Coordinate { x: 0, y: 2 }))
@@ -12444,7 +13601,7 @@ fn pagelist_pin_leftWrap_maximum_distance() {
 /// column of row 0 must land on the single column of row 1.
 #[test]
 fn pagelist_pin_wrap_one_column_selection_gesture_shape() {
-    let mut s = PageList::init(1, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(1, 3)).unwrap();
 
     let start = s
         .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
@@ -12547,7 +13704,7 @@ fn pagelist_pin_rejects_columns_beyond_mixed_width_page_bounds() {
 // ref: test "PageList PageIterator reverse count includes row zero"
 #[test]
 fn pagelist_PageIterator_reverse_count_includes_row_zero() {
-    let mut s = PageList::init(2, 2, None).unwrap();
+    let mut s = PageList::init(Options::new(2, 2)).unwrap();
 
     let mut it = super::iter::PageIterator {
         row: Some(s.get_top_left(point::Tag::Screen)),
@@ -12565,7 +13722,7 @@ fn pagelist_PageIterator_reverse_count_includes_row_zero() {
 // ref: test "PageList PageIterator count crosses page boundaries"
 #[test]
 fn pagelist_PageIterator_count_crosses_page_boundaries() {
-    let mut s = PageList::init(80, 24, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
     let first = s.pages.first;
     unsafe { (*super::Node::page(first)).pause_integrity_checks(true) };
@@ -12637,7 +13794,7 @@ fn pagelist_PageIterator_count_crosses_page_boundaries() {
 // ref: test "PageList scroll minimum row delta"
 #[test]
 fn pagelist_scroll_minimum_row_delta() {
-    let mut s = PageList::init(10, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(10, 3)).unwrap();
 
     // Create one row of history so scrolling all the way back has an
     // observable result.
@@ -12652,7 +13809,7 @@ fn pagelist_scroll_minimum_row_delta() {
 // ref: test "PageList: jump minimum prompt delta"
 #[test]
 fn pagelist_jump_minimum_prompt_delta() {
-    let mut s = PageList::init(10, 3, None).unwrap();
+    let mut s = PageList::init(Options::new(10, 3)).unwrap();
 
     s.scroll(Scroll::DeltaPrompt(isize::MIN));
     assert!(matches!(s.viewport, Viewport::Active));
@@ -12671,7 +13828,7 @@ fn pagelist_jump_minimum_prompt_delta() {
 // real sizes are restored before `deinit`.
 #[test]
 fn pagelist_Cell_screenPoint_supports_long_scrollback() {
-    let mut s = PageList::init(1, 1, None).unwrap();
+    let mut s = PageList::init(Options::new(1, 1)).unwrap();
     s.pause_integrity_checks(true);
 
     for _ in 0..2 {
@@ -12745,7 +13902,7 @@ fn pagelist_Cell_screenPoint_supports_long_scrollback() {
 // termination. The ring is undone before `deinit`.
 #[test]
 fn pagelist_pointFromPin_rejects_overflowing_screen_coordinate() {
-    let mut s = PageList::init(1, 1, None).unwrap();
+    let mut s = PageList::init(Options::new(1, 1)).unwrap();
     s.pause_integrity_checks(true);
 
     let mut extra: Vec<*mut super::Node> = Vec::new();
@@ -12808,7 +13965,11 @@ fn pagelist_pointFromPin_rejects_overflowing_screen_coordinate() {
 // ref: test "PageList increaseCapacity from zero-capacity dimensions"
 #[test]
 fn pagelist_increaseCapacity_from_zero_capacity_dimensions() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // Compact the only page. A plain page has no styled, grapheme,
     // or hyperlink content so the exact capacity is zero in every
@@ -12859,7 +14020,11 @@ fn pagelist_increaseCapacity_from_zero_capacity_dimensions() {
 /// post-fix it terminates on the first iteration.
 #[test]
 fn pagelist_increaseCapacity_from_zero_terminates_within_a_bounded_retry() {
-    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     let mut node = s.compact(s.pages.first).unwrap().unwrap();
     assert_eq!(0, unsafe { super::Node::capacity(node) }.styles);
@@ -12898,7 +14063,7 @@ fn pagelist_eraseRow_hyperlink_dense_row_crosses_page_boundary() {
     // eraseRow must instead increase the destination page's capacity
     // and retry, the same way insertLines/deleteLines and
     // cursorScrollAbove handle their cross-page copies.
-    let mut s = PageList::init(80, 10, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 10)).unwrap();
 
     // Grow to two pages so our active area straddles them: the first
     // page is exactly full and the second page holds the last 5 rows
@@ -13043,7 +14208,7 @@ fn pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary() {
     // which has the same rotate-then-clone structure and had the
     // same bug: a cross-page row clone failure propagated out after
     // the first page had already been rotated.
-    let mut s = PageList::init(80, 10, None).unwrap();
+    let mut s = PageList::init(Options::new(80, 10)).unwrap();
 
     {
         let page = unsafe { super::Node::page(s.pages.last) };

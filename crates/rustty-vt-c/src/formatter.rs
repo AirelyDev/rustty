@@ -617,15 +617,6 @@ mod tests {
         }
     }
 
-    // PORT NOTE: `.{ .cols = 80, .rows = 24, .max_scrollback = 10_000 }`
-    fn term_opts(max_scrollback: usize) -> terminal_c::Options {
-        terminal_c::Options {
-            cols: 80,
-            rows: 24,
-            max_scrollback,
-        }
-    }
-
     // test "terminal_new/free" {
     #[test]
     fn terminal_new_free() {
@@ -634,7 +625,7 @@ mod tests {
             let mut t: terminal_c::Terminal = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, terminal_c.new(...));
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(calloc, &mut t, term_opts(10_000))
+                terminal_c::new(calloc, &mut t, 80, 24)
             });
             // defer terminal_c.free(t);
 
@@ -717,7 +708,7 @@ mod tests {
         selection: *const CSelection,
     ) -> (Result, terminal_c::Terminal, Result, Formatter) {
         let mut t: terminal_c::Terminal = std::ptr::null_mut();
-        let t_new_result = unsafe { terminal_c::new(calloc, &mut t, term_opts(10_000)) };
+        let t_new_result = unsafe { terminal_c::new(calloc, &mut t, 80, 24) };
         unsafe { terminal_c::vt_write(t, bytes.as_ptr(), bytes.len()) };
         let mut f: Formatter = std::ptr::null_mut();
         let f_new_result = unsafe {
@@ -943,7 +934,7 @@ mod tests {
             // terminal_c.vt_write(t, "Hello World", 11);
             let mut t: terminal_c::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(calloc, &mut t, term_opts(10_000))
+                terminal_c::new(calloc, &mut t, 80, 24)
             });
             let bytes = b"Hello World";
             unsafe { terminal_c::vt_write(t, bytes.as_ptr(), bytes.len()) };

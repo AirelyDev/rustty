@@ -468,15 +468,6 @@ mod tests {
         });
     }
 
-    // PORT NOTE: `.{ .cols = 80, .rows = 24, .max_scrollback = 0 }`
-    fn term_opts() -> terminal_c::Options {
-        terminal_c::Options {
-            cols: 80,
-            rows: 24,
-            max_scrollback: 0,
-        }
-    }
-
     // test "setopt_from_terminal" {
     #[test]
     fn setopt_from_terminal_test() {
@@ -488,7 +479,7 @@ mod tests {
             // Create terminal
             let mut t: terminal_c::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(calloc, &mut t, term_opts())
+                terminal_c::new(calloc, &mut t, 80, 24)
             });
 
             // Apply terminal state to encoder
@@ -523,7 +514,7 @@ mod tests {
             // Encoder null with valid terminal
             let mut t: terminal_c::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(calloc, &mut t, term_opts())
+                terminal_c::new(calloc, &mut t, 80, 24)
             });
             // setopt_from_terminal(null, t);
             unsafe { setopt_from_terminal(std::ptr::null_mut(), t) };

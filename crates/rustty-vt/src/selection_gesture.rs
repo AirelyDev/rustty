@@ -1061,14 +1061,15 @@ mod tests {
     use allocator_api2::alloc::Global as Allocator;
 
     // PORT NOTE: the reference uses inline `Terminal.init(testing.allocator, .{
-    // .cols, .rows })` / `.{ ..., .max_scrollback }` literals. `Options` has more
+    // .cols, .rows })` / `.{ ..., .max_scrollback_bytes }` literals. `Options` has more
     // fields in the port; these helpers mirror the Terminal test helpers in
     // terminal.rs.
     fn opts(cols: crate::size::CellCountInt, rows: crate::size::CellCountInt) -> Options {
         Options {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: crate::terminal::Colors {
                 background: crate::color::DynamicRGB::UNSET,
                 foreground: crate::color::DynamicRGB::UNSET,
@@ -1084,10 +1085,11 @@ mod tests {
     fn opts_sb(
         cols: crate::size::CellCountInt,
         rows: crate::size::CellCountInt,
-        max_scrollback: usize,
+        max_scrollback_bytes: usize,
     ) -> Options {
         Options {
-            max_scrollback,
+            max_scrollback_bytes: Some(max_scrollback_bytes),
+            max_scrollback_lines: None,
             ..opts(cols, rows)
         }
     }
@@ -1095,12 +1097,13 @@ mod tests {
     fn screen_opts(
         cols: crate::size::CellCountInt,
         rows: crate::size::CellCountInt,
-        max_scrollback: usize,
+        max_scrollback_bytes: usize,
     ) -> crate::screen::Options {
         crate::screen::Options {
             cols,
             rows,
-            max_scrollback,
+            max_scrollback_bytes: Some(max_scrollback_bytes),
+            max_scrollback_lines: None,
             kitty_image_storage_limit: 0,
             kitty_image_loading_limits: crate::kitty::graphics_image::Limits::DIRECT,
         }

@@ -173,26 +173,6 @@ extern "C" {
  */
 
 /**
- * Terminal initialization options.
- *
- * @ingroup terminal
- */
-typedef struct {
-  /** Terminal width in cells. Must be greater than zero. */
-  uint16_t cols;
-
-  /** Terminal height in cells. Must be greater than zero. */
-  uint16_t rows;
-
-  /** Maximum number of lines to keep in scrollback history. */
-  size_t max_scrollback;
-
-  // TODO: Consider ABI compatibility implications of this struct.
-  // We may want to artificially pad it significantly to support
-  // future options.
-} RusttyTerminalOptions;
-
-/**
  * Amount of compression work to perform before returning.
  *
  * @ingroup terminal
@@ -887,6 +867,27 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Input type: RusttyTerminalClipboardWriteFn
    */
   RUSTTY_TERMINAL_OPT_CLIPBOARD_WRITE = 26,
+
+  /**
+   * Set the maximum scrollback allocation in bytes.
+   *
+   * Lowering the limit immediately removes eligible complete historical
+   * pages. A value of zero disables scrollback and erases retained history.
+   * A NULL value pointer removes the byte limit.
+   *
+   * Input type: size_t*
+   */
+  RUSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES = 27,
+
+  /**
+   * Set the maximum number of physical lines retained in scrollback.
+   *
+   * Lowering the limit immediately removes eligible complete historical
+   * pages. A NULL value pointer removes the line limit.
+   *
+   * Input type: size_t*
+   */
+  RUSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES = 28,
   RUSTTY_TERMINAL_OPT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyTerminalOption;
 
@@ -1197,22 +1198,56 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Output type: bool *
    */
   RUSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE = 32,
+
+  /*
+   * NOTE: RUSTTY_TERMINAL_DATA_VT_PROCESSING_ERROR = 33 is not yet
+   * implemented; the discriminant is reserved so 34/35 keep upstream's
+   * numbering.
+   */
+
+  /**
+   * The configured maximum scrollback allocation in bytes.
+   *
+   * This always reports the primary screen's configured value, including
+   * while an alternate screen is active. Returns RUSTTY_NO_VALUE when the
+   * configured byte limit is unlimited.
+   *
+   * Output type: size_t *
+   */
+  RUSTTY_TERMINAL_DATA_SCROLLBACK_MAX_BYTES = 34,
+
+  /**
+   * The configured maximum number of physical scrollback lines.
+   *
+   * This always reports the primary screen's configured value, including
+   * while an alternate screen is active. Returns RUSTTY_NO_VALUE when the
+   * configured line limit is unlimited.
+   *
+   * Output type: size_t *
+   */
+  RUSTTY_TERMINAL_DATA_SCROLLBACK_MAX_LINES = 35,
   RUSTTY_TERMINAL_DATA_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyTerminalData;
 
 /**
  * Create a new terminal instance.
  *
+ * The terminal starts with various reasonable defaults e.g. around
+ * scrollback limits. Use rustty_terminal_set() to change any options
+ * prior to using the terminal.
+ *
  * @param allocator Pointer to allocator, or NULL to use the default allocator
  * @param terminal Pointer to store the created terminal handle
- * @param options Terminal initialization options
+ * @param cols Terminal width in cells (must be greater than zero)
+ * @param rows Terminal height in cells (must be greater than zero)
  * @return RUSTTY_SUCCESS on success, or an error code on failure
  *
  * @ingroup terminal
  */
 RUSTTY_API RusttyResult rustty_terminal_new(const RusttyAllocator* allocator,
-                                   RusttyTerminal* terminal,
-                                   RusttyTerminalOptions options);
+                                            RusttyTerminal* terminal,
+                                            uint16_t cols,
+                                            uint16_t rows);
 
 /**
  * Free a terminal instance.
@@ -1273,7 +1308,8 @@ RUSTTY_API RusttyResult rustty_terminal_resize(RusttyTerminal terminal,
  * write_pty callback and userdata pointer. The value is passed
  * directly for pointer types (callbacks, userdata) or as a pointer
  * to the value for non-pointer types (e.g. RusttyString*).
- * NULL clears the option to its default.
+ * The behavior of a NULL value is specific to each option and is
+ * documented by the corresponding RusttyTerminalOption value.
  *
  * Callbacks are invoked synchronously during rustty_terminal_vt_write().
  * Callbacks must not call rustty_terminal_vt_write() on the same

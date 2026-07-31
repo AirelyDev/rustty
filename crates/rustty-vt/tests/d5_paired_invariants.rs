@@ -40,7 +40,8 @@ fn terminal(cols: u16, rows: u16) -> Terminal {
     let opts = Options {
         cols,
         rows,
-        max_scrollback: 10_000,
+        max_scrollback_bytes: Some(10_000),
+        max_scrollback_lines: None,
         colors: Colors {
             background: DynamicRGB::UNSET,
             foreground: DynamicRGB::UNSET,

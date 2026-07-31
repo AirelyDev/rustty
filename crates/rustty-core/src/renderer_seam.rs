@@ -2150,7 +2150,8 @@ mod compression_tests {
                     TerminalOptions {
                         cols: 80,
                         rows: 24,
-                        max_scrollback: 10 * 1024 * 1024,
+                        max_scrollback_bytes: Some(10 * 1024 * 1024),
+                        max_scrollback_lines: None,
                         colors: rustty_vt::terminal::Colors::default(),
                         default_modes: rustty_vt::modes::ModePacked::default(),
                         kitty_image_storage_limit: 0,

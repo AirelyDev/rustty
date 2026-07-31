@@ -474,17 +474,9 @@ mod tests {
         with_test_allocator(|alloc| {
             // var terminal: terminal_c.Terminal = null;
             let mut term: terminal::Terminal = std::ptr::null_mut();
-            // try testing.expectEqual(Result.success, terminal_c.new(..., .{ .cols=80, .rows=24, .max_scrollback=10_000 }));
+            // try testing.expectEqual(Result.success, terminal_c.new(..., 80, 24));
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut term,
-                    terminal::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut term, 80, 24)
             });
             // defer terminal_c.free(terminal);
 
@@ -523,17 +515,9 @@ mod tests {
         with_test_allocator(|alloc| {
             // var terminal: terminal_c.Terminal = null;
             let mut term: terminal::Terminal = std::ptr::null_mut();
-            // try testing.expectEqual(Result.success, terminal_c.new(..., .{ .cols=80, .rows=24, .max_scrollback=10_000 }));
+            // try testing.expectEqual(Result.success, terminal_c.new(..., 80, 24));
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut term,
-                    terminal::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut term, 80, 24)
             });
             // defer terminal_c.free(terminal);
 

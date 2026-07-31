@@ -239,6 +239,7 @@ mod tests {
     use crate::color::{DynamicPalette, DynamicRGB};
     use crate::kitty;
     use crate::modes as modespkg;
+    use crate::pagelist::Options;
     use crate::point::{self, Point};
     use crate::screen::Screen;
     use crate::screen::SelectionString;
@@ -251,7 +252,8 @@ mod tests {
         TerminalOptions {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: Colors {
                 background: DynamicRGB::UNSET,
                 foreground: DynamicRGB::UNSET,
@@ -619,7 +621,8 @@ mod tests {
         let mut t: Terminal = Terminal::init(
             alloc,
             TerminalOptions {
-                max_scrollback: 10 * 1024 * 1024,
+                max_scrollback_bytes: Some(10 * 1024 * 1024),
+                max_scrollback_lines: None,
                 ..terminal_opts(80, 24)
             },
         )
@@ -776,8 +779,16 @@ mod tests {
         let alloc = Allocator;
 
         // Zero here forces minimum max size to effectively two pages.
-        // var p: PageList = try .init(alloc, 80, 24, 0);
-        let mut p: PageList = PageList::init(80, 24, Some(0)).unwrap();
+        // var p: PageList = try .init(alloc, .{
+        //     .cols = 80,
+        //     .rows = 24,
+        //     .max_size = 0,
+        // });
+        let mut p: PageList = PageList::init(Options {
+            max_size: Some(0),
+            ..Options::new(80, 24)
+        })
+        .unwrap();
         // defer p.deinit();
 
         // Grow to capacity
@@ -862,7 +873,7 @@ mod tests {
         // test is only that the split successor is SHORTER than the second page;
         // 10 cols yields ~35k rows per page, which makes the row-by-row fill and
         // the formatter passes take ~1 minute in a debug Rust build.
-        let mut pages: PageList = PageList::init(80, 2, None).unwrap();
+        let mut pages: PageList = PageList::init(Options::new(80, 2)).unwrap();
 
         // PORT NOTE: the fill loops are wrapped in `pause_integrity_checks`.
         // rustty's debug `verify_integrity` walks every tracked pin on every

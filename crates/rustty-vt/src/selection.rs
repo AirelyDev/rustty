@@ -641,16 +641,17 @@ mod tests {
     use allocator_api2::alloc::Global as Allocator;
 
     // PORT NOTE: helper for `Screen.init(testing.allocator, .{ .cols, .rows,
-    // .max_scrollback })`. The reference struct-literal sets only those three
+    // .max_scrollback_bytes })`. The reference struct-literal sets only those three
     // fields; the Rust `Options` carries the deferred kitty fields, so we fill
     // those via `..Options::default()`.
-    fn screen_init(cols: u16, rows: u16, max_scrollback: usize) -> Screen {
+    fn screen_init(cols: u16, rows: u16, max_scrollback_bytes: usize) -> Screen {
         Screen::init(
             Allocator,
             Options {
                 cols,
                 rows,
-                max_scrollback,
+                max_scrollback_bytes: Some(max_scrollback_bytes),
+                max_scrollback_lines: None,
                 ..Options::default()
             },
         )

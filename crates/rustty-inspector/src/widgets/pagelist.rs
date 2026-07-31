@@ -474,7 +474,10 @@ fn summaryTable(pages: &PageList) {
     );
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
     let mut limit_buf: [u8; 64] = [0; 64];
-    let limit = formatBytes(&mut limit_buf, pages.max_size());
+    let limit = formatBytes(
+        &mut limit_buf,
+        pages.limits.max(rustty_vt::pagelist::Key::Bytes),
+    );
     unsafe { dcimgui_sys::ImGui_TextUnformatted(limit.as_ptr()) };
 
     // cimgui.c.ImGui_TableNextRow();
@@ -2638,7 +2641,11 @@ mod ws7_tests {
              cannot be exercised here"
         );
 
-        let mut pages = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+        let mut pages = PageList::init(rustty_vt::pagelist::Options {
+            max_size: Some(10 * 1024 * 1024),
+            ..rustty_vt::pagelist::Options::new(80, 24)
+        })
+        .unwrap();
         while pages.total_pages() < 6 {
             let _ = pages.grow().unwrap();
         }
@@ -2742,7 +2749,11 @@ mod ws7_tests {
         // `IMGUI_LOCK` (memory: parallel-cargo-test-exposes-c-init-races).
         let _guard = IMGUI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut pages = PageList::init(80, 24, Some(10 * 1024 * 1024)).unwrap();
+        let mut pages = PageList::init(rustty_vt::pagelist::Options {
+            max_size: Some(10 * 1024 * 1024),
+            ..rustty_vt::pagelist::Options::new(80, 24)
+        })
+        .unwrap();
         while pages.total_pages() < 6 {
             let _ = pages.grow().unwrap();
         }

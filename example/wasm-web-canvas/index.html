@@ -164,24 +164,8 @@
 
       // --- VT terminal roundtrip via the retained rustty_vt_c C-ABI ---
       try {
-        const layoutPtr = ex.rustty_type_json();
-        let e = layoutPtr;
-        const mem = u8();
-        while (mem[e]) e++;
-        const LAYOUT = JSON.parse(dec.decode(u8().subarray(layoutPtr, e)));
-        const T = LAYOUT["RusttyTerminalOptions"];
-        const optsPtr = ex.rustty_wc_alloc(T.size);
-        u8().fill(0, optsPtr, optsPtr + T.size);
-        const setU = (base, f, v) => {
-          const fi = T.fields[f];
-          new DataView(ex.memory.buffer, base + fi.offset, fi.size)[
-            fi.size === 1 ? "setUint8" : fi.size === 2 ? "setUint16" : "setUint32"
-          ](0, v, true);
-        };
-        setU(optsPtr, "cols", 80);
-        setU(optsPtr, "rows", 24);
         const slot = ex.rustty_wc_alloc(4);
-        const r = ex.rustty_terminal_new(0, slot, optsPtr);
+        const r = ex.rustty_terminal_new(0, slot, 80, 24);
         const term = new DataView(ex.memory.buffer, slot, 4).getUint32(0, true);
         log(`rustty_terminal_new(80x24): rc=${r} handle=${term}`);
         const vt = enc.encode("\x1b[1;32mHello from rustty web_canvas.wasm!\x1b[0m");

@@ -1633,11 +1633,12 @@ mod tests {
 
     // PORT NOTE: see active.rs — supplies the Zig `Options` field defaults the
     // reference relies on implicitly.
-    fn terminal_opts(cols: u16, rows: u16, max_scrollback: usize) -> TerminalOptions {
+    fn terminal_opts(cols: u16, rows: u16, max_scrollback_bytes: usize) -> TerminalOptions {
         TerminalOptions {
             cols,
             rows,
-            max_scrollback,
+            max_scrollback_bytes: Some(max_scrollback_bytes),
+            max_scrollback_lines: None,
             colors: Colors {
                 background: DynamicRGB::UNSET,
                 foreground: DynamicRGB::UNSET,
@@ -1730,7 +1731,7 @@ mod tests {
     #[test]
     fn simple_search_with_history() {
         let alloc = Allocator;
-        // var t: Terminal = try .init(alloc, .{ .cols = 10, .rows = 2, .max_scrollback = std.math.maxInt(usize) });
+        // var t: Terminal = try .init(alloc, .{ .cols = 10, .rows = 2, .max_scrollback_bytes = std.math.maxInt(usize) });
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 2, usize::MAX)).unwrap();
         let active_ptr: *mut Screen = t.screens.active;
         // const list: *PageList = &t.screens.active.pages;

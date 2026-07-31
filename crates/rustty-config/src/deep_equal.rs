@@ -177,6 +177,15 @@ macro_rules! deep_equal_via_equal_byval {
 
 deep_equal_via_equal_byval!(Color, Duration, WindowPadding);
 
+// `Limit(T, default)` is a `.@"struct"` with a single `.int` field and no
+// `equal` decl, so the reference's struct recursion collapses to `PartialEq`.
+// It is generic, so it takes a blanket impl rather than a macro row.
+impl<T: LimitInt + PartialEq, const DEFAULT: u128> DeepEqual for Limit<T, DEFAULT> {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
 // ===========================================================================
 // `.@"union"` arm (tagged unions WITHOUT an `equal` decl): the reference
 //   const old_tag = std.meta.activeTag(old);

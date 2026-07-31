@@ -7,12 +7,7 @@
 int main() {
   // Create a small terminal
   RusttyTerminal terminal;
-  RusttyTerminalOptions opts = {
-    .cols = 10,
-    .rows = 3,
-    .max_scrollback = 0,
-  };
-  RusttyResult result = rustty_terminal_new(NULL, &terminal, opts);
+  RusttyResult result = rustty_terminal_new(NULL, &terminal, 10, 3);
   assert(result == RUSTTY_SUCCESS);
 
   // Write some content so the grid has interesting data

@@ -2070,13 +2070,14 @@ mod tests {
     // PORT NOTE: the reference tests construct `Terminal: try .init(testing.allocator,
     // .{ .cols, .rows })` and drive bytes through a `Stream`. Rustty's `Options`
     // has no field defaults, so we supply them via this helper (matching
-    // `terminal.rs`'s test `opts`). `max_scrollback` defaults to 10_000 except
+    // `terminal.rs`'s test `opts`). `max_scrollback_bytes` defaults to 10_000 except
     // where a test overrides it.
     fn opts(cols: size::CellCountInt, rows: size::CellCountInt) -> Options {
         Options {
             cols,
             rows,
-            max_scrollback: 10_000,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
             colors: Colors {
                 background: DynamicRGB::UNSET,
                 foreground: DynamicRGB::UNSET,
@@ -3009,7 +3010,8 @@ mod tests {
         let mut t = Terminal::init(
             Global,
             Options {
-                max_scrollback: 100,
+                max_scrollback_bytes: Some(100),
+                max_scrollback_lines: None,
                 ..opts(80, 24)
             },
         )

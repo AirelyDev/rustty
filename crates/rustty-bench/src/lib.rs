@@ -57,7 +57,7 @@ pub mod osc_parser;
 /// defaults (§7.5/§7.7): the ScreenClone/TerminalStream benchmarks init with
 /// `.{ .rows, .cols }`, relying on the reference struct's field defaults for the
 /// rest. rustty's `terminal::Options` has no `Default` impl, so we reproduce the
-/// `.ghostty`-artifact defaults exactly (`max_scrollback = 10_000`, `colors =
+/// `.ghostty`-artifact defaults exactly (`max_scrollback_bytes = 10_000`, `colors =
 /// .default`, `default_modes = .{}`, `kitty_image_storage_limit = 320MB`,
 /// `kitty_image_loading_limits = .direct`).
 pub(crate) fn terminal_options(rows: u16, cols: u16) -> rustty_vt::terminal::Options {
@@ -66,8 +66,9 @@ pub(crate) fn terminal_options(rows: u16, cols: u16) -> rustty_vt::terminal::Opt
         cols,
         // .rows = opts.@"terminal-rows",
         rows,
-        // max_scrollback: usize = 10_000,
-        max_scrollback: 10_000,
+        // max_scrollback_bytes: usize = 10_000,
+        max_scrollback_bytes: Some(10_000),
+        max_scrollback_lines: None,
         // colors: Colors = .default,
         colors: rustty_vt::terminal::Colors::default(),
         // default_modes: modespkg.ModePacked = .{},

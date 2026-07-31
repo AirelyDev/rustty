@@ -168,18 +168,21 @@ impl PageList {
         self.viewport_pin_row_offset = None;
 
         if !opts.reflow {
-            return self.resize_without_reflow(opts);
+            self.resize_without_reflow(opts)?;
+            // Shrinking the active row count turns former active rows into
+            // scrollback even without reflow, which can cross the line limit.
+            self.enforce_limit(super::Key::Lines);
+            return Ok(());
         }
 
-        // Recalculate our minimum max size. This allows grow to work properly
-        // when increasing beyond our initial minimum max size or explicit max
-        // size to fit the active area.
-        let old_min_max_size = self.min_max_size;
-        self.min_max_size = Self::min_max_size(
+        // Recalculate our minimum limits. This allows grow to work properly when
+        // increasing beyond the explicit limits to fit the active area.
+        let old_limits = self.limits;
+        self.limits.resize(
             opts.cols.unwrap_or(self.cols),
             opts.rows.unwrap_or(self.rows),
         );
-        // errdefer self.min_max_size = old_min_max_size;
+        // errdefer self.limits = old_limits;
 
         // On reflow, the main thing that causes reflow is column changes. If
         // only rows change, reflow is impossible. So we change our behavior based
@@ -207,8 +210,8 @@ impl PageList {
             }
         };
         if let Err(e) = r {
-            // errdefer self.min_max_size = old_min_max_size;
-            self.min_max_size = old_min_max_size;
+            // errdefer self.limits = old_limits;
+            self.limits = old_limits;
             return Err(e);
         }
 
@@ -223,6 +226,11 @@ impl PageList {
             }
             super::Viewport::Active | super::Viewport::Top => {}
         }
+
+        // Column reflow can change the physical history row count, and a row
+        // resize can move the active boundary. Both may expose whole old pages
+        // that are now eligible for line-limit pruning.
+        self.enforce_limit(super::Key::Lines);
 
         Ok(())
     }
@@ -524,21 +532,19 @@ impl PageList {
     }
 
     pub(crate) fn resize_without_reflow(&mut self, opts: Resize) -> Result<(), super::OutOfMemory> {
-        // We only set the new min_max_size if we're not reflowing. If we are
-        // reflowing, then resize handles this for us.
-        let old_min_max_size = self.min_max_size;
-        self.min_max_size = if !opts.reflow {
-            Self::min_max_size(
+        // We only set the new minimums if we're not reflowing. If we are
+        // reflowing, then the outer resize call handles this for us.
+        let old_limits = self.limits;
+        if !opts.reflow {
+            self.limits.resize(
                 opts.cols.unwrap_or(self.cols),
                 opts.rows.unwrap_or(self.rows),
-            )
-        } else {
-            old_min_max_size
-        };
-        // errdefer self.min_max_size = old_min_max_size;
+            );
+        }
+        // errdefer self.limits = old_limits;
 
-        // PORT NOTE: the reference `errdefer self.min_max_size = old_min_max_size`
-        // restores `min_max_size` on any error below. Both fallible paths
+        // PORT NOTE: the reference `errdefer self.limits = old_limits`
+        // restores `limits` on any error below. Both fallible paths
         // (`resizeWithoutReflowGrowCols` and `grow`) restore it before returning
         // the error; on success the restore is skipped.
 
@@ -616,8 +622,8 @@ impl PageList {
                         // call this method multiple times.
                         self.cols = old_cols;
                         if let Err(e) = self.resize_without_reflow_grow_cols(cols, chunk) {
-                            // errdefer self.min_max_size = old_min_max_size;
-                            self.min_max_size = old_min_max_size;
+                            // errdefer self.limits = old_limits;
+                            self.limits = old_limits;
                             return Err(e);
                         }
                     }
