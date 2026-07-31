@@ -2205,7 +2205,7 @@ impl Page {
         let entry = map.get_entry_context(src_offset, &actx).unwrap();
         let value = unsafe { *entry.value_ptr };
         unsafe { map.remove_by_ptr(entry.key_ptr) };
-        map.put_assume_capacity_context(dst_offset, value, &actx);
+        map.put_assume_capacity_no_clobber_context(dst_offset, value, &actx);
 
         // NOTE: We must not set src/dst.hyperlink here because this
         // function is used in various cases where we swap cell contents
@@ -2407,7 +2407,7 @@ impl Page {
         let entry = map.get_entry_context(src_offset, &actx).unwrap();
         let value = unsafe { *entry.value_ptr };
         unsafe { map.remove_by_ptr(entry.key_ptr) };
-        map.put_assume_capacity_context(dst_offset, value, &actx);
+        map.put_assume_capacity_no_clobber_context(dst_offset, value, &actx);
     }
 
     /// Clear the graphemes for a given cell.

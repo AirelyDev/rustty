@@ -568,7 +568,14 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         ctx: &Context,
     ) -> Result<(), OutOfMemory> {
         assert(!self.contains_context(key, ctx));
-        self.grow_if_needed(1)?;
+        if self.grow_if_needed(1).is_err() {
+            // Live entries still fit, so an assume-capacity insertion can
+            // either recycle a tombstone or rehash if its probe reaches a
+            // genuinely free slot.
+            if unsafe { (*self.header()).size } >= self.max_load() {
+                return Err(OutOfMemory);
+            }
+        }
 
         self.put_assume_capacity_no_clobber_context(key, value, ctx);
         Ok(())
@@ -598,8 +605,16 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         }
 
         let fingerprint = Metadata::take_fingerprint(hash);
-        // if (metadata[0].isFree()) self.header().available -= 1;
         if unsafe { (*metadata).is_free() } {
+            // Removal does not restore insertion headroom. A move can
+            // therefore remove its source, probe to a different free
+            // slot, and arrive here with no headroom left. Rehash before
+            // consuming that slot so the counter and metadata agree.
+            if unsafe { (*self.header()).available } == 0 {
+                assert(unsafe { (*self.header()).size } < self.max_load());
+                self.rehash(ctx);
+                return self.put_assume_capacity_no_clobber_context(key, value, ctx);
+            }
             unsafe { (*self.header()).available -= 1 };
         }
         unsafe {
@@ -1763,7 +1778,110 @@ mod tests {
         }
 
         assert!(map.remove_context(0, &c));
-        map.put_assume_capacity_context(15, 15, &c);
+        map.put_assume_capacity_no_clobber_context(15, 15, &c);
+
+        assert_eq!(max_load, map.count());
+        assert_eq!(15, map.get_context(15, &c).unwrap());
+        for i in 0..map.capacity() {
+            assert!(!unsafe { *map.metadata.unwrap().add(i as usize) }.is_tombstone());
+        }
+    }
+
+    // `test "HashMap no-clobber move after remove at max load"` (fedd42e8d).
+    //
+    // PORT NOTE: the reference's version also calls `expectCanonical(&map, ...)`
+    // after every move. That helper is meaningful only once removal is
+    // backward-shift (it asserts no used entry is separated from its home slot
+    // by a free slot, which tombstones deliberately violate), so the call is
+    // added when `remove_by_index` becomes backward-shift.
+    //
+    // HONESTY NOTE (P3-W2 T2 Step 5): this test does NOT discriminate
+    // no-clobber from clobbering insertion. Executed control: replacing both
+    // `put_assume_capacity_no_clobber_context` calls in this test and in
+    // `HashMap_no_clobber_move_rehashes_exhausted_headroom` with
+    // `put_assume_capacity_context` leaves both PASSING. That is expected once
+    // stated plainly — `65f953e8e` is a *performance* commit ("avoid duplicate
+    // probes when moving cell data"): for a destination key known to be absent
+    // the two insertions choose the same slot and write the same bytes, so no
+    // black-box assertion can separate them. What IS gated is that the
+    // `page_impl.rs` move sites run at all: dropping the insert in
+    // `move_hyperlink`/`move_grapheme` fails 7 tests (`page_moveCells_graphemes`,
+    // `terminal_insert_blanks_shift_graphemes`,
+    // `terminal_insert_blanks_shifts_hyperlinks`,
+    // `terminal_print_devanagari_grapheme_should_be_wide_on_next_line`,
+    // `terminal_print_slice_differential_fuzz_vs_print`,
+    // `terminal_scroll_{down,up}_left_right_scroll_region_hyperlink`).
+    #[test]
+    fn HashMap_no_clobber_move_after_remove_at_max_load() {
+        // const Context = struct { hash(key) = key; eql(a, b) = a == b; };
+        struct Context;
+        impl HashMapContext<u32> for Context {
+            fn hash(&self, key: u32) -> u64 {
+                key as u64
+            }
+            fn eql(&self, a: u32, b: u32) -> bool {
+                a == b
+            }
+        }
+        type Map = HashMapUnmanaged<u32, u32, Context, 80>;
+        let cap = 16;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = Context;
+
+        // Fill the map to its maximum load.
+        let max_load = map.max_load();
+        for i in 0..max_load {
+            map.put_assume_capacity_no_clobber_context(i, i, &c);
+        }
+
+        // Model a managed-cell move: remove the source and insert the value at
+        // a destination known to be absent. This must work at maximum load for
+        // any number of moves since removal genuinely frees a slot.
+        for i in 0..100u32 {
+            let src: u32 = i;
+            let dst: u32 = i + max_load;
+            assert!(map.remove_context(src, &c));
+            map.put_assume_capacity_no_clobber_context(dst, dst, &c);
+
+            assert_eq!(max_load, map.count());
+            assert_eq!(dst, map.get_context(dst, &c).unwrap());
+        }
+    }
+
+    // `test "HashMap no-clobber move rehashes exhausted headroom"` (65f953e8e)
+    #[test]
+    fn HashMap_no_clobber_move_rehashes_exhausted_headroom() {
+        // const Context = struct { hash(key) = key; eql(a, b) = a == b; };
+        struct Context;
+        impl HashMapContext<u32> for Context {
+            fn hash(&self, key: u32) -> u64 {
+                key as u64
+            }
+            fn eql(&self, a: u32, b: u32) -> bool {
+                a == b
+            }
+        }
+        type Map = HashMapUnmanaged<u32, u32, Context, 80>;
+        let cap = 16;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = Context;
+
+        // Fill all insertion headroom with keys in the first part of the table.
+        let max_load = map.max_load();
+        for i in 0..max_load {
+            map.put_assume_capacity_no_clobber_context(i, i, &c);
+        }
+
+        // Model a managed-cell move: removing the source leaves a tombstone but
+        // does not restore headroom, and the destination hashes to a free slot.
+        assert!(map.remove_context(0, &c));
+        map.put_assume_capacity_no_clobber_context(15, 15, &c);
 
         assert_eq!(max_load, map.count());
         assert_eq!(15, map.get_context(15, &c).unwrap());
