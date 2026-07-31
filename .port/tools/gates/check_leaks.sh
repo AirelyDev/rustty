@@ -104,6 +104,40 @@ live_ffi_unit_filters() {
 # `MIRI EXCEPTION (rustty-xev …)` annotations in the crate, so adding an
 # exception whose tests this arm does not reach makes the arm RED (too few ran)
 # instead of silently shrinking the covered set.
+# ASan coverage for modules that are NOT Miri exceptions and therefore must NOT
+# be folded into `live_ffi_unit_filters`.
+#
+# WHY SEPARATE: the floor above is "ASan ran >= the number of MIRI EXCEPTION
+# annotations". Adding non-excepted tests to that filter INFLATES the count, so
+# an excepted test could silently stop running and the floor would still pass —
+# which is exactly the vacuity this arm exists to prevent. Two invocations keep
+# the floor comparing like with like.
+#
+# `thread_pool::` is here because it was previously excluded from ASan entirely
+# after the arm crashed on it (`BUS ... ___chkstk_darwin` in `pthread_create`),
+# recorded as ASan frames not fitting "16 KB pool-thread stacks" — blamed on the
+# tool. The cause was OURS: two tests wrote `stack_size: 0`, dropping the
+# reference's 16 MiB field default (`ThreadPool.zig:84`), and `init`'s
+# `max(1, ..)` made that a ONE-BYTE request that macOS clamps to
+# PTHREAD_STACK_MIN (16 KiB). With the default restored the tests run clean in
+# ~2s. The exclusion had left the crate's most UB-dense module — three real
+# Stacked-Borrows findings live in `thread_pool.rs`, two in the implementation —
+# with no ASan coverage at all.
+extra_asan_filters() {  # $1 = crate
+  case "$1" in
+    rustty-xev) echo "thread_pool::";;
+    *) echo "";;
+  esac
+}
+# Floor for the arm above: hand-set, because these are not annotation-derived.
+# 4 is the current `thread_pool::` test count; it exists so the arm goes RED if
+# the filter stops matching rather than silently running zero tests.
+extra_asan_floor() {  # $1 = crate
+  case "$1" in
+    rustty-xev) echo 4;;
+    *) echo 0;;
+  esac
+}
 live_ffi_unit_floor() {  # $1 = crate
   grep -rho "MIRI EXCEPTION ($1" "crates/$1/src" 2>/dev/null | wc -l | tr -d ' '
 }
@@ -205,6 +239,27 @@ run_crate() {
     elif [ "${uran:-0}" -lt "${floor:-1}" ]; then
       echo "G6 RED [$c]: ASan companion ran ${uran:-0} test(s), fewer than the $floor source"
       echo "  \`MIRI EXCEPTION ($c …)\` annotations — an exception is escaping BOTH lanes."
+      mrc=1
+    fi
+  fi
+
+  # Second, INDEPENDENT ASan invocation: non-excepted modules (see
+  # extra_asan_filters). Kept separate so the annotation-derived floor above
+  # cannot be satisfied by tests that are not exceptions.
+  local xfilters xfloor xout xran
+  xfilters="$(extra_asan_filters "$c")"
+  if [ -n "$xfilters" ]; then
+    xfloor="$(extra_asan_floor "$c")"
+    echo "=== G6 [$c] :: ASan (non-excepted modules: $xfilters) ==="
+    xout="$(bash "$GATES_DIR/sanitizers.sh" "$c" "$xfilters" address 2>&1)"
+    printf '%s\n' "$xout" | sed 's/^/    /'
+    xran="$(printf '%s' "$xout" | sed -n 's/.*✅ address: \([0-9]*\) test(s) ran.*/\1/p')"
+    if printf '%s' "$xout" | grep -q 'SANITIZERS: PROBLEM'; then
+      echo "G6 RED [$c]: ASan is not clean on the non-excepted modules."
+      mrc=1
+    elif [ "${xran:-0}" -lt "${xfloor:-1}" ]; then
+      echo "G6 RED [$c]: ASan ran ${xran:-0} test(s) on $xfilters, fewer than the"
+      echo "  expected $xfloor — the filter has stopped matching."
       mrc=1
     fi
   fi

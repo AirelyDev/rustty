@@ -1644,9 +1644,20 @@ mod tests {
         // Fresh counter each invocation (OnceLock may already be set by a prior test).
         *CTX.get().unwrap().ran.lock().unwrap() = 0;
 
+        // `..Config::default()`, NOT an explicit `stack_size`. The reference
+        // gives the field a DEFAULT — `stack_size: u32 = (std.Thread.SpawnConfig{})
+        // .stack_size` (16 MiB, ThreadPool.zig:84) — so a Zig test written as
+        // `.{ .max_threads = n }` silently receives 16 MiB. Rust struct literals
+        // require every field, and these two tests originally wrote `stack_size:
+        // 0`, which `init`'s `max(1, ..)` turns into a ONE-BYTE request; macOS
+        // then clamps to PTHREAD_STACK_MIN = 16 KiB. That is a dropped Zig field
+        // default, and it is what made the ASan companion arm die with
+        // `BUS ... ___chkstk_darwin` in `pthread_create` — a crash previously
+        // attributed to ASan frames not fitting "16 KB pool-thread stacks",
+        // i.e. to the tool rather than to us.
         let pool = ThreadPool::init(Config {
-            stack_size: 0,
             max_threads,
+            ..Config::default()
         });
 
         // Tasks must outlive the pool run; box them so their `node`s have stable
@@ -1815,9 +1826,20 @@ mod tests {
         }));
         let ctx: &LifeCtx = unsafe { &*ctx_ptr };
 
+        // `..Config::default()`, NOT an explicit `stack_size`. The reference
+        // gives the field a DEFAULT — `stack_size: u32 = (std.Thread.SpawnConfig{})
+        // .stack_size` (16 MiB, ThreadPool.zig:84) — so a Zig test written as
+        // `.{ .max_threads = n }` silently receives 16 MiB. Rust struct literals
+        // require every field, and these two tests originally wrote `stack_size:
+        // 0`, which `init`'s `max(1, ..)` turns into a ONE-BYTE request; macOS
+        // then clamps to PTHREAD_STACK_MIN = 16 KiB. That is a dropped Zig field
+        // default, and it is what made the ASan companion arm die with
+        // `BUS ... ___chkstk_darwin` in `pthread_create` — a crash previously
+        // attributed to ASan frames not fitting "16 KB pool-thread stacks",
+        // i.e. to the tool rather than to us.
         let pool = ThreadPool::init(Config {
-            stack_size: 0,
             max_threads,
+            ..Config::default()
         });
 
         // `Box::into_raw` -> the raw pointer's provenance spans the WHOLE
