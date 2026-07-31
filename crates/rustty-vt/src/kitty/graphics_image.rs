@@ -45,46 +45,20 @@ mod temp_dir {
     #[cfg(test)]
     pub use rustty_os::tempdir::TempDir;
 
-    // PORT NOTE (P3-W7 T3, area-E `E15`/`E12`): `allocTmpDir` gained an
-    // explicit captured-environment parameter upstream, and the value it
-    // discovers now lives in `global.tmpDirPath()`. **This crate is the
-    // libghostty-vt artifact, which upstream FORBIDS from importing
-    // `global.zig`** (`@compileError("global state cannot be used in
-    // libghostty-vt")`, enforced on this side as a dependency-edge assertion in
-    // `.port/tools/gates/check_acyclic.sh` — see `P3-W7 T1`). So this crate
-    // cannot reach either the accessor or `rustty-os`'s new signature.
+    // PORT NOTE (P3-W11 T1, oracle `e8525c0fd`(iii)): the reference's
+    // `allocTmpDir`/`freeTmpDir` imports are **DELETED** by `e8525c0fd`. The
+    // temp directory `isPathInTempDir` validates against is now a PARAMETER
+    // threaded down from `Limits.temporary_file.enabled.directory`, which
+    // `termio` fills with `global.tmpDirPath()`.
     //
-    // Upstream's own resolution is `E12`: `isPathInTempDir` takes the temp dir
-    // as a PARAMETER, threaded in from
-    // `kitty_image_loading_limits = .allWithTempDir(global.tmpDirPath())` set by
-    // `termio`. That is an area A–D change (`Limits.temporary_directory`) and is
-    // NOT part of P3-W7 — it is recorded as residual. Until it lands, the
-    // self-contained discovery below (byte-faithful to `os/file.zig`'s POSIX
-    // `allocTmpDir`, and the same body this module already used on wasm32)
-    // keeps behaviour identical to before this task WITHOUT taking a forbidden
-    // dependency edge.
-    #[allow(non_snake_case)]
-    pub fn allocTmpDir() -> String {
-        #[cfg(windows)]
-        {
-            std::env::temp_dir()
-                .to_string_lossy()
-                .trim_end_matches('\\')
-                .to_string()
-        }
-        #[cfg(not(windows))]
-        {
-            match std::env::var_os("TMPDIR").or_else(|| std::env::var_os("TMP")) {
-                Some(v) => v.to_string_lossy().trim_end_matches('/').to_string(),
-                None => "/tmp".to_string(),
-            }
-        }
-    }
-
-    /// PORT NOTE: `freeTmpDir` — a no-op on POSIX; in Rust the returned `String`
-    /// owns its allocation and is freed by Drop on every platform.
-    #[allow(non_snake_case)]
-    pub fn freeTmpDir(_dir: &str) {}
+    // This is deliberate security hardening: the previous body consulted the
+    // process environment (`TMPDIR`/`TMP`) at validation time, so which
+    // directories a remote-controlled kitty `f=` transmission could read from
+    // depended on mutable process state. It no longer does.
+    //
+    // It also removes the reason this crate — the libghostty-vt artifact, which
+    // upstream FORBIDS from importing `global.zig` — needed a self-contained
+    // copy of the discovery logic (see the `P3-W7 T3` note this replaces).
 }
 
 // const log = std.log.scoped(.kitty_gfx);
@@ -134,6 +108,29 @@ pub struct LoadingImage {
     /// Quiet is the quiet settings for the initial load command. This is
     /// used if q isn't set on subsequent chunks.
     pub quiet: command::Quiet,
+
+    /// The temporary directory for file transmission (null means that
+    /// temporary directory transmission is disabled).
+    // PORT NOTE (oracle `e8525c0fd`): `temporary_directory: ?[]const u8`. Zig
+    // stores a BORROW of `Limits.temporary_file.enabled.directory`, which in
+    // turn borrows terminal-owned storage. Rust owns the bytes here instead:
+    // tying `LoadingImage`'s lifetime to the `Limits` it was built from would
+    // infect `ImageStorage`, `Screen` and `Terminal` with a lifetime parameter
+    // for no observable gain. Byte-slice rule: `Vec<u8>`, never `String`.
+    pub temporary_directory: Option<Vec<u8>>,
+}
+
+/// PORT NOTE (oracle `e8525c0fd`): the reference's anonymous
+/// `union(enum) { enabled: struct { directory: []const u8 }, disabled: void }`
+/// inside `Limits`. Named here because Rust has no anonymous enums.
+/// Byte-slice rule: the directory is `Vec<u8>`, never `String`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemporaryFileLimit {
+    Enabled {
+        /// The directory to expect temporary files in.
+        directory: Vec<u8>,
+    },
+    Disabled,
 }
 
 /// The limits of the Kitty Graphics protocol we should allow.
@@ -142,26 +139,38 @@ pub struct LoadingImage {
 /// parameters for resource or security reasons. Note that depending
 /// on how libghostty is compiled, some of these may be fully unsupported
 /// and ignored (e.g. "file" on wasm32-freestanding).
-// PORT NOTE: `packed struct { file: bool, temporary_file: bool,
-// shared_memory: bool }`. The struct is only read field-wise, never bitcast, so
-// a plain struct preserves all observable behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// PORT NOTE: the reference was a `packed struct` of three `bool`s;
+// `e8525c0fd` widened `temporary_file` into a tagged union and dropped
+// `packed`. The struct is only read field-wise, never bitcast, so a plain
+// struct preserves all observable behavior. It is no longer `Copy`, because
+// the enabled arm owns its directory bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Limits {
     pub file: bool,
-    pub temporary_file: bool,
+    pub temporary_file: TemporaryFileLimit,
     pub shared_memory: bool,
 }
 
 impl Limits {
-    pub const ALL: Limits = Limits {
-        file: true,
-        temporary_file: true,
-        shared_memory: true,
-    };
+    /// Enables all filesystem-related image transmission mediums. `path`
+    /// is the temporary directory to expect files in when files are
+    /// transmitted using said medium.
+    // PORT NOTE (oracle `e8525c0fd`): replaces `pub const all: Limits`, which
+    // is DELETED upstream — there is no longer a way to enable the temporary
+    // file medium without naming the directory it is restricted to.
+    pub fn all_with_temp_dir(path: &[u8]) -> Limits {
+        Limits {
+            file: true,
+            temporary_file: TemporaryFileLimit::Enabled {
+                directory: path.to_vec(),
+            },
+            shared_memory: true,
+        }
+    }
 
     pub const DIRECT: Limits = Limits {
         file: false,
-        temporary_file: false,
+        temporary_file: TemporaryFileLimit::Disabled,
         shared_memory: false,
     };
 }
@@ -170,7 +179,11 @@ impl LoadingImage {
     /// Initialize a chunked immage from the first image transmission.
     /// If this is a multi-chunk image, this should only be the FIRST
     /// chunk.
-    pub fn init(cmd: &command::Command, limits: Limits) -> Result<LoadingImage, Error> {
+    // PORT NOTE (oracle `e8525c0fd`): `limits: Limits` is taken by REFERENCE
+    // here. `Limits` stopped being `Copy` when `temporary_file` gained its
+    // owned directory bytes; upstream's by-value pass is free because the Zig
+    // union holds a borrowed slice.
+    pub fn init(cmd: &command::Command, limits: &Limits) -> Result<LoadingImage, Error> {
         // Build our initial image from the properties sent via the control.
         // These can be overwritten by the data loading process. For example,
         // PNG loading sets the width/height from the data.
@@ -183,12 +196,21 @@ impl LoadingImage {
                 height: t.height,
                 compression: t.compression,
                 format: t.format,
+                usage: t.usage,
                 ..Image::default()
             },
 
             data: Vec::new(),
             display: cmd.display(),
             quiet: cmd.quiet,
+            // .temporary_directory = switch (limits.temporary_file) {
+            //     .enabled => |d| d.directory,
+            //     .disabled => null,
+            // },
+            temporary_directory: match &limits.temporary_file {
+                TemporaryFileLimit::Enabled { directory } => Some(directory.clone()),
+                TemporaryFileLimit::Disabled => None,
+            },
         };
 
         // Special case for the direct medium, we just add the chunk directly.
@@ -214,8 +236,10 @@ impl LoadingImage {
                         return Err(Error::UnsupportedMedium);
                     }
                 }
+                // .temporary_file => if (limits.temporary_file == .disabled)
+                //     return error.UnsupportedMedium,
                 command::Medium::TemporaryFile => {
-                    if !limits.temporary_file {
+                    if limits.temporary_file == TemporaryFileLimit::Disabled {
                         return Err(Error::UnsupportedMedium);
                     }
                 }
@@ -456,7 +480,14 @@ impl LoadingImage {
 
         // Temporary file logic
         if medium == command::Medium::TemporaryFile {
-            if !Self::isPathInTempDir(path) {
+            // assert(self.temporary_directory != null);
+            assert(self.temporary_directory.is_some());
+            // PORT NOTE: the borrow is taken before the call so the
+            // `&self.temporary_directory` read and the `&[u8]` argument do not
+            // overlap a `&mut self` — `isPathInTempDir` is an associated
+            // function, so no `self` borrow is live inside it.
+            let dir = self.temporary_directory.as_deref().unwrap();
+            if !Self::isPathInTempDir(dir, path) {
                 return Err(Error::TemporaryFileNotInTempDir);
             }
             if index_of(path, b"tty-graphics-protocol").is_none() {
@@ -546,34 +577,35 @@ impl LoadingImage {
 
     /// Returns true if path appears to be in a temporary directory.
     /// Copies logic from Kitty.
-    fn isPathInTempDir(path: &[u8]) -> bool {
+    // PORT NOTE (oracle `e8525c0fd`(iii), `b988efcfe`): `dir` is now a
+    // PARAMETER. The previous body called `temp_dir.allocTmpDir()`, which read
+    // `TMPDIR`/`TMP` from the process environment at validation time; that
+    // lookup is DELETED. See the `temp_dir` module note above.
+    fn isPathInTempDir(dir: &[u8], path: &[u8]) -> bool {
         if starts_with(path, b"/tmp") {
             return true;
         }
         if starts_with(path, b"/dev/shm") {
             return true;
         }
-        // PORT NOTE: `temp_dir.allocTmpDir(std.heap.page_allocator)` /
-        // `freeTmpDir`. The Rust `allocTmpDir` returns an owning `String`; the
-        // freeTmpDir call is preserved (a no-op on POSIX).
-        let dir = temp_dir::allocTmpDir();
-        if starts_with(path, dir.as_bytes()) {
-            temp_dir::freeTmpDir(&dir);
+        if starts_with(path, dir) {
             return true;
         }
 
         // The temporary dir is sometimes a symlink. On macOS for
         // example /tmp is /private/var/...
-        // PORT NOTE: `posix.realpath(dir, &buf)`; on failure (`else |_| {}`) we
-        // simply fall through.
-        if let Ok(real_dir) = realpath(dir.as_bytes()) {
-            if starts_with(path, &real_dir) {
-                temp_dir::freeTmpDir(&dir);
-                return true;
-            }
+        // PORT NOTE: `std.Io.Dir.cwd().realPathFile(io, dir, &buf) catch return
+        // false`. `e8525c0fd` turned the old `if (posix.realpath(...)) |…| …
+        // else |_| {}` fall-through into an early `return false`; with nothing
+        // after the check in either version the two are equivalent, and we
+        // follow the new shape.
+        let Ok(real_dir) = realpath(dir) else {
+            return false;
+        };
+        if starts_with(path, &real_dir) {
+            return true;
         }
 
-        temp_dir::freeTmpDir(&dir);
         false
     }
 
@@ -786,6 +818,9 @@ pub struct Image {
     pub format: command::Format,
     pub compression: command::Compression,
     pub data: Vec<u8>,
+    /// Usage hints transmitted with the image (oracle `a65e11cc9`); see
+    /// `command::Usage`. `transient` prioritises this image for eviction.
+    pub usage: command::Usage,
     /// Unique, monotonically increasing stamp assigned each time an image is
     /// added to (or replaced in) an `ImageStorage`. A changed generation for a
     /// given image ID means the image contents may have changed, even if the
@@ -812,6 +847,7 @@ impl Default for Image {
             format: command::Format::Rgb,
             compression: command::Compression::None,
             data: Vec::new(),
+            usage: command::Usage::DEFAULT,
             generation: 0,
             implicit_id: false,
         }
@@ -976,7 +1012,7 @@ mod tests {
             quiet: command::Quiet::No,
             data: b"AAAA".to_vec(),
         };
-        let _loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let _loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
     }
 
     #[test]
@@ -992,7 +1028,7 @@ mod tests {
             quiet: command::Quiet::No,
             data: b"AAAA".to_vec(),
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
         assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
     }
 
@@ -1009,7 +1045,7 @@ mod tests {
             quiet: command::Quiet::No,
             data: b"AAAA".to_vec(),
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
         assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
     }
 
@@ -1040,7 +1076,7 @@ mod tests {
             quiet: command::Quiet::No,
             data: b"AAAA".to_vec(),
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
         assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
     }
 
@@ -1064,7 +1100,7 @@ mod tests {
             data: include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data")
                 .to_vec(),
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
         let img = loading.complete().unwrap();
 
         // should be decompressed
@@ -1086,7 +1122,7 @@ mod tests {
             quiet: command::Quiet::No,
             data: include_bytes!("testdata/image-rgb-none-20x15-2147483647-raw.data").to_vec(),
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
         let img = loading.complete().unwrap();
 
         // should be decompressed
@@ -1116,7 +1152,7 @@ mod tests {
             quiet: command::Quiet::No,
             data: data[0..1024].to_vec(),
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
 
         // Read our remaining chunks
         let mut pos = 1024;
@@ -1158,7 +1194,7 @@ mod tests {
             quiet: command::Quiet::No,
             data: Vec::new(),
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
 
         // Read our remaining chunks
         let mut pos = 0;
@@ -1202,7 +1238,11 @@ mod tests {
         };
         assert_eq!(
             Err(Error::TemporaryFileNotNamedCorrectly),
-            LoadingImage::init(&cmd, Limits::ALL).map(|_| ())
+            LoadingImage::init(
+                &cmd,
+                &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir))
+            )
+            .map(|_| ())
         );
 
         // Temporary file should still be there
@@ -1239,7 +1279,11 @@ mod tests {
             quiet: command::Quiet::No,
             data: path_bytes,
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::ALL).unwrap();
+        let mut loading = LoadingImage::init(
+            &cmd,
+            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
+        )
+        .unwrap();
         let img = loading.complete().unwrap();
         assert!(img.compression == command::Compression::None);
 
@@ -1274,7 +1318,11 @@ mod tests {
             quiet: command::Quiet::No,
             data: path_bytes,
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::ALL).unwrap();
+        let mut loading = LoadingImage::init(
+            &cmd,
+            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
+        )
+        .unwrap();
         let img = loading.complete().unwrap();
         assert!(img.compression == command::Compression::None);
         tmp_dir.dir().access(&path).unwrap();
@@ -1318,7 +1366,11 @@ mod tests {
             quiet: command::Quiet::No,
             data: path_bytes,
         };
-        let mut loading = LoadingImage::init(&cmd, Limits::ALL).unwrap();
+        let mut loading = LoadingImage::init(
+            &cmd,
+            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
+        )
+        .unwrap();
         let img = loading.complete().unwrap();
         assert!(img.compression == command::Compression::None);
         assert!(img.format == command::Format::Rgba);
@@ -1342,7 +1394,7 @@ mod tests {
         };
 
         // Direct medium should work even with the most restrictive limits
-        let _loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        let _loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
     }
 
     #[test]
@@ -1370,7 +1422,7 @@ mod tests {
         };
         assert_eq!(
             Err(Error::UnsupportedMedium),
-            LoadingImage::init(&cmd, Limits::DIRECT).map(|_| ())
+            LoadingImage::init(&cmd, &Limits::DIRECT).map(|_| ())
         );
         tmp_dir.deinit();
     }
@@ -1400,9 +1452,9 @@ mod tests {
         };
         let _loading = LoadingImage::init(
             &cmd,
-            Limits {
+            &Limits {
                 file: true,
-                temporary_file: false,
+                temporary_file: TemporaryFileLimit::Disabled,
                 shared_memory: false,
             },
         )
@@ -1443,9 +1495,9 @@ mod tests {
             Err(Error::UnsupportedMedium),
             LoadingImage::init(
                 &cmd,
-                Limits {
+                &Limits {
                     file: true,
-                    temporary_file: false,
+                    temporary_file: TemporaryFileLimit::Disabled,
                     shared_memory: true,
                 },
             )
@@ -1491,9 +1543,11 @@ mod tests {
         };
         let _loading = LoadingImage::init(
             &cmd,
-            Limits {
+            &Limits {
                 file: false,
-                temporary_file: true,
+                temporary_file: TemporaryFileLimit::Enabled {
+                    directory: tmp_dir_realpath(&tmp_dir),
+                },
                 shared_memory: false,
             },
         )
@@ -1512,5 +1566,14 @@ mod tests {
     #[cfg(windows)]
     fn path_to_bytes(p: &std::path::Path) -> Vec<u8> {
         p.to_string_lossy().into_owned().into_bytes()
+    }
+
+    /// PORT NOTE (oracle `e8525c0fd`): upstream's ported temp-file tests build
+    /// their limits with
+    /// `.allWithTempDir(dir_path_buf[0..try tmp_dir.dir.realPath(io, &dir_path_buf)])`
+    /// — i.e. the canonical path of the test's OWN temp directory, not the
+    /// process `TMPDIR`. This is that expression.
+    fn tmp_dir_realpath(tmp_dir: &temp_dir::TempDir) -> Vec<u8> {
+        path_to_bytes(&tmp_dir.dir().realpath(".").unwrap())
     }
 }

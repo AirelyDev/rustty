@@ -3313,7 +3313,18 @@ impl Surface {
     fn scroll_vertical_end(_ec: &gtk4::EventControllerScroll, this: &Surface) {
         this.imp().precision_scroll.set(false);
     }
-    /// PORTS: `surface.zig:3025-3066` `ecMouseScrollHorizontal`.
+    /// PORTS: `surface.zig:3025-3080` `ecMouseScrollHorizontal` (oracle
+    /// `5ea45919d`).
+    ///
+    /// PORT NOTE (`P3-W11 T5` = `P3-W8 T5` Step 3): the tab-switch accumulator
+    /// used to run unconditionally for `unit == .surface`, and any other unit
+    /// was DROPPED. It now runs only when `gtk-horizontal-tab-scroll` is on AND
+    /// the unit is `.surface` (i.e. a touchpad); otherwise the horizontal
+    /// scroll is FORWARDED to the terminal, so applications like neovim receive
+    /// it instead of it being swallowed. The predicate is extracted into
+    /// [`Self::horizontal_tab_scroll_applies`] so it is testable without a
+    /// widget — a test of only the accumulator arm passes without the new
+    /// behaviour.
     #[template_callback]
     fn scroll_horizontal(
         ec: &gtk4::EventControllerScroll,
@@ -3323,9 +3334,36 @@ impl Surface {
     ) -> bool {
         let imp = this.imp();
 
-        match ec.unit() {
-            gdk4::ScrollUnit::Surface => {}
-            _ => return false,
+        // Check if horizontal tab scrolling is enabled and this is a
+        // touchpad surface scroll. If not, forward to the terminal.
+        //
+        // `const tab_scroll_enabled = if (priv.config) |config|
+        //      config.get().@"gtk-horizontal-tab-scroll" else true;`
+        let tab_scroll_enabled = {
+            let config_ref = imp.config.borrow();
+            match config_ref.as_ref() {
+                Some(config) => config.get().gtk_horizontal_tab_scroll,
+                None => true,
+            }
+        };
+
+        if !Self::horizontal_tab_scroll_applies(tab_scroll_enabled, ec.unit()) {
+            // Forward horizontal scroll to the terminal (e.g. for neovim).
+            // `const surface = priv.core_surface orelse return @intFromBool(false);`
+            let Some(core) = this.core() else {
+                return false;
+            };
+            // `const scaled = self.scaledCoordinates(x, 0);`
+            let (sx, _) = this.scaled_coordinates(x, 0.0);
+            // `surface.scrollCallback(scaled.x * -1, 0, .{})` — written `-sx`
+            // to satisfy clippy::neg_multiply, as in `scroll_vertical`.
+            //
+            // SAFETY: `core` is the widget's boxed, initialized core surface.
+            if unsafe { (*core).scrollCallback(-sx, 0.0, ScrollMods::default()) }.is_err() {
+                eprintln!("warn(gtk): error in scroll callback");
+                return false;
+            }
+            return true;
         }
 
         let pending = imp.pending_horizontal_scroll.get() + x;
@@ -3369,6 +3407,14 @@ impl Surface {
         imp.pending_horizontal_scroll.set(0.0);
 
         true
+    }
+
+    /// The `5ea45919d` predicate, extracted so it is testable without a widget:
+    /// the tab-switch accumulator runs only when the `gtk-horizontal-tab-scroll`
+    /// option is on AND the scroll unit is `.surface` (a touchpad two-finger
+    /// scroll). Every other combination forwards the event to the terminal.
+    fn horizontal_tab_scroll_applies(tab_scroll_enabled: bool, unit: gdk4::ScrollUnit) -> bool {
+        tab_scroll_enabled && matches!(unit, gdk4::ScrollUnit::Surface)
     }
 
     // -- DropTarget (surface.blp:224-227) ----------------------------------
@@ -4171,6 +4217,46 @@ impl Surface {
 mod tests {
     use super::*;
     use crate::gtk::gresource;
+
+    /// NEGATIVE CONTROL (`P3-W11 T5` = `P3-W8 T5` Step 3, oracle `5ea45919d`).
+    ///
+    /// The accumulator arm and the forwarding arm are selected by one
+    /// predicate; a test of only the accumulator arm passes against the
+    /// pre-`5ea45919d` code, which ran the accumulator for EVERY `.surface`
+    /// scroll and dropped every other unit. This asserts the full table,
+    /// including both new `false` rows (option off with a touchpad; option on
+    /// with a wheel) that select the forwarding arm.
+    ///
+    /// Headless: `ScrollUnit` is a plain `gdk4` enum, so no display or
+    /// `gtk4::init()` is involved (gate `G-GTKINIT`).
+    #[test]
+    fn horizontal_tab_scroll_predicate() {
+        use gdk4::ScrollUnit;
+
+        // The only combination that switches tabs.
+        assert!(Surface::horizontal_tab_scroll_applies(
+            true,
+            ScrollUnit::Surface
+        ));
+
+        // Option OFF with a touchpad: NEW behaviour — forwarded, not swallowed.
+        assert!(!Surface::horizontal_tab_scroll_applies(
+            false,
+            ScrollUnit::Surface
+        ));
+
+        // A mouse wheel: forwarded regardless of the option. Before
+        // `5ea45919d` both of these returned early with `false` and the event
+        // never reached the terminal.
+        assert!(!Surface::horizontal_tab_scroll_applies(
+            true,
+            ScrollUnit::Wheel
+        ));
+        assert!(!Surface::horizontal_tab_scroll_applies(
+            false,
+            ScrollUnit::Wheel
+        ));
+    }
 
     /// The `#[template]` literal must equal the const-folded resolver
     /// (`surface.zig:3600-3604`), so the two never drift.

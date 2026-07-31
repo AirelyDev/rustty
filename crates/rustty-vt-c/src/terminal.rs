@@ -53,6 +53,7 @@ use rustty_lib::String as LibString;
 use rustty_vt::clipboard;
 use rustty_vt::device_attributes;
 use rustty_vt::device_status;
+use rustty_vt::kitty::graphics_image::TemporaryFileLimit;
 use rustty_vt::modes;
 use rustty_vt::pagelist::grow::ScrollbarC;
 use rustty_vt::point::{Coordinate, Tag};
@@ -77,6 +78,29 @@ use std::os::raw::c_int;
 // choice here so dynamic OSC payloads (e.g. OSC 52 clipboard) can grow.
 static GLOBAL_ZIG_ALLOCATOR_FOR_OSC: rustty_lib::allocator::GlobalZigAllocator =
     rustty_lib::allocator::GlobalZigAllocator;
+
+/// PORT NOTE (oracle `e8525c0fd`/`960c2cca5`): `wrapper.tmp_dir_path` is a
+/// `[std.fs.max_path_bytes]u8` field whose only role is to OWN the temp-dir
+/// bytes the limits borrow. rustty's `Limits` owns those bytes itself, so the
+/// field is structurally N/A — but the length bound it imposes is an observable
+/// part of the C contract (`RUSTTY_OUT_OF_MEMORY` for an over-long directory),
+/// so the constant survives. Values match `std.fs.max_path_bytes`: `PATH_MAX`
+/// on POSIX (1024 on Darwin/BSD, 4096 on Linux), `PATH_MAX_WIDE * 3 + 1` on
+/// Windows, and 4096 on WASI/freestanding. R3: a plain constant, no `libc`.
+const MAX_PATH_BYTES: usize = if cfg!(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+)) {
+    1024
+} else if cfg!(windows) {
+    32767 * 3 + 1
+} else {
+    4096
+};
 
 /// Wrapper around ZigTerminal that tracks additional state for C API usage,
 /// such as the persistent VT stream needed to handle escape sequences split
@@ -1166,10 +1190,10 @@ pub enum Option_ {
     //         .color_palette => ?*const color.PaletteC,
     //         .kitty_image_storage_limit => ?*const u64,
     //         .kitty_image_medium_file,
-    //         .kitty_image_medium_temp_file,
     //         .kitty_image_medium_shared_mem,
     //         .glyph_protocol,
     //         => ?*const bool,
+    //         .kitty_image_medium_temp_file => ?*const lib.String,
     //         .apc_max_bytes,
     //         .apc_max_bytes_kitty,
     //         .scrollback_max_bytes,
@@ -1433,7 +1457,6 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             }
         }
         // .kitty_image_medium_file,
-        // .kitty_image_medium_temp_file,
         // .kitty_image_medium_shared_mem,
         // => {
         //     if (comptime !build_options.kitty_graphics) return .success;
@@ -1443,15 +1466,15 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         //         const screen = entry.value.*;
         //         switch (option) {
         //             .kitty_image_medium_file => screen.kitty_images.image_limits.file = val,
-        //             .kitty_image_medium_temp_file => screen.kitty_images.image_limits.temporary_file = val,
         //             .kitty_image_medium_shared_mem => screen.kitty_images.image_limits.shared_memory = val,
         //             else => unreachable,
         //         }
         //     }
         // },
-        Option_::KittyImageMediumFile
-        | Option_::KittyImageMediumTempFile
-        | Option_::KittyImageMediumSharedMem => {
+        // PORT NOTE (oracle `e8525c0fd`, `P3-W11 T1`): `kitty_image_medium_temp_file`
+        // LEFT this multi-arm group when its value type changed from `bool*` to
+        // `RusttyString*`; it now has its own arm below.
+        Option_::KittyImageMediumFile | Option_::KittyImageMediumSharedMem => {
             if !rustty_vt::options::KITTY_GRAPHICS {
                 return Result::Success;
             }
@@ -1466,9 +1489,85 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                     let limits = unsafe { &mut (*screen).kitty_images.image_limits };
                     match option {
                         Option_::KittyImageMediumFile => limits.file = val,
-                        Option_::KittyImageMediumTempFile => limits.temporary_file = val,
                         Option_::KittyImageMediumSharedMem => limits.shared_memory = val,
                         _ => unreachable!(),
+                    }
+                }
+            }
+        }
+
+        // .kitty_image_medium_temp_file => {
+        //     if (comptime !build_options.kitty_graphics) return .success;
+        //     if (value) |v| {
+        //         if (v.len > wrapper.tmp_dir_path.len) return .out_of_memory;
+        //         @memcpy(wrapper.tmp_dir_path[0..v.len], v.ptr[0..v.len]);
+        //         var it = wrapper.terminal.screens.all.iterator();
+        //         while (it.next()) |entry| {
+        //             const screen = entry.value.*;
+        //             screen.kitty_images.image_limits.temporary_file = .{
+        //                 .enabled = .{ .directory = wrapper.tmp_dir_path[0..v.len] },
+        //             };
+        //         }
+        //     } else {
+        //         var it = wrapper.terminal.screens.all.iterator();
+        //         while (it.next()) |entry| {
+        //             const screen = entry.value.*;
+        //             screen.kitty_images.image_limits.temporary_file = .disabled;
+        //         }
+        //     }
+        // },
+        Option_::KittyImageMediumTempFile => {
+            if !rustty_vt::options::KITTY_GRAPHICS {
+                return Result::Success;
+            }
+            let ptr = value as *const LibString;
+            if ptr.is_null() {
+                // `else` arm: a NULL value pointer DISABLES the medium.
+                for slot in unsafe { (*t).screens.all.iter() } {
+                    if let Some(screen) = *slot {
+                        unsafe {
+                            (*screen).kitty_images.image_limits.temporary_file =
+                                TemporaryFileLimit::Disabled;
+                        }
+                    }
+                }
+                return Result::Success;
+            }
+
+            // PORT NOTE (oracle `960c2cca5`, "fix kitty temp directory copy
+            // length mismatch"): the reference copies the caller's bytes into
+            // `wrapper.tmp_dir_path`, a fixed `[max_path_bytes]u8` buffer whose
+            // slice the limits then BORROW. `960c2cca5` fixed a `@memcpy(&buf,
+            // v.ptr[0..v.len])` whose destination was the WHOLE buffer while
+            // the source was `v.len` bytes — a length mismatch. rustty's limits
+            // OWN their directory bytes (`Vec<u8>`), so there is no fixed
+            // buffer and the mismatched-memcpy shape cannot occur. What must
+            // survive the port is the observable contract that fix sits inside:
+            //   (a) the length is bounds-checked FIRST, against
+            //       `MAX_PATH_BYTES`, returning `RUSTTY_OUT_OF_MEMORY`;
+            //   (b) EXACTLY `v.len` bytes are copied — never more.
+            let v = unsafe { &*ptr };
+            let len = v.len;
+            // if (v.len > wrapper.tmp_dir_path.len) return .out_of_memory;
+            if len > MAX_PATH_BYTES {
+                return Result::OutOfMemory;
+            }
+            // @memcpy(wrapper.tmp_dir_path[0..v.len], v.ptr[0..v.len]);
+            let dir: Vec<u8> = if len == 0 {
+                Vec::new()
+            } else {
+                // SAFETY: the C caller guarantees `ptr`/`len` describe a valid
+                // borrowed byte range for the duration of this call.
+                unsafe { core::slice::from_raw_parts(v.ptr, len) }.to_vec()
+            };
+            debug_assert_eq!(len, dir.len());
+            for slot in unsafe { (*t).screens.all.iter() } {
+                if let Some(screen) = *slot {
+                    unsafe {
+                        (*screen).kitty_images.image_limits.temporary_file =
+                            TemporaryFileLimit::Enabled {
+                                directory: dir.clone(),
+                            };
                     }
                 }
             }
@@ -2045,9 +2144,9 @@ pub enum TerminalData {
     //         .color_palette, .color_palette_default => color.PaletteC,
     //         .kitty_image_storage_limit => u64,
     //         .kitty_image_medium_file,
-    //         .kitty_image_medium_temp_file,
     //         .kitty_image_medium_shared_mem,
     //         => bool,
+    //         .kitty_image_medium_temp_file => lib.String,
     //         .kitty_graphics => KittyGraphics,
     //         .selection => selection_c.CSelection,
     //     };
@@ -2315,13 +2414,26 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
         }
         // .kitty_image_medium_temp_file => {
         //     if (comptime !build_options.kitty_graphics) return .no_value;
-        //     out.* = t.screens.active.kitty_images.image_limits.temporary_file;
+        //     const dir = switch (t.screens.active.kitty_images.image_limits.temporary_file) {
+        //         .enabled => |d| d.directory,
+        //         .disabled => "",
+        //     };
+        //     out.* = .{ .ptr = dir.ptr, .len = dir.len };
         // },
         TerminalData::KittyImageMediumTempFile => {
             if !rustty_vt::options::KITTY_GRAPHICS {
                 return Result::NoValue;
             }
-            unsafe { *(out as *mut bool) = (*active).kitty_images.image_limits.temporary_file };
+            // PORT NOTE (byte-slice rule + borrow contract): `RusttyString` is
+            // documented as BORROWED — the pointer is valid for as long as the
+            // producing object is unchanged. Here it points into the active
+            // screen's own `Vec<u8>`, exactly as upstream's points into
+            // `wrapper.tmp_dir_path`.
+            let dir: &[u8] = match unsafe { &(*active).kitty_images.image_limits.temporary_file } {
+                TemporaryFileLimit::Enabled { directory } => directory.as_slice(),
+                TemporaryFileLimit::Disabled => b"",
+            };
+            unsafe { *(out as *mut LibString) = LibString::init(dir) };
         }
         // .kitty_image_medium_shared_mem => {
         //     if (comptime !build_options.kitty_graphics) return .no_value;
@@ -6741,6 +6853,139 @@ mod tests {
             });
             assert_eq!(1, written);
             assert_eq!(80, cols);
+            unsafe { free(t) };
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // P3-W11 T1 (P3-W6 T4 Steps 3/5) — the kitty temp-file medium is a
+    // DIRECTORY across the C ABI (oracle e8525c0fd, b988efcfe, 960c2cca5).
+    // -----------------------------------------------------------------------
+
+    /// Read `RUSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE` back as bytes.
+    fn temp_dir_data(t: Terminal) -> Vec<u8> {
+        let mut out = LibString {
+            ptr: core::ptr::null(),
+            len: 0,
+        };
+        assert_eq!(Result::Success, unsafe {
+            get(
+                t,
+                TerminalData::KittyImageMediumTempFile,
+                core::ptr::addr_of_mut!(out) as *mut c_void,
+            )
+        });
+        if out.len == 0 {
+            return Vec::new();
+        }
+        unsafe { core::slice::from_raw_parts(out.ptr, out.len) }.to_vec()
+    }
+
+    #[test]
+    fn kitty_image_medium_temp_file_is_a_directory_round_trip() {
+        with_test_allocator(|alloc| {
+            let (r, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, r);
+
+            // Default construction leaves the medium DISABLED, which reads
+            // back as the empty string (upstream's `.disabled => ""`).
+            assert_eq!(Vec::<u8>::new(), temp_dir_data(t));
+
+            let dir = b"/some/where/tmp";
+            let v = LibString::init(dir);
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::addr_of!(v) as *const c_void,
+                )
+            });
+            assert_eq!(dir.to_vec(), temp_dir_data(t));
+
+            // The string is COPIED into the terminal: mutating the caller's
+            // buffer afterwards must not be observable.
+            let mut owned = dir.to_vec();
+            let v2 = LibString::init(&owned);
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::addr_of!(v2) as *const c_void,
+                )
+            });
+            owned[1] = b'X';
+            assert_eq!(dir.to_vec(), temp_dir_data(t));
+
+            // NULL disables the medium (the `else` arm), and the read-back
+            // string becomes empty again.
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::null::<c_void>(),
+                )
+            });
+            assert_eq!(Vec::<u8>::new(), temp_dir_data(t));
+
+            unsafe { free(t) };
+        });
+    }
+
+    /// NEGATIVE CONTROL for `960c2cca5` (the copy-length bound).
+    ///
+    /// Upstream copies into a fixed `[std.fs.max_path_bytes]u8`; the guard
+    /// `if (v.len > wrapper.tmp_dir_path.len) return .out_of_memory;` is what
+    /// stops an over-long directory, and `960c2cca5` fixed the memcpy it
+    /// guards. rustty owns the bytes, so what must be pinned is the guard's
+    /// observable contract: `MAX_PATH_BYTES` is accepted, `MAX_PATH_BYTES + 1`
+    /// is rejected with `OUT_OF_MEMORY` **and leaves the previous value
+    /// untouched** (i.e. no partial copy happened).
+    #[test]
+    fn kitty_image_medium_temp_file_rejects_an_over_long_directory() {
+        with_test_allocator(|alloc| {
+            let (r, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, r);
+
+            let ok = vec![b'a'; MAX_PATH_BYTES - 1];
+            let v = LibString::init(&ok);
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::addr_of!(v) as *const c_void,
+                )
+            });
+            assert_eq!(ok, temp_dir_data(t));
+
+            // Exactly at the bound: still accepted.
+            let exact = vec![b'b'; MAX_PATH_BYTES];
+            let v = LibString::init(&exact);
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::addr_of!(v) as *const c_void,
+                )
+            });
+            assert_eq!(exact, temp_dir_data(t));
+
+            // One over: rejected, and NOTHING was copied.
+            let too_long = vec![b'c'; MAX_PATH_BYTES + 1];
+            let v = LibString::init(&too_long);
+            assert_eq!(Result::OutOfMemory, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::addr_of!(v) as *const c_void,
+                )
+            });
+            assert_eq!(
+                exact,
+                temp_dir_data(t),
+                "a rejected over-long directory must not partially overwrite \
+                 the previous value"
+            );
+
             unsafe { free(t) };
         });
     }

@@ -7324,25 +7324,21 @@ where
         // state matches the last one returns early, so repeated same-state
         // callbacks NO LONGER reach the renderer at all.
         //
-        // VERIFICATION DEBT (P3-W4 T7 Step 5): the plan asks for a Surface-level
-        // KAT — enable mode 2033, drive `occlusionCallback(false)`, assert the
-        // encoded report reaches the pty write queue, and assert a REPEAT call
-        // emits nothing. rustty-core has NO `Surface` test fixture (a `Surface`
-        // owns a live `App`, a renderer thread, an io thread and a pty), and
-        // building one is out of scope for this workstream. The two halves that
-        // ARE reachable are covered:
-        //   - the RIS exemption and the vt-side report/mode arms by
-        //     `rustty-vt` `stream_terminal::tests::visibility_reports`;
-        //   - the termio mode-2033 + DSR arms by `rustty-termio`
-        //     `stream_handler::tests::stream_handler_visibility_report_arms_push_forced_messages`.
-        // The UNCOVERED half is exactly this function: the dedup early-return
-        // and the `flags.visible` write under the renderer lock.
-        // RECIPE to close it: extend the `rustty-termio` `exec.rs` `TestTermio`
-        // fixture into a `rustty-core` `TestSurface` (heap-pinned `Surface` with
-        // a stub `App` + the same re-seated self-pointers), then assert
-        // (a) `occlusionCallback(false)` pushes exactly one renderer `Visible`
-        // message and one termio `VisibilityReport`, and (b) a second
-        // `occlusionCallback(false)` pushes NEITHER.
+        // VERIFIED (V21, `P3-W11 Task 6`): the dedup, the `flags.visible` write
+        // under the renderer lock and the mode-2033-gated report are covered by
+        // `crates/rustty-core/tests/surface_visibility_kat.rs`, which builds the
+        // `TestSurface` the V21 recipe describes. Deleting the early-return
+        // below makes it fail (a repeat callback then pushes a second renderer
+        // message). The neighbouring halves stay covered by
+        //   - `rustty-vt` `stream_terminal::tests::visibility_reports` (the RIS
+        //     exemption and the vt-side report/mode arms), and
+        //   - `rustty-termio`
+        //     `stream_handler::tests::stream_handler_visibility_report_arms_push_forced_messages`
+        //     (the mode-2033 + DSR arms).
+        // STILL OPEN in V21: the last hop, "the queued `VisibilityReport` is
+        // drained by `termio::Thread` and the encoded bytes land in the pty
+        // write queue" — that needs a live pty + io thread. The KAT pins the
+        // encoded payload (`\x1b[?999;2n`) but not the delivery.
         //
         // Avoid duplicate renderer and visibility reports.
         // if (self.visible == visible) return;

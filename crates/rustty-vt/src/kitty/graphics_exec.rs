@@ -175,7 +175,7 @@ fn query(alloc: Allocator, terminal: &Terminal, cmd: &Command) -> Response {
     //     return result;
     // };
     let _ = &alloc;
-    let loading = match LoadingImage::init(cmd, storage.image_limits) {
+    let loading = match LoadingImage::init(cmd, &storage.image_limits) {
         Ok(loading) => loading,
         Err(err) => {
             encode_error(&mut result, err);
@@ -541,7 +541,7 @@ fn load_and_add_image(
         *storage.loading.take().unwrap()
     } else {
         // else try .init(alloc, cmd, storage.image_limits);
-        LoadingImage::init(cmd, storage.image_limits)?
+        LoadingImage::init(cmd, &storage.image_limits)?
     };
 
     // We only want to deinit on error. If we're chunking, then we don't

@@ -3320,8 +3320,56 @@ and the end-to-end "report reaches the pty" assertion. `rustty-core` has no
 `Surface` fixture; the row carries a runnable recipe (extend `exec.rs`'s
 `TestTermio` into a `TestSurface`) and names the exact mutation that must fail.
 
+## `P3-W11` status, 2026-07-31 (end of the first lane pass)
+
+| task | status |
+|---|---|
+| 1 — `P3-W6 T4` kitty temp-file -> directory | **LANDED** (`4d690b4`) |
+| 2 — `P3-W6 T5` kitty transient usage / eviction | **LANDED** (`e67ff42`) |
+| 3 — `P3-W6 T6` viewport fingerprint reuse | **LANDED** (`1a139c8`), Miri harness at `.port/phase-3/mirihar-fingerprint-update` |
+| 4 — `P3-W8 T6`/`T7` Wayland hotkeys (F-W1..F-W4) | **NOT STARTED — see below** |
+| 5 — `P3-W8 T5` step 3 `gtk-horizontal-tab-scroll` | **LANDED** (`9dff03b`), verified on the Linux VM |
+| 6 — **V21** Surface visibility KAT | **(a) DISCHARGED** (`21cfb81`); **(b) PARTIAL**, still owned here |
+
+### Task 4 remains OPEN and owned by `P3-W11`
+
+Nothing of F-W1..F-W4 exists. It was not started because it is not a sweep-sized
+item and starting it half-way would have produced exactly the silent-no-op
+keybind failure mode the `P3-W8 T6` preamble warns about. Its real size, from
+the `P3-W8` text itself:
+
+* **F-W1/F-W2** — `key::keysym_from_trigger`, `winproto::App::{bind,clear}_global_shortcuts`,
+  `GlobalShortcuts::BindFailed` + the `bind-failed` signal, and
+  `Application::global_shortcut_bind_failed` raising a **desktop notification**.
+  Carries the `RefCell` hazard: `winproto()` hands out a `Ref<'_>` while
+  `clear_global_shortcuts` needs `&mut`, so `close()` must route through
+  `winproto_mut()` or an upstream crash-fix becomes a double-borrow panic.
+* **F-W3** — vendoring `vicinae-hotkey-v1.xml` (305 lines, MIT, Aurelien
+  Brabant) and adding `wayland-scanner` `generate_client_code!` machinery to
+  `crates/rustty-apprt/build.rs`. **New machinery for that crate.**
+* **F-W4** — `Hotkeys` itself (164 lines) plus 3 i18n msgids that must land
+  *with* it, not before (WS13 T1's `code_msgids_all_wrapped_and_in_pot` gate is
+  written to fail on msgids reachable from nothing).
+* Verification: the entry-selection logic is pure and unit-testable, but the
+  wire half needs a fake `wayland-server` compositor advertising
+  `vicinae_hotkey_manager_v1` — ~a day of scaffolding, and `P3-W8 T7` Step 4
+  already says to **schedule it as its own task rather than pretend F-W4 is
+  verified**.
+
+**Do not fold it into another sweep.** It wants its own workstream with the
+fake-compositor harness scheduled alongside it.
+
+### Task 6 residue
+
+V21 part (b)'s last hop (`Thread::drainMailbox` -> `visibilityReport` ->
+`queueWrite` -> the pty write queue) needs a pty-owning `ThreadData` fixture.
+The remaining recipe is written into the V21 row.
+
 ## `P3-W11` finale
 
-- [ ] Every task above either landed or re-filed with an owner in an OPEN workstream.
-- [ ] `G-P2` green; `check_phase2_closure.py --self-test` green.
-- [ ] Both platforms green.
+- [x] Every task above either landed or re-filed with an owner in an OPEN workstream.
+- [x] `G-P2` green; `check_phase2_closure.py --self-test` green.
+- [x] Both platforms green (macOS: 4373 tests, 0 failed, G-REL / wasm / fmt /
+      clippy / acyclic / vt-headers all green. Linux VM: 0 `test result: FAILED`
+      across the workspace; the `gtk,wayland,x11` predicate KAT green with its
+      negative control observed RED).
