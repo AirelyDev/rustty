@@ -16,8 +16,11 @@
 //!   `std.EnumMap(Tag, Binding)` keyed by a `Tag` enum and recovers the concrete
 //!   type with a comptime `tag.Type()` cast (`Globals.zig:17,37-46,100-103`). Rust
 //!   has no comptime type recovery, so rustty stores each proxy in its own typed
-//!   `Option<…>` field and keeps a `HashMap<u32, Tag>` only to route the
-//!   `global_remove` event back to the right field (`Globals.zig:180-188`).
+//!   `Option<…>` field and keeps a `HashMap<Tag, u32>` — the reference's map shape
+//!   minus the type-erased proxy, i.e. keyed by [`Tag`] with the advertised `name`
+//!   in the value (`Globals.zig:17,24-27`) — to route the `global_remove` event
+//!   back to the right field (`Globals.zig:180-188`) and to detect
+//!   re-advertisement of an already-bound global (`Globals.zig:161-170`).
 //! * The reference installs listeners in `onGlobalAttached` AFTER binding
 //!   (`Globals.zig:105-127`). In wayland-client the listener IS the
 //!   [`Dispatch`] impl selected by the `QueueHandle` passed to `bind`, so binding
@@ -28,6 +31,7 @@
 
 use std::collections::HashMap;
 
+use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::{delegate_noop, Connection, Dispatch, Proxy, QueueHandle};
@@ -57,9 +61,11 @@ use super::hotkeys::Hotkeys;
 use super::vicinae::vicinae_hotkey_manager_v1::VicinaeHotkeyManagerV1;
 
 /// PORTS: `Globals.zig:29-47` `Tag`. Which advertised global a binding
-/// corresponds to. Kept only to route the `global_remove` event
-/// (`Globals.zig:180-188`) back to the matching typed field below.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// corresponds to. Used as the key of the binding map, exactly as the reference
+/// does (`Globals.zig:17`), to route the `global_remove` event
+/// (`Globals.zig:180-188`) back to the matching typed field below and to detect
+/// re-advertisement (`Globals.zig:161-170`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Tag {
     Compositor,
     XdgActivation,
@@ -145,8 +151,12 @@ pub struct Globals {
     /// against this one state type. See `hotkeys.rs`'s module docs.
     hotkeys: Hotkeys,
 
-    /// Routes `global_remove(name)` back to the field it bound (`Globals.zig:180-188`).
-    names: HashMap<u32, Tag>,
+    /// PORTS: `Globals.zig:17` `map: std.EnumMap(Tag, Binding)` — minus the
+    /// type-erased `Binding.proxy`, which lives in the typed field above, leaving
+    /// `Binding.name` (`Globals.zig:26`) as the value. Tag-keyed like the
+    /// reference, so re-advertising an already-bound global REPLACES its entry
+    /// (`Globals.zig:161-170`) instead of accumulating one entry per name.
+    names: HashMap<Tag, u32>,
 
     /// OBSERVABILITY (not in the reference): count of `xdg_activation_token_v1.done`
     /// events dispatched by the token handler below. The reference has no analogue —
@@ -279,82 +289,136 @@ impl Globals {
     ) {
         if interface == WlCompositor::interface().name {
             let v = version.min(WlCompositor::interface().version);
+            let old = self.compositor.take();
             self.compositor = Some(registry.bind::<WlCompositor, (), Globals>(name, v, qh, ()));
-            self.names.insert(name, Tag::Compositor);
+            self.record_binding(Tag::Compositor, name, old.map(|p| p.id()));
         } else if interface == XdgActivationV1::interface().name {
             let v = version.min(XdgActivationV1::interface().version);
+            let old = self.xdg_activation.take();
             self.xdg_activation =
                 Some(registry.bind::<XdgActivationV1, (), Globals>(name, v, qh, ()));
-            self.names.insert(name, Tag::XdgActivation);
+            self.record_binding(Tag::XdgActivation, name, old.map(|p| p.id()));
         } else if interface == OrgKdeKwinServerDecorationManager::interface().name {
             let v = version.min(OrgKdeKwinServerDecorationManager::interface().version);
+            let old = self.kde_decoration_manager.take();
             self.kde_decoration_manager = Some(
                 registry.bind::<OrgKdeKwinServerDecorationManager, (), Globals>(name, v, qh, ()),
             );
-            self.names.insert(name, Tag::KdeDecorationManager);
+            self.record_binding(Tag::KdeDecorationManager, name, old.map(|p| p.id()));
             // Emits `default_mode` at bind time (`Globals.zig:115-118`).
             self.needs_roundtrip = true;
         } else if interface == OrgKdeKwinSlideManager::interface().name {
             let v = version.min(OrgKdeKwinSlideManager::interface().version);
+            let old = self.kde_slide_manager.take();
             self.kde_slide_manager =
                 Some(registry.bind::<OrgKdeKwinSlideManager, (), Globals>(name, v, qh, ()));
-            self.names.insert(name, Tag::KdeSlideManager);
+            self.record_binding(Tag::KdeSlideManager, name, old.map(|p| p.id()));
         } else if interface == KdeOutputOrderV1::interface().name {
             let v = version.min(KdeOutputOrderV1::interface().version);
+            let old = self.kde_output_order.take();
             self.kde_output_order =
                 Some(registry.bind::<KdeOutputOrderV1, (), Globals>(name, v, qh, ()));
-            self.names.insert(name, Tag::KdeOutputOrder);
+            self.record_binding(Tag::KdeOutputOrder, name, old.map(|p| p.id()));
             // Emits the initial output order at bind time (`Globals.zig:120-123`).
             self.needs_roundtrip = true;
         } else if interface == ExtBackgroundEffectManagerV1::interface().name {
             let v = version.min(ExtBackgroundEffectManagerV1::interface().version);
+            let old = self.ext_background_effect.take();
             self.ext_background_effect =
                 Some(registry.bind::<ExtBackgroundEffectManagerV1, (), Globals>(name, v, qh, ()));
-            self.names.insert(name, Tag::ExtBackgroundEffect);
+            self.record_binding(Tag::ExtBackgroundEffect, name, old.map(|p| p.id()));
             // Emits `capabilities` at bind time (`Globals.zig:110-113`).
             self.needs_roundtrip = true;
         } else if interface == VicinaeHotkeyManagerV1::interface().name {
             // PORTS: `Globals.zig:46` — the `vicinae_hotkey_manager` arm of the
             // registry bind. The manager emits no events, so no extra roundtrip.
             let v = version.min(VicinaeHotkeyManagerV1::interface().version);
+            let old = self.vicinae_hotkey_manager.take();
             self.vicinae_hotkey_manager =
                 Some(registry.bind::<VicinaeHotkeyManagerV1, (), Globals>(name, v, qh, ()));
-            self.names.insert(name, Tag::VicinaeHotkeyManager);
+            self.record_binding(Tag::VicinaeHotkeyManager, name, old.map(|p| p.id()));
+        }
+    }
+
+    /// PORTS: `Globals.zig:161-172` — the "if this global was already bound, then
+    /// we also need to destroy the old binding" step plus the
+    /// `map.put(tag, .{ .proxy, .name })` that records the new one.
+    ///
+    /// `superseded` is the proxy the caller just replaced, if any. Because the
+    /// reference's map is Tag-keyed, a re-advertisement replaces the entry rather
+    /// than adding a second one, and it runs `onGlobalRemoved(tag)` +
+    /// `old.proxy.destroy()` first.
+    fn record_binding(&mut self, tag: Tag, name: u32, superseded: Option<ObjectId>) {
+        if self.names.insert(tag, name).is_some() {
+            self.on_global_removed(tag);
+            if let Some(id) = superseded {
+                self.destroy_proxy(id);
+            }
+        }
+    }
+
+    /// PORTS: `Globals.zig:168,185` `proxy.destroy()`. That is `wl_proxy_destroy`:
+    /// a client-side free of the proxy and its id, with no protocol request.
+    /// wayland-rs's exact analogue is `Backend::destroy_object` — merely dropping
+    /// the Rust handle would leave the object registered in the backend's object
+    /// map, which is the leak the reference's `destroy()` avoids.
+    fn destroy_proxy(&self, id: ObjectId) {
+        // `InvalidId` means the object is already gone, which is not an error here
+        // (the reference's `wl_proxy_destroy` has no failure mode either).
+        let _ = self.conn.backend().destroy_object(&id);
+    }
+
+    /// PORTS: `Globals.zig:129-134` `onGlobalRemoved`. Reset the scalar state
+    /// derived from a binding that is going away. Note this is called on
+    /// re-advertisement too (`Globals.zig:166`), which is why it only resets
+    /// derived state and never touches the proxy fields.
+    fn on_global_removed(&mut self, tag: Tag) {
+        match tag {
+            Tag::KdeOutputOrder => self.state.reset_output_order(),
+            Tag::ExtBackgroundEffect => {
+                // DIVERGENCE (pre-existing): the reference leaves
+                // `bg_effect_capabilities` set. rustty clears the derived `blur`
+                // bit so a withdrawn manager cannot leave a stale capability.
+                self.state.bg_blur_supported = false;
+            }
+            _ => {}
         }
     }
 
     /// PORTS: `Globals.zig:180-188` (the `.global_remove` arm) + `onGlobalRemoved`
-    /// (`Globals.zig:129-134`). Unset the field whose global went away.
-    ///
-    /// PORT NOTE: the reference also `proxy.destroy()`s the removed binding
-    /// (`Globals.zig:185`). Dropping a wayland-client proxy sends no protocol
-    /// request (only the generated destructor methods do), so we simply drop it —
-    /// the compositor has already withdrawn the global, so there is nothing to
-    /// release. Behavior-equivalent for the graceful-teardown case.
+    /// (`Globals.zig:129-134`). Unset every binding recorded under this `name`.
+    /// The reference iterates its Tag-keyed map comparing `Binding.name`
+    /// (`Globals.zig:182-183`); we iterate the same map the same way.
     fn remove_global(&mut self, name: u32) {
-        let Some(tag) = self.names.remove(&name) else {
-            return;
-        };
-        match tag {
-            Tag::Compositor => self.compositor = None,
-            Tag::XdgActivation => self.xdg_activation = None,
-            Tag::KdeDecorationManager => self.kde_decoration_manager = None,
-            Tag::KdeSlideManager => self.kde_slide_manager = None,
-            Tag::KdeOutputOrder => {
-                self.kde_output_order = None;
-                self.state.reset_output_order();
+        let tags: Vec<Tag> = self
+            .names
+            .iter()
+            .filter(|&(_, &n)| n == name)
+            .map(|(&tag, _)| tag)
+            .collect();
+        for tag in tags {
+            self.on_global_removed(tag);
+            // `kv.value.proxy.destroy()` (`Globals.zig:185`) then
+            // `self.map.remove(kv.key)` (`Globals.zig:186`).
+            let id = match tag {
+                Tag::Compositor => self.compositor.take().map(|p| p.id()),
+                Tag::XdgActivation => self.xdg_activation.take().map(|p| p.id()),
+                Tag::KdeDecorationManager => self.kde_decoration_manager.take().map(|p| p.id()),
+                Tag::KdeSlideManager => self.kde_slide_manager.take().map(|p| p.id()),
+                Tag::KdeOutputOrder => self.kde_output_order.take().map(|p| p.id()),
+                Tag::ExtBackgroundEffect => self.ext_background_effect.take().map(|p| p.id()),
+                Tag::VicinaeHotkeyManager => {
+                    // The manager going away does NOT invalidate the hotkey objects
+                    // it created ("Hotkey objects created through this manager are
+                    // unaffected and remain valid", `vicinae-hotkey-v1.xml`), so the
+                    // entries are left alone.
+                    self.vicinae_hotkey_manager.take().map(|p| p.id())
+                }
+            };
+            if let Some(id) = id {
+                self.destroy_proxy(id);
             }
-            Tag::ExtBackgroundEffect => {
-                self.ext_background_effect = None;
-                self.state.bg_blur_supported = false;
-            }
-            Tag::VicinaeHotkeyManager => {
-                self.vicinae_hotkey_manager = None;
-                // The manager going away does NOT invalidate the hotkey objects it
-                // created ("Hotkey objects created through this manager are
-                // unaffected and remain valid", `vicinae-hotkey-v1.xml`), so the
-                // entries are left alone.
-            }
+            self.names.remove(&tag);
         }
     }
 }
