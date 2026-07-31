@@ -111,10 +111,30 @@ Full per-sentence attribution is in `g3b_after_attribution.txt`. Top buckets of 
 None of these is closed by `P3-W10`. They are the measured, attributed comment-coverage debt of the
 resync and the seed of the next pass.
 
-## G1 (`check_tests_ported.py`) after the advance — RED, 12 named misses
+## Which gates the advance actually moved — and which it did NOT
 
-`PROGRESS` in ci.sh. The advance made the gate compare against head's test names, which surfaced 12
-upstream tests rustty does not have:
+This is the second thing the plan did not model, and it matters for reading any post-advance CI run.
+The gates split into two families:
+
+* **live-tree readers** — they open files under `/Users/gael/projects/ghostty/src` at run time, so
+  they moved with the advance: **G3b**, **G1b** (`check_test_counts.py` greps `test{}` blocks),
+  **A5** (`check_rustty_vt_headers.sh`, incl. the oracle `lib_vt.zig` export arm), **G-LZ4**
+  (differential vs `origin/main:src/terminal/compress/lz4.zig`), `check-vt-struct-layouts.mjs`.
+* **frozen-inventory readers** — **G1** (`check_tests_ported.py`) and **G2**
+  (`check_assertions.py`) never touch the oracle tree at all (`grep -n ghostty` in either file
+  returns nothing). They read `.port/phase-0/inventory/{tests-summary.json,tests.jsonl}`, a census
+  taken at `4749c4e93` and last written in `15c1a9b`. G3 (`check_comments_fidelity.py`) likewise
+  compares against the phase-0 comment census.
+
+**Consequence: advancing the working tree does NOT advance G1/G2/G3's contract.** Their verdicts
+are bit-for-bit identical before and after the checkout. Regenerating the phase-0 census at
+`6ad1fe7d8` is a real follow-up and is **not** done here — it would move the global assertion floor
+(11,975) and the test contract (3,234), which is a decision, not a chore. **Owner: next resync.**
+
+## G1 — RED, 12 named misses (PRE-EXISTING, not caused by the advance)
+
+`PROGRESS` in ci.sh. Because G1 reads the frozen inventory, these 12 are **pin-era** contract tests
+that were never ported, not newly-surfaced head tests:
 
 ```
 config::fromHex
@@ -128,8 +148,39 @@ vt::Terminal: scrollUp with max_scrollback zero and left/right margin
 vt::Terminal: scrollUp with max_scrollback zero and top margin
 ```
 
-The `os::*Env` / `os::args` five are `e8525c0fd`'s environ/args rework (same NON-PORT as above). The
-remaining seven are genuine test gaps. Left OPEN, owner: next resync.
+The `os::*Env` / `os::args` five are the environ/args helpers; the remaining seven are genuine
+pin-era test gaps. Left OPEN, owner: next resync.
+
+## G2 — RED on `os::desktop environment` (PRE-EXISTING, and a false alarm)
+
+`WEAKENED: os::desktop environment ref=10 rust=9`. This is the frozen-inventory effect in its purest
+form. `P3-W7 T3` correctly ported upstream `f8e13f31e` ("Fix desktop detection tests when running
+from Gnome"), which **restructured** the test into per-case blank `Environ.Map`s and in doing so
+**reduced** it from 10 assertions to 8 upstream. `crates/rustty-os/src/desktop.rs:232` matches that
+new shape with 9. G2 still compares against the pin-era count of 10, so a faithful port reads as a
+weakening. **Not a regression, and not fixable without regenerating the phase-0 census** — see the
+follow-up above. Do NOT "fix" this by padding assertions into `desktop.rs`.
+
+## Two HARD ci.sh failures, neither caused by the advance
+
+* **G6b** (`check_pagelist_compress_leaks.sh`) — **FIXED HERE.** The out-of-tree harness
+  `.port/phase-2/mirihar-pagelist-compress` still called `PageList::init(20, 6, Some(1 << 30))`;
+  `P3-W3`'s runtime scrollback limits replaced that signature with a single `Options`. The harness
+  therefore failed to **compile**, and the gate printed `RED: PageList leaked compressed-page
+  encodings` — *a build break wearing a leak's clothes*, which is exactly the class of misleading
+  gate output this project keeps finding. Call site migrated to
+  `Options { max_size: Some(1 << 30), ..Options::new(20, 6) }`; gate now GREEN and its FAIL arm
+  re-proven reachable (`--self-test`: "PageList leaked 27374 global-allocator bytes", exit 101).
+  **Lesson for the gate itself (not fixed here): `check_pagelist_compress_leaks.sh` should
+  distinguish a non-zero `cargo` exit from a non-zero leak delta.**
+* **G4-uni** (`.port/phase-0/harness/unicode/run_unicode_diff.sh`) — **still RED, environmental.**
+  `zig build uucode-oracle` fails at
+  `zig-pkg/uucode-0.2.0-…/build.zig:211: member function expected 3 argument(s), found 2`
+  (`b.modules.put`). The harness pins uucode 0.2.0 in its **own** `build.zig.zon` — it does not read
+  the oracle tree — so this is not advance-related. The host `zig` is **0.16.0** (installed
+  2026-07-29, mid-Phase-3; the plan's stated local toolchain was 0.15.2) and uucode 0.2.0 predates
+  the 0.16 stdlib change. The fix is the deferred **uucode revision bump** already owned by
+  `.port/phase-3/NON_PORTS.md` §G1. **Not weakened, not skipped, left RED.**
 
 ## Upstream moved during Phase 3
 
