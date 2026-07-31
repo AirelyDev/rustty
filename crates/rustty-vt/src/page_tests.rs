@@ -2956,4 +2956,21 @@ mod tests {
         }
     }
 
+    /// `P3-W1 T4` (oracle c442eb4b3). A zero-row page would leave the pool's
+    /// stale free-list node in the first pointer-size bytes of a REUSED buffer,
+    /// because `init_buf`'s row loop — the only thing that overwrites those
+    /// bytes — would iterate zero times. rustty's `decommit_pool_item` makes
+    /// this live, and rustty skips the zeroing memset in release exactly as Zig
+    /// does, so without this assert the corruption would be release-only and
+    /// dependent on pool reuse order.
+    #[test]
+    #[should_panic(expected = "cap.rows > 0")]
+    fn page_init_buf_rejects_zero_rows() {
+        let _ = Page::init(Capacity {
+            cols: 10,
+            rows: 0,
+            ..Capacity::new(10, 1)
+        });
+    }
+
 }

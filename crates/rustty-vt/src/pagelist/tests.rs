@@ -12802,3 +12802,84 @@ fn pagelist_pointFromPin_rejects_overflowing_screen_coordinate() {
     s.total_rows += 1;
     s.deinit();
 }
+
+// -- P3-W1 T4 step 3: growth from a zero capacity dimension (oracle 8307349ec) --
+
+// ref: test "PageList increaseCapacity from zero-capacity dimensions"
+#[test]
+fn pagelist_increaseCapacity_from_zero_capacity_dimensions() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    // Compact the only page. A plain page has no styled, grapheme,
+    // or hyperlink content so the exact capacity is zero in every
+    // managed dimension.
+    let mut node = s.compact(s.pages.first).unwrap().unwrap();
+    let cap = |n: *mut super::Node| unsafe { super::Node::capacity(n) };
+    assert_eq!(0, cap(node).styles);
+    assert_eq!(0, cap(node).grapheme_bytes);
+    assert_eq!(0, cap(node).string_bytes);
+    assert_eq!(0, cap(node).hyperlink_bytes);
+
+    // Increasing each dimension from zero must actually grow it.
+    // Regression: 0 * 2 == 0 used to "succeed" without growing,
+    // which turned caller retry loops into infinite loops.
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::Styles))
+        .unwrap();
+    assert!(cap(node).styles > 0);
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
+        .unwrap();
+    assert!(cap(node).grapheme_bytes > 0);
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::StringBytes))
+        .unwrap();
+    assert!(cap(node).string_bytes > 0);
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::HyperlinkBytes))
+        .unwrap();
+    assert!(cap(node).hyperlink_bytes > 0);
+
+    // Increasing a non-zero dimension still doubles.
+    let styles = cap(node).styles;
+    node = s
+        .increase_capacity(node, Some(IncreaseCapacity::Styles))
+        .unwrap();
+    assert_eq!(styles * 2, cap(node).styles);
+
+    s.deinit();
+}
+
+/// `REACHABILITY.md` row 6's own note: the consequence of the pre-fix code is
+/// NOT a panic — `0 * 2 == 0`, so the dimension never grows and the
+/// unbounded-retry callers spin allocating a page per iteration. A
+/// `#[should_panic]` control is therefore blind to it and an unguarded
+/// reproduction of the caller loop would HANG the suite. This models the retry
+/// loop with an explicit ceiling instead: pre-fix it exhausts the ceiling,
+/// post-fix it terminates on the first iteration.
+#[test]
+fn pagelist_increaseCapacity_from_zero_terminates_within_a_bounded_retry() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    let mut node = s.compact(s.pages.first).unwrap().unwrap();
+    assert_eq!(0, unsafe { super::Node::capacity(node) }.styles);
+
+    const CEILING: usize = 8;
+    let mut iterations = 0usize;
+    while unsafe { super::Node::capacity(node) }.styles == 0 {
+        iterations += 1;
+        assert!(
+            iterations <= CEILING,
+            "increase_capacity did not grow a zero dimension in {CEILING} \
+             retries; every unbounded-retry caller (start_hyperlink, \
+             cursor_set_hyperlink, the reflow probes, insert_lines/delete_lines) \
+             is an infinite allocation loop in this state"
+        );
+        node = s
+            .increase_capacity(node, Some(IncreaseCapacity::Styles))
+            .unwrap();
+    }
+    assert_eq!(1, iterations, "one retry must be enough");
+
+    s.deinit();
+}

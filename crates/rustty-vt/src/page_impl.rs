@@ -413,6 +413,12 @@ impl Page {
     /// It is up to the caller to not call deinit on these pages.
     pub fn init_buf(buf: OffsetBuf, l: Layout) -> Page {
         let cap = l.capacity;
+
+        // A page must always have at least one row. Aside from being
+        // useless otherwise, the row initialization below must always
+        // overwrite the start of the buffer for pool reuse. See the
+        // `const _` assert next to `Row` in `page.rs`.
+        assert!(cap.rows > 0);
         let rows: Offset<Row> = buf.member(l.rows_start);
         let cells: Offset<Cell> = buf.member(l.cells_start);
 
@@ -2503,6 +2509,10 @@ impl Page {
     /// The memory layout for a page given a desired minimum cols
     /// and rows size.
     pub fn layout(cap: Capacity) -> Layout {
+        // The rows array must stay at offset 0: the PageList memory
+        // pool relies on `init_buf` overwriting the first bytes of a
+        // reused page buffer, which hold the pool's free list node.
+        // See the `const _` assert next to `Row` in `page.rs`.
         let rows_count: usize = cap.rows as usize;
         let rows_start = 0;
         let rows_end: usize = rows_start + (rows_count * core::mem::size_of::<Row>());

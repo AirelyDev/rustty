@@ -1752,16 +1752,23 @@ impl Terminal {
                     let cps = unsafe { (*page).lookup_grapheme(prev_cell) }.unwrap();
                     for &cp2 in cps {
                         // log.debug("cp1={x} cp2={x}", .{ previous_codepoint, cp2 });
-                        // assert(!unicode.graphemeBreak(previous_codepoint, cp2, &state));
+                        // _ = unicode.graphemeBreak(previous_codepoint, cp2, &state);
                         //
-                        // DG4 (PORT_RULES.md "DG2/DG4"): `assert` here is
-                        // `quirks.inlineAssert` -> `debug_assert!`. The call
-                        // MUTATES `state` (the reference's `inline fn` argument
-                        // is evaluated in every build mode), so it must run
-                        // UNCONDITIONALLY outside the macro — `debug_assert!`
-                        // would drop the side effect in unchecked builds.
-                        let brk = unicode::graphemeBreak(previous_codepoint, cp2, &mut state);
-                        debug_assert!(!brk);
+                        // With mode 2027 disabled, zero-width codepoints are
+                        // attached without applying grapheme boundary rules. If
+                        // the mode is enabled later, an existing cell can
+                        // therefore contain one or more breaks. Feed those breaks
+                        // into the state machine so it can reset its context and
+                        // determine the boundary for the new codepoint.
+                        //
+                        // PORT NOTE (oracle b287f6d1a, `P3-W1 T4`): this used to
+                        // be `debug_assert!(!brk)`, which is exactly the
+                        // assertion upstream deleted. The pre-existing DG4 note
+                        // here — that the call MUTATES `state` and must run
+                        // unconditionally outside the macro — was and remains
+                        // correct; it is the ASSERT that was wrong, not the call.
+                        // Keep the call.
+                        let _brk = unicode::graphemeBreak(previous_codepoint, cp2, &mut state);
                         previous_codepoint = cp2;
                     }
                 }
@@ -15610,13 +15617,14 @@ mod tests {
                 }
                 15 => {
                     let v = rand.boolean();
-                    // Erase the display first: grapheme clusters created
-                    // while mode 2027 was off can trip a pre-existing
-                    // debug assert in print()'s cluster walk when the mode
-                    // is toggled on (unrelated to printSlice; it reproduces
-                    // with per-codepoint print alone).
-                    t1.erase_display(csi::EraseDisplay::Complete, false);
-                    t2.erase_display(csi::EraseDisplay::Complete, false);
+                    // PORT NOTE (oracle b287f6d1a, `P3-W1 T4`): the
+                    // `erase_display` workaround that used to sit here is
+                    // DELETED, exactly as upstream deletes it in
+                    // `testPrintSliceDifferential`. It existed to dodge the
+                    // `debug_assert!(!brk)` in `print`'s stored-cluster walk,
+                    // which that commit removes. The differential now exercises
+                    // live mode-2027 changes over existing screen content, which
+                    // is the coverage the workaround was suppressing.
                     t1.modes.set(modespkg::Mode::GraphemeCluster, v);
                     t2.modes.set(modespkg::Mode::GraphemeCluster, v);
                 }
@@ -18624,5 +18632,61 @@ mod tests {
         );
 
         t.deinit(alloc);
+    }
+
+    // -- P3-W1 T4 step 1: stored grapheme boundaries (oracle b287f6d1a) -------
+
+    // ref: test "Terminal: enabling grapheme mode handles stored breaks"
+    #[test]
+    fn terminal_enabling_grapheme_mode_handles_stored_breaks() {
+        let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
+
+        t.modes.set(modespkg::Mode::GraphemeCluster, false);
+        t.print(b'a' as u21).unwrap();
+        t.print(0x200B).unwrap(); // Zero width space is stored on the prior cell.
+
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.print(0x0301).unwrap();
+
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(b"a\xE2\x80\x8B\xCC\x81".as_slice(), str.as_slice());
+
+        t.deinit(Global);
+    }
+
+    /// `REACHABILITY.md` row 5 demanded that this be driven END TO END through
+    /// `Stream`, not by calling `print` directly, before the row could be
+    /// ranked. This is that drive: the mode toggles are real DECSET/DECRST
+    /// sequences (`CSI ? 2027 h` / `l`) and the codepoints are real UTF-8 bytes
+    /// off the wire, so nothing here depends on a test reaching into `print`.
+    /// On today's pre-fix tree this panics in `print`'s stored-cluster walk.
+    ///
+    /// The release-mode consequence, which row 5 also asked for: the site is a
+    /// `debug_assert!`, so in release it is COMPILED OUT and the pre-fix code
+    /// silently produced the same output as the fixed code — the defect is a
+    /// debug/ReleaseSafe-only crash, not a release miscompute. That is why this
+    /// test is a plain assertion on the resulting string: it is meaningful in
+    /// both profiles, and in debug it also catches the panic.
+    #[test]
+    fn terminal_enabling_grapheme_mode_handles_stored_breaks_via_stream() {
+        let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
+
+        {
+            let mut stream = t.vt_stream();
+            // CSI ? 2027 l  -- disable grapheme clustering
+            stream.next_slice(b"\x1b[?2027l");
+            // "a" then U+200B ZERO WIDTH SPACE, attached with no boundary rules
+            stream.next_slice("a\u{200B}".as_bytes());
+            // CSI ? 2027 h  -- enable grapheme clustering
+            stream.next_slice(b"\x1b[?2027h");
+            // U+0301 COMBINING ACUTE ACCENT
+            stream.next_slice("\u{0301}".as_bytes());
+            stream.deinit();
+        }
+
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(b"a\xE2\x80\x8B\xCC\x81".as_slice(), str.as_slice());
+
+        t.deinit(Global);
     }
 }

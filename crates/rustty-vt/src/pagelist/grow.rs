@@ -492,20 +492,38 @@ impl PageList {
             macro_rules! adjust_field {
                 ($field:ident, $int:ty) => {{
                     let old = cap.$field;
-                    // We use checked math to prevent overflow. If there is an
-                    // overflow it means we're out of space in this dimension,
-                    // since pages can take up to their maxInt capacity in any
-                    // category.
-                    let new: $int = match (old as $int).checked_mul(2) {
-                        Some(v) => v,
-                        None => {
-                            // Our final doubling would overflow since maxInt is
-                            // 2^N - 1 for an unsignged int of N bits. So, if we overflow
-                            // and we haven't used all the bits, use all the bits.
-                            if old < <$int>::MAX {
-                                <$int>::MAX
-                            } else {
-                                return Err(IncreaseCapacityError::OutOfSpace);
+                    // A dimension can be zero for pages with exact
+                    // capacities (see compact). Doubling zero stays zero,
+                    // which would break our guarantee that we always
+                    // increase by at least one unit and turn caller retry
+                    // loops into infinite loops. Jump straight to the
+                    // standard default instead: it is what all standard
+                    // pages start with, so retrying callers are guaranteed
+                    // enough room for their pending allocation.
+                    //
+                    // PORT NOTE (oracle 8307349ec, `P3-W1 T4`): the reference
+                    // writes the default as `const default: Capacity = .{ .cols
+                    // = 0, .rows = 0 }` and reads `@field(default, field_name)`
+                    // — i.e. the struct's own field defaults. `Capacity::default()`
+                    // is rustty's spelling of exactly that.
+                    let new: $int = if old == 0 {
+                        Capacity::default().$field
+                    } else {
+                        // We use checked math to prevent overflow. If there is an
+                        // overflow it means we're out of space in this dimension,
+                        // since pages can take up to their maxInt capacity in any
+                        // category.
+                        match (old as $int).checked_mul(2) {
+                            Some(v) => v,
+                            None => {
+                                // Our final doubling would overflow since maxInt is
+                                // 2^N - 1 for an unsignged int of N bits. So, if we overflow
+                                // and we haven't used all the bits, use all the bits.
+                                if old < <$int>::MAX {
+                                    <$int>::MAX
+                                } else {
+                                    return Err(IncreaseCapacityError::OutOfSpace);
+                                }
                             }
                         }
                     };
