@@ -247,6 +247,7 @@ _rustty() {
     config+=" --gtk-toolbar-style="
     config+=" --gtk-titlebar-style="
     config+=" '--gtk-wide-tabs '"
+    config+=" '--gtk-horizontal-tab-scroll '"
     config+=" --gtk-custom-css="
     config+=" '--desktop-notifications '"
     config+=" '--progress-style '"
@@ -453,6 +454,7 @@ _rustty() {
       --gtk-toolbar-style) _compreply compgen -W "flat raised raised-border" -- "$cur"; _add_spaces ;;
       --gtk-titlebar-style) _compreply compgen -W "native tabs" -- "$cur"; _add_spaces ;;
       --gtk-wide-tabs) return ;;
+      --gtk-horizontal-tab-scroll) return ;;
       --gtk-custom-css) _files ;;
       --desktop-notifications) return ;;
       --progress-style) return ;;

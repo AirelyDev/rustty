@@ -354,6 +354,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::GtkTitlebarStyle => g_enum!(gtk_titlebar_style),
         Key::GtkToolbarStyle => g_enum!(gtk_toolbar_style),
         Key::GtkWideTabs => g_bool!(gtk_wide_tabs),
+        Key::GtkHorizontalTabScroll => g_bool!(gtk_horizontal_tab_scroll),
         Key::ImageStorageLimit => g_uint!(image_storage_limit),
         Key::InitialCommand => false,
         Key::InitialWindow => g_bool!(initial_window),

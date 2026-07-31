@@ -307,6 +307,7 @@ pub enum Key {
     GtkToolbarStyle,
     GtkTitlebarStyle,
     GtkWideTabs,
+    GtkHorizontalTabScroll,
     GtkCustomCss,
     DesktopNotifications,
     ProgressStyle,
@@ -415,6 +416,7 @@ impl Key {
             b"fullscreen" => Some(Key::Fullscreen),
             b"grapheme-width-method" => Some(Key::GraphemeWidthMethod),
             b"gtk-custom-css" => Some(Key::GtkCustomCss),
+            b"gtk-horizontal-tab-scroll" => Some(Key::GtkHorizontalTabScroll),
             b"gtk-opengl-debug" => Some(Key::GtkOpenglDebug),
             b"gtk-quick-terminal-layer" => Some(Key::GtkQuickTerminalLayer),
             b"gtk-quick-terminal-namespace" => Some(Key::GtkQuickTerminalNamespace),
@@ -771,6 +773,7 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::GtkToolbarStyle => TypeId::of::<GtkToolbarStyle>(),
         Key::GtkTitlebarStyle => TypeId::of::<GtkTitlebarStyle>(),
         Key::GtkWideTabs => TypeId::of::<bool>(),
+        Key::GtkHorizontalTabScroll => TypeId::of::<bool>(),
         Key::GtkCustomCss => TypeId::of::<RepeatablePath>(),
         Key::DesktopNotifications => TypeId::of::<bool>(),
         Key::ProgressStyle => TypeId::of::<bool>(),
@@ -4662,6 +4665,14 @@ pub struct Config {
     /// If you set this to `false` then tabs will only take up space they need,
     /// which is the old style.
     pub gtk_wide_tabs: bool,
+    // @"gtk-horizontal-tab-scroll": bool = true,
+    /// If `true` (default), then two-finger horizontal scrolling on a touchpad
+    /// will switch between tabs. Scrolling left goes to the next tab and
+    /// scrolling right goes to the previous tab. Set this to `false` to
+    /// disable this behavior.
+    ///
+    /// Available since 1.4.0.
+    pub gtk_horizontal_tab_scroll: bool,
     // @"gtk-custom-css": RepeatablePath = .{},
     /// Custom CSS files to be loaded.
     ///
@@ -5108,6 +5119,7 @@ impl Default for Config {
             gtk_toolbar_style: GtkToolbarStyle::Raised,
             gtk_titlebar_style: GtkTitlebarStyle::Native,
             gtk_wide_tabs: true,
+            gtk_horizontal_tab_scroll: true,
             gtk_custom_css: RepeatablePath::default(),
             desktop_notifications: true,
             progress_style: true,
@@ -7597,6 +7609,7 @@ impl Config {
             Key::GtkToolbarStyle => c!(gtk_toolbar_style),
             Key::GtkTitlebarStyle => c!(gtk_titlebar_style),
             Key::GtkWideTabs => c!(gtk_wide_tabs),
+            Key::GtkHorizontalTabScroll => c!(gtk_horizontal_tab_scroll),
             Key::GtkCustomCss => c!(gtk_custom_css),
             Key::DesktopNotifications => c!(desktop_notifications),
             Key::ProgressStyle => c!(progress_style),
@@ -7888,6 +7901,7 @@ impl Config {
         cv!(gtk_toolbar_style);
         cv!(gtk_titlebar_style);
         cv!(gtk_wide_tabs);
+        cv!(gtk_horizontal_tab_scroll);
         // RepeatablePath (no derived `Clone`)
         ci!(gtk_custom_css);
         cv!(desktop_notifications);
@@ -8184,6 +8198,7 @@ pub(crate) const CONFIG_FIELDS: &[(&[u8], Key)] = &[
     (b"gtk-toolbar-style", Key::GtkToolbarStyle),
     (b"gtk-titlebar-style", Key::GtkTitlebarStyle),
     (b"gtk-wide-tabs", Key::GtkWideTabs),
+    (b"gtk-horizontal-tab-scroll", Key::GtkHorizontalTabScroll),
     (b"gtk-custom-css", Key::GtkCustomCss),
     (b"desktop-notifications", Key::DesktopNotifications),
     (b"progress-style", Key::ProgressStyle),
@@ -8786,6 +8801,8 @@ impl Config {
             b"gtk-titlebar-style" => f_enum!(gtk_titlebar_style),
             // @"gtk-wide-tabs": bool
             b"gtk-wide-tabs" => f_display!(gtk_wide_tabs),
+            // @"gtk-horizontal-tab-scroll": bool
+            b"gtk-horizontal-tab-scroll" => f_display!(gtk_horizontal_tab_scroll),
             // @"gtk-custom-css": RepeatablePath (FormatEntry)
             b"gtk-custom-css" => f_entry!(gtk_custom_css),
 
@@ -10287,6 +10304,8 @@ impl Target for Config {
             }
             // @"gtk-wide-tabs": bool
             b"gtk-wide-tabs" => field_bool!(gtk_wide_tabs),
+            // @"gtk-horizontal-tab-scroll": bool
+            b"gtk-horizontal-tab-scroll" => field_bool!(gtk_horizontal_tab_scroll),
             // @"gtk-custom-css": RepeatablePath (parseCLI self)
             b"gtk-custom-css" => field_parsecli_self_map!(gtk_custom_css, path_parse_err),
 
@@ -10447,6 +10466,7 @@ mod parse_tests {
         b"fullscreen",
         b"grapheme-width-method",
         b"gtk-custom-css",
+        b"gtk-horizontal-tab-scroll",
         b"gtk-opengl-debug",
         b"gtk-quick-terminal-layer",
         b"gtk-quick-terminal-namespace",
@@ -10572,10 +10592,51 @@ mod parse_tests {
 
     // The field-name list and the `Key` enum are both derived (in the
     // reference) from `std.meta.fields(Config)`, so their counts must match.
+    //
+    // FIELD-COUNT CONTRACT — LAST RECONCILED AGAINST THE ORACLE AT
+    // `6ad1fe7d8` (oracle `origin/main`, 2026-07-29), by `P3-W9 T3` step 3.
+    // See `FIELD_COUNT_ORACLE_RECONCILIATION` below for what the number means
+    // and for the two rows that are still DIVERGENT by design.
     #[test]
     fn config_field_names_count_is_contract() {
-        assert_eq!(CONFIG_FIELD_NAMES.len(), 204);
+        assert_eq!(CONFIG_FIELD_NAMES.len(), 205);
     }
+
+    /// Area G OQ-6: until `P3-W9 T3`, these three `204` assertions guarded rustty
+    /// against ITSELF — nothing asserted the set matched the oracle's, so the
+    /// contract's implicit fidelity claim was FALSE and drift was invisible.
+    /// This note records the reconciliation so the next drift is visible rather
+    /// than inferred. Reproduce with
+    /// `python3 .port/phase-3/w9-diff-oracle-vs-rustty-fields.py`:
+    ///
+    /// ```text
+    /// --- oracle 4749c4e93 (the pin): 209 fields | rustty: 205 ---
+    ///   in oracle, NOT in rustty: _arena, _conditional_set, _conditional_state,
+    ///                             _diagnostics, _replay_steps, _xdg-terminal-exec
+    ///   in rustty, NOT in oracle: gtk-horizontal-tab-scroll, scrollback-compression
+    /// --- oracle origin/main (6ad1fe7d8): 212 fields | rustty: 205 ---
+    ///   in oracle, NOT in rustty: <the same 6 `_`-prefixed>,
+    ///                             scrollback-limit-bytes, scrollback-limit-lines
+    ///   in rustty, NOT in oracle: scrollback-limit
+    /// ```
+    ///
+    /// Reading it:
+    ///
+    ///  * The six `_`-prefixed entries are the reference's PRIVATE fields, which
+    ///    its own `Key`/field derivation skips. They are not config options and
+    ///    are correctly absent from this list. Oracle PUBLIC counts are therefore
+    ///    203 at the pin and **206** at head.
+    ///  * rustty's 205 = 206 − `scrollback-limit-lines` (ABSENT) with
+    ///    `scrollback-limit` not yet renamed to `scrollback-limit-bytes`. Both
+    ///    are the runtime-limits unit (oracle `65c48213b`/`1092204df`/`f4c68d65e`),
+    ///    owned by `P3-W3 T4`, which lands them TOGETHER with the `PageList`
+    ///    mechanism (landing the option alone would ship an unenforced knob).
+    ///    When it lands, this number becomes **206** and the two DIVERGENT rows
+    ///    above go to zero.
+    ///  * `gtk-horizontal-tab-scroll` and `scrollback-compression` show as "not in
+    ///    oracle" at the PIN only, because both are beyond-pin ports
+    ///    (`5ea45919d`/`b5f5ca078` and `0fb89f4ff`); at head they match.
+    const FIELD_COUNT_ORACLE_RECONCILIATION: () = ();
 
     // Every non-`_` Config field dispatches to a real parse arm. We use the
     // empty-string value, which `parseIntoField` resets to the field default
@@ -10674,6 +10735,52 @@ mod parse_tests {
         c.format_entry_field(b"scrollback-compression", &mut buf)
             .unwrap();
         assert_eq!(buf.written(), b"scrollback-compression = false\n");
+    }
+
+    /// `P3-W9 T3` step 4 — `gtk-horizontal-tab-scroll` (oracle `5ea45919d` +
+    /// `b5f5ca078`). Registering a Config option touches 12 independent tables;
+    /// this covers the ones a missed registration silently breaks, each with its
+    /// own assertion so it fails alone rather than as a lump: default, key
+    /// lookup, parse, format round-trip. The COUNT half is
+    /// `config_field_names_count_is_contract` +
+    /// `key_exhaustive_parse_format_clone_changed` (205/205/205).
+    ///
+    /// EXECUTED NEGATIVE CONTROLS (`P3-W9 T3` step 4, each reverted):
+    ///  * delete the `string_to_enum` arm -> assertion (2) FAILS, and it fails
+    ///    ALONE. Worth recording: `key_exhaustive_parse_format_clone_changed`
+    ///    walks `ALL_KEYS` -> `CONFIG_FIELDS` and never calls `string_to_enum`,
+    ///    so a missing NAME->KEY arm is invisible to it. This test is the only
+    ///    thing covering that table for this option.
+    ///  * delete the `CONFIG_FIELD_NAMES` entry -> the 205 count assertion FAILS
+    ///    while this test still passes. The two halves are genuinely independent.
+    ///
+    /// The BEHAVIOUR half — two-finger horizontal touchpad scroll switching
+    /// tabs — belongs to the GTK apprt and is `P3-W8 T5 step 3`'s control, NOT
+    /// this one. This test deliberately proves only that the option exists,
+    /// parses, formats and round-trips; do not read it as evidence that
+    /// anything CONSUMES it.
+    #[test]
+    fn config_gtk_horizontal_tab_scroll_defaults_parses_and_round_trips() {
+        // (1) default is `true`, per the oracle's `= true`.
+        assert!(Config::default().gtk_horizontal_tab_scroll);
+
+        // (2) the name resolves to a `Key` (the `string_to_enum` parse table).
+        assert_eq!(
+            Key::string_to_enum(b"gtk-horizontal-tab-scroll"),
+            Some(Key::GtkHorizontalTabScroll)
+        );
+
+        // (3) it parses.
+        let mut c = Config::default();
+        c.parse_into_field(b"gtk-horizontal-tab-scroll", Some(b"false"))
+            .unwrap();
+        assert!(!c.gtk_horizontal_tab_scroll);
+
+        // (4) it round-trips through the formatter.
+        let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+        c.format_entry_field(b"gtk-horizontal-tab-scroll", &mut buf)
+            .unwrap();
+        assert_eq!(buf.written(), b"gtk-horizontal-tab-scroll = false\n");
     }
 
     // Optional integer field.
@@ -11031,6 +11138,7 @@ mod clone_changed_tests {
         Key::GtkToolbarStyle,
         Key::GtkTitlebarStyle,
         Key::GtkWideTabs,
+        Key::GtkHorizontalTabScroll,
         Key::GtkCustomCss,
         Key::DesktopNotifications,
         Key::ProgressStyle,
@@ -11062,10 +11170,13 @@ mod clone_changed_tests {
     //   was deep-copied.
     #[test]
     fn key_exhaustive_parse_format_clone_changed() {
-        // `Key`-count contract: 204 variants, matching `CONFIG_FIELDS` and the
-        // 204 field names.
-        assert_eq!(ALL_KEYS.len(), 204);
-        assert_eq!(CONFIG_FIELDS.len(), 204);
+        // `Key`-count contract: 205 variants, matching `CONFIG_FIELDS` and the
+        // 205 field names. Last reconciled against the ORACLE at `6ad1fe7d8`
+        // (`P3-W9 T3` step 3) — see `FIELD_COUNT_ORACLE_RECONCILIATION` in
+        // `parse_tests` for the set-diff and the two rows still divergent by
+        // design.
+        assert_eq!(ALL_KEYS.len(), 205);
+        assert_eq!(CONFIG_FIELDS.len(), 205);
 
         let default = Config::default();
 
