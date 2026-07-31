@@ -3602,7 +3602,12 @@ mod tests {
     // `debug_assertions` the fail point never trips, so the test can only run
     // in debug — where it still runs and passes.
     #[test]
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // `cfg`, NOT `cfg_attr(..., ignore)`: `ignore` skips EXECUTION but the body
+    // is still COMPILED, and `SetStringFp`/`set_string_tw_*` do not exist under
+    // `--release`. That is precisely what made `cargo test --release` fail to
+    // BUILD (P3-W5 fixed the identical defect in rustty-vt; this sibling site
+    // was missed because the debug lane cannot see it).
+    #[cfg(debug_assertions)]
     fn get_vt_processing_error() {
         with_test_allocator(|alloc| {
             let (new_result, t) = new_t(alloc, 80, 24);
@@ -6026,11 +6031,18 @@ mod tests {
             // (== 0). Only the count separates the three cases — the
             // `!get(SynchronizedOutput)` assertion below passes for both 1 and
             // 2. See the `sync_output_clear_count` PORT NOTE in vt/modes.rs.
+            // The COUNTER is `cfg(debug_assertions)` in rustty-vt, so it must be
+            // referenced under the same cfg here — an unconditional call does not
+            // compile under `--release`. The behavioural assertions below stay in
+            // BOTH profiles; only the count, which is what distinguishes 0/1/2
+            // clears, is debug-only.
+            #[cfg(debug_assertions)]
             rustty_vt::modes::sync_output_clear_reset();
 
             // The terminal-level reset must run even if grid work is unnecessary.
             assert_eq!(Result::Success, unsafe { resize(t, 80, 24, 9, 18) });
             assert!(!unsafe { (*zt).modes.get(modes::Mode::SynchronizedOutput) });
+            #[cfg(debug_assertions)]
             assert_eq!(1, rustty_vt::modes::sync_output_clear_count());
             unsafe { free(t) };
         });

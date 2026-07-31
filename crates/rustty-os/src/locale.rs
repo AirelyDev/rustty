@@ -466,7 +466,16 @@ mod tests {
     ///
     /// Deleting the `assert(!cfg!(test))` line makes this test fail (the call
     /// then succeeds and returns `Ok`), which is the control.
+    ///
+    /// `cfg(debug_assertions)`, and NOT because release is less important:
+    /// `inlineAssert` is a `debug_assert!` (DG4 — matching Zig, where `assert`
+    /// is a no-op in ReleaseFast), so under `--release` the tripwire is compiled
+    /// out and there is nothing to observe. Worse, the call would then SUCCEED
+    /// and do exactly what the tripwire exists to prevent — mutate `LANG` out
+    /// from under every other test in the process. So the test must not merely
+    /// be skipped in release, it must not be BUILT to run there.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "assertion failed")]
     fn ensure_locale_refuses_to_run_under_test() {
         let _ = super::ensureLocale();
