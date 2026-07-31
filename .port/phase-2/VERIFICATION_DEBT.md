@@ -897,49 +897,69 @@ most likely place for a regression). **Negative control:** make
 closing the surface HANGS — a passing run with a no-op signal would prove
 nothing.
 
-## V13. GTK `pre_exec`/`post_fork` are ported but NOT YET REACHED by `Command` — **OWNER: WS20**
+## V13. GTK `pre_exec`/`post_fork` — WIRING **DISCHARGED**; the Linux cgroup end-to-end check REMAINS — **OWNER: WS20**
 
-**Filed WS20, 2026-07-30.** `src/apprt/gtk/pre_exec.zig` and
-`src/apprt/gtk/post_fork.zig` are ported in full
+**Filed WS20, 2026-07-30. Wiring discharged 2026-07-30 (branch
+`ws20-v13-preexec-wiring`).** `src/apprt/gtk/pre_exec.zig` and
+`src/apprt/gtk/post_fork.zig` were already ported in full
 (`crates/rustty-apprt/src/gtk/{pre_exec,post_fork}.rs`, unit-tested and
-mutation-proved). What is NOT yet wired is the seam that makes
+mutation-proved). What was missing was the seam that makes
 `rustty_termio::command::Command` CALL them.
 
-**Why.** The oracle selects the hook payload type at comptime:
-`Command.zig:145-161` defines `RtPreExecInfo` / `RtPostForkInfo` as
-`if (@hasDecl(apprt.runtime, "pre_exec")) apprt.runtime.pre_exec.PreExecInfo else
-struct {}`. Rust has no comptime type selection, and
-`rustty_termio::command::{RtPreExecInfo, RtPostForkInfo}` are still the EMPTY
-growth-point structs (`command.rs:308-340`, marked "GROWTH POINT — GTK seam").
-A `PreExecFn`-shaped adapter therefore cannot read the config the hook needs, so
-the ported functions take their `PreExecInfo`/`PostForkInfo` explicitly. Filling
-the growth point is a `crates/rustty-termio` change, and that crate was owned by
-a sibling lane during WS20 — this is a lane boundary, NOT a scope exclusion.
+**DISCHARGED (recipe steps 1-3).**
+1. `rustty_termio::command::{RtPreExecInfo, RtPostForkInfo}` are no longer the
+   empty growth points: they carry the reference's real GTK fields
+   (`pre_exec.zig:11-23` / `post_fork.zig:15-31`) and their `init(&Config)`
+   copies them (no new crate edge — termio already deps rustty-config).
+   `rustty_apprt::gtk::{pre_exec::PreExecInfo, post_fork::PostForkInfo}` are now
+   RE-EXPORTS of those types, which makes the reference's comptime identity
+   `RtPreExecInfo == apprt.runtime.pre_exec.PreExecInfo` literally true — just
+   established from the LOWER crate, because R4 forbids
+   `rustty-termio -> rustty-apprt`.
+2. The hook FUNCTIONS are installed from above: `gtk::App::init` calls
+   `rustty_termio::command::install_rt_hooks({rt_pre_exec, rt_post_fork})` (thin
+   `PreExecFn`/`PostForkFn` adapters in the two gtk modules, doing the
+   `cmd.rt_pre_exec_info` / `cmd.rt_post_fork_info` + `cmd.pid` reads the
+   reference does inline), and `termio::exec` reads `command::rt_hooks()` at
+   exactly the site the reference resolves `@hasDecl` (`Exec.zig:1034-1037`).
+   **This is the one divergence from the oracle's comptime branch**, documented
+   in full at the seam (PORT NOTE above `command::RtPreExecInfo`): the
+   reference's choice is a build-time constant, ours is a process-global set
+   once during apprt init, and a second install of a DIFFERENT pair panics.
+   `rustty-apprt` gained a direct (downward, previously transitive)
+   `rustty-termio` edge; `check_acyclic.sh` is GREEN.
+3. `rustty_apprt::gtk::post_fork::PostForkError` is collapsed — now a re-export
+   of `rustty_termio::command::PostForkError` (the mirror existed only to dodge
+   the crate edge step 2 legitimately adds).
 
-**Recipe.**
-1. In `rustty-termio`, replace the empty `RtPreExecInfo`/`RtPostForkInfo` with
-   the real payload (the five config fields: `gtk-single-instance`,
-   `linux-cgroup`, `linux-cgroup-hard-fail`, `linux-cgroup-memory-limit`,
-   `linux-cgroup-processes-limit`). `rustty-termio` already depends on
-   `rustty-config`, so no new edge is needed and the graph stays acyclic.
-2. Set `rt_pre_exec` / `rt_post_fork` in `termio::exec`'s `Command` construction
-   (`exec.rs:2593-2598,2627-2631`, currently `None` with the oracle lines quoted
-   above them) to thin adapters that forward to
-   `rustty_apprt::gtk::{pre_exec::pre_exec, post_fork::post_fork}`. The direction
-   apprt→termio must NOT be added; route it the way the oracle does, from the
-   apprt side via the existing `Config`→`PreExecInfo::init` constructors.
-3. Collapse `rustty_apprt::gtk::post_fork::PostForkError` into
-   `rustty_termio::command::PostForkError` (they are the same unit marker;
-   duplicated only to avoid the crate edge).
-4. End-to-end check on Linux with `linux-cgroup = always`: launch a surface and
-   confirm the SHELL process (not the app) is in
-   `app-rustty-surface-transient-<pid>.scope`. **Negative control:** set
-   `linux-cgroup = never` and confirm the shell is in the app's own scope.
+Gates run on macOS at discharge: `cargo check --workspace --all-targets`,
+`cargo test --workspace --no-fail-fast` (4250 passed / 0 failed), `cargo fmt
+--all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`check_acyclic.sh`, `cargo check -p rustty-apprt --features gtk --all-targets`.
+New mutation-proved KATs:
+`exec::tests::rt_hooks_reach_the_spawned_command` (a real fork/exec KAT proving
+the installed `postFork` IS called by `Command::start`; reverting
+`rt_post_fork: rt_hooks.post_fork` to `None` fails it 0 != 1),
+`command::tests::{rt_pre_exec_info_init_copies_the_config_fields,
+rt_post_fork_info_init_copies_the_config_fields, rt_info_defaults_are_inert}`,
+and `crates/rustty-termio/tests/rt_hooks_install.rs` (own process; its fail arm
+dies if the double-install assert is weakened).
+
+**STILL OPEN — HONEST HARDWARE DEBT (recipe step 4).** The GTK modules are
+`#[cfg(all(target_os = "linux", feature = "gtk"))]`, so on the macOS dev host
+NOTHING in `crates/rustty-apprt/src/gtk/{pre_exec,post_fork}.rs` — including the
+new adapters — nor the `gtk::App::init` install call is COMPILED, let alone run.
+Two things remain unverified, and neither was attempted:
+- the gtk-side COMPILE (`cargo check -p rustty-apprt --features gtk` on Linux);
+- the end-to-end cgroup behavior: with `linux-cgroup = always` the SHELL process
+  (not the app) must land in `app-rustty-surface-transient-<pid>.scope`.
 
 Runnable, on the Linux VM (`ssh gael@192.168.64.4`):
 ```sh
 cd ~/projects/rustty
 cargo test  -p rustty-termio --lib
+cargo test  -p rustty-termio --test rt_hooks_install
+cargo check -p rustty-apprt  --features gtk --all-targets
 cargo test  -p rustty-apprt  --features gtk --lib
 cargo build -p rustty --features gtk
 

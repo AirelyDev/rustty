@@ -41,8 +41,8 @@ fn mk_cfg() -> Config {
         working_directory: None,
         resources_dir: None,
         term: b"xterm-256color".to_vec(),
-        rt_pre_exec_info: rustty_termio::command::RtPreExecInfo,
-        rt_post_fork_info: rustty_termio::command::RtPostForkInfo,
+        rt_pre_exec_info: rustty_termio::command::RtPreExecInfo::default(),
+        rt_post_fork_info: rustty_termio::command::RtPostForkInfo::default(),
     }
 }
 

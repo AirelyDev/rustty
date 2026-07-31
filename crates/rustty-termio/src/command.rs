@@ -58,6 +58,7 @@
 // `RtPreExecInfo`/`RtPostForkInfo` below — realized only by the GTK apprt
 // (ported last); NO rustty-apprt-api edge is taken here (blueprint §1).
 use allocator_api2::alloc::Global as Allocator;
+use rustty_config::value_types::{GtkSingleInstance, LinuxCgroup};
 use rustty_config::Config;
 use std::ffi::{c_char, c_void, CStr};
 use std::fs::File;
@@ -301,25 +302,109 @@ impl Exit {
     }
 }
 
+// ============================================================================
+// THE APPRT `rt_*` HOOK SEAM — PORT NOTE (divergence from the oracle's
+// comptime branch). READ THIS BEFORE TOUCHING ANYTHING BELOW.
+// ============================================================================
+//
+// The reference selects BOTH the payload TYPE and the hook FUNCTION at comptime
+// from whichever apprt the build chose:
+//
+//     // Command.zig:139-155
+//     pub const RtPreExecInfo = if (@hasDecl(apprt.runtime, "pre_exec"))
+//         apprt.runtime.pre_exec.PreExecInfo
+//     else struct {
+//         pub inline fn init(_: *const configpkg.Config) @This() { return .{}; }
+//     };
+//     pub const RtPostForkInfo = if (@hasDecl(apprt.runtime, "post_fork"))
+//         apprt.runtime.post_fork.PostForkInfo
+//     else struct { ... };
+//
+//     // termio/Exec.zig:1034-1037
+//     .rt_pre_exec = if (comptime @hasDecl(apprt.runtime, "pre_exec"))
+//         apprt.runtime.pre_exec.preExec else null,
+//     .rt_pre_exec_info = self.rt_pre_exec_info,
+//     .rt_post_fork = if (comptime @hasDecl(apprt.runtime, "post_fork"))
+//         apprt.runtime.post_fork.postFork else null,
+//     .rt_post_fork_info = self.rt_post_fork_info,
+//
+// Rust has neither comptime type selection nor `@hasDecl`, and R4 forbids the
+// edge this would need: `rustty-termio` must NOT depend on `rustty-apprt`
+// (`rustty-apprt` -> `rustty-core` -> `rustty-termio` already exists, so naming
+// the apprt from here is a crate cycle). The two halves are therefore split:
+//
+//   * THE PAYLOAD TYPES (`RtPreExecInfo`/`RtPostForkInfo`) are DEFINED HERE with
+//     the reference's real GTK fields — `pre_exec.zig:11-23` and
+//     `post_fork.zig:15-31` verbatim. This crate already depends on
+//     `rustty-config`, so `init(&Config)` needs no new edge. The GTK apprt then
+//     ALIASES these (`pub use rustty_termio::command::RtPreExecInfo as
+//     PreExecInfo;`), which makes the reference's comptime identity
+//     `RtPreExecInfo == apprt.runtime.pre_exec.PreExecInfo` literally true —
+//     just established from the lower crate instead of the upper one. The
+//     non-GTK apprts never construct a hook, so the fields are inert for them
+//     exactly as the reference's `else struct {}` is.
+//
+//   * THE HOOK FUNCTIONS are INSTALLED FROM ABOVE via [`install_rt_hooks`]
+//     rather than named from here. The apprt layer calls it once during its own
+//     init; `Exec`'s `Command` construction reads [`rt_hooks`] at exactly the
+//     site the reference reads `@hasDecl` (`Exec.zig:1034,1036`).
+//
+// WHAT THIS COSTS, STATED PLAINLY: the reference's choice is a build-time
+// constant that cannot be wrong; ours is a process-global set once at startup,
+// so there is a window before the install in which the hooks read as `None`.
+// That window is closed in practice — the install happens in apprt init, and no
+// `Command` exists before an apprt has a surface to spawn one for — and
+// [`install_rt_hooks`] is deliberately not idempotent-silent: a SECOND install
+// with different hooks panics, which is the runtime stand-in for "the build
+// picked one apprt". This is the whole of the divergence; nothing else about
+// the seam differs from the reference.
+
 /// Configuration information needed by the apprt pre exec function. Note
 /// that this should be a trivially copyable struct and not require any
 /// allocation/deallocation.
 //
-// PORT NOTE (GROWTH POINT — GTK seam): reference `pub const RtPreExecInfo =
-// if (@hasDecl(apprt.runtime, "pre_exec")) apprt.runtime.pre_exec.PreExecInfo
-// else struct { pub inline fn init(_: *const configpkg.Config) @This() {
-// return .{}; } };` — the comptime `@hasDecl` branch is realized ONLY by the
-// GTK apprt (ported last). Until the GTK backend lands and specializes this
-// type IN PLACE, the trivial fallback struct is the definition (blueprint §1:
-// do NOT add this to rustty-apprt-api).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RtPreExecInfo;
+// PORT NOTE: this is the reference's `apprt.runtime.pre_exec.PreExecInfo`
+// (`src/apprt/gtk/pre_exec.zig:11-23`), hoisted into this crate for the reason
+// spelled out in the seam note above. `rustty_apprt::gtk::pre_exec::PreExecInfo`
+// is an alias OF this type, not a copy of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RtPreExecInfo {
+    /// `gtk_single_instance: configpkg.Config.GtkSingleInstance`
+    /// (`pre_exec.zig:12`).
+    pub gtk_single_instance: GtkSingleInstance,
+    /// `linux_cgroup: configpkg.Config.LinuxCgroup` (`pre_exec.zig:13`).
+    pub linux_cgroup: LinuxCgroup,
+    /// `linux_cgroup_hard_fail: bool` (`pre_exec.zig:14`).
+    pub linux_cgroup_hard_fail: bool,
+}
 
 impl RtPreExecInfo {
-    // pub inline fn init(_: *const configpkg.Config) @This() { return .{}; }
+    /// PORTS: `pre_exec.zig:16-22` `pub fn init(cfg: *const configpkg.Config)`.
+    /// (The reference's non-GTK `else` branch is the same `init(&Config)`
+    /// signature returning an empty value — the signature is what `Exec` and
+    /// `Surface` bind to, and it is unchanged.)
     #[inline]
-    pub fn init(_: &Config) -> Self {
-        Self
+    #[must_use]
+    pub fn init(cfg: &Config) -> Self {
+        Self {
+            gtk_single_instance: cfg.gtk_single_instance,
+            linux_cgroup: cfg.linux_cgroup,
+            linux_cgroup_hard_fail: cfg.linux_cgroup_hard_fail,
+        }
+    }
+}
+
+impl Default for RtPreExecInfo {
+    /// The INERT value — `linux_cgroup: .never` makes the hook return on its
+    /// first branch (`pre_exec.zig:35`), which is what the reference's
+    /// `.rt_pre_exec_info = undefined` stands in for at call sites that install
+    /// no rt hook (its ten `test`s, `Command.zig:395,428,...`).
+    fn default() -> Self {
+        Self {
+            gtk_single_instance: GtkSingleInstance::DEFAULT,
+            linux_cgroup: LinuxCgroup::Never,
+            linux_cgroup_hard_fail: false,
+        }
     }
 }
 
@@ -327,19 +412,128 @@ impl RtPreExecInfo {
 /// that this should be a trivially copyable struct and not require any
 /// allocation/deallocation.
 //
-// PORT NOTE (GROWTH POINT — GTK seam): reference `pub const RtPostForkInfo =
-// if (@hasDecl(apprt.runtime, "post_fork")) apprt.runtime.post_fork.PostForkInfo
-// else struct { ... };` — same GTK-realized comptime branch as RtPreExecInfo
-// above; trivial fallback until GTK lands (blueprint §1).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RtPostForkInfo;
+// PORT NOTE: the reference's `apprt.runtime.post_fork.PostForkInfo`
+// (`src/apprt/gtk/post_fork.zig:15-31`) — see the seam note above and the
+// `RtPreExecInfo` note; `rustty_apprt::gtk::post_fork::PostForkInfo` aliases it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RtPostForkInfo {
+    /// `gtk_single_instance: configpkg.Config.GtkSingleInstance`
+    /// (`post_fork.zig:16`).
+    pub gtk_single_instance: GtkSingleInstance,
+    /// `linux_cgroup: configpkg.Config.LinuxCgroup` (`post_fork.zig:17`).
+    pub linux_cgroup: LinuxCgroup,
+    /// `linux_cgroup_hard_fail: bool` (`post_fork.zig:18`).
+    pub linux_cgroup_hard_fail: bool,
+    /// `linux_cgroup_memory_limit: ?u64` (`post_fork.zig:19`).
+    pub linux_cgroup_memory_limit: Option<u64>,
+    /// `linux_cgroup_processes_limit: ?u64` (`post_fork.zig:20`).
+    pub linux_cgroup_processes_limit: Option<u64>,
+}
 
 impl RtPostForkInfo {
-    // pub inline fn init(_: *const configpkg.Config) @This() { return .{}; }
+    /// PORTS: `post_fork.zig:22-30` `pub fn init(cfg: *const configpkg.Config)`.
     #[inline]
-    pub fn init(_: &Config) -> Self {
-        Self
+    #[must_use]
+    pub fn init(cfg: &Config) -> Self {
+        Self {
+            gtk_single_instance: cfg.gtk_single_instance,
+            linux_cgroup: cfg.linux_cgroup,
+            linux_cgroup_hard_fail: cfg.linux_cgroup_hard_fail,
+            linux_cgroup_memory_limit: cfg.linux_cgroup_memory_limit,
+            linux_cgroup_processes_limit: cfg.linux_cgroup_processes_limit,
+        }
     }
+}
+
+impl Default for RtPostForkInfo {
+    /// The INERT value — see [`RtPreExecInfo::default`] (`post_fork.zig:43`).
+    fn default() -> Self {
+        Self {
+            gtk_single_instance: GtkSingleInstance::DEFAULT,
+            linux_cgroup: LinuxCgroup::Never,
+            linux_cgroup_hard_fail: false,
+            linux_cgroup_memory_limit: None,
+            linux_cgroup_processes_limit: None,
+        }
+    }
+}
+
+/// The pair of apprt hooks the reference picks at comptime
+/// (`Exec.zig:1034,1036`), carried as data because Rust must pick them from
+/// above. See the seam note above [`RtPreExecInfo`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RtHooks {
+    /// `apprt.runtime.pre_exec.preExec` when the apprt declares it, else `null`.
+    pub pre_exec: Option<PreExecFn>,
+    /// `apprt.runtime.post_fork.postFork` when the apprt declares it, else
+    /// `null`.
+    pub post_fork: Option<PostForkFn>,
+}
+
+/// PORT NOTE (Rust-only): `#[derive(PartialEq)]` on a struct of function
+/// POINTERS is linted (`unpredictable_function_pointer_comparisons`) because
+/// `==` on `fn` items is not guaranteed meaningful across codegen units.
+/// `core::ptr::fn_addr_eq` is the sanctioned spelling; the only consumer is
+/// [`install_rt_hooks`]'s double-install assert, whose two operands come from
+/// the SAME call site when it is legitimate, so a false negative there would
+/// require the same `fn` item to be emitted twice.
+impl PartialEq for RtHooks {
+    fn eq(&self, other: &Self) -> bool {
+        fn same<T: Copy>(a: Option<T>, b: Option<T>, eq: impl Fn(T, T) -> bool) -> bool {
+            match (a, b) {
+                (None, None) => true,
+                (Some(a), Some(b)) => eq(a, b),
+                _ => false,
+            }
+        }
+        same(self.pre_exec, other.pre_exec, |a, b| {
+            core::ptr::fn_addr_eq(a, b)
+        }) && same(self.post_fork, other.post_fork, |a, b| {
+            core::ptr::fn_addr_eq(a, b)
+        })
+    }
+}
+
+impl Eq for RtHooks {}
+
+/// The process-global stand-in for the reference's comptime `apprt.runtime`
+/// selection. `None` == the `@hasDecl` branch that yields `null` for both hooks,
+/// which is what EVERY apprt other than GTK produces.
+static RT_HOOKS: std::sync::RwLock<Option<RtHooks>> = std::sync::RwLock::new(None);
+
+/// Install the apprt's `rt_pre_exec`/`rt_post_fork` hooks. Called ONCE by the
+/// apprt during its own init; every `Command` built by `Exec` afterwards carries
+/// them (`Exec.zig:1034-1037`).
+///
+/// # Panics
+/// If called a second time with a DIFFERENT pair. The reference's selection is a
+/// build-time constant and so cannot vary within a process; re-installing a
+/// different apprt's hooks would mean two apprts live at once, which is not a
+/// state the reference can represent. Re-installing the SAME pair is a no-op, so
+/// an apprt that initializes twice (tests, `none`+embedded) stays fine.
+pub fn install_rt_hooks(hooks: RtHooks) {
+    let mut slot = RT_HOOKS.write().unwrap_or_else(|e| e.into_inner());
+    match *slot {
+        None => *slot = Some(hooks),
+        Some(existing) => assert!(
+            existing == hooks,
+            "install_rt_hooks: a different apprt's hooks are already installed \
+             (the reference selects these at comptime; they cannot change)",
+        ),
+    }
+}
+
+/// The installed hooks, or the all-`null` pair when no apprt installed any.
+///
+/// Read by `Exec` at the `Command` construction site, mirroring the reference's
+/// `if (comptime @hasDecl(apprt.runtime, "pre_exec")) ... else null`
+/// (`Exec.zig:1034,1036`).
+#[must_use]
+pub fn rt_hooks() -> RtHooks {
+    RT_HOOKS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_default()
 }
 
 impl<'a> Command<'a> {
@@ -1456,6 +1650,98 @@ mod tests {
     use rustty_os::tempdir::TempDir;
     use std::io::{Read as _, Seek as _, SeekFrom};
 
+    /// KAT (rustty-only margin; V13). `RtPreExecInfo::init` is the reference's
+    /// `pre_exec.zig:16-22` — it must copy the THREE named config fields, and
+    /// exactly those. (Pre-V13 it discarded the config entirely, so the GTK
+    /// hook could not have read a thing.)
+    #[test]
+    fn rt_pre_exec_info_init_copies_the_config_fields() {
+        let mut cfg = Config {
+            gtk_single_instance: GtkSingleInstance::True,
+            linux_cgroup: LinuxCgroup::Always,
+            linux_cgroup_hard_fail: true,
+            ..Config::default()
+        };
+
+        assert_eq!(
+            RtPreExecInfo::init(&cfg),
+            RtPreExecInfo {
+                gtk_single_instance: GtkSingleInstance::True,
+                linux_cgroup: LinuxCgroup::Always,
+                linux_cgroup_hard_fail: true,
+            }
+        );
+
+        // The other polarity, so a hard-coded constant cannot pass.
+        cfg.gtk_single_instance = GtkSingleInstance::False;
+        cfg.linux_cgroup = LinuxCgroup::SingleInstance;
+        cfg.linux_cgroup_hard_fail = false;
+        assert_eq!(
+            RtPreExecInfo::init(&cfg),
+            RtPreExecInfo {
+                gtk_single_instance: GtkSingleInstance::False,
+                linux_cgroup: LinuxCgroup::SingleInstance,
+                linux_cgroup_hard_fail: false,
+            }
+        );
+    }
+
+    /// KAT (rustty-only margin; V13). `RtPostForkInfo::init` is
+    /// `post_fork.zig:22-30` — the same three fields plus the two cgroup
+    /// limits.
+    #[test]
+    fn rt_post_fork_info_init_copies_the_config_fields() {
+        let mut cfg = Config {
+            gtk_single_instance: GtkSingleInstance::True,
+            linux_cgroup: LinuxCgroup::Always,
+            linux_cgroup_hard_fail: true,
+            linux_cgroup_memory_limit: Some(1234),
+            linux_cgroup_processes_limit: Some(56),
+            ..Config::default()
+        };
+
+        assert_eq!(
+            RtPostForkInfo::init(&cfg),
+            RtPostForkInfo {
+                gtk_single_instance: GtkSingleInstance::True,
+                linux_cgroup: LinuxCgroup::Always,
+                linux_cgroup_hard_fail: true,
+                linux_cgroup_memory_limit: Some(1234),
+                linux_cgroup_processes_limit: Some(56),
+            }
+        );
+
+        cfg.linux_cgroup_memory_limit = None;
+        cfg.linux_cgroup_processes_limit = Some(7);
+        cfg.linux_cgroup_hard_fail = false;
+        assert_eq!(
+            RtPostForkInfo::init(&cfg),
+            RtPostForkInfo {
+                gtk_single_instance: GtkSingleInstance::True,
+                linux_cgroup: LinuxCgroup::Always,
+                linux_cgroup_hard_fail: false,
+                linux_cgroup_memory_limit: None,
+                linux_cgroup_processes_limit: Some(7),
+            }
+        );
+    }
+
+    /// KAT (rustty-only margin; V13). The `Default` both `Info` types carry for
+    /// the reference's `.rt_*_info = undefined` call sites must be INERT — a
+    /// `.never` cgroup mode, which is the first branch of both hooks
+    /// (`pre_exec.zig:35` / `post_fork.zig:43`). If this ever drifted to
+    /// `.always`, every test that spawns a `Command` would start polling
+    /// `/proc` for 250 ms.
+    #[test]
+    fn rt_info_defaults_are_inert() {
+        assert_eq!(RtPreExecInfo::default().linux_cgroup, LinuxCgroup::Never);
+        assert!(!RtPreExecInfo::default().linux_cgroup_hard_fail);
+        assert_eq!(RtPostForkInfo::default().linux_cgroup, LinuxCgroup::Never);
+        assert!(!RtPostForkInfo::default().linux_cgroup_hard_fail);
+        assert_eq!(RtPostForkInfo::default().linux_cgroup_memory_limit, None);
+        assert_eq!(RtPostForkInfo::default().linux_cgroup_processes_limit, None);
+    }
+
     // [T8] Every test below forks. Take the crate-wide fork-serialization lock
     // (lib.rs `FORK_KAT_SERIAL`) for the test's duration: an unserialized
     // `fork()` snapshots every open fd, leaking a concurrently-running exec
@@ -1549,9 +1835,9 @@ mod tests {
                     r#do
                 }),
                 rt_pre_exec: None,
-                rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+                rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
                 rt_post_fork: None,
-                rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+                rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
                 data: None,
                 pid: None,
             };
@@ -1599,9 +1885,9 @@ mod tests {
                     r#do
                 }),
                 rt_pre_exec: None,
-                rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+                rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
                 rt_post_fork: None,
-                rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+                rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
                 data: None,
                 pid: None,
             };
@@ -1649,9 +1935,9 @@ mod tests {
                     }
                     r#do
                 }),
-                rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+                rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
                 rt_post_fork: None,
-                rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+                rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
                 data: None,
                 pid: None,
             };
@@ -1699,9 +1985,9 @@ mod tests {
                     }
                     r#do
                 }),
-                rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+                rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
                 rt_post_fork: None,
-                rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+                rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
                 data: None,
                 pid: None,
             };
@@ -1742,14 +2028,14 @@ mod tests {
                 stderr: None,
                 os_pre_exec: None,
                 rt_pre_exec: None,
-                rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+                rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
                 rt_post_fork: Some({
                     fn r#do(_: &mut Command<'_>) -> Result<(), PostForkError> {
                         Err(PostForkError) // return error.PostForkError;
                     }
                     r#do
                 }),
-                rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+                rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
                 data: None,
                 pid: None,
             };
@@ -1823,9 +2109,9 @@ mod tests {
             stderr: None,
             os_pre_exec: None,
             rt_pre_exec: None,
-            rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+            rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
             rt_post_fork: None,
-            rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+            rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
             pseudo_console: None,
             data: None,
             pid: None,
@@ -1841,9 +2127,9 @@ mod tests {
             stderr: None,
             os_pre_exec: None,
             rt_pre_exec: None,
-            rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+            rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
             rt_post_fork: None,
-            rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+            rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
             data: None,
             pid: None,
         };
@@ -1915,9 +2201,9 @@ mod tests {
             stderr: None,
             os_pre_exec: None,
             rt_pre_exec: None,
-            rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+            rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
             rt_post_fork: None,
-            rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+            rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
             pseudo_console: None,
             data: None,
             pid: None,
@@ -1933,9 +2219,9 @@ mod tests {
             stderr: None,
             os_pre_exec: None,
             rt_pre_exec: None,
-            rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+            rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
             rt_post_fork: None,
-            rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+            rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
             data: None,
             pid: None,
         };
@@ -2009,9 +2295,9 @@ mod tests {
             stderr: None,
             os_pre_exec: None,
             rt_pre_exec: None,
-            rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+            rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
             rt_post_fork: None,
-            rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+            rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
             pseudo_console: None,
             data: None,
             pid: None,
@@ -2027,9 +2313,9 @@ mod tests {
             stderr: None,
             os_pre_exec: None,
             rt_pre_exec: None,
-            rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+            rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
             rt_post_fork: None,
-            rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+            rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
             data: None,
             pid: None,
         };
@@ -2116,9 +2402,9 @@ mod tests {
                 stderr: Some(&stderr),
                 os_pre_exec: None,
                 rt_pre_exec: None,
-                rt_pre_exec_info: RtPreExecInfo, // .rt_pre_exec_info = undefined,
+                rt_pre_exec_info: RtPreExecInfo::default(), // .rt_pre_exec_info = undefined,
                 rt_post_fork: None,
-                rt_post_fork_info: RtPostForkInfo, // .rt_post_fork_info = undefined,
+                rt_post_fork_info: RtPostForkInfo::default(), // .rt_post_fork_info = undefined,
                 data: None,
                 pid: None,
             };

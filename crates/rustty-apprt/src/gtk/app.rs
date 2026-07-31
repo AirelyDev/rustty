@@ -78,6 +78,23 @@ impl App {
         // `errdefer app.unref()` (`App.zig:44`) is discharged by Rust drop glue:
         // an early return past this point would drop `app` (unref) — but there is
         // no fallible step after construction, so the guard is vacuous here.
+        // V13 — INSTALL THE `rt_*` HOOKS. The reference resolves
+        // `@hasDecl(apprt.runtime, "pre_exec")` / `"post_fork"` at COMPTIME
+        // against whichever apprt the build selected (`Command.zig:139-155`,
+        // `termio/Exec.zig:1034-1037`); THIS module is that apprt, and it is the
+        // one that declares both. Rust cannot let `rustty-termio` name us (R4:
+        // rustty-apprt -> rustty-core -> rustty-termio already exists, so the
+        // reverse edge would cycle), so the selection is handed DOWN here
+        // instead — see the seam PORT NOTE above
+        // `rustty_termio::command::RtPreExecInfo`. `App::init` is the earliest
+        // point at which "the GTK apprt is the runtime" is settled, and it
+        // strictly precedes any surface (hence any `Command`). Installing the
+        // same pair twice is a no-op, so a second `App::init` is fine.
+        rustty_termio::command::install_rt_hooks(rustty_termio::command::RtHooks {
+            pre_exec: Some(super::pre_exec::rt_pre_exec),
+            post_fork: Some(super::post_fork::rt_post_fork),
+        });
+
         let app = Application::new(std::ptr::null_mut(), core_app);
         Ok(App { app })
     }
