@@ -164,6 +164,15 @@ mod imp {
         /// state (§1.11). `.none` until realized (`window.zig:312`).
         pub winproto: RefCell<winproto::Window>,
 
+        /// Kind of hacky to have this but this lets us know if we've
+        /// initialized any single surface yet. We need this because we
+        /// gate default size on this so that we don't resize the window
+        /// after surfaces already exist.
+        ///
+        /// I think long term we can probably get rid of this by implementing
+        /// a property or method that gets us all the surfaces in all the
+        /// tabs and checking if we have zero or one that isn't initialized.
+        ///
         /// PORTS: `window.zig:250` `surface_init` — whether any surface has
         /// initialized (gates default-size).
         pub surface_init: Cell<bool>,
@@ -697,6 +706,7 @@ mod imp {
                 Action::init("paste", action_paste, None),
                 Action::init("reset", action_reset, None),
                 Action::init("clear", action_clear, None),
+                // TODO: accept the surface that toggled the command palette
                 Action::init(
                     "toggle-command-palette",
                     action_toggle_command_palette,
@@ -1227,6 +1237,10 @@ mod imp {
         }
 
         // ---- Command palette / inspector -----------------------------------
+        /// Toggle the command palette.
+        ///
+        /// TODO: accept the surface that toggled the command palette as a parameter
+        ///
         /// PORTS: `window.zig:2007-2049` `toggleCommandPalette`. Lazily build a
         /// [`CommandPalette`] (bind its config, connect its `trigger` signal, save a
         /// WEAK ref), then toggle it modal over this window.
@@ -2256,6 +2270,8 @@ fn action_toggle_command_palette(
     _param: Option<&glib::Variant>,
     this: &Window,
 ) {
+    // TODO: accept the surface that toggled the command palette as a
+    // parameter
     this.imp().toggle_command_palette();
 }
 
@@ -2265,6 +2281,8 @@ fn action_toggle_inspector(
     _param: Option<&glib::Variant>,
     this: &Window,
 ) {
+    // TODO: accept the surface that toggled the command palette as a
+    // parameter
     this.imp().toggle_inspector();
 }
 

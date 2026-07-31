@@ -102,6 +102,10 @@ impl From<collection::Error> for InitError {
     }
 }
 
+// FIXME: This gets a massive manual error set for now because there is an
+// equally massive call stack in the get_presentation tracepoint. This should
+// be consolidated into something better ASAP.
+//
 /// The error set for `renderGlyph`/`renderCodepoint` (tripwire-injected
 /// `OutOfMemory`, the resolver errors, and the atlas-grow `OutOfMemory`).
 #[derive(Debug)]

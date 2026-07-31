@@ -178,6 +178,28 @@ impl Environ {
         self.get_posix(key).map(<[u8]>::to_vec)
     }
 
+    /// PORT NOTE: `pub inline fn containsConstant(self: Environ, comptime key)
+    /// bool` (`std/process/Environ.zig:570`) — the non-allocating existence
+    /// probe. The `comptime key` exists upstream only so the Windows arm can
+    /// `comptime`-widen the literal to WTF-16; the POSIX arm is exactly
+    /// `getPosix(key) != null`, and rustty's block is already byte-oriented on
+    /// every target, so the key stays a runtime `&[u8]`.
+    #[must_use]
+    pub fn contains_constant(&self, key: &[u8]) -> bool {
+        self.get_posix(key).is_some()
+    }
+
+    /// PORT NOTE: `pub inline fn containsUnemptyConstant(self: Environ, comptime
+    /// key) bool` (`std/process/Environ.zig:589`) — present AND non-empty. See
+    /// [`Environ::contains_constant`] for why `key` is not `comptime` here.
+    ///
+    /// Used by `Config.zig:5183`'s CLI-environment heuristic (`TERM_PROGRAM`)
+    /// and `crash/sentry.zig:113` (`XDG_CACHE_HOME`).
+    #[must_use]
+    pub fn contains_unempty_constant(&self, key: &[u8]) -> bool {
+        self.get_posix(key).is_some_and(|v| !v.is_empty())
+    }
+
     /// PORT NOTE: `pub fn createMap(self: Environ, alloc) !Map`.
     #[must_use]
     pub fn create_map(&self) -> EnvMap {
@@ -422,6 +444,49 @@ mod tests {
             e.create_map().get(&b"K"[..]).map(Vec::as_slice),
             Some(&b"first"[..])
         );
+    }
+
+    /// `containsUnemptyConstant` is NOT a bare presence check: upstream's two
+    /// call sites (`Config.zig:5183` `TERM_PROGRAM`, `crash/sentry.zig:113`
+    /// `XDG_CACHE_HOME`) both branch on "set AND non-empty", and a `KEY=` entry
+    /// must read as ABSENT. `containsConstant` is the presence-only sibling and
+    /// must disagree on exactly that entry.
+    #[test]
+    fn environ_contains_constant_vs_unempty_constant() {
+        let e = Environ::from_entries(vec![
+            b"SET=value".to_vec(),
+            b"EMPTY=".to_vec(),
+            // Non-UTF-8 value: the predicates are byte-typed, so this is
+            // "present and non-empty" like any other.
+            b"RAW=\xff\xfe".to_vec(),
+        ]);
+
+        assert!(e.contains_constant(b"SET"));
+        assert!(e.contains_unempty_constant(b"SET"));
+
+        // The load-bearing disagreement: present, but empty.
+        assert!(e.contains_constant(b"EMPTY"));
+        assert!(!e.contains_unempty_constant(b"EMPTY"));
+
+        assert!(e.contains_constant(b"RAW"));
+        assert!(e.contains_unempty_constant(b"RAW"));
+
+        assert!(!e.contains_constant(b"MISSING"));
+        assert!(!e.contains_unempty_constant(b"MISSING"));
+
+        // Prefix/suffix keys must not match (`getPosix` splits on `=`).
+        assert!(!e.contains_unempty_constant(b"SE"));
+        assert!(!e.contains_unempty_constant(b"SETX"));
+    }
+
+    /// Both predicates read the SAME block `get_posix` does, so the
+    /// first-entry-wins rule (`getenv(3)`) applies to them too: a later
+    /// non-empty `K=` cannot resurrect an earlier empty one.
+    #[test]
+    fn environ_contains_unempty_constant_respects_first_entry_wins() {
+        let e = Environ::from_entries(vec![b"K=".to_vec(), b"K=later".to_vec()]);
+        assert!(e.contains_constant(b"K"));
+        assert!(!e.contains_unempty_constant(b"K"));
     }
 
     #[test]

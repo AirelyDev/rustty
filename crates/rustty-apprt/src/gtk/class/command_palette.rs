@@ -672,6 +672,8 @@ impl Command {
         let obj: Self = glib::Object::builder().property("config", config).build();
         let weak: WeakRef<Surface> = WeakRef::default();
         weak.set(Some(surface));
+        // TODO: Replace with surface id whenever Rustty adds one
+        //
         // `sort_key = @intFromPtr(surface)` (`:587`).
         let sort_key = surface.as_ptr() as usize;
         obj.imp().data.replace(Some(imp_command::CommandData::Jump(

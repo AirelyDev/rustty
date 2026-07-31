@@ -14,6 +14,10 @@
 //!   * posix_spawn is used for Mac, but doesn't support the necessary
 //!     features for tty setup.
 //!
+//!
+//! TODO: This may have changed a lot now with the new I/O implementations in
+//! >= 0.16.0, so this might warrant a recheck.
+//!
 //! PORTS: ghostty src/Command.zig (10 `test{}` blocks — all ported).
 //! RELOCATED into rustty-termio (break #13b, blueprint §1): placing Command in
 //! rustty-core would cycle (termio/Exec constructs+starts Command while core

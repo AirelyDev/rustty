@@ -48,11 +48,14 @@ pub struct UniformsGpu {
     pub(crate) cursor_pos: [u16; 2], // 120
     pub(crate) cursor_color: [u8; 4], // 124
     pub(crate) bg_color: [u8; 4], // 128
-    pub(crate) cursor_wide: u8, // 132
-    pub(crate) use_display_p3: u8, // 133
+    // Various booleans.
+    //
+    // TODO: Maybe put these in a packed struct, like for OpenGL.
+    pub(crate) cursor_wide: u8,         // 132
+    pub(crate) use_display_p3: u8,      // 133
     pub(crate) use_linear_blending: u8, // 134
     pub(crate) use_linear_correction: u8, // 135
-                                // align(16) ⇒ size 144 (tail pad 136..144)
+                                        // align(16) ⇒ size 144 (tail pad 136..144)
 }
 
 impl From<&Uniforms> for UniformsGpu {
