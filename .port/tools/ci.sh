@@ -369,6 +369,21 @@ GATE_REGISTRY=(
   # individual functions — that is what a partial port looks like, and nothing
   # else here looks for it.
   "G-SYMS|HARD|$PY $ROOT/.port/tools/audit_symbol_coverage.py"
+  # G-TESTS (2026-07-31). Pass 3, and the same frozen-inventory blind spot one
+  # level down: G1 compares test blocks against `.port/phase-0/inventory/`
+  # captured at 4749c4e93, so a test upstream added since the pin is in neither
+  # its numerator nor its denominator and G1 stays green while a whole commit's
+  # worth of tests goes unported. This reads the LIVE oracle tree.
+  #
+  # Its own FAIL path is checked FIRST and separately, because the previous
+  # version of this gate was VACUOUS and the control did not fire: renaming a
+  # ported test away left it GREEN. `--self-test` breaks each of the four
+  # acceptance arms (name / citation / TEST_AUDIT entry / vacuity) on a real row
+  # and requires the gate to notice. If the self-test is red the gate's verdict
+  # means nothing, so it runs as its own HARD entry rather than as a flag on the
+  # main one.
+  "G-TESTS-SELF|HARD|$PY $ROOT/.port/tools/audit_test_coverage.py --self-test"
+  "G-TESTS|HARD|$PY $ROOT/.port/tools/audit_test_coverage.py"
   "G-ONIG|HARD|bash $GATES/check_oniguruma_lane.sh"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
