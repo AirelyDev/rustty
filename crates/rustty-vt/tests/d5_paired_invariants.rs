@@ -33,7 +33,7 @@ use rustty_vt::sgr::Attribute;
 use rustty_vt::terminal::{Colors, Options, Terminal};
 
 /// Build a minimal `Terminal` the same way the in-crate `terminal.rs` test
-/// helper `opts()` does (its `Colors::default()` is still `todo!()`, so the
+/// helper `opts()` does (that helper is not exported from the crate, so the
 /// fields are spelled out). Small grid — these tests only exercise the seam,
 /// not layout.
 fn terminal(cols: u16, rows: u16) -> Terminal {

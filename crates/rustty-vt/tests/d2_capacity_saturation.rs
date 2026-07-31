@@ -380,7 +380,7 @@ fn pagelist_pin_buf_capacity_saturation() {
 
 // ---------------------------------------------------------------------------
 // Shared helper — build a minimal `Terminal` (spelled out because the in-crate
-// `opts()` test helper is not exported and `Colors::default()` is still `todo!()`).
+// `opts()` test helper is not exported from the crate).
 // Mirrors the d5 integration-test helper.
 // ---------------------------------------------------------------------------
 fn terminal(cols: u16, rows: u16) -> Terminal {
