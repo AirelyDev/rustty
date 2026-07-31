@@ -2278,12 +2278,13 @@ mod tests {
     /// toplevel (oracle `004c88e41`, P3-W8 T5).
     ///
     /// VERIFICATION HONESTY: this covers the zero-size and zero-bounds early
-    /// returns and the "only when it exceeds the bounds" rule. It does **NOT**
-    /// verify the geometry effect the commit exists for — that needs the window
-    /// to move to a *larger* monitor, i.e. two heads, and the project's VM has
-    /// one. The maximized / fullscreen / quick-terminal guards are likewise
-    /// only reviewed, not exercised. See `.port/phase-2/VERIFICATION_DEBT.md`
-    /// row **V20**.
+    /// returns and the "only when it exceeds the bounds" rule. The GEOMETRY
+    /// EFFECT the commit exists for is verified separately, on two real heads,
+    /// by `tests/gtk_wayland_compute_size.rs` via
+    /// `.port/tools/gates/v20b_compute_size_clamp_gate.sh` (headless sway with two
+    /// differently-sized virtual outputs) — `VERIFICATION_DEBT.md` row **V20b**,
+    /// discharged. The maximized / fullscreen / quick-terminal guards and the
+    /// "no GdkSurface yet" return remain reviewed, not exercised.
     #[test]
     fn compute_size_decision_guards() {
         // Zero / negative surface size: never re-assert (a freshly-realized

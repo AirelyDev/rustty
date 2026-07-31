@@ -1429,11 +1429,15 @@ because of the toolchain gap V15 describes.
 
 ## V19. macOS 27 AppKit workarounds + the synchronous-`deinit` free assertion — **ENVIRONMENT-BLOCKED** [2026-07-30, re-owned 2026-07-31]
 
-**Blocked on:** a macOS 27 host (beta or release). This box is macOS 26.5
-(Darwin 25.5.0, Xcode 26.5). Two of the three V19a items are guarded by
-`if #available(macOS 27, *)` or only reachable on a macOS 27 view hierarchy, and
-the third is a pointer-shape change that only the macOS 27 HIG cursor set
-provides — none of them can execute here at all, on any amount of effort.
+**Blocked on:** a macOS 27 host (beta or release) — **for `2104e0749` and
+`632aa6756` only**. This box is macOS 26.5 (Darwin 25.5.0, Xcode 26.5).
+`2104e0749`'s body sits inside `if #available(macOS 27, *)` and targets a
+macOS-27-only `NSScrollPocket`, so it cannot execute here at all; `632aa6756`'s
+added branch is the `?? firstSuperview(withClassName: "NSTitlebarAccessoryContainerView")`
+fallback, which is dead code on a macOS 26 view hierarchy because the first lookup
+(`NSTitlebarAccessoryClipView`) always succeeds. Neither can be exercised on any
+amount of effort here. See the correction below for `fa3802a70`, which is **not**
+in that category.
 
 ```
 PORTED: macos/Sources/Features/Terminal/Window Styles/HiddenTitlebarTerminalWindow.swift
@@ -1471,10 +1475,36 @@ listed here rather than being claimed green.
 | `fa3802a70` | `macos/Sources/Helpers/Backport.swift` `BackportPointerStyle.official` | `frameResize(position:directions:)` → `columnResize(directions:)` / `rowResize(directions:)` |
 
 This host is **macOS 26.5 (Darwin 25.5.0, Xcode 26.5)**. `2104e0749` and `632aa6756`
-are guarded by / only reachable on macOS 27 view hierarchies, and `fa3802a70` is a
-purely visual cursor change. `xcodebuild test` compiles all three and is green, which
-proves **compilation and availability-annotation correctness only** — it proves nothing
-about the behaviour.
+are guarded by / only reachable on macOS 27 view hierarchies. `xcodebuild test`
+compiles all three and is green, which proves **compilation and
+availability-annotation correctness only** — it proves nothing about the behaviour.
+
+**CORRECTION, 2026-07-31 — `fa3802a70` is NOT macOS-27-gated.** The original text
+said it was "a pointer-shape change that only the macOS 27 HIG cursor set provides".
+That is wrong at the code level, and was tested rather than assumed on this host:
+`BackportPointerStyle.official` is annotated `@available(macOS 15, *)`, and both the
+old and the new spellings — `PointerStyle.frameResize(position:directions:)` and
+`.columnResize(directions:)` / `.rowResize(directions:)` — are **macOS 15** SwiftUI
+APIs. A probe run under `swift` on macOS 26.5.1 (25F80) executed all three and showed
+them distinguishable:
+
+```
+columnResize: PointerStyle(value: columnResize(directions: Set(rawValue: 1))
+frameResize : PointerStyle(value: frameResize(position: leading, directions: Set(rawValue: 3)))
+rowResize   : PointerStyle(value: rowResize(directions: Set(rawValue: 1))
+```
+
+So the six-case mapping the commit actually changed IS reachable and assertable here.
+What macOS 27 is genuinely needed for is only the *rendered cursor artwork* — a human
+visual judgment, in the same family as row V7.
+
+**Runnable here (not yet run — recorded so it is not rediscovered):** a
+`macos/Tests/Helpers/` case asserting
+`String(describing: BackportPointerStyle.resizeLeft.official)` contains
+`columnResize(directions:` and NOT `frameResize`, over all six resize cases.
+`PointerStyle` has no useful `Equatable`/introspection, hence `String(describing:)`;
+the probe above is what established that it discriminates. The negative control is
+free: reverting one case to `.frameResize(position:)` must fail that case.
 
 **Recipe (needs a macOS 27 beta host or VM):**
 
@@ -1527,52 +1557,33 @@ path that assertion fails, because the free is still queued.
 
 ---
 
-## V20. `P3-W8 T5` apprt/GTK: the monitor clamp's geometry effect — **ENVIRONMENT-BLOCKED** [2026-07-30, re-owned 2026-07-31]
+## V20. `P3-W8 T5` apprt/GTK: the monitor clamp's geometry effect — **DISCHARGED 2026-07-31**
 
-**STILL DEFERRED** — V20b's geometry effect only.
-
-**Blocked on:** a second monitor. Reproducing the clamp's geometry effect
-requires moving a window from a smaller head to a LARGER one; the Fedora VM has
-exactly one head, and no amount of effort on this hardware produces a second.
-V20a — the half that needed only a headed session — was executed and passed on
-2026-07-31 (see its sub-entry).
+**Both halves are now RUN and PASSED on the Fedora VM.** V20a (the suspended-state
+half) passed 2026-07-31; V20b (the monitor clamp's geometry effect) — the residual
+this row was previously filed as environment-limited on — passed the same day
+against a real compositor with **two heads**, once the "needs two monitors" premise
+was tested instead of assumed. The environment-limit marker and its `Blocked on:`
+line are gone because the block was not real: the VM has one PHYSICAL head, but a headless
+compositor supplies as many VIRTUAL heads as the test needs, on its own socket,
+without touching the primary session.
 
 ```
 PORTED: crates/rustty-apprt/src/gtk/class/window.rs
 PORTED: crates/rustty-apprt/src/gtk/class/surface.rs
 ```
 
-**Recipe (needs a second head):**
-
-```sh
-ssh gael@192.168.64.4
-export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
-cd ~/projects/rustty
-# Add a second output first — a physical dual-monitor host, or a GNOME
-# --virtual-monitor / second wayland-headless output if the session grows one.
-cargo build -p rustty --features gtk,wayland     # to completion, never
-                                                 # concurrently with headed work
-./target/debug/rustty
-# Drag the window from the SMALLER head to the LARGER one, then resize past the
-# smaller head's dimensions. Without 004c88e41 the max size stays clamped to the
-# monitor the window was realized on.
-```
+**What the old disposition got wrong.** It read "a second monitor" as "hardware".
+`.port/tools/gates/ws17_set_urgent_mutter_gate.sh` had already established the
+pattern that dissolves that — a SECOND, HEADLESS compositor instance with a virtual
+monitor, needing no DRM device and no seat. Extending it from one virtual head to
+two is a configuration change, not a hardware one.
 
 **Re-owned 2026-07-31 (was `OWNER: P3-W8` follow-up).** `P3-W8` merged, so G-P2
-correctly reported this row as an orphan. Rather than re-file it into another
-workstream, `P3-W6` executed the part that was actually runnable (V20a) and
-converted the genuinely environment-limited remainder (V20b) to this
-disposition. The residual is an environment limit, not unfinished porting: both
-artifacts above are ported, their guard conditions are unit-tested, and two
-independent negative controls on those units were already run on the VM and
-observed to fail.
+correctly reported this row as an orphan. `P3-W6` executed the runnable part (V20a)
+and deferred the remainder; that remainder is now executed too.
 
-Both items **compile and their headless assertions pass on the Fedora VM**
-(`cargo check`/`cargo test -p rustty-apprt --features gtk,wayland,x11`). Neither
-has been observed doing the thing it exists for. Recorded here rather than
-claimed green.
-
-### V20b. `004c88e41` clamp the max window size to the current monitor — **"logic reviewed + guard conditions unit tested, geometry effect unverified"**
+### V20b. `004c88e41` clamp the max window size to the current monitor — **DISCHARGED 2026-07-31: the geometry effect was RUN on two real heads**
 
 **Ported:** `crates/rustty-apprt/src/gtk/class/window.rs`
 `imp::compute_size_decision` (the pure predicate) + `imp::toplevel_compute_size`
@@ -1589,24 +1600,130 @@ does have `ToplevelExtManual::connect_compute_size`, `ToplevelSize::bounds()` an
 `.{ .after = true }`, so the trampoline is connected directly with
 `g_signal_connect_data(..., G_CONNECT_AFTER)`.
 
-**Verified:** `compute_size_decision_guards`
-(`crates/rustty-apprt/src/gtk/class/window.rs`) covers the zero-size,
-zero-bounds, within-bounds and exceeds-bounds arms. Two independent negative
-controls were **run on the VM and observed to fail**:
-deleting `if w <= bounds_w && h <= bounds_h { return false; }` →
+**Unit-level verification (unchanged, 2026-07-30).** `compute_size_decision_guards`
+covers the zero-size, zero-bounds, within-bounds and exceeds-bounds arms. Two
+independent negative controls were run on the VM and observed to fail: deleting
+`if w <= bounds_w && h <= bounds_h { return false; }` →
 `assertion failed: !imp::compute_size_decision(800, 600, 800, 600)`; deleting
 `if bounds_w <= 0 || bounds_h <= 0 { return false; }` →
 `assertion failed: !imp::compute_size_decision(1000, 800, 0, 600)`.
 
-**NOT verified:** the geometry effect. Reproducing it needs the window to move to
-a **larger** monitor, i.e. two heads; the VM has one. Also unexercised: the
-maximized / fullscreen / quick-terminal early returns and the
-"no GdkSurface yet" return, which need a live toplevel.
+#### The geometry effect — RUN 2026-07-31
 
-**Recipe:** a second head. Either a physical dual-monitor host, or GNOME's
-`--virtual-monitor` / a second `wayland-headless` output if the session supports
-it. Move a window from the smaller to the larger monitor and confirm it can then
-be resized past the smaller monitor's dimensions.
+**Gate:** `.port/tools/gates/v20b_compute_size_clamp_gate.sh`.
+**KAT:** `crates/rustty-apprt/tests/gtk_wayland_compute_size.rs`
+(`compute_size_reasserts_size_on_a_smaller_monitor`).
+**Evidence:** `.port/phase-2/evidence/v20b/v20b-compute-size-two-heads.txt`.
+
+**Environment.** Fedora VM (`ssh gael@192.168.64.4`, one PHYSICAL head), GNOME
+Shell 50.0 / mutter on Wayland as the primary session — **not touched**. The gate
+runs a SECOND compositor: a headless **sway 1.11** (`WLR_BACKENDS=headless`,
+`WLR_HEADLESS_OUTPUTS=2`) on its own `WAYLAND_DISPLAY` and its own IPC socket, the
+same isolation discipline as the WS17 mutter gate and for the same reason (row V4's
+two hard host crashes correlated with primary-session live-compositor activity).
+Two heads, deliberately different sizes: `HEADLESS-2` 800x600 at the origin and
+`HEADLESS-1` 1920x1200 beside it.
+
+```sh
+ssh gael@192.168.64.4
+export XDG_RUNTIME_DIR=/run/user/1000     # NOT WAYLAND_DISPLAY — the gate makes its own
+cd ~/projects/rustty
+bash .port/tools/gates/v20b_compute_size_clamp_gate.sh
+```
+
+**Why sway and not mutter.** mutter's `--virtual-monitor` also gives extra heads, but
+nothing on this host moves a window BETWEEN mutter's heads without injecting input
+into a live session. sway exposes `swaymsg move workspace to output` /
+`swaymsg output … disable`, i.e. an external, scriptable, compositor-driven move.
+Both are real compositors; the seam under test is GDK's, not sway's.
+
+**Two provisioning traps the gate now asserts around, because both silently
+produced a green-looking run first:**
+
+1. `output … mode/resolution` in sway's config file is dropped — the headless outputs
+   do not exist yet when the config is parsed — so both heads stayed at wlroots'
+   1280x720 default. The modes are set over IPC after startup instead.
+2. With the default GLES renderer the headless backend still allocates through GBM,
+   which fails `Permission denied` on this VM (`DRM_IOCTL_MODE_CREATE_DUMB failed`).
+   `swaymsg output … resolution` still answers `success: true` while nothing changes.
+   `WLR_RENDERER=pixman` fixes it. The gate re-reads `swaymsg -t get_outputs` and
+   FAILS unless the two heads really are 1920x1200 and 800x600.
+
+**How the bounds are made to shrink.** The predicate only fires when the
+compositor's bounds drop BELOW the window's live size. A probe temporarily added to
+`toplevel_compute_size` showed what GDK actually delivers on this stack:
+`bounds=2720x1200` with both heads attached — the bounding box of the ATTACHED
+monitors (1920+800 wide), i.e. sway does not send `xdg_toplevel.configure_bounds`
+and GDK falls back. So moving the window alone does not shrink the bounds; the
+larger head has to LEAVE. The gate therefore moves the window to the 800x600 head
+and then switches the 1920x1200 head off, at which point the probe reads
+`bounds=800x600`. The window has still travelled from a large head to a small one
+under compositor control, which is exactly the stale-bounds condition the commit
+addresses.
+
+**Arm 1 `exceeds` — the clamp is defeated (PASS).** Window realized at 1400x1000 on
+the big head, moved to the 800x600 head, big head disabled, then asked for its size
+again (1401x1001 — the reference's "resize past the smaller head's dimensions"; the
+`+1` stops GTK short-circuiting an unchanged request):
+
+```
+V20B arm=exceeds requested=1400x1000 small_head=800x600 (HEADLESS-2)
+V20B heads advertised by the compositor: [("HEADLESS-2", 800, 600), ("HEADLESS-1", 1920, 1200)]
+V20B before move: surface=1400x1000
+V20B outputs now: HEADLESS-2:True:800x600 HEADLESS-1:False:0x0
+V20B after move to HEADLESS-2 (800x600) + re-request 1401x1001: surface=1400x1000
+V20B arm `exceeds` OK
+test result: ok. 1 passed; 0 failed
+```
+
+The surface stays **1400x1000 on an 800x600 head** — and stays at its CURRENT size,
+not the 1401x1001 that was requested, which is precisely `size.setSize(w, h)`'s
+semantics rather than some generic "requests are honoured".
+
+**Arm 2 `fits` — the contrasting control (PASS).** Identical run at 640x480, which
+fits the small head, so the predicate must return false and the handler must be a
+no-op. GTK's default sizing wins and the window is NOT inflated to the head:
+
+```
+V20B arm=fits requested=640x480 small_head=800x600 (HEADLESS-2)
+V20B before move: surface=640x480
+V20B outputs now: HEADLESS-2:True:800x600 HEADLESS-1:False:0x0
+V20B after move to HEADLESS-2 (800x600) + re-request 641x481: surface=641x481
+V20B arm `fits` OK
+test result: ok. 1 passed; 0 failed
+```
+
+Without this arm, "the window is not the monitor's size" would not distinguish a
+working handler from one that never runs at all.
+
+**Arm 3 — SOURCE-MUTATION NEGATIVE CONTROL, run and observed to FAIL.** The
+re-assertion was disabled in place (`if false && compute_size_decision(…)` in
+`toplevel_compute_size`), rebuilt, and arm 1 re-run against the same two heads. The
+probe caught the bounds shrinking and GTK's clamp winning:
+
+```
+V20BPROBE surface=1x1       bounds=2720x1200
+V20BPROBE surface=1400x1000 bounds=2720x1200   (x3)
+V20BPROBE surface=1400x1000 bounds=800x600     <- the big head left
+V20BPROBE surface=800x600   bounds=800x600     (x2)
+V20B after move to HEADLESS-2 (800x600) + re-request 1401x1001: surface=800x600
+panicked at gtk_wayland_compute_size.rs (the `exceeds` assertion):
+  CLAMP NOT DEFEATED: after moving to the 800x600 head the surface is 800x600,
+  i.e. GTK's clamp to the stale monitor bounds won.
+test result: FAILED. 0 passed; 1 failed
+GATE FAIL: arm `exceeds`: the clamp was NOT defeated
+```
+
+That is the pre-`004c88e41` behaviour, reproduced: 1400x1000 → 800x600. The mutation
+and the probe were then reverted with `git checkout --` (which rewrites the mtime, so
+cargo really did rebuild — a `mv file.bak file` restore would have preserved the older
+mtime and silently skipped it) and the gate re-run green.
+
+**STILL NOT exercised, and honestly so:** the maximized / fullscreen /
+quick-terminal early returns and the "no GdkSurface yet" return. They are reviewed
+and unit-adjacent only; none is reachable from this KAT, which never maximizes,
+never goes fullscreen and never builds a quick terminal. That residual is small
+enough not to warrant its own blocked row, but it is not claimed green.
 
 ## V20a. `2f3814ca5` honor suspended window state (`P3-W8 T5`) — **DISCHARGED 2026-07-31 (P3-W6)**
 
