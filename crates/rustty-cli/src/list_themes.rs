@@ -1185,6 +1185,19 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
             }
             // if (theme_list.hasMouse(mouse)) |_| {
             if Window::has_mouse(theme_list, Some(mouse)).is_some() {
+                // NOTE: mouse co-ordinates can be negative (see
+                // https://github.com/rockorager/libvaxis/pull/276).
+                // Working around it in this case, but putting this here in
+                // case there are issues.
+                //
+                // PORT NOTE (`d320cd7df`, `.port/phase-3/NON_PORTS.md` §G2):
+                // upstream clamps because libvaxis 0.6.0 widened `Mouse.row`
+                // to a SIGNED type. rustty-vaxis is pinned at 0.5.1, where
+                // `Mouse::row` is `u16` (`crates/rustty-vaxis/src/mouse.rs:19`)
+                // and a negative row is unrepresentable, so the clamp
+                // (`@max(0, ...)`) is a provable no-op here. It becomes live
+                // when the deferred vaxis bump lands — do not drop this note
+                // then, port the clamp.
                 // if (mouse.button == .left and mouse.type == .release) {
                 if mouse.button == Button::Left && mouse.r#type == MouseType::Release {
                     // const selection = self.window + mouse.row;
@@ -2237,6 +2250,17 @@ fn rank_filtered(
                 name,
                 &tokens,
                 RankOptions {
+                    // NOTE: Changed from ".to_lower = true" (the option was
+                    // renamed). I think this is the correct analog for case
+                    // insensitive ranking (which is what I'm guessing
+                    // ".to_lower = true" implies, but this comment serves as a
+                    // hint if there's a regression.
+                    //
+                    // PORT NOTE (`e8525c0fd`, `.port/phase-3/NON_PORTS.md` §G2):
+                    // the rename to `.case_sensitive = false` is a zf 0.11.0 API
+                    // change. rustty-zf is pinned at 0.10.3, where the field is
+                    // still `to_lower`; the two spellings request the SAME
+                    // case-insensitive ranking. Rename with the deferred bump.
                     to_lower: true,
                     plain: true,
                 },

@@ -241,6 +241,32 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 
     // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
 
+    // PARITY (`e8525c0fd`): the reference `global.init`'s `.c` arm builds
+    // `args` from the C argv and refuses the platform outright:
+    //
+    //     // TODO: Using the C API from Windows is unsupported at this time.
+    //     //
+    //     // When do we plan on supporting Windows, it's recommended to
+    //     // ensure that the C API can take a UNICODE_STRING (aka []16, a
+    //     // WTF-16 string) so that it can just be passed into
+    //     // std.process.Args.Vector directly.
+    //     .c => |c| .{ .vector = if (builtin.os.tag == .windows)
+    //         return error.UnsupportedOSForCApi
+    //     else
+    //         c.argv[0..c.argc] },
+    //
+    // `init` propagating that error is what `ghostty_init` turns into a
+    // non-zero return, so the rustty analogue is this early `return 1`.
+    if cfg!(windows) {
+        // std.log.err("failed to initialize ghostty error={}", .{err});
+        log(
+            Level::Err,
+            "default",
+            "failed to initialize rustty error=UnsupportedOSForCApi",
+        );
+        return 1;
+    }
+
     // reference: std.os.argv = argv[0..argc];
     let stored: Vec<Vec<u8>> = if argv.is_null() {
         Vec::new()

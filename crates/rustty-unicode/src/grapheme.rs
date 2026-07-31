@@ -136,18 +136,24 @@ fn invalid_codepoint(cp: u32) -> bool {
 /// keep buffering when this consumes all available codepoints and more input
 /// may still arrive.
 ///
+/// For codepoint types wider than u21, values greater than U+10FFFF are
+/// accepted so FFI-facing callers can use u32 input without trapping. An
+/// invalid value consumes one codepoint at width 1 when it starts the slice,
+/// and terminates the current cluster when it appears later. For u21 callers
+/// these checks are comptime-dead.
+///
 /// PORT NOTE: the reference is generic over the codepoint type `T` with the
 /// `check_invalid` guards comptime-dead for u21. Rustty callers are all u32,
-/// so the guards are live: values greater than U+10FFFF are accepted (an
-/// invalid value consumes one codepoint at width 1 when it starts the slice,
-/// and terminates the current cluster when it appears later).
+/// so the guards are always live.
 // pub fn graphemeWidth(comptime T: type, cps: []const T) GraphemeWidth
 pub fn grapheme_width(cps: &[u32]) -> GraphemeWidth {
     if cps.is_empty() {
         return GraphemeWidth { len: 0, width: 0 };
     }
 
-    // Guard invalid input before the table lookup.
+    // The C API accepts u32 codepoints, so it can receive values outside
+    // Unicode's range. Guard before narrowing to u21; native u21 callers
+    // skip this path at comptime.
     if invalid_codepoint(cps[0]) {
         return GraphemeWidth { len: 1, width: 1 };
     }
@@ -158,8 +164,8 @@ pub fn grapheme_width(cps: &[u32]) -> GraphemeWidth {
     let mut state = BreakState::Default;
 
     while len < cps.len() {
-        // Treat invalid input as a boundary so a valid prefix cluster can
-        // still be returned.
+        // Treat invalid u32 input as a boundary so a valid prefix cluster can
+        // still be returned without attempting to narrow the invalid value.
         if invalid_codepoint(cps[len]) {
             break;
         }
@@ -191,8 +197,8 @@ pub fn grapheme_width(cps: &[u32]) -> GraphemeWidth {
 
 /// This is all the structures and data for the precomputed lookup table
 /// for all possible permutations of state and grapheme break properties.
-/// Precomputation requires 2^13 keys of 4 bit values so the whole table is
-/// 8KB.
+/// Precomputation requires 2^13 keys of byte-sized values so the whole
+/// table is 8KB.
 struct Precompute;
 
 /// PARITY: the reference `Key` is a `packed struct(u13)` laid out as
@@ -214,8 +220,21 @@ impl Key {
     }
 }
 
-/// PARITY: the reference `Value` is a `packed struct(u4)` laid out as
-/// `{ result: bool, state: u3 }` — bit 0 is `result`, bits 1..=3 are `state`.
+/// PARITY: the reference `Value` is a `packed struct(u8)` laid out as
+/// `{ result: bool, state: u3, _padding: u4 }` — bit 0 is `result`, bits
+/// 1..=3 are `state`, bits 4..=7 are zero padding.
+///
+/// The reference carries that trailing field with this rationale:
+///
+/// > Explicit padding to give the struct a power-of-two backing
+/// > integer, for the same reason as `Properties._padding` (avoids
+/// > exotic-width LLVM integer accesses that defeat register
+/// > promotion). @sizeOf was already 1, so the table stays 8KB.
+///
+/// PORT NOTE: rustty decodes each entry from the embedded byte table into a
+/// plain (non-bitfield) Rust struct, so there is no exotic-width backing
+/// integer to widen and no `_padding` field to carry. The serialized table
+/// bytes are identical either way.
 #[derive(Clone, Copy)]
 struct Value {
     result: bool,

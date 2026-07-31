@@ -116,6 +116,28 @@ const MAX_PATH_BYTES: usize = if cfg!(any(
 // `AutoArrayHashMapUnmanaged(*TrackedGridRef, void)`).
 pub struct TerminalWrapper {
     pub terminal: *mut ZigTerminal,
+
+    // /// We need to keep an I/O instance here as part of the terminal since we
+    // /// have no way of taking it in the C API. This is set up in `new` and
+    // /// destroyed on `free`.
+    // ///
+    // /// This is set to null on freestanding platforms, which get std.Io.failing
+    // /// instead.
+    // io_impl: IoImpl,
+    //
+    // PORT NOTE (`e8525c0fd`/`da04b65d4`): N/A. Zig 0.16 threads an explicit
+    // `std.Io` through every blocking call, so the C API — which has no place to
+    // take one — must own a `*std.Io.Threaded`. Rust's I/O is ambient, so there
+    // is nothing to store, allocate in `new`, or `deinit` in `free`.
+    //
+    // /// We also need to store a temp dir path for some operations (e.g., kitty
+    // /// graphics). This provides stable storage for the API calls.
+    // tmp_dir_path: [max_path_bytes]u8,
+    //
+    // PORT NOTE: N/A for storage — rustty's `Limits` owns the temp-dir bytes
+    // itself, so there is no borrow needing stable backing. The LENGTH BOUND
+    // the field imposes is still observable through the C API and survives as
+    // `MAX_PATH_BYTES`; see its PORT NOTE above.
     pub stream: Stream<'static>,
     pub effects: Effects,
     pub tracked_grid_refs: HashSet<*mut TrackedGridRef>,
@@ -397,6 +419,8 @@ pub struct CDeviceAttributesTertiary {
 // the same exposed-provenance bridge `hyperlink.rs` uses for its stored page
 // pointers, and it gives the recovered pointer whole-allocation provenance so the
 // sibling reads are SB-sound.
+///
+/// Fetches a `TerminalWrapper` reference from a `Handler`.
 #[inline]
 fn wrapper_from_handler(handler: *mut Handler<'static>) -> *mut TerminalWrapper {
     // const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
@@ -1015,7 +1039,12 @@ fn new_(
         progress_report: Some(Effects::progress_report_trampoline),
     };
 
-    // wrapper.* = .{ .terminal = t, .stream = .initAlloc(alloc, handler) };
+    // wrapper.* = .{
+    //     .terminal = t,
+    //     .io_impl = io_impl,
+    //     .tmp_dir_path = undefined, // Only used if temporary directory is set with API calls
+    //     .stream = .initAlloc(alloc, handler),
+    // };
     // PORT NOTE: the reference threads the C allocator into the OSC parser; we
     // back it with the process-static global zig allocator (the same choice
     // `Terminal::vt_stream` makes), which supports dynamic OSC growth.
@@ -2763,6 +2792,13 @@ pub unsafe fn free(terminal_: Terminal) {
     // wrapper.stream.deinit();
     wrapper.stream.deinit();
 
+    // if (builtin.os.tag != .freestanding) {
+    //     // Deinit is always safe to call, even for single-threaded instances
+    //     wrapper.io_impl.deinit();
+    //     alloc.destroy(wrapper.io_impl);
+    // }
+    //   N/A: rustty has no `io_impl` to tear down (see `TerminalWrapper`).
+
     // t.deinit(alloc);
     unsafe { (*t).deinit(alloc) };
     // alloc.destroy(t); — reclaim the heap terminal AFTER the stream's handler
@@ -3273,6 +3309,23 @@ mod tests {
                 )
             });
             assert!(viewport_active);
+
+            // With no scrollback the scrollbar covers exactly the active area.
+            let mut scrollbar_data: TerminalScrollbar = TerminalScrollbar {
+                total: 0,
+                offset: 0,
+                len: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::Scrollbar,
+                    &mut scrollbar_data as *mut TerminalScrollbar as *mut c_void,
+                )
+            });
+            assert_eq!(2, scrollbar_data.total);
+            assert_eq!(0, scrollbar_data.offset);
+            assert_eq!(2, scrollbar_data.len);
 
             unsafe { free(t) };
         });

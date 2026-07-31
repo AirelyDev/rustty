@@ -125,6 +125,7 @@ pub struct X11Entry {
 unsafe impl Sync for X11Entry {}
 unsafe impl Send for X11Entry {}
 
+/// Comptime-built static table, terminated by a null-name entry.
 // PORT NOTE: the reference builds `x11_entries` at COMPTIME
 // (`[x11_color.entries.len + 1]X11Entry`, null-name terminated). Rust has no
 // comptime rgb.txt parse; the same table is built once at runtime and leaked

@@ -285,11 +285,10 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
     //   PORT NOTE: Rust always links libc; the compile-time assertion holds
     //   trivially and needs no runtime check.
 
-    // const err = std.posix.execvpeZ(
-    //     "/bin/sh",
-    //     &.{ "/bin/sh", "-c", command },
-    //     std.c.environ,
-    // );
+    // Run/replace process (using execve)
+    // const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", command.ptr };
+    // const envp = std.c.environ;
+    // const err = std.posix.errno(std.posix.system.execve(argv[0].?, &argv, envp));
     //   PORT NOTE: `execvpeZ` replaces the process image using the inherited
     //   environment (`std.c.environ`); Rust's `CommandExt::exec` (`execvp` with the
     //   inherited env) is the faithful map — it returns only on failure.

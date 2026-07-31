@@ -4186,10 +4186,15 @@ impl ReadThread {
         // gather stage borrow `&pipeline` without an `Arc`, matching the
         // reference's stack-local `Pipeline`.
         //
-        // The reference treats a spawn failure as fatal ("if we can't spawn a
-        // thread the process is already doomed"); `std::thread::scope` has no
-        // fallible spawn, so the failure mode it guards against surfaces as the
-        // same abort Rust already uses for thread-spawn failure.
+        // The reference treats a spawn failure as fatal:
+        //     // If we can't spawn a thread the process is already
+        //     // doomed (every surface spawns several), so don't try
+        //     // to limp along.
+        //     log.err("read thread exiting, failed to spawn gather thread err={}", .{err});
+        //     return;
+        // `std::thread::scope` has no fallible spawn, so the failure mode it
+        // guards against surfaces as the same abort Rust already uses for
+        // thread-spawn failure.
         let pipeline = &pipeline;
         std::thread::scope(|scope| {
             let gather_fd = fd;

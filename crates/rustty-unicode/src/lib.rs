@@ -37,9 +37,11 @@ pub use props_table::table;
 ///
 /// This operates on a single codepoint and cannot account for
 /// grapheme-cluster-level width rules (VS16, combining sequences);
-/// callers needing cluster-accurate widths must segment into
-/// grapheme clusters and combine per-codepoint widths. Callers must
-/// pass `cp <= 0x10FFFF` (the C wrapper guards larger values).
+/// callers needing cluster-accurate widths should use [`grapheme::grapheme_width`].
+/// Summing per-codepoint widths is only correct when mode 2027 is
+/// disabled.
+///
+/// Callers must pass `cp <= 0x10FFFF` (the C wrapper guards larger values).
 // pub fn codepointWidth(cp: u21) u2 { return table.get(cp).width; }
 pub fn codepoint_width(cp: u32) -> u8 {
     table().get(cp).width

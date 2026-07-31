@@ -5437,19 +5437,29 @@ fn probable_cli_environment() -> bool {
         }
     }
 
-    // If we have TERM_PROGRAM set to a non-empty value, we assume
-    // a graphical terminal environment.
-    // if (std.posix.getenv("TERM_PROGRAM")) |v| {
-    //     if (v.len > 0) return true;
-    // }
-    if let Ok(v) = std::env::var("TERM_PROGRAM") {
-        if !v.is_empty() {
-            return true;
-        }
+    // If we have TERM_PROGRAM set to a non-empty value, we assume a graphical
+    // terminal environment.
+    //
+    // TODO: This is not available on WASI without libc due to the memory
+    // allocation requirement. This restricts this function to said platforms.
+    // To be fair, the legacy getenv path had more restrictive issues (no WASI
+    // period, or Windows for that matter).
+    //
+    // PORT NOTE (`e8525c0fd`): upstream replaced `std.posix.getenv("TERM_PROGRAM")`
+    // with the captured global environ. rustty follows: `std::env::var` is a
+    // lossy `String` read that would also miss an environment the process
+    // captured at init, whereas `global::environ()` is the byte-typed block
+    // `global.init` published (and `sync_environ` keeps current). The WASI/libc
+    // caveat above is Zig-specific — Rust's `OsString` path has no such
+    // restriction — but it is recorded because it is the reason upstream's
+    // comment exists at all.
+    // if (global.environ().containsUnemptyConstant("TERM_PROGRAM")) return true;
+    if rustty_global::environ().contains_unempty_constant(b"TERM_PROGRAM") {
+        return true;
     }
 
     // CLI arguments makes things probable
-    // if (std.os.argv.len > 1) return true;
+    // if (global.args().vector.len > 1) return true;
     if std::env::args_os().len() > 1 {
         return true;
     }
