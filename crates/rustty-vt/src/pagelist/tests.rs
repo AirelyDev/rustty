@@ -22,11 +22,7 @@
 // are reproduced verbatim.
 #![allow(clippy::while_immutable_condition)]
 
-use super::compress::{
-    CompressionIterator, CompressionMode, IncrementalCompressionFlags,
-    IncrementalCompressionResult, IncrementalCompressionState,
-    INCREMENTAL_COMPRESSION_MAX_INSPECTED,
-};
+use super::compress::{CompressionIterator, CompressionMode, IncrementalCompressionResult};
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
@@ -3985,52 +3981,6 @@ fn pagelist_oversized_page_is_heap_owned() {
 // not carried over with it.
 // =====================================================================
 
-/// Overwrite a compressed node's encoded buffer so that decoding it must fail.
-///
-/// The oracle spells this `@memset(node.data.compressed.encoded, 0xFF)`.
-///
-/// # Panics
-/// Panics if the node is resident.
-fn corrupt_compressed_encoded_for_test(node: *mut super::Node) {
-    unsafe {
-        let data = core::ptr::addr_of_mut!((*node).data);
-        assert_eq!(NodeData::tag(data), NodeData::TAG_COMPRESSED);
-        let c = NodeData::compressed_payload(data) as *mut crate::compress::CompressedPage;
-        (*c).encoded.fill(0xFF);
-    }
-}
-
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression skips visible history"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList owns incremental compression state"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression bounds inspected pages"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression advances after failure"`.
-///
-/// PORT NOTE: no `deinit`, matching the sibling
-/// `pagelist_compression_leaves_incompressible_pages_resident` — the first
-/// page's backing memory is deliberately filled with random bytes, so it is no
-/// longer a structurally valid page and `deinit`'s integrity assertions would
-/// fire on it. The oracle's `defer s.deinit()` is safe only because its
-/// equivalent assertions are compiled out in its test build.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
 // NOT PORTED: oracle@main PageList.zig
 // `test "PageList incremental compression advances after allocation failure"`.
 //
@@ -4060,53 +4010,6 @@ fn corrupt_compressed_encoded_for_test(node: *mut super::Node) {
 //   Allow allocations again. The pass must continue with the following page
 //   rather than retrying the failed candidate.
 
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression advances after decommit failure"`.
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "tripwire failure injection is disabled without debug_assertions"
-)]
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression restarts after replacement"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression restarts after reset"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression restarts after active boundary
-/// resize"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression restarts after prune reuse"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression restarts after earlier replacement"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList incremental compression keeps progress after tail growth"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
 /// PORTS: oracle@main PageList.zig
 /// `test "PageList memory stats do not restore compressed pages"`.
 #[cfg_attr(
@@ -4263,12 +4166,6 @@ fn pagelist_does_not_compress_the_mixed_history_and_active_page() {
 }
 
 /// PORTS: oracle@main PageList.zig
-/// `test "PageList lazily restores compressed history made active by resize"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
 /// `test "PageList full and incremental compression skip a spanning viewport"`.
 #[cfg_attr(
     miri,
@@ -4332,30 +4229,6 @@ fn pagelist_full_and_incremental_compression_skip_a_spanning_viewport() {
     full.deinit();
 }
 
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList compression restores through page access"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList reset discards malformed compressed data"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList deinit discards malformed compressed data"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
-/// PORTS: oracle@main PageList.zig
-/// `test "PageList prune reuses malformed compressed page memory"`.
-#[cfg_attr(
-    miri,
-    ignore = "MIRI EXCEPTION (.port/phase-3 G3b-vt lane): LZ4 page-compression volume, the same class as the `pagelist_compress*` tests already excepted for TIMEOUT in both Miri lanes (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6'). NOT individually re-measured by this lane."
-)]
 #[test]
 fn pagelist_decommit_pool_item_zeroes_the_dirty_region() {
     // PORT NOTE (WS7 B1): `decommit_pool_item` now delegates to
