@@ -49,11 +49,11 @@ use gio::prelude::*;
 use gtk4::glib;
 use gtk4::prelude::*;
 
+use allocator_api2::alloc::Global;
 use rustty_apprt::gtk::class::application::Application;
 use rustty_apprt::gtk::class::window::Window;
 use rustty_apprt::gtk::{self};
 use rustty_core::app::App as CoreApp;
-use allocator_api2::alloc::Global;
 
 /// Pump the default main context until `pred` holds or `secs` elapse. Bounded so a
 /// dead seam FAILS rather than hangs.
@@ -123,10 +123,22 @@ fn compute_size_reasserts_size_on_a_smaller_monitor() {
     // The requested logical window size, supplied by the gate so the two arms
     // differ ONLY in this number (and so the value in play is visible in the log
     // rather than assumed).
-    let want_w: i32 = std::env::var("RUSTTY_V20B_W").expect("RUSTTY_V20B_W").parse().unwrap();
-    let want_h: i32 = std::env::var("RUSTTY_V20B_H").expect("RUSTTY_V20B_H").parse().unwrap();
-    let small_w: i32 = std::env::var("RUSTTY_V20B_SMALL_W").expect("small w").parse().unwrap();
-    let small_h: i32 = std::env::var("RUSTTY_V20B_SMALL_H").expect("small h").parse().unwrap();
+    let want_w: i32 = std::env::var("RUSTTY_V20B_W")
+        .expect("RUSTTY_V20B_W")
+        .parse()
+        .unwrap();
+    let want_h: i32 = std::env::var("RUSTTY_V20B_H")
+        .expect("RUSTTY_V20B_H")
+        .parse()
+        .unwrap();
+    let small_w: i32 = std::env::var("RUSTTY_V20B_SMALL_W")
+        .expect("small w")
+        .parse()
+        .unwrap();
+    let small_h: i32 = std::env::var("RUSTTY_V20B_SMALL_H")
+        .expect("small h")
+        .parse()
+        .unwrap();
     let small_out = std::env::var("RUSTTY_V20B_SMALL_OUTPUT").expect("small output name");
     let big_out = std::env::var("RUSTTY_V20B_BIG_OUTPUT").expect("big output name");
     eprintln!(
