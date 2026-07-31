@@ -58,40 +58,15 @@ def norm(s):
     return [p for p in s.split("_") if len(p) > 2]
 
 
-def main():
-    argv = sys.argv[1:]
-    limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 40
+def analyze(zig, fns, cites, accepted):
+    """The whole decision procedure, as a pure function of its four inputs.
 
-    acc_path = os.path.join(ROOT, ".port/phase-3/TEST_AUDIT.md")
-    accepted = set()
-    if os.path.exists(acc_path):
-        accepted = set(re.findall(r'`(src/[\w/]+\.zig::[^`]+)`',
-                                  open(acc_path, errors="ignore").read()))
-
-    # Every Rust fn name in the tree, as one blob for substring containment.
-    fns = set()
-    for base, dirs, files in os.walk(os.path.join(ROOT, "crates")):
-        dirs[:] = [d for d in dirs if d != "target"]
-        for f in files:
-            if f.endswith(".rs"):
-                try:
-                    fns.update(RS_FN.findall(
-                        open(os.path.join(base, f), errors="ignore").read()))
-                except OSError:
-                    pass
-    blob = "\n".join(sorted(fns)).lower()
-
-    files = subprocess.run(["git", "ls-files", "src"], cwd=ORACLE,
-                           capture_output=True, text=True, check=True).stdout.split()
-    nonports_path = os.path.join(ROOT, ".port/phase-3/NON_PORTS.md")
-    nonported = set()
-    if os.path.exists(nonports_path):
-        nonported = set(re.findall(r"`(src/[\w/]+\.zig)`",
-                                   open(nonports_path, errors="ignore").read()))
-    zig = [f for f in files if f.endswith(".zig")
-           and not any(f.startswith(p) for p in SKIP_PREFIXES)
-           and f not in nonported]
-
+    Split out from `main` for ONE reason: so `--self-test` can feed it doctored
+    inputs and prove each acceptance arm can actually fail. An earlier version of
+    this gate had a vacuous arm and my control DID NOT FIRE — renaming a ported
+    test away left it GREEN. A gate whose FAIL path has never been demonstrated
+    on real rows is indistinguishable from one that cannot fail.
+    """
     total, gaps, acked = 0, [], []
     for rel in sorted(zig):
         try:
@@ -101,6 +76,10 @@ def main():
         stem = os.path.basename(rel)[:-4].lower()
         for name in TEST_BLOCK.findall(src):
             total += 1
+            # A verbatim citation of the oracle test name in a PORT NOTE settles
+            # it before any name heuristic runs.
+            if re.sub(r"\s+", " ", name) in cites:
+                continue
             # Strip a leading module qualifier that merely repeats the file name:
             # `test "color: parse valid"` in color.zig. In Rust the module IS the
             # file, so the ported fn is `parse_valid` and the qualifier can never
@@ -108,7 +87,13 @@ def main():
             # absence.
             if ":" in name:
                 head, _, tail = name.partition(":")
-                if norm(head) and norm(head)[0] in (stem, stem.replace("_", "")):
+                # Compare the JOINED normalization, not just its first token. The
+                # old `norm(head)[0]` form compared "glyf" against the stem
+                # "glyf_rasterize", never matched, left the qualifier on the
+                # name, and reported a present-and-passing test as absent — the
+                # FOURTH false absence this matcher has produced.
+                hn = "_".join(norm(head))
+                if hn and hn in (stem, stem.replace("_", "")):
                     name = tail.strip() or name
             parts = norm(name)
             if not parts:
@@ -126,13 +111,138 @@ def main():
             # i.e. it could not detect the exact thing it exists to detect. Two
             # fragments in the same identifier is a real signal; one fragment
             # somewhere in 800 files is not.
+            # ...AND that fn must cover most of the name, not just two words of
+            # it. Two fragments alone is maskable by a SIBLING IN THE SAME TEST
+            # FAMILY: `PageList cold compression continues after an
+            # incompressible page` was accepted by
+            # `pagelist_compression_leaves_incompressible_pages_resident`, a
+            # different test that merely shares the family's vocabulary. The
+            # self-test arm below caught exactly that. Requiring 70% of the
+            # name's distinct tokens surfaced 16 further absences, all in the
+            # same compression series.
             long_parts = [p for p in parts if len(p) >= 6]
+            uniq = list(dict.fromkeys(parts))
             if len(long_parts) >= 2 and any(
-                sum(p in fn.lower() for p in long_parts) >= 2 for fn in fns
+                sum(p in fn.lower() for p in long_parts) >= 2
+                and sum(p in fn.lower() for p in uniq) >= 0.70 * len(uniq)
+                for fn in fns
             ):
                 continue
             key = f"{rel}::{name}"
             (acked if key in accepted else gaps).append((rel, name))
+    return total, gaps, acked
+
+
+def self_test(zig, fns, cites, accepted):
+    """Break each acceptance arm on a REAL row and require the gate to notice.
+
+    Every arm below is checked against a specific test that lives in the tree
+    today, so these controls fail loudly if someone deletes the row rather than
+    silently passing on an empty set.
+    """
+    failures = []
+
+    def arm(label, z, f, c, a, must_contain):
+        _t, gaps, _k = analyze(z, f, c, a)
+        found = any(must_contain in f"{rel}::{name}" for rel, name in gaps)
+        print(f"  {'ok  ' if found else 'FAIL'} {label}")
+        if not found:
+            failures.append(label)
+
+    # 1. NAME arm: a test matched only by fn-name similarity must be reported
+    #    when that fn is renamed away. This is the exact control that did not
+    #    fire against the old vacuous fallback.
+    victim = "pagelist_cold_compression_continues_after_an_incompressible_page"
+    assert victim in fns, "self-test anchor gone: re-point arm 1"
+    arm("name arm fires when the ported fn is renamed away",
+        [z for z in zig if z.endswith("terminal/PageList.zig")],
+        {f for f in fns if f != victim}, "",
+        set(), "cold compression continues after an incompressible page")
+
+    # 2. CITATION arm: a test matched ONLY by a verbatim PORT NOTE citation must
+    #    be reported when the citation is removed. Anchored on a gsettings test,
+    #    whose Rust name (`gsettings_key_tag_names`) shares no fragment with the
+    #    oracle name — so nothing but the citation can be carrying it.
+    cite = "@tagName returns correct GTK property names"
+    assert cite in cites, "self-test anchor gone: re-point arm 2"
+    arm("citation arm fires when the PORT NOTE citation is removed",
+        [z for z in zig if z.endswith("gtk/gsettings.zig")],
+        fns, cites.replace(cite, ""), set(), cite)
+
+    # 3. ACCEPTED arm: an absence recorded in TEST_AUDIT.md must come back as a
+    #    GAP when the entry is withdrawn — otherwise the ledger is decorative.
+    key = "src/terminal/c/unicode.zig::codepoint_width wide"
+    assert key in accepted, "self-test anchor gone: re-point arm 3"
+    arm("accepted arm fires when the TEST_AUDIT.md entry is withdrawn",
+        [z for z in zig if z.endswith("terminal/c/unicode.zig")],
+        fns, cites, accepted - {key}, key)
+
+    # 4. VACUITY arm: an empty oracle read must be RED, not a clean 0/0 pass.
+    total, _g, _k = analyze([], fns, cites, accepted)
+    ok = total < 1000
+    print(f"  {'ok  ' if ok else 'FAIL'} vacuity arm trips on an empty oracle read")
+    if not ok:
+        failures.append("vacuity")
+
+    if failures:
+        print(f"SELF-TEST RED: {len(failures)} arm(s) could not fail: {failures}")
+        return 1
+    print("SELF-TEST GREEN: all 4 acceptance arms demonstrated reachable FAIL.")
+    return 0
+
+
+def main():
+    argv = sys.argv[1:]
+    limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 40
+
+    acc_path = os.path.join(ROOT, ".port/phase-3/TEST_AUDIT.md")
+    accepted = set()
+    if os.path.exists(acc_path):
+        accepted = set(re.findall(r'`(src/[\w/]+\.zig::[^`]+)`',
+                                  open(acc_path, errors="ignore").read()))
+
+    # Every Rust fn name in the tree, plus the raw source text — the latter so a
+    # PORT NOTE that CITES the oracle test verbatim counts as a match. That
+    # citation is the port's own claim of provenance, the same signal G-FILES
+    # relies on at file level, and it is the only thing that survives a rename:
+    # `test "Key.Type returns correct types"` is ported as
+    # `fn gsettings_key_type`, which no name-similarity heuristic will ever link
+    # back. Requiring the LITERAL oracle name keeps this from going vacuous.
+    fns = set()
+    text = []
+    for base, dirs, files in os.walk(os.path.join(ROOT, "crates")):
+        dirs[:] = [d for d in dirs if d != "target"]
+        for f in files:
+            if f.endswith(".rs"):
+                try:
+                    src = open(os.path.join(base, f), errors="ignore").read()
+                except OSError:
+                    continue
+                fns.update(RS_FN.findall(src))
+                text.append(src)
+    # Rewrap doc comments before matching: rustfmt splits a long PORT NOTE mid
+    # citation, so `test "Key.GValueType returns correct GObject types"` is
+    # stored as `... GObject\n    /// types"` and a literal search misses it. Two
+    # of these were reported absent while cited correctly.
+    cites = "\n".join(text)
+    cites = re.sub(r"\n\s*(?:///|//!|//|\*)?[ \t]*", " ", cites)
+    cites = re.sub(r"\s+", " ", cites)
+
+    files = subprocess.run(["git", "ls-files", "src"], cwd=ORACLE,
+                           capture_output=True, text=True, check=True).stdout.split()
+    nonports_path = os.path.join(ROOT, ".port/phase-3/NON_PORTS.md")
+    nonported = set()
+    if os.path.exists(nonports_path):
+        nonported = set(re.findall(r"`(src/[\w/]+\.zig)`",
+                                   open(nonports_path, errors="ignore").read()))
+    zig = [f for f in files if f.endswith(".zig")
+           and not any(f.startswith(p) for p in SKIP_PREFIXES)
+           and f not in nonported]
+
+    if "--self-test" in argv:
+        return self_test(zig, fns, cites, accepted)
+
+    total, gaps, acked = analyze(zig, fns, cites, accepted)
 
     for rel, name in gaps[:limit]:
         print(f'ABSENT  {rel:46} test "{name}"')

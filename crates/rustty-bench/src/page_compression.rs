@@ -842,6 +842,49 @@ fn read_to_end_limited<R: std::io::Read>(r: &mut R, max: usize) -> Result<Vec<u8
     }
 }
 
+// test "readToEndAlloc reads through EOF and permits exact limit" {
+//
+// PORTS: oracle@main `src/lib/compat/file.zig` (that whole file is a backport of
+// Zig 0.15.2's `std.fs.file`, so it has no single Rust counterpart — Rust's std
+// already reads files, and only the byte cap needs expressing). The cap is
+// re-expressed per call site; `read_to_end_limited` is this crate's copy of it,
+// and until now nothing pinned its boundary. The oracle test's whole point is in
+// its name: a file of EXACTLY `max` bytes must succeed. A `>=` where the code has
+// `>` would reject it, and no other test in the tree would notice.
+#[test]
+fn read_to_end_alloc_reads_through_eof_and_permits_exact_limit() {
+    // const contents = "hello, world";
+    let contents: &[u8] = b"hello, world";
+
+    // The oracle writes to a tmpDir and reopens the file twice; a `&[u8]` is a
+    // `Read` and exercises the same loop, without leaving a temp file behind if
+    // the assertion fails.
+    let got = read_to_end_limited(&mut &contents[..], contents.len()).unwrap();
+    // try testing.expectEqualStrings(contents, result);
+    assert_eq!(got, contents);
+
+    // try testing.expectError(error.FileTooBig, readToEndAlloc(.., contents.len - 1));
+    let err = read_to_end_limited(&mut &contents[..], contents.len() - 1).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+    // A short read must not be mistaken for EOF: the loop has to keep going and
+    // still enforce the cap across the ACCUMULATED length, not per chunk.
+    struct OneByteAtATime<'a>(&'a [u8]);
+    impl std::io::Read for OneByteAtATime<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() || buf.is_empty() {
+                return Ok(0);
+            }
+            buf[0] = self.0[0];
+            self.0 = &self.0[1..];
+            Ok(1)
+        }
+    }
+    let got = read_to_end_limited(&mut OneByteAtATime(contents), contents.len()).unwrap();
+    assert_eq!(got, contents);
+    assert!(read_to_end_limited(&mut OneByteAtATime(contents), contents.len() - 1).is_err());
+}
+
 // test PageCompression {
 #[test]
 fn page_compression() {
