@@ -67,7 +67,7 @@
 use core::ffi::{c_char, c_int, c_uint, CStr};
 
 use rustty_datastruct::intrusive_linked_list::Node as _;
-use rustty_vt::hyperlink::PageEntryId;
+use rustty_vt::hyperlink::PageEntryIdTag;
 // WS19 T7: `pagelist::access::Cell` is deliberately NO LONGER IMPORTED here. It
 // carries `node: *mut Node`, and having it in scope is what let the cell-detail path
 // reach the restoring `Node::page(cell.node)`. The widget uses the node-free
@@ -1904,12 +1904,13 @@ fn hyperlinkTable(cell: &InspectedCell, page: *const rustty_vt::page::Page) {
     //         }
     //     },
     // }
-    match entry.id {
-        PageEntryId::Implicit(value) => {
+    match entry.id.tag() {
+        PageEntryIdTag::Implicit => {
+            let value = entry.id.implicit();
             unsafe { dcimgui_sys::ImGui_Text(c"implicit %d".as_ptr(), value as c_int) };
         }
-        PageEntryId::Explicit(slice) => {
-            let id = unsafe { slice.slice(base) };
+        PageEntryIdTag::Explicit => {
+            let id = unsafe { entry.id.explicit().slice(base) };
             if id.is_empty() {
                 unsafe { dcimgui_sys::ImGui_TextDisabled(c"(empty)".as_ptr()) };
             } else {

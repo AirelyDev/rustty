@@ -1966,11 +1966,12 @@ impl Screen {
 
             let other_base = unsafe { (*other_page).memory_ptr() };
             let uri = unsafe { (*other_link).uri.slice(other_base) }.to_vec();
-            let id_: Option<Vec<u8>> = match unsafe { &(*other_link).id } {
-                hyperlink::PageEntryId::Explicit(slice) => {
-                    Some(unsafe { slice.slice(other_base) }.to_vec())
+            let other_id = unsafe { (*other_link).id };
+            let id_: Option<Vec<u8>> = match other_id.tag() {
+                hyperlink::PageEntryIdTag::Explicit => {
+                    Some(unsafe { other_id.explicit().slice(other_base) }.to_vec())
                 }
-                hyperlink::PageEntryId::Implicit(_) => None,
+                hyperlink::PageEntryIdTag::Implicit => None,
             };
 
             // And it to our cursor.
@@ -3234,19 +3235,71 @@ impl Screen {
     /// Start the hyperlink state. Future cells will be marked as hyperlinks with
     /// this state. Note that various terminal operations may clear the hyperlink
     /// state, such as switching screens (alt screen).
+    ///
+    /// `uri`/`id_` must NOT point into the screen's *current* hyperlink state
+    /// (`cursor.hyperlink`), which this call releases. Use
+    /// [`Screen::start_hyperlink_raw`] for that; see its `# Safety` section for
+    /// why the distinction exists.
+    ///
+    /// This is sound as a safe function because that restriction is
+    /// unviolatable from safe code: `cursor.hyperlink` is an
+    /// `Option<*mut Hyperlink>`, so a slice into the current hyperlink's
+    /// allocation can only be produced by `unsafe` code, which is then subject
+    /// to `start_hyperlink_raw`'s contract instead.
     pub fn start_hyperlink(
         &mut self,
         uri: &[u8],
         id_: Option<&[u8]>,
     ) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+        // SAFETY: `uri`/`id_` are live readable slices for the whole call, and
+        // per this function's documented restriction they do not alias the
+        // current hyperlink state.
+        unsafe { self.start_hyperlink_raw(uri as *const [u8], id_.map(|id| id as *const [u8])) }
+    }
+
+    /// [`Screen::start_hyperlink`] taking RAW slice pointers, so that the
+    /// arguments may alias the screen's current hyperlink state.
+    ///
+    /// PORT NOTE (P3 F2): the oracle is
+    /// `startHyperlink(self: *Screen, uri: []const u8, id_: ?[]const u8)` and
+    /// its `startHyperlinkOnce` explicitly documents that "the source slices are
+    /// allowed to reference our current hyperlink" — the reference even has a
+    /// test for it (`"Screen: hyperlink accepts its current values"`). That
+    /// contract is expressible in Zig, whose slices are unprotected pointers,
+    /// but NOT with Rust `&[u8]` parameters: a reference-typed argument is
+    /// STRONGLY PROTECTED for the entire duration of the call, and this call
+    /// reaches `end_hyperlink`, which drops the `Box<Hyperlink>` those slices
+    /// point into. Freeing a strongly-protected allocation is Undefined
+    /// Behavior even though the reference is never read again — Miri: "not
+    /// granting access to tag <N> because that would remove [SharedReadOnly for
+    /// <M>] which is strongly protected", with `<M>` reported as `id_:
+    /// Option<&[u8]>`. Raw pointers carry no protector, which is exactly the
+    /// Zig parameter semantics, so the aliasing contract is ported by taking
+    /// `*const [u8]`. (Same class as the `&mut Page`/`&mut [Cell]` raw-pointer
+    /// argument conversions elsewhere in this crate.)
+    ///
+    /// # Safety
+    ///
+    /// `uri` and `id_` must point at readable `[u8]` slices on entry. They MAY
+    /// alias the current hyperlink state: both are copied into owned buffers
+    /// before that state is released. They must not be dangling.
+    pub unsafe fn start_hyperlink_raw(
+        &mut self,
+        uri: *const [u8],
+        id_: Option<*const [u8]>,
+    ) -> Result<(), pagelist::grow::IncreaseCapacityError> {
         use crate::page::InsertHyperlinkError;
         use crate::pagelist::grow::IncreaseCapacity;
 
-        // Create our pending entry.
+        // Create our pending entry. This copies both byte slices out of caller
+        // memory BEFORE anything below can release the current hyperlink, which
+        // is what makes the aliasing contract above work.
         let link: hyperlink::Hyperlink = hyperlink::Hyperlink {
-            uri: uri.to_vec(),
+            // SAFETY: caller contract — `uri` is a readable slice on entry.
+            uri: unsafe { (*uri).to_vec() },
             id: if let Some(id) = id_ {
-                hyperlink::HyperlinkId::Explicit(id.to_vec())
+                // SAFETY: caller contract — `id_` is a readable slice on entry.
+                hyperlink::HyperlinkId::Explicit(unsafe { (*id).to_vec() })
             } else {
                 let implicit = self.cursor.hyperlink_implicit_id;
                 // defer self.cursor.hyperlink_implicit_id +%= 1;
@@ -12938,15 +12991,22 @@ mod tests {
         // the current values through the RAW pointer the cursor already stores
         // (`cursor.hyperlink: Option<*mut Hyperlink>`) — the same aliasing the
         // reference test exercises, expressed in the way this crate allows.
+        //
+        // PORT NOTE (P3 F2): the slices stay RAW (`*const [u8]`) all the way
+        // into `start_hyperlink_raw`. Materializing them as `&[u8]` arguments
+        // would strongly protect them for the duration of the call, and the
+        // call releases the very allocation they point into — see the PORT NOTE
+        // on `Screen::start_hyperlink_raw`. This is the aliasing the reference
+        // test exists to exercise, so the test keeps it.
         let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
         let (uri_ptr, uri_len) = unsafe { ((*link).uri.as_ptr(), (*link).uri.len()) };
         let (id_ptr, id_len) = match unsafe { &(*link).id } {
             crate::hyperlink::HyperlinkId::Explicit(v) => (v.as_ptr(), v.len()),
             crate::hyperlink::HyperlinkId::Implicit(_) => unreachable!(),
         };
-        let uri: &[u8] = unsafe { core::slice::from_raw_parts(uri_ptr, uri_len) };
-        let id: &[u8] = unsafe { core::slice::from_raw_parts(id_ptr, id_len) };
-        s.start_hyperlink(uri, Some(id)).unwrap();
+        let uri: *const [u8] = core::ptr::slice_from_raw_parts(uri_ptr, uri_len);
+        let id: *const [u8] = core::ptr::slice_from_raw_parts(id_ptr, id_len);
+        unsafe { s.start_hyperlink_raw(uri, Some(id)) }.unwrap();
 
         let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
         assert_eq!(b"http://example.com".as_slice(), unsafe {

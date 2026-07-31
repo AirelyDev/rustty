@@ -37,7 +37,7 @@
 // PageList` alias is unused by this file, so it is carried only as a comment.
 use core::ffi::{c_char, c_int, CStr};
 
-use rustty_vt::hyperlink::PageEntryId;
+use rustty_vt::hyperlink::PageEntryIdTag;
 use rustty_vt::page::{Cell, Page, Row, SemanticPrompt};
 
 use super::helpMarker;
@@ -1113,9 +1113,9 @@ fn hyperlinksList(page: &Page) {
         // offset-slice off the page base, projected via `memory_ptr()`); `%.*s`
         // takes `(int precision, char* ptr)` so the (possibly non-NUL-terminated)
         // byte slice is bounded by its length.
-        match item.value.id {
-            PageEntryId::Explicit(slice) => {
-                let explicit_id = unsafe { slice.slice(base) };
+        match item.value.id.tag() {
+            PageEntryIdTag::Explicit => {
+                let explicit_id = unsafe { item.value.id.explicit().slice(base) };
                 unsafe {
                     dcimgui_sys::ImGui_Text(
                         c"%.*s".as_ptr(),
@@ -1124,7 +1124,7 @@ fn hyperlinksList(page: &Page) {
                     )
                 };
             }
-            PageEntryId::Implicit(_) => {
+            PageEntryIdTag::Implicit => {
                 unsafe { dcimgui_sys::ImGui_TextDisabled(c"-".as_ptr()) };
             }
         }
