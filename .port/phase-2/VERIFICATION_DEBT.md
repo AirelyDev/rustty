@@ -1894,7 +1894,7 @@ monitor**, only a headed session.
 
 ---
 
-## V21. `P3-W4 T7` Surface-level visibility KAT (dedup + report reaches the pty) — **OWNER: `P3-W11` Task 6** [2026-07-31]
+## V21. `P3-W4 T7` Surface-level visibility KAT (dedup + report reaches the pty) — **(a) DISCHARGED by `P3-W11` Task 6; (b) PARTIAL, OWNER: `P3-W11` Task 6** [2026-07-31]
 
 > **Re-owned at the `P3-W4` merge, 2026-07-31.** The row was filed naming
 > `P3-W4 T7`, and the filing lane flagged in its own report that this would
@@ -1961,3 +1961,51 @@ its `merge: P3-W4` commit lands. G-P2 derives P3 workstream closure from those
 merge commits, so the moment `P3-W4` merges this row becomes an owner-in-a-closed-
 workstream violation — exactly the shape of the existing V19/V20 violations.
 **Re-own it to an open workstream (or close it) as part of the P3-W4 merge.**
+
+---
+
+### DISPOSITION, `P3-W11` Task 6, 2026-07-31
+
+**(a) the dedup: DISCHARGED.** `crates/rustty-core/tests/surface_visibility_kat.rs`
+builds the `TestSurface` this row's recipe describes — a heap-pinned
+`MaybeUninit<Surface<TestApp>>` with only the fields `occlusionCallback` reads
+written (the `app.rs::fabricateSurface` precedent), carrying a real `Termio`
+assembled the way `rustty-termio`'s `exec.rs` `TestTermio` assembles one, with
+its self-referential pointers re-seated at the final in-`Surface` address. It
+asserts:
+
+* a state CHANGE pushes exactly **one** renderer `Visible(false)` and exactly
+  one **unforced** `VisibilityReport { visible: false }`, and updates
+  `io.terminal.flags.visible` under the renderer lock;
+* a REPEAT same-state callback pushes **neither**;
+* a transition back is not deduped;
+* with mode 2033 disabled the renderer message still goes out but no report is
+  queued.
+
+**Negative control executed and observed RED.** Deleting the
+`if self.visible == visible { return Ok(()); }` early-return in
+`crates/rustty-core/src/surface.rs`:
+
+```
+thread 'surface_occlusion_callback_dedups_and_reports' panicked at
+crates/rustty-core/tests/surface_visibility_kat.rs:403:5:
+assertion `left == right` failed: a repeat same-state occlusion callback must not reach the renderer
+  left: 0
+ right: 1
+```
+
+Reverted; the KAT is green. A `REBUILD SENTINEL` assert in the test was
+separately tripped and observed to fire, so the mutation-restore path is known
+to rebuild.
+
+**(b) end to end: PARTIAL, still open.** The KAT pins the encoded payload the
+report carries (`encode_visibility_report(NotVisible) == b"\x1b[?999;2n"`), but
+the last hop — `termio::Thread::drainMailbox` -> `Termio::visibilityReport` ->
+`queueWrite` -> the pty write queue — needs a live `ThreadData` with a real pty
+and io thread, which the fabricated `Surface` deliberately does not have
+(`queueWrite` takes `&mut ThreadData<M>`, which only `Thread::threadMain`
+produces). **Remaining recipe:** extend the fixture with a
+`termio::Thread` + `ThreadData` over an `Exec` backend whose pty is a
+`rustty_os::pty::Pty` pair, drive one `drainMailbox` tick, and assert the
+subprocess-side read end receives `\x1b[?999;2n`. That is a pty-owning fixture,
+i.e. its own task, and it is the only part of V21 that remains.
