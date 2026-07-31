@@ -714,3 +714,62 @@ over them is **forbidden**.
 
 `vt::HashMap ensureUnusedCapacity with tombstones` is **not** this workstream's
 (P3-W3 touches no HashMap code).
+
+---
+
+# Area A — file-level coverage audit (2026-07-31)
+
+Added by the **per-file oracle→port coverage audit**
+(`.port/tools/audit_file_coverage.py`), which asks the blunt question no existing
+gate asks: *is there a Rust counterpart for this oracle file at all?* G1/G2/G3
+read a **frozen phase-0 inventory**, so a file upstream added after the pin is in
+none of them — these three were invisible to every gate.
+
+All three arrive with `e8525c0fd` "Update to Zig 0.16.0", the same commit behind
+config's 4 remaining G3b misses and global's 31.
+
+## A1 — `src/datastruct/segmented_list.zig` (NEW, 468 lines) — do NOT port as a file
+
+1. **Upstream.** Zig 0.16.0 removed `std.SegmentedList`, so upstream vendored it.
+   Its one load-bearing property is **pointer stability across appends**.
+2. **Why not.** Rust has no `SegmentedList`, and porting a growable-array
+   container as a container would be porting a *Zig-std gap*, not a behaviour.
+   What must survive is the guarantee, and it does — at both use sites, checked
+   individually rather than assumed:
+   - `src/terminal/osc/parsers/color.zig`'s `List` → `Vec<Request>`
+     (`crates/rustty-vt/src/osc/parsers/color.rs:417`). Nothing holds a pointer
+     into it across a push, so plain `Vec` is sufficient and the PORT NOTE says so.
+   - `src/font/Collection.zig`'s `StyleArray` → `Vec<Box<EntryOrAlias>>`
+     (`crates/rustty-font-shaper/src/collection.rs:885`). Here the guarantee IS
+     load-bearing — `alias: *mut Entry` pointers must survive growth — so each
+     element is heap-boxed. `clippy::vec_box` is `allow`ed at that site with the
+     reason recorded, because "already on the heap" is exactly the point.
+3. **What porting it would break.** Nothing, but it would add an unused container
+   and a second way to express a guarantee already expressed at each site.
+4. **What holds the line.** `collection.rs`'s alias tests: a bare
+   `Vec<EntryOrAlias>` moves elements on realloc and invalidates the alias
+   pointers, which is UB in Rust rather than merely wrong — so the `Box` is
+   guarded by the type, not by a comment.
+
+## A2 — `src/lib/compat/fd.zig` (NEW, 74 lines) — N/A
+
+1. **Upstream.** `close`/`pipe`/`pipe2` shims over `std.posix`, whose signatures
+   Zig 0.16.0 changed.
+2. **Why not.** A shim that exists to bridge two versions of Zig's std has no
+   Rust counterpart by construction.
+3. **Equivalent.** `crates/rustty-os/src/pipe.rs:23` `pub fn pipe()`, hand-rolled
+   over `extern "C"` per the standing rule that this port never adds the `libc`
+   crate. `passwd.rs`'s uses resolve the same way.
+
+## A3 — `src/lib/compat/reader.zig` (NEW, 55 lines) — N/A
+
+1. **Upstream.** `readByte`/`readerInt`/`readStructEndian`/`readSkipBytes`/… over
+   `std.Io.Reader`, the 0.16.0 I/O migration.
+2. **Why not.** Same class as A2: a bridge between Zig std versions.
+3. **Equivalent.** rustty's opentype readers use a slice cursor —
+   `read_be_i16_init(data, &mut pos)` (`crates/rustty-font/src/opentype/glyf.rs:411`),
+   with `svg.rs` and `feature.rs` on the same idiom. This is not a shim but a
+   different shape, and it is the shape that made `P3-W8 T4`'s bounds-guard
+   control **vacuous** — `slice::get(pos..pos+n)` already yields `EndOfStream`
+   for any out-of-range `pos`, so the oracle's explicit guard is R1-faithful but
+   observably redundant here.

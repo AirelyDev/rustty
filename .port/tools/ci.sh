@@ -357,6 +357,12 @@ GATE_REGISTRY=(
   # The gate floors the DELTA (with-feature minus without), not the absolute
   # count: -p rustty-vt --features oniguruma runs the WHOLE crate, so an
   # absolute floor would hold even if every gated test vanished.
+  # G-FILES (2026-07-31). The blunt question no other gate asks: does every
+  # oracle file have a Rust counterpart at all? G1/G2/G3 read a FROZEN phase-0
+  # inventory, so a file upstream ADDED after the pin is invisible to all three
+  # — which is how three post-pin files sat unexamined until the file-level
+  # audit. An absence is acceptable only when ARGUED in NON_PORTS.md.
+  "G-FILES|HARD|$PY $ROOT/.port/tools/audit_file_coverage.py"
   "G-ONIG|HARD|bash $GATES/check_oniguruma_lane.sh"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
