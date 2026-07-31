@@ -5637,6 +5637,34 @@ mod tests {
         });
     }
 
+    // test "clipboard_write without callback is unsupported and silent"
+    #[test]
+    fn clipboard_write_without_callback_is_unsupported_and_silent() {
+        with_test_allocator(|alloc| {
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            // OSC 52 without a callback should not crash
+            vtw(t, b"\x1B]52;c;aGVsbG8=\x1B\\");
+
+            let contents = [clipboard::Content {
+                mime: b"text/plain",
+                data: b"hello",
+            }];
+            let result = Effects::clipboard_write_trampoline(
+                unsafe { &mut (*t).stream.handler },
+                clipboard::Write {
+                    location: clipboard::Location::Standard,
+                    contents: &contents,
+                },
+            );
+            assert_eq!(clipboard::WriteResult::Unsupported, result);
+
+            unsafe { free(t) };
+        });
+    }
+
     // test "pwd_changed without callback is silent"
     #[test]
     fn pwd_changed_without_callback_is_silent() {
