@@ -15,8 +15,14 @@
 //!
 //! The port's production std_size is **409600 bytes (= 25 x 16 KiB)**. The
 //! difference decomposes EXACTLY into three sections (all other sections are
-//! byte-identical — rows 1720, cells 369800, grapheme_map 10768,
-//! hyperlink_set 152, hyperlink_map 464):
+//! byte-identical — rows 1720, cells 369800, grapheme_map 10776,
+//! hyperlink_set 152, hyperlink_map 916):
+//!
+//! NOTE (2026-07-30): grapheme_map moved 10768 -> 10776 and hyperlink_map
+//! 464 -> 916 when WS10 T11 ported `7e14347c1` (hash-map `Header.available`)
+//! and gave `hyperlink::Map` the reference's 80% max_load_percentage. Both are
+//! the reference's own layout moving; see the per-assert notes below, including
+//! what this golden does and does NOT prove.
 //!
 //! | section        | oracle | port  | why |
 //! |----------------|-------:|------:|-----|
@@ -67,8 +73,21 @@ fn std_size_golden_aarch64_macos() {
         layout.grapheme_alloc_layout.total_size, 8256,
         "grapheme_alloc section drifted (BitmapAllocator layout)"
     );
+    // 10768 -> 10776 (+8) when WS10 T11 ported oracle `7e14347c1`, which adds
+    // `available: Size` to the hash-map `Header` (verified:
+    // `git -C ../ghostty show 7e14347c1:src/terminal/hash_map.zig` line 194).
+    // The growth is the new header field, so this is the reference's own layout
+    // moving — not a rustty-side regression. The golden is re-pinned rather than
+    // relaxed: it still fails on any further drift.
+    //
+    // VERIFICATION LIMIT (be honest about this): the CAUSE is confirmed against
+    // the oracle, but the exact byte counts below are re-pinned from rustty's own
+    // `Page::layout` rather than independently derived from the oracle's
+    // `page.zig:785-790` formula. So these goldens prove "no further drift", not
+    // "byte-identical to the reference". Cross-validating the numbers against an
+    // oracle-computed layout is tracked as a Phase-3 follow-up.
     assert_eq!(
-        layout.grapheme_map_layout.total_size, 10768,
+        layout.grapheme_map_layout.total_size, 10776,
         "grapheme_map section drifted"
     );
     assert_eq!(
@@ -80,7 +99,13 @@ fn std_size_golden_aarch64_macos() {
         "hyperlink_set section drifted"
     );
     assert_eq!(
-        layout.hyperlink_map_layout.total_size, 464,
+        // 464 -> 916 when WS10 T11 gave `hyperlink::Map` the reference's 80%
+        // max_load_percentage (oracle `hyperlink.zig:23`:
+        // `AutoOffsetHashMap(Offset(Cell), Id, 80)`), which raises the capacity
+        // needed for the same entry count. Upstream's own design; see the
+        // VERIFICATION LIMIT note above.
+        layout.hyperlink_map_layout.total_size,
+        916,
         "hyperlink_map section drifted"
     );
     assert_eq!(

@@ -142,13 +142,40 @@ PERF_METRICS="${PERF_METRICS:-${TMPDIR:-/tmp}/rustty-perf-metrics.json}"
 # not an addition to what CI runs by default.
 WEBGL_LANE=0
 LZ4_SLOW_LANE=0
+# ---- --fast: the LANE-LEVEL subset -----------------------------------------
+# A full ci.sh is dominated by a handful of gates (G6/G6c Miri — a single vt lane
+# measured 3092s — plus G4 differential, G5 fuzz, G8/G8b perf). Running that per
+# working lane costs hours and finds almost nothing a lane can act on: EVERY real
+# UB this program has found came from a SCOPED Miri harness or a specific test,
+# never from the breadth of the full sweep. The full sweep's value is
+# regression-catching breadth, which is an INTEGRATION concern.
+#
+# So: lanes run `--fast`; the integrator runs the full suite once per merge batch.
+#
+# ANTI-VACUITY: --fast must never be mistakable for a full pass. It refuses to
+# print the ALL-GREEN banner, names every gate it skipped, and exits 4 (a distinct
+# code) so no script can treat a fast run as a release verdict.
+FAST_LANE=0
+SKIPPED_GATES=()
 for arg in "$@"; do
   case "$arg" in
     --webgl) WEBGL_LANE=1 ;;
     --lz4-slow) LZ4_SLOW_LANE=1 ;;
-    *) echo "ci.sh: unknown argument '$arg' (known opt-in lanes: --webgl, --lz4-slow)" >&2; exit 2 ;;
+    --fast) FAST_LANE=1 ;;
+    *) echo "ci.sh: unknown argument '$arg' (known: --webgl, --lz4-slow, --fast)" >&2; exit 2 ;;
   esac
 done
+
+# Gates skipped by --fast, by id. Deliberately a NAMED list rather than a
+# duration heuristic: a gate that becomes slow should be added here consciously,
+# with the cost written down, not silently dropped because it crossed a timeout.
+FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G8 G8b "
+
+skip_in_fast() {
+  # usage: skip_in_fast <id> ; returns 0 (true) when --fast should skip it
+  [ "$FAST_LANE" -eq 1 ] || return 1
+  case "$FAST_SKIP_IDS" in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
 
 # P3-W0 T7 step 3 — the PERIODIC lane for the exhaustive LZ4 differential.
 #
@@ -481,6 +508,11 @@ run_cargo() {
 # Run one registry gate, interpreting its exit code per classification.
 run_gate() {
   local id="$1" kind="$2"; shift 2
+  if skip_in_fast "$id"; then
+    echo "### gate $id  [SKIPPED by --fast]"
+    SKIPPED_GATES+=("$id")
+    return 0
+  fi
   section "gate $id  [$kind]  ->  $*"
   "$@"; local rc=$?
   if [ "$rc" -eq 0 ]; then
@@ -560,11 +592,24 @@ echo "WARNINGS — BLOCKED (pending contract/tooling) (${#WARNINGS[@]}):";   for
 echo "HARD FAILURES (${#HARD_FAILURES[@]}):"; for x in "${HARD_FAILURES[@]:-}"; do [ -n "$x" ] && echo "  X $x"; done
 
 hr
-if [ "${#HARD_FAILURES[@]}" -eq 0 ]; then
-  echo "CI RESULT: PASS  (all hard-fail checks green; progress gates printed"
-  echo "           progress without failing CI — R5: gates invariant, never weakened)"
-  exit 0
-else
+if [ "${#HARD_FAILURES[@]}" -ne 0 ]; then
   echo "CI RESULT: FAIL  (${#HARD_FAILURES[@]} non-progress check(s) red)" >&2
   exit 1
 fi
+
+if [ "$FAST_LANE" -eq 1 ]; then
+  # ANTI-VACUITY: a subset that prints the full-pass banner is exactly how a
+  # green comes to mean nothing. Name what was skipped and exit on a DISTINCT
+  # code so no caller can mistake this for a release verdict.
+  echo "CI RESULT: FAST-SUBSET GREEN — *** NOT A RELEASE GATE ***"
+  echo "  ${#SKIPPED_GATES[@]} expensive gate(s) were SKIPPED by --fast:"
+  for x in "${SKIPPED_GATES[@]:-}"; do [ -n "$x" ] && echo "    - $x"; done
+  echo "  These are the breadth/regression gates (Miri leak lanes, differential,"
+  echo "  fuzz, perf fences). A lane may ship on this result; INTEGRATION may not."
+  echo "  Run the full suite (no --fast) once per merge batch before declaring green."
+  exit 4
+fi
+
+echo "CI RESULT: PASS  (all hard-fail checks green; progress gates printed"
+echo "           progress without failing CI — R5: gates invariant, never weakened)"
+exit 0
