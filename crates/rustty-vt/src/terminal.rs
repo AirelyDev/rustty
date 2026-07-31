@@ -5276,9 +5276,26 @@ impl Terminal {
         }
 
         // for (attrs[0..i]) |c| {
+        //     // Preserve underline styles. Kind of a hack to special case '4'
+        //     // here but its easier than changing how we do all attributes.
+        //     if (c == '4' and pen.flags.underline != .single) {
+        //         try writer.print(";4:{}", .{@intFromEnum(pen.flags.underline)});
+        //         continue;
+        //     }
+        //
         //     try writer.print(";{c}", .{c});
         // }
+        //
+        // PORT NOTE (oracle cb2fef390, `P3-W1 T6`): the buffer stays
+        // `&mut [u8]` in, `&[u8]` out — nothing here formats through `String`.
         for &c in &attrs[0..i] {
+            // Preserve underline styles. Kind of a hack to special case '4'
+            // here but its easier than changing how we do all attributes.
+            if c == b'4' && pen.flags.underline != sgr::Underline::Single {
+                write_print!(";4:{}", pen.flags.underline as u8);
+                continue;
+            }
+
             write_print!(";{}", c as char);
         }
 
@@ -15837,14 +15854,25 @@ mod tests {
             t.set_attribute(sgr::Attribute::Unset).unwrap();
         }
 
-        {
-            t.set_attribute(sgr::Attribute::Underline(sgr::Underline::Single))
+        // PORT NOTE (oracle cb2fef390, `P3-W1 T6`): the single-underline case
+        // that used to stand alone here is now case 1 of a 5-case table. It is
+        // deliberately RETAINED rather than replaced: without an
+        // `underline == Single` case the test would pass even if the `;4:{n}`
+        // branch were taken unconditionally.
+        for (underline, expected) in [
+            (sgr::Underline::Single, "0;4"),
+            (sgr::Underline::Double, "0;4:2"),
+            (sgr::Underline::Curly, "0;4:3"),
+            (sgr::Underline::Dotted, "0;4:4"),
+            (sgr::Underline::Dashed, "0;4:5"),
+        ] {
+            t.set_attribute(sgr::Attribute::Underline(underline))
                 .unwrap();
             let buf = t.print_attributes(&mut storage).unwrap();
-            assert_eq!(buf, "0;4".as_bytes());
-            t.set_attribute(sgr::Attribute::Unset).unwrap();
+            assert_eq!(buf, expected.as_bytes(), "underline {underline:?}");
         }
 
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
         {
             let buf = t.print_attributes(&mut storage).unwrap();
             assert_eq!(buf, "0".as_bytes());

@@ -2152,14 +2152,38 @@ impl Screen {
         }
 
         if unsafe { (*row).styled() } {
-            for i in 0..cells_len {
-                let cell = unsafe { cells_base.add(i) };
-                if unsafe { (*cell).has_styling() } {
-                    unsafe {
-                        let base = (*page).memory_ptr();
-                        (*page).styles.release(base, (*cell).style_id());
-                    }
+            // Styled cells overwhelmingly come in runs sharing the same
+            // style (e.g. a colored status bar or a highlighted region),
+            // so group them and release each run with a single ref-count
+            // update rather than per cell.
+            //
+            // PORT NOTE (oracle 8d663a76e, `P3-W1 T6`). UB HAZARD: the style
+            // ids are read through the raw `*mut Cell` (`cells_base.add(..)`),
+            // exactly as the previous per-cell loop did, because
+            // `release_multiple` mutates page memory through `*mut Page`. A
+            // live `&mut [Cell]` across that call would be Stacked-Borrows UB
+            // (memory: rust-mut-args-strongly-protected).
+            //
+            // `release_multiple`'s own `ref_count >= n` assertion holds by
+            // construction: every cell in the run held a reference.
+            let mut i: usize = 0;
+            while i < cells_len {
+                let id = unsafe { (*cells_base.add(i)).style_id() };
+                if id == style::DEFAULT_ID {
+                    i += 1;
+                    continue;
                 }
+                let mut j = i + 1;
+                while j < cells_len && unsafe { (*cells_base.add(j)).style_id() } == id {
+                    j += 1;
+                }
+                unsafe {
+                    let base = (*page).memory_ptr();
+                    (*page)
+                        .styles
+                        .release_multiple(base, id, (j - i) as style::Id);
+                }
+                i = j;
             }
 
             // If we have no left/right scroll region we can be sure
@@ -10365,6 +10389,119 @@ mod tests {
         assert!(unsafe { (*page).styles.count() } >= 1);
         assert!(unsafe { (*page).hyperlink_set.count() } >= 1);
         assert!(unsafe { (*page).grapheme_count() } >= 1);
+
+        s.deinit();
+    }
+
+    /// `P3-W1 T6` step 4 (oracle 8d663a76e). A "no panic" test is blind to a
+    /// DOUBLE release, so this asserts the ref count reaches EXACTLY zero, from
+    /// an exactly-known starting value, for both the uniform-run case (one
+    /// `release_multiple` call) and the alternating case (which degrades to one
+    /// call per cell and is where an off-by-one run length would show up).
+    #[test]
+    fn screen_clear_cells_releases_styles_per_run() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 8,
+                rows: 1,
+                max_scrollback: 0,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        // One uniform run of four styled cells.
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"AAAA").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        let row: *mut Row = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+        let cells: *mut [Cell] = unsafe { (*page).get_cells(row) };
+        let base = unsafe { (*page).memory_ptr() };
+
+        let id = unsafe { (*(cells as *mut Cell)).style_id() };
+        assert_ne!(
+            crate::style::DEFAULT_ID,
+            id,
+            "the first cell must be styled"
+        );
+        assert_eq!(
+            4,
+            usize::from(unsafe { (*page).styles.ref_count(base, id) })
+        );
+
+        // Clear exactly the four styled cells.
+        let run: *mut [Cell] = core::ptr::slice_from_raw_parts_mut(cells as *mut Cell, 4);
+        s.clear_cells(page, row, run);
+
+        assert_eq!(
+            0,
+            usize::from(unsafe { (*page).styles.ref_count(base, id) }),
+            "one release_multiple per run must land the ref count on exactly \
+             zero -- not below it (double release) and not above (short run)"
+        );
+
+        s.deinit();
+    }
+
+    /// Companion to the run test: ALTERNATING styles, where every run has
+    /// length one. This is the case an off-by-one in the run scan would break
+    /// while the uniform case still passed.
+    #[test]
+    fn screen_clear_cells_releases_alternating_styles_exactly_once_each() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 8,
+                rows: 1,
+                max_scrollback: 0,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"A").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+        s.set_attribute(crate::sgr::Attribute::Italic).unwrap();
+        s.test_write_string(b"B").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"C").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+
+        let page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        let row: *mut Row = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+        let cells: *mut [Cell] = unsafe { (*page).get_cells(row) };
+        let base = unsafe { (*page).memory_ptr() };
+        let cells_base = cells as *mut Cell;
+
+        let bold_id = unsafe { (*cells_base).style_id() };
+        let italic_id = unsafe { (*cells_base.add(1)).style_id() };
+        assert_ne!(bold_id, italic_id);
+        assert_eq!(bold_id, unsafe { (*cells_base.add(2)).style_id() });
+        assert_eq!(
+            2,
+            usize::from(unsafe { (*page).styles.ref_count(base, bold_id) })
+        );
+        assert_eq!(
+            1,
+            usize::from(unsafe { (*page).styles.ref_count(base, italic_id) })
+        );
+
+        let run: *mut [Cell] = core::ptr::slice_from_raw_parts_mut(cells_base, 3);
+        s.clear_cells(page, row, run);
+
+        assert_eq!(
+            0,
+            usize::from(unsafe { (*page).styles.ref_count(base, bold_id) })
+        );
+        assert_eq!(
+            0,
+            usize::from(unsafe { (*page).styles.ref_count(base, italic_id) })
+        );
 
         s.deinit();
     }
