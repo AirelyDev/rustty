@@ -5252,7 +5252,7 @@ impl Terminal {
                 // SAFETY: stable initialized heap screen; `&mut self` excludes
                 // other aliases.
                 let screen: &mut Screen = unsafe { &mut *screen };
-                screen.kitty_images.image_limits = limits;
+                screen.kitty_images.image_limits = limits.clone();
             }
         }
     }
@@ -5707,7 +5707,9 @@ impl Terminal {
                         // graphics IS enabled in rustty, so the reference's
                         // `build_options.kitty_graphics` arm is the live one).
                         kitty_image_storage_limit: unsafe { (*primary).kitty_images.total_limit },
-                        kitty_image_loading_limits: unsafe { (*primary).kitty_images.image_limits },
+                        kitty_image_loading_limits: unsafe {
+                            (*primary).kitty_images.image_limits.clone()
+                        },
                     },
                 ) {
                     Ok(r) => r,
@@ -6027,7 +6029,7 @@ impl Terminal {
                         unsafe {
                             (
                                 (*primary).kitty_images.total_limit,
-                                (*primary).kitty_images.image_limits,
+                                (*primary).kitty_images.image_limits.clone(),
                             )
                         }
                     } else {

@@ -861,12 +861,13 @@ typedef enum RUSTTY_ENUM_TYPED {
   RUSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE = 16,
 
   /**
-   * Enable or disable Kitty image loading via the temporary file medium.
+   * Enable Kitty image loading via the temporary file medium, restricted to
+   * the provided directory. The string data is copied into the terminal.
    *
-   * A NULL value pointer is a no-op. Has no effect when Kitty graphics
-   * are disabled at build time.
+   * A NULL value pointer disables the temporary file medium. Has no effect
+   * when Kitty graphics are disabled at build time.
    *
-   * Input type: bool*
+   * Input type: RusttyString*
    */
   RUSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE = 17,
 
@@ -1253,12 +1254,13 @@ typedef enum RUSTTY_ENUM_TYPED {
   RUSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_FILE = 27,
 
   /**
-   * Whether the temporary file medium is enabled for Kitty image loading
-   * on the active screen.
+   * The directory allowed for Kitty image loading via the temporary file
+   * medium on the active screen. The string is empty when the medium is
+   * disabled.
    *
    * Returns RUSTTY_NO_VALUE when Kitty graphics are disabled at build time.
    *
-   * Output type: bool *
+   * Output type: RusttyString *
    */
   RUSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE = 28,
 

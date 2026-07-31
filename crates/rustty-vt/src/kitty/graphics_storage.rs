@@ -219,7 +219,9 @@ impl ImageStorage {
     ) -> Result<(), OutOfMemory> {
         // Special case disabling by quickly deleting all
         if limit == 0 {
-            let image_limits = self.image_limits;
+            // PORT NOTE: `Limits` is no longer `Copy` (it owns the temp-file
+            // directory bytes); the save/restore around `deinit` moves instead.
+            let image_limits = core::mem::replace(&mut self.image_limits, Limits::DIRECT);
             self.deinit(alloc, s);
             *self = ImageStorage {
                 image_limits,
