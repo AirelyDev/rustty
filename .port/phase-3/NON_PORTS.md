@@ -275,3 +275,162 @@ this workstream's.
    golden. If the offset algorithm regresses, those fail first. The exact
    divergent pixel is recorded above so a future reader can re-measure it in one
    command rather than rediscovering it.
+
+---
+
+# Area G — `P3-W9` (config / CLI / build / i18n / synthetic)
+
+**READ FIRST — two rows here are OPEN, and this file is otherwise a CLOSED
+record.** `G1` (uucode) and `G2` (vaxis/zf) are `P3-W9 T6` work that was
+**measured and decided but NOT completed**. They are written up with full
+evidence instead of being quietly dropped, but they have **NO OWNER**: `P3-W9`
+closes with this commit and no other workstream claims them. Whoever sequences
+the remaining workstreams must assign them, or `.port/phase-2/DEFERRALS.md` /
+`VERIFICATION_DEBT.md` must carry them with an owner in an open workstream so
+the `G-P2` closure gate can see them. Do not let this paragraph be the only
+thing holding them.
+
+Appended by **`P3-W9` Task 6 and Task 7**. Same 4-criterion basis as above.
+Source of the verdicts: `.port/phase-3/assessments/G-config-build-i18n.md`.
+
+## G1 — `uucode` revision bump (`e8525c0fd` / `f2a7652ab`) — DEFERRED, NOT non-ported
+
+**This row is the ONE open item in this file.** It is recorded here rather than
+silently dropped because `P3-W9 T6 step 2` explicitly sanctions "defer the
+uucode bump with a written reason" as an outcome, and because deferring a
+dependency bump without the reason is how a table goes stale unnoticed.
+
+1. **Upstream.** `build.zig.zon`'s `uucode` moved from
+   `uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9` to
+   `uucode-2826a37a4562284fdacd8fa029d49509cc9bffcd` (hash `ZZjBPlK5…`),
+   **still labelled `0.2.0`**. The API moved `uucode.x.types` -> `uucode.types`
+   and `uucode.x.grapheme` -> `uucode.grapheme`, and
+   `src/build/uucode_config.zig` was rewritten (+203).
+2. **Why not now — measured, not assumed.**
+   * **The UCD source data did not change.** Both tarballs were fetched and
+     diffed (`.port/phase-3/w9-fetch-deps.sh`; `diff -rq <old>/ucd <new>/ucd`):
+     **every `ucd/*.txt` file is byte-identical.** The only difference is a NEW
+     file, `ucd/BidiMirroring.txt` (+636) — a bidi-mirroring property that
+     `crates/rustty-unicode`'s three generated tables do not consume — plus a
+     one-line `ucd/.gitignore` change. So the INPUT to rustty's tables is
+     unchanged: "the version label did not change" is not the evidence here,
+     the data byte-comparison is.
+   * **The DERIVATION logic did move, and that is why this is a deferral and not
+     a non-port.** `src/x/config_x/wcwidth.zig` (−228) was restructured into
+     `src/components.zig` (+2717) and `src/x/grapheme.zig` (−842) into
+     `src/grapheme.zig` (+771). A line-level comparison shows the old wcwidth
+     `compute` body is **not** a verbatim move (60 of its 72 code lines do not
+     appear verbatim in the new file), so byte-identical input does **not** by
+     itself prove byte-identical output.
+   * **The CI-toolchain coupling makes this a two-lane change.**
+     `.github/workflows/ci.yml:69` installs **Zig 0.15.2** specifically as the
+     G4-uni uucode oracle. Verified on this host: with Zig **0.16.0** installed,
+     `bash .port/phase-0/harness/unicode/run_unicode_diff.sh` fails to build the
+     OLD uucode at all —
+     `zig-pkg/uucode-0.2.0-…/build.zig:211:18: error: member function expected 3
+     argument(s), found 2` — while the NEW uucode requires 0.16. The two
+     revisions are **mutually exclusive** under one Zig pin: bumping uucode
+     forces the CI Zig pin to move in the same commit, and the G4-uni lane must
+     be re-proven green under 0.16 before the tables are regenerated.
+3. **What would break if we did it half-way.** Regenerating the three
+   `crates/rustty-unicode/src/generated/*_data.rs` without moving the CI pin
+   leaves CI unable to build the oracle it diffs against, i.e. G4-uni goes RED
+   or (worse) BLOCKED-and-ignored. Moving the pin without regenerating leaves
+   the pin describing a toolchain that cannot build the committed tables'
+   generator. Either half alone is a false green.
+4. **What holds the line.** Nothing currently detects table staleness against
+   the NEW uucode — `crates/rustty-unicode/src/generated/checksum.rs` validates
+   internal consistency, not upstream data, and G4-uni pins the tables to the
+   **old** revision. Stated plainly rather than implied. The discharge recipe,
+   in order:
+   1. bump `.github/workflows/ci.yml:69` to Zig 0.16.0 (matching
+      `build.zig.zon`'s `minimum_zig_version = "0.16.0"` at oracle head);
+   2. update `.port/phase-0/harness/unicode/` to fetch the new uucode tarball
+      and to use `uucode.types` / `uucode.grapheme` (dropping the `x.` prefix);
+   3. run `run_unicode_diff.sh` and **byte-compare** the regenerated
+      `props_data.rs` / `symbols_data.rs` / `grapheme_data.rs` against the
+      committed ones. A non-empty diff is a REAL data change and must be
+      reviewed codepoint-by-codepoint, not blessed.
+
+## G2 — `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 — DEFERRED with a measured delta
+
+Also open, also recorded rather than dropped. `P3-W9 T6 step 1` asks for the
+tarball diff and the port of the deltas; the diff was produced and read, the
+port was **not** completed, and the size is the reason.
+
+1. **Upstream.** Both are ported Zig libraries, not Cargo dependencies:
+   `crates/rustty-vaxis` and `crates/rustty-zf`. Consumers are `rustty-cli`'s
+   `list-themes` / `list-keybinds` / `list-colors`.
+2. **Measured delta** (`.port/phase-3/w9-fetch-deps.sh` +
+   `w9-dep-delta.sh`; per-file numbers reproducible in one command):
+   * **vaxis `src/` = 4,402 diff lines.** Largest: `widgets/TextInput.zig`
+     +316/−19, `vxfw/TextField.zig` +301/−19, `tty.zig` +205/−107,
+     `Vaxis.zig` +205/−91, `queue.zig` +160/−133, `vxfw/App.zig` +110/−44,
+     `widgets/terminal/Command.zig` +86/−42, `Loop.zig` +76/−30.
+   * **zf ported files = 847 diff lines** over `src/zf/{filter,zf,clib}.zig`.
+3. **The four SEMANTIC changes found while reading it** — recorded so the port,
+   when it happens, does not treat this as pure Zig-0.16 churn:
+   * `ctlseqs.zig` +10: three NEW multi-cursor sequences
+     (`secondary_cursors_rgb`, `reset_secondary_cursors`,
+     `show_secondary_cursor`).
+   * `Screen.zig`: `cursor_row`/`cursor_col` collapse into a new
+     `pub const Cursor = struct { row, col }` field plus
+     `cursor_secondary: []Cursor`; `Window.zig` follows at its two write sites.
+   * `Mouse.zig`: `col`/`row` change type **`u16` -> `i16`** (negative
+     coordinates now representable). A silent-truncation hazard if half-ported.
+   * `zf`: `token` -> `needle` throughout, `rankToken` -> `rankNeedle`,
+     `highlightToken` -> `highlightNeedle`, and — the one that is NOT a rename —
+     `RankOptions.to_lower: bool = true` becomes
+     `RankOptions.case_sensitive: bool = true`. The old code passed
+     `!opts.to_lower` as `case_sensitive`, so the **default polarity flips**
+     from case-INsensitive to case-SENSITIVE. Porting the rename without
+     re-checking `rustty-cli`'s `list-themes` call site would silently change
+     the fuzzy picker's matching behaviour.
+   * `unicode.zig` / `gwidth.zig`: `GraphemeIterator.next()` ->
+     `nextCodePoint()` and `res.cp` -> `res.code_point` — this is the **uucode
+     API rename surfacing through vaxis**, so G2 and G1 are coupled: vaxis 0.6.0
+     expects the new uucode.
+4. **What holds the line.** `crates/rustty-vaxis` and `crates/rustty-zf` keep
+   their own ported test suites, which pin the 0.5.1/0.10.3 behaviour. **Stated
+   plainly: for `list-themes` there is effectively no runtime coverage** —
+   `crates/rustty-cli/src/list_themes.rs`'s interactive `Loop` path is
+   `#[ignore]`-on-device (it needs a real `/dev/tty`), so it is exercised by NO
+   CI test and the guard there is compile-time only. Do not read the green
+   `rustty-vaxis`/`rustty-zf` suites as coverage of the CLI integration.
+
+## G3 — `libxev` bump (`e8525c0fd`) — nothing semantic for rustty; the 3 QUIRKs RE-AFFIRMED
+
+1. **Upstream.** `libxev-34fa5087…` -> `libxev-9ce8e8e6…`. `src/` delta is
+   5,353 diff lines, concentrated in `windows.zig` (+677/−113), a NEW
+   `posix.zig` (+694), `backend/kqueue.zig` (+295/−100),
+   `backend/epoll.zig` (+149/−76) — i.e. the Zig-0.16 `std.posix`/`std.Io`
+   migration and the Windows backend, none of which rustty ports differently.
+2. **Why no port action.** `crates/rustty-xev` is a **D6 Zig-port-defer**
+   (memory `integration-tier-decisions`); it is not tracking libxev revisions.
+3. **The `P3-W0 T5` re-check, executed against the NEW revision** (the point of
+   this row — `P3-W0 T5` deferred exactly this to `P3-W9 T6 step 3`):
+   * `crates/rustty-xev/src/epoll.rs:1158` and `:1823`, and
+     `io_uring.rs:1645`/`:2359` — the "sendmsg with buffer is unimplemented and
+     panics" quirk. **Still present upstream:**
+     `grep -rn 'TODO: sendmsg with buffer'` in the new tarball hits
+     `backend/io_uring.zig:494` and `backend/epoll.zig:750` (was `:489`/`:706`).
+     Re-affirmed, no change.
+   * `crates/rustty-xev/src/dynamic.rs:142` — the doc says "defaults to the
+     FIRST candidate backend", the code takes the LAST. **Still present
+     upstream:** the new `dynamic.zig:28` still reads "defaults to the first
+     candidate backend" while `:91` is
+     `pub var backend: Backend = subset(bes[bes.len - 1]);`. Re-affirmed.
+   * `crates/rustty-xev/src/io_uring.rs:7393` — the reference test's redundant
+     second `loop.add(&c_read_cancel)` after `loop.cancel` already added it.
+     **Still present upstream:** new `backend/io_uring.zig:1786`. Re-affirmed.
+4. **What holds the line.** The three PORT NOTEs themselves, now carrying the
+   re-check; and `crates/rustty-xev`'s ported test suite, which encodes the
+   quirky behaviour (the double-cancel test asserts success twice).
+
+## G4 — `z2d` 0.10.0 -> 0.12.1 — owned elsewhere, cross-reference only
+
+`P3-W9 T6 step 4` is explicit that this is **`P3-W8 T3`**'s, and it landed
+there: `2035be3` "z2d/font: native `Path::offset` replaces the two-surface
+inner-stroke mask; drawE0B5 forces perpendicular butt caps; 6 goldens regolded
+(oracle d0e72a3ab)". Recorded here only so a sweep of `build.zig.zon` does not
+re-open it.
