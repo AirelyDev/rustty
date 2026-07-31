@@ -4854,4 +4854,155 @@ mod tests {
             "wakeup must break the blocking iteration"
         );
     }
+
+    /// Run `f` with the process's fd 2 redirected into a temp file, and return
+    /// everything written there as RAW BYTES (never a lossy `String` — the thing
+    /// under test is a byte dump).
+    ///
+    /// `eprintln!` reaches fd 2 ONLY when libtest's per-thread output capture is
+    /// off, i.e. under `--nocapture`; with capture on, std diverts the write to
+    /// libtest's sink and this returns empty. The caller treats an empty capture
+    /// as a HARD FAILURE rather than a pass, so a capture-on run can never make
+    /// the assertion below vacuous.
+    fn capture_stderr<F: FnOnce()>(f: F) -> Vec<u8> {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+
+        let path = std::env::temp_dir().join(format!(
+            "rustty-v14-css-{}-{:?}.log",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let file = std::fs::File::create(&path).expect("create the stderr sink");
+
+        // SAFETY: plain fd plumbing on the current process. `saved` is a fresh
+        // duplicate of fd 2 that we own and restore/close below; `file`'s fd is
+        // valid for the whole scope.
+        let saved = unsafe { libc::dup(2) };
+        assert!(saved >= 0, "dup(2) failed");
+        assert!(
+            unsafe { libc::dup2(file.as_raw_fd(), 2) } >= 0,
+            "dup2 onto fd 2 failed"
+        );
+
+        f();
+
+        let _ = std::io::stderr().flush();
+        unsafe {
+            libc::dup2(saved, 2);
+            libc::close(saved);
+        }
+        drop(file);
+
+        let out = std::fs::read(&path).expect("read the stderr sink");
+        let _ = std::fs::remove_file(&path);
+        out
+    }
+
+    /// V14 (`.port/phase-2/VERIFICATION_DEBT.md`): drive
+    /// [`imp::Application::signal_css_parsing_error`] ITSELF, not just the
+    /// `CssSection::bytes()` binding it calls.
+    ///
+    /// PORTS the acceptance surface of `application.zig:1261-1274`: on a >= 4.16
+    /// build box the handler logs the OFFENDING CSS SOURCE BYTES after the
+    /// location/domain/code/message; on the 4.14 floor the `if (comptime
+    /// gtk_version.atLeast(4, 16, 0))` arm folds away and the log carries only the
+    /// fallback line (`:1275-1280`).
+    ///
+    /// This is a LIB test because `signal_css_parsing_error` is `pub(super)` and
+    /// therefore unreachable from `tests/gtk_css_parse_error.rs`, which can only
+    /// prove the binding.
+    ///
+    /// The assertion is a DIFFERENTIAL, not a one-sided claim: the expected
+    /// presence of the bytes is `cfg!(feature = "gtk-v4_16")`, so the same test
+    /// body asserts PRESENT under `--features gtk,gtk-v4_16` and ABSENT under
+    /// `--features gtk`. Either arm fails if the handler's gate does not match its
+    /// feature.
+    ///
+    /// G-GTKINIT: this reuses the lib-test binary's ONE `gtk4::init()` the same way
+    /// every other headed test in this module does (soft-skip when GTK is already
+    /// bound to a different libtest thread) — it does not add a new init to a
+    /// `tests/` binary.
+    #[test]
+    #[ignore = "headed GTK; needs --nocapture (fd-2 capture). run: \
+                cargo test -p rustty-apprt --features gtk[,gtk-v4_16] --lib \
+                css_parsing_error -- --ignored --nocapture"]
+    fn signal_css_parsing_error_byte_dump_follows_the_feature_ceiling() {
+        if gtk4::init().is_err() {
+            // Another headed test in this binary already bound GTK to its thread.
+            // Loud, so a filtered run can never be mistaken for evidence.
+            println!(
+                "V14: SKIPPED — GTK is bound to another test thread; \
+                 re-run with `--lib css_parsing_error`"
+            );
+            return;
+        }
+        let _ = libadwaita::init();
+
+        // The runtime half of the two-part gate: with the feature on but a < 4.16
+        // shared library the arm self-disables and there is nothing to prove.
+        #[cfg(feature = "gtk-v4_16")]
+        assert!(
+            crate::gtk::gtk_version::at_least(4, 16, 0),
+            "this KAT needs a >= 4.16 GTK runtime; the byte-dump arm self-disables below it"
+        );
+
+        const BAD_CSS: &str = "window { color: ###notacolor; }";
+
+        let app = build_test_app(std::ptr::null_mut());
+
+        // The production wiring shape (`:1201-1207` / `Application::new`): a real
+        // `CssProvider::parsing-error` emission, forwarded straight into the
+        // handler under test with the section and error GTK itself produced.
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let provider = gtk4::CssProvider::new();
+        provider.connect_parsing_error(glib::clone!(
+            #[weak]
+            app,
+            #[strong]
+            calls,
+            move |_provider, section, error| {
+                calls.set(calls.get() + 1);
+                app.imp().signal_css_parsing_error(section, error);
+            }
+        ));
+
+        let logged = capture_stderr(|| provider.load_from_string(BAD_CSS));
+
+        assert!(
+            calls.get() > 0,
+            "a malformed stylesheet must raise parsing-error and reach the handler"
+        );
+        assert!(
+            !logged.is_empty(),
+            "captured NOTHING on fd 2 — run this test with `--nocapture`, or libtest \
+             swallows the handler's eprintln! and the assertion below would be vacuous"
+        );
+
+        println!(
+            "V14 EVIDENCE (gtk-v4_16 = {}): {}",
+            cfg!(feature = "gtk-v4_16"),
+            String::from_utf8_lossy(&logged).trim_end()
+        );
+
+        // Both arms log the fallback fields (`:1275-1280`).
+        let head = b"warn(gtk): css parsing failed at";
+        assert!(
+            logged.windows(head.len()).any(|w| w == head),
+            "the handler must log the fallback line in BOTH arms; got {:?}",
+            String::from_utf8_lossy(&logged)
+        );
+
+        // The differential: the raw source bytes appear IFF the ceiling is raised.
+        let needle = BAD_CSS.as_bytes();
+        let has_bytes = logged.windows(needle.len()).any(|w| w == needle);
+        assert_eq!(
+            has_bytes,
+            cfg!(feature = "gtk-v4_16"),
+            "the `application.zig:1261-1274` byte dump must be present IFF \
+             `gtk-v4_16` is on (feature on = {}); logged: {:?}",
+            cfg!(feature = "gtk-v4_16"),
+            String::from_utf8_lossy(&logged)
+        );
+    }
 }
