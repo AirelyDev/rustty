@@ -6993,6 +6993,38 @@ ordering and therefore the same latent defect. (The residual cure for those arms
 is tracked as an open deferral — see "`threadEnter` error arms should drain the
 pty master before `stop()`".)
 
+**[P3-W7 T7, 2026-07-30] The two-stage read pipeline WIDENS this paragraph — the
+divergence's justification gets STRONGER, not weaker.** Upstream `2f0e6659d` +
+`bb0ac4c72` (ported by WS10 T20, `a788346`) make the read thread return early in
+places that did not exist at the pin. Re-checked against the landed code, there
+are **two** such arms and they are NOT symmetric:
+
+1. **`setNonblock(fd)` failure — a REAL new no-reader window.**
+   `crates/rustty-termio/src/exec.rs` `ReadThread::threadMainPosix` does
+   `if !Self::setNonblock(fd) { return; }` **before** the gather thread is
+   spawned and before any byte is read. `threadEnter` has ALREADY returned
+   success at that point, so this is not a `threadEnter` error arm at all — it
+   is a *new class* of the same bug: a forked child with pending output on its
+   pty slave and no reader on the master, with `threadExit`'s `stop()` still to
+   come. That is exactly the `?Es` wedging condition, and the bounded `killPid`
+   is what stands between it and an unclosable window. Narrow (it needs
+   `fcntl(F_SETFL)` to fail on a valid pty master) but real, and it did not
+   exist before the pipeline.
+2. **`io-gather` spawn failure — NOT a new window.** Upstream treats a spawn
+   failure as fatal, and `std::thread::scope` has no fallible spawn, so rustty's
+   `.expect("spawn io-gather")` **aborts the process** rather than returning
+   from the read thread. A dead process cannot have an unclosable window, so
+   this arm contributes no reachability. Recorded because area E §5.1 predicted
+   two arms and only one of them survives contact with the ported code — a
+   ledger that transcribed the prediction instead of checking would be wrong
+   here.
+
+**Do NOT let a mechanical rebase drop the deadline.** Upstream's loop is *still*
+`while (true)` at `6ad1fe7d8` (re-read at upstream head), so the divergence is
+unchanged in kind; `KILL_ABANDON` and the `elapsed >= KILL_ABANDON` check stay
+exactly where they are. Upstream now passes `null` for the status pointer in
+`killPid` (it never read the status) — cosmetic, no action.
+
 **PRECISE GUARANTEE — scope of the behavior change.** An earlier revision of
 this entry claimed "every healthy teardown is observationally identical to the
 oracle". That over-claimed. The guarantee that actually holds is:
@@ -7120,14 +7152,32 @@ made, and a strictly weaker one:**
 child). Deliberately NOT an in-suite reproduction of the wedge — see the `killPid`
 entry above for why the previous such test was deleted.
 
-**Known residual, owned by Phase 3 area E (E1), not by this entry.** Upstream's
-read-pipeline commits (`2f0e6659d`, `bb0ac4c72`) add TWO NEW no-reader windows that
-are *not* `threadEnter` arms: `setNonblock(fd)` failure and `io-gather` spawn
-failure abort the reader from INSIDE the read thread, after `threadEnter` has
-already returned success, so `threadExit`'s `stop()` then runs into the same
-wedging condition. When E1 is ported, those two arms need the same drain (and the
-bounded `killPid` entry's "Reachability in PRODUCTION" paragraph needs them added).
-See area E §5.1/§5.3.
+**Known residual — RE-VERIFIED against the LANDED pipeline [P3-W7 T7,
+2026-07-30]; still OPEN, narrowed from two arms to one.** The prediction was
+that upstream's read-pipeline commits (`2f0e6659d`, `bb0ac4c72`) add TWO new
+no-reader windows that are *not* `threadEnter` arms. The pipeline has since
+landed (WS10 T20, `a788346`), so the prediction is now checkable against code
+rather than against a diff, and it is **half right**:
+
+* **`setNonblock(fd)` failure — CONFIRMED, and OPEN.**
+  `crates/rustty-termio/src/exec.rs` `ReadThread::threadMainPosix` does
+  `if !Self::setNonblock(fd) { return; }` before the gather thread exists and
+  before any byte is read, with `threadEnter` already returned success. It does
+  **not** call `drain_pty_master_once`. This is a *new class* of the same
+  defect this entry describes — same wedging condition, different arm — and it
+  needs the same drain. **Owner: whichever workstream next touches
+  `ReadThread::threadMainPosix`;** P3-W7 records it rather than fixing it
+  because the fix belongs with the pipeline's owner and is a behaviour change
+  on a path this workstream has no test for.
+* **`io-gather` spawn failure — REFUTED.** `std::thread::scope` has no fallible
+  spawn, so rustty's `.expect("spawn io-gather")` aborts the process instead of
+  returning from the read thread. A dead process has no unclosable window, so
+  this arm adds no reachability at all. Recorded explicitly: a ledger that
+  transcribed the prediction instead of re-checking it would have carried a
+  phantom arm forever.
+
+The bounded `killPid` entry's "Production reachability" paragraph has been
+updated with both findings. See area E §5.1/§5.3 for the original prediction.
 
 ---
 
