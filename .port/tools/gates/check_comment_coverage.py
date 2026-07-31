@@ -140,8 +140,45 @@ def run(args):
     # (rustty-vt maps to 94 reference files, mostly still stubs), a whole-crate run is
     # both slow and meaninglessly RED. --ref-files/--port-glob restrict the comparison
     # to one module (e.g. PageList.zig <-> pagelist/*.rs) — same logic, scoped inputs.
-    scope_ref = [p.strip() for p in args.ref_files.split(",") if p.strip()] if getattr(args, "ref_files", None) else None
+    #
+    # VACUITY FIX (deferral re-audit, 2026-07-31). --ref-files used to be passed
+    # to comment_bodies() verbatim, so a path relative to the oracle root (the
+    # natural spelling, e.g. `renderer/Thread.zig`) never resolved; comment_bodies
+    # swallows the open() error, the gate found ZERO reference sentences and
+    # printed "distinctive ref comments=0 missing=0 ... GREEN", exit 0. A
+    # nonexistent file did the same. That is precisely the "full coverage against
+    # nothing" spoof hole this module's GHOSTTY_SRC note says it refuses to have,
+    # reintroduced through the scope override. Relative entries now resolve
+    # against GHOSTTY_SRC, and a scope file that does not exist is BLOCKED (2),
+    # never a green.
+    scope_ref = None
+    if getattr(args, "ref_files", None):
+        scope_ref = []
+        for p in args.ref_files.split(","):
+            p = p.strip()
+            if not p:
+                continue
+            full = p if os.path.isabs(p) else os.path.join(GHOSTTY_SRC, p)
+            if not os.path.isfile(full):
+                print(
+                    f"BLOCKED: --ref-files entry does not exist: {p!r} "
+                    f"(resolved to {full!r}). A missing scope file would yield a "
+                    f"vacuous GREEN, so this is a hard error.",
+                    file=sys.stderr,
+                )
+                return 2
+            scope_ref.append(full)
+        if not scope_ref:
+            print("BLOCKED: --ref-files was given but names no files.", file=sys.stderr)
+            return 2
     scope_port = sorted(_glob.glob(args.port_glob, recursive=True)) if getattr(args, "port_glob", None) else None
+    if getattr(args, "port_glob", None) and not scope_port:
+        print(
+            f"BLOCKED: --port-glob {args.port_glob!r} matched no files; every "
+            f"reference comment would report MISSING against an empty port side.",
+            file=sys.stderr,
+        )
+        return 2
 
     overall_red = 0
     for crate in crates:

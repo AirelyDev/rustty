@@ -6639,7 +6639,7 @@ mod tests {
     // has no field defaults, so this helper supplies them verbatim, mirroring the
     // reference `Options` declaration. `colors = .default` expands to
     // `Colors{ background/foreground/cursor = .unset, palette = .default }`
-    // (the still-`todo!()` `Colors::default()` inlined here for tests only).
+    // (`Colors::default()` inlined here for tests only).
     fn opts(cols: size::CellCountInt, rows: size::CellCountInt) -> Options {
         Options {
             cols,

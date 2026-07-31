@@ -111,9 +111,15 @@ impl Backend {
             &[Backend::Iocp]
         }
         // PORT NOTE: `.wasi => &.{.wasi_poll}` — the single-candidate wasi arm
-        // (mirrors the macOS single-candidate shape; the WasiPoll BODY is out of scope
-        // by platform — see `lib.rs`'s `unsupported_target_seam` and DEFERRALS.md's
-        // `# Justified R1 Divergences`).
+        // (mirrors the macOS single-candidate shape).
+        //
+        // STALE TEXT CORRECTED (deferral re-audit, 2026-07-31): this note used to
+        // say "the WasiPoll BODY is out of scope by platform — see `lib.rs`'s
+        // `unsupported_target_seam`". Both halves were wrong: the claim was
+        // RETRACTED in DEFERRALS.md (the body IS ported, `wasi_poll.rs` +
+        // `wasi_watcher.rs`), and `unsupported_target_seam` no longer exists in
+        // `lib.rs` (the surviving seam is `no_backend_seam`, which covers only
+        // freestanding wasm — a target libxev itself declares no backend for).
         // WS14 T6: same cfg widening as `default()` above.
         #[cfg(all(target_family = "wasm", not(target_os = "emscripten")))]
         {

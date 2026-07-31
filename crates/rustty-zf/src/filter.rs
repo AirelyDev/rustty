@@ -4,16 +4,24 @@
 //! `IndexIterator`, `hasSeparator`, `PathIterator`, `segmentLen`, `rankToken`,
 //! `FixedArrayList`, `highlightToken`, `isStartOfWord`, `ScanResult`, `scanToEnd`.
 //!
-//! `std.fs.path.{sep,basenamePosix}` are inlined here (pure leaf ⇒ no std shim);
-//! the port target is macOS/Linux ⇒ `sep = '/'`. Windows `'\\'` is out of scope
-//! (a faithful simplification — zf itself uses the native `sep`, and the theme
-//! picker only ever sees POSIX-style resource paths on the supported targets).
+//! `std.fs.path.{sep,basenamePosix}` are inlined here (pure leaf ⇒ no std shim).
+//!
+//! PORT NOTE (deferral re-audit, 2026-07-31): `SEP` used to be hardcoded to
+//! `b'/'` with the note "Windows `'\\'` is out of scope". That was a real
+//! behavioural divergence on a target the reference supports — upstream zf uses
+//! the comptime-native `const sep = std.fs.path.sep` (`zf/filter.zig:4`), which
+//! is `'\\'` on Windows, and it feeds `hasSeparator`/`PathIterator`/
+//! `isStartOfWord`, so a Windows build scored path segments wrongly. `SEP` is
+//! now target-native, matching the reference exactly.
 
 // const std = @import("std");
 // const testing = std.testing;
 
 // const sep = std.fs.path.sep;
+#[cfg(not(windows))]
 pub const SEP: u8 = b'/';
+#[cfg(windows)]
+pub const SEP: u8 = b'\\';
 
 /// `std.fs.path.basenamePosix` — the trailing path component (no trailing slashes).
 /// `basename("a/path/to/file") = "file"`, `basename("s/") = "s"`,

@@ -3721,16 +3721,25 @@ mod tests {
     //   // Read
     //   // Wait for the send/receive
     //
-    // HONEST-SKIP CONTRACT (VALIDATION_REPORT §3e; R5 forbids an #[ignore] and the
-    // Zap pool + `xev.File` watcher are their own chunk, not portable here): the
-    // marker const below is flipped to `true` by the ThreadPool-body chunk (the
-    // `TMUX_DCS_WIRED` precedent), and while it is `false` the test body FAILS
-    // LOUDLY unless the deferral is still tracked in the DEFERRALS ledger — the
-    // skip can never silently outlive its ledger entry.
-    /// Flipped to `true` by the ThreadPool work-stealing body chunk (§1/§6),
-    /// which must then replace the ledger-tracking arm with the live reference
-    /// body above.
-    const THREAD_POOL_BODY_PORTED: bool = false;
+    // HONEST-SKIP CONTRACT (VALIDATION_REPORT §3e; R5 forbids an #[ignore]): the
+    // marker const below is flipped to `true` by the chunk that lands the real
+    // blocker (the `TMUX_DCS_WIRED` precedent), and while it is `false` the test
+    // body FAILS LOUDLY unless the deferral is still tracked in the DEFERRALS
+    // ledger — the skip can never silently outlive its ledger entry.
+    //
+    // MARKER CORRECTED (deferral re-audit, 2026-07-31): this const was named
+    // `THREAD_POOL_BODY_PORTED` and its prose blamed "the Zap pool + `xev.File`
+    // watcher". The Zap work-stealing pool HAS since landed in full
+    // (`crates/rustty-xev/src/thread_pool.rs`, 0 `unimplemented!()`), so the old
+    // name asserted a blocker that no longer exists and would have read as
+    // "pool unported" to anyone grepping. The SOLE remaining blocker is the
+    // macOS `xev.File` watcher, which kqueue never instantiates (Linux ports
+    // `File`/`TCP`/`UDP`; macOS does not) — this test cannot open a file
+    // watcher to drive IO through the pool.
+    /// Flipped to `true` by the chunk that instantiates the macOS `xev.File`
+    /// watcher, which must then replace the ledger-tracking arm with the live
+    /// reference body above.
+    const MACOS_FILE_WATCHER_PORTED: bool = false;
 
     #[test]
     #[cfg_attr(
@@ -3738,26 +3747,28 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
     )]
     fn kqueue_file_io_on_thread_pool() {
-        if !THREAD_POOL_BODY_PORTED {
-            // Deferred: the Zap work-stealing ThreadPool body (§1/§6). The type
-            // surface (`ThreadPool.init/deinit/shutdown/schedule`,
-            // `Loop.init(.{.thread_pool})`) is ported; the live thread-pool IO
-            // path lands with the pool body. Assert the deferral is still
-            // ledgered so this skip stays visible (compile-time embed: a removed
-            // ledger entry fails this test on the next build).
+        if !MACOS_FILE_WATCHER_PORTED {
+            // Deferred: the macOS `xev.File` watcher. The Zap work-stealing pool
+            // itself IS ported (`thread_pool.rs`), and so are
+            // `ThreadPool.init/deinit/shutdown/schedule` +
+            // `Loop.init(.{.thread_pool})`; what is missing is the macOS
+            // `File`/`TCP`/`UDP` watcher instantiation this test needs to drive
+            // IO through the pool. Assert the deferral is still ledgered so this
+            // skip stays visible (compile-time embed: a removed ledger entry
+            // fails this test on the next build).
             let ledger = include_str!("../../../.port/phase-2/DEFERRALS.md");
             assert!(
-                ledger.contains("`ThreadPool.zig` work-stealing BODY")
+                ledger.contains("macOS `xev.File`/`TCP`/`UDP` watcher surface")
                     && ledger.contains("file IO on thread pool"),
-                "the ThreadPool-body deferral vanished from DEFERRALS.md but \
-                 `kqueue_file_io_on_thread_pool` is still a skip-stub: port the \
-                 reference body (and flip THREAD_POOL_BODY_PORTED) or restore \
-                 the ledger entry"
+                "the macOS `xev.File` watcher deferral vanished from \
+                 DEFERRALS.md but `kqueue_file_io_on_thread_pool` is still a \
+                 skip-stub: port the watcher (and flip \
+                 MACOS_FILE_WATCHER_PORTED) or restore the ledger entry"
             );
             return;
         }
         unreachable!(
-            "THREAD_POOL_BODY_PORTED flipped without porting the reference \
+            "MACOS_FILE_WATCHER_PORTED flipped without porting the reference \
              `kqueue: file IO on thread pool` body into this test"
         );
     }

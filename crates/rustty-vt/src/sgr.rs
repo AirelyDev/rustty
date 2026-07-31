@@ -26,44 +26,13 @@
 use crate::color;
 use rustty_util::quirks::inlineAssert as assert;
 
-/// DEFERRED SEAM: `Parser.Action.CSI.SepList == std.StaticBitSet(MAX_PARAMS)`.
-/// MAX_PARAMS is 24 in the reference Parser.
-// PORT NOTE: minimal fixed-size bitset standing in for the not-yet-ported
-// Parser's SepList. Adds no reference logic; only the `initEmpty`/`set`/`isSet`
-// operations sgr depends on.
-const MAX_PARAMS: usize = 24;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SepList {
-    bits: u32,
-}
-
-impl SepList {
-    /// `initEmpty`
-    pub const fn init_empty() -> SepList {
-        SepList { bits: 0 }
-    }
-
-    /// `set`
-    pub fn set(&mut self, idx: usize) {
-        debug_assert!(idx < MAX_PARAMS);
-        self.bits |= 1u32 << idx;
-    }
-
-    /// `isSet`
-    pub fn is_set(&self, idx: usize) -> bool {
-        if idx >= MAX_PARAMS {
-            return false;
-        }
-        (self.bits >> idx) & 1 == 1
-    }
-}
-
-impl Default for SepList {
-    fn default() -> Self {
-        SepList::init_empty()
-    }
-}
+// PORT NOTE: `sgr.zig:8` is `const SepList = @import("Parser.zig").Action.CSI.SepList;`
+// — the reference has exactly ONE `SepList` type, owned by `Parser`. The local
+// bitset that stood here was a vt-sub-batch seam for the era when `Parser` was
+// not yet ported; `Parser` has since landed, so this re-export restores the
+// reference's single-type structure (R1). `parser::SepList` is the same
+// `StaticBitSet(MAX_PARAMS)` projection with `MAX_PARAMS == 24`.
+pub use crate::parser::SepList;
 
 /// C: RusttySgrUnderline (R2) — checked by the A5 enum-discriminant arm.
 /// Underline style (sub-parameter of SGR 4).
