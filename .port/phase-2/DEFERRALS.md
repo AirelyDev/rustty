@@ -6486,6 +6486,24 @@ later. Each records what diverges, why fidelity was overruled, and how the
 divergence is bounded. Anything here must be a conscious decision with a
 rationale — never an accident.
 
+**[P3-W7 T8, 2026-07-30] Phase 3 area E's deliberate NON-PORTS live in
+[`.port/phase-3/NON_PORTS.md`](../phase-3/NON_PORTS.md), each with the same
+4-criterion basis this section requires.** They are recorded there rather than
+inline because they are decisions about the *upstream resync range*, not about
+the pinned baseline this file otherwise covers, and because keeping them
+together is what stops a future mechanical sweep of the range diff from
+"discovering" them and porting them by reflex. Nothing in that file is open
+work; it needs no owner. Covered: `quirks_memset` (`E34`, with the
+perf-baseline measurement hazard), `os/hostname.zig`'s `isValid` deletion
+(`E17` — **keep rustty's**, Rust std has no RFC 1123 validator),
+`os/windows.zig`'s rewrite (`E25` — already at the destination shape),
+`os/mach.zig`'s `next_mmap_addr_hint` (`E24`), `os/flatpak.zig`'s
+`@cImport`→`gio_c` (`E26`), `main_ghostty.zig`'s iOS `allow_stack_tracing`
+(`E36`), `main.zig`'s `std.testing.log_level` (`E35`), and `tripwire.zig`
+(`E38` — doc comment only; the `cfg!(debug_assertions)` equivalence needs no
+rebase). Plus two upstream BUGS that must not be reproduced: the `os/main.zig`
+doc typo (`E28`) and `pty.zig`'s `@tagName(posix.errno(-1))` (`E32`).
+
 ## ~~libxev `iocp` (Windows) + `wasi_poll` (WASI/wasm) backends — OUT OF SCOPE BY PLATFORM~~ — **RETRACTED. THE BACKENDS ARE PORTED.**
 
 **[RETRACTED AND REPLACED — WS20, 2026-07-30.]** The entry that stood here was
