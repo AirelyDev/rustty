@@ -191,4 +191,64 @@ mod tests {
             rest = &after[st + 2..];
         }
     }
+
+    /// RUSTTY-SIDE (`P3-W9 T4` step 4): every emitted sequence must actually
+    /// PARSE as a Kitty graphics APC command.
+    ///
+    /// Why this exists on top of `kitty_is_deterministic_for_a_fixed_seed`: that
+    /// test checks the payload's SHAPE (base64 alphabet, length a multiple of
+    /// four) and the `\x1b_G…\x1b\\` envelope by string matching. A generator
+    /// that emitted a structurally malformed control block — a bad key, a
+    /// missing `;`, an out-of-range `i=` — would still pass every one of those
+    /// assertions while silently invalidating every benchmark built on this
+    /// corpus, because the benchmark's parser would reject the input and measure
+    /// the reject path instead of the parse path. This runs the real
+    /// `rustty_vt::apc::Handler` and requires a `Command::Kitty` out the other
+    /// end.
+    ///
+    /// The handler is fed the APC BODY, i.e. what the VT parser hands it after
+    /// `\x1b_` and before `\x1b\\` — so the `G` identifier is the first byte.
+    #[test]
+    fn every_generated_sequence_parses_as_a_kitty_apc_command() {
+        use allocator_api2::alloc::Global;
+        use rustty_vt::apc::{Command, Handler};
+
+        let prng = DefaultPrng::init(7);
+        let mut buf = [0u8; 8192];
+        let mut writer = FixedWriter::fixed(&mut buf);
+        let mut v = Kitty::new(prng.random());
+        // Several sequences, so a per-draw defect cannot hide behind one sample.
+        const N: usize = 8;
+        for _ in 0..N {
+            v.next(&mut writer, 8192 / N).unwrap();
+        }
+        let data = writer.buffered().to_vec();
+
+        let mut parsed = 0usize;
+        let mut rest: &[u8] = &data;
+        while !rest.is_empty() {
+            assert!(rest.starts_with(b"\x1b_"), "not an APC start");
+            let end = rest
+                .windows(2)
+                .position(|w| w == b"\x1b\\")
+                .expect("ST terminator");
+            // The body is everything between `\x1b_` and `\x1b\\`.
+            let body = &rest[2..end];
+
+            let mut h: Handler = Handler::default();
+            h.start();
+            h.feed_slice(Global, body);
+            match h.end(Global) {
+                Some(Command::Kitty(_)) => parsed += 1,
+                Some(Command::Glyph(_)) => panic!("parsed as the GLYPH protocol"),
+                None => panic!(
+                    "the APC handler REJECTED a generated sequence: {:?}",
+                    String::from_utf8_lossy(&body[..body.len().min(48)])
+                ),
+            }
+
+            rest = &rest[end + 2..];
+        }
+        assert_eq!(parsed, N, "expected {N} parsed commands");
+    }
 }

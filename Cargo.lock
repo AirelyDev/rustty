@@ -1573,6 +1573,7 @@ dependencies = [
 name = "rustty-synthetic"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
  "rustty-args",
  "rustty-os",
  "rustty-vt",
