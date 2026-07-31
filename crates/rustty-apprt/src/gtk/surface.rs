@@ -25,7 +25,6 @@
 //! .surface = self }`) and never rewritten.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 
 use glib::prelude::*;

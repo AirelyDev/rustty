@@ -76,6 +76,9 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use core::ffi::{c_char, c_int, c_void};
+// P3-W7 T2/T4: `put`/`getv`/`removev`/`hasv` on the byte-typed `EnvMap`. Only
+// `default_termio_env`'s Darwin arm calls them, so the import carries the same cfg.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use rustty_global::EnvMapExt as _;
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, CString};

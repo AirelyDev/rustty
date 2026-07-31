@@ -534,7 +534,7 @@ impl Window {
         env: &mut rustty_global::EnvMap,
     ) -> Result<(), WinprotoError> {
         // `bufPrint("{}", .{xid})` — DECIMAL (`x11.zig:322-326`).
-        env.put(b"WINDOWID", self.x11_surface.xid().to_string());
+        env.put(b"WINDOWID", self.x11_surface.xid().to_string().as_bytes());
         Ok(())
     }
 
