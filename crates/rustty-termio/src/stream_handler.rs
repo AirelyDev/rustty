@@ -2529,6 +2529,25 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     }
 
     // .print_slice => { @branchHint(.likely); try self.terminal.printSlice(value.cps); },
+    //
+    // VERIFICATION NOTE (P3-W7 T6, area-E `E10`): the plan's proposed control
+    // for this arm was "assert a multi-codepoint run through `print_slice`
+    // produces the SAME SCREEN as the same bytes fed one at a time". At THIS
+    // level that assertion is **vacuous by construction** and must not be
+    // written: `Handler::print_slice`'s trait default is *defined* as fanning
+    // the run back out to `print` (see `rustty_vt::stream`), so deleting this
+    // override leaves the resulting screen byte-identical — the test would pass
+    // either way. The arm's presence is a throughput property, not an
+    // observable-behaviour one, which is why upstream ships it with no test.
+    //
+    // The behavioural equivalence IS pinned, one layer down where it is
+    // falsifiable:
+    //   * `rustty_vt::terminal::tests::terminal_print_slice_differential_fuzz_vs_print`
+    //     — randomized differential, `print` vs `print_slice`, asserted after
+    //     EVERY op;
+    //   * `rustty_vt::stream::tests::stream_print_slice_matches_per_byte` —
+    //     the ground-state dispatch path, driven through `next_slice_capped`
+    //     so it is not silently skipped in a non-SIMD build.
     fn print_slice(&mut self, cps: &[u32]) {
         let r = self.term().print_slice(cps).map_err(|_| crate::Error);
         self.vt(r);
