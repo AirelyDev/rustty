@@ -15,14 +15,37 @@
 //!
 //! The port's production std_size is **409600 bytes (= 25 x 16 KiB)**. The
 //! difference decomposes EXACTLY into three sections (all other sections are
-//! byte-identical — rows 1720, cells 369800, grapheme_map 10776,
-//! hyperlink_set 152, hyperlink_map 916):
+//! byte-identical — rows 1720, cells 369800, grapheme_map 10768,
+//! hyperlink_set 152, hyperlink_map 912):
 //!
-//! NOTE (2026-07-30): grapheme_map moved 10768 -> 10776 and hyperlink_map
-//! 464 -> 916 when WS10 T11 ported `7e14347c1` (hash-map `Header.available`)
-//! and gave `hyperlink::Map` the reference's 80% max_load_percentage. Both are
-//! the reference's own layout moving; see the per-assert notes below, including
-//! what this golden does and does NOT prove.
+//! NOTE (2026-07-30, `P3-W2` T2/T3): the two hash-map-backed sections moved
+//! twice today, in opposite directions, and both moves are the REFERENCE's own
+//! layout — not port drift:
+//!
+//! 1. WS10 T11 ported `7e14347c1`, which added `available: Size` to the
+//!    hash-map `Header` and gave `hyperlink::Map` the 80% max_load_percentage:
+//!    grapheme_map 10768 -> 10776 (+8), hyperlink_map 464 -> 916 (+452).
+//! 2. `P3-W2` T3 ported `fedd42e8d`, which replaces tombstones with
+//!    backward-shift deletion and therefore **deletes `Header.available`
+//!    again**: grapheme_map 10776 -> 10768 (-8), hyperlink_map 916 -> 912 (-4).
+//!
+//! The two deltas differ because the two maps have differently-aligned headers.
+//! `hyperlink::Map` is `AutoOffsetHashMap<Offset<Cell>, Id, 80>`: every `Header`
+//! field is 4-byte (`Offset` is a `u32`, `Size` is a `u32`), so dropping one
+//! `Size` field shrinks the header by exactly 4. `GraphemeMap` is
+//! `AutoOffsetHashMap<Offset<Cell>, OffsetSlice<u32>, 100>`, whose value type
+//! contains a `usize` and so forces `align_of::<Header<_, _>>() == 8`: the
+//! 5-field header was 20 bytes padded to 24, the 4-field header is 16, so it
+//! shrinks by 8.
+//!
+//! The **80% load factor survives** `fedd42e8d` — that is why hyperlink_map
+//! settles at 912 rather than returning to its pre-`7e14347c1` 464. If a future
+//! change puts it back near 464, the load factor has been lost, not the header.
+//! `std_size` itself is unchanged at 409600 across both moves: `Page::layout`
+//! rounds the total up to `page_size_min` (16 KiB) and these tens of bytes are
+//! absorbed by that rounding. That is also why this golden's `total_size` assert
+//! alone would NOT have caught either move — the section-by-section asserts are
+//! the ones doing the work.
 //!
 //! | section        | oracle | port  | why |
 //! |----------------|-------:|------:|-----|
@@ -73,12 +96,14 @@ fn std_size_golden_aarch64_macos() {
         layout.grapheme_alloc_layout.total_size, 8256,
         "grapheme_alloc section drifted (BitmapAllocator layout)"
     );
-    // 10768 -> 10776 (+8) when WS10 T11 ported oracle `7e14347c1`, which adds
-    // `available: Size` to the hash-map `Header` (verified:
-    // `git -C ../ghostty show 7e14347c1:src/terminal/hash_map.zig` line 194).
-    // The growth is the new header field, so this is the reference's own layout
-    // moving — not a rustty-side regression. The golden is re-pinned rather than
-    // relaxed: it still fails on any further drift.
+    // 10776 -> 10768 (-8) when `P3-W2` T3 ported oracle `fedd42e8d`, which
+    // deletes `Header.available` along with the tombstone headroom counter it
+    // served (verified: `git -C ../ghostty show fedd42e8d:src/terminal/hash_map.zig`
+    // — the Header is `values, keys, capacity, size`). This exactly undoes the
+    // +8 that `7e14347c1` added one commit earlier; see the module doc for why
+    // this map moves by 8 while the hyperlink map moves by 4. The reference's
+    // own layout moving — not a rustty-side regression. The golden is re-pinned
+    // rather than relaxed: it still fails on any further drift.
     //
     // VERIFICATION LIMIT (be honest about this): the CAUSE is confirmed against
     // the oracle, but the exact byte counts below are re-pinned from rustty's own
@@ -87,7 +112,7 @@ fn std_size_golden_aarch64_macos() {
     // "byte-identical to the reference". Cross-validating the numbers against an
     // oracle-computed layout is tracked as a Phase-3 follow-up.
     assert_eq!(
-        layout.grapheme_map_layout.total_size, 10776,
+        layout.grapheme_map_layout.total_size, 10768,
         "grapheme_map section drifted"
     );
     assert_eq!(
@@ -102,10 +127,14 @@ fn std_size_golden_aarch64_macos() {
         // 464 -> 916 when WS10 T11 gave `hyperlink::Map` the reference's 80%
         // max_load_percentage (oracle `hyperlink.zig:23`:
         // `AutoOffsetHashMap(Offset(Cell), Id, 80)`), which raises the capacity
-        // needed for the same entry count. Upstream's own design; see the
-        // VERIFICATION LIMIT note above.
+        // needed for the same entry count; then 916 -> 912 (-4) when `P3-W2` T3
+        // ported `fedd42e8d` and deleted `Header.available`. The load factor is
+        // what holds this at 912 instead of 464 — a regression to ~464 means the
+        // 80% has been lost, which is separately pinned by
+        // `page_hyperlinkCapacity_reports_max_load_not_raw_capacity`. Upstream's
+        // own design; see the VERIFICATION LIMIT note above.
         layout.hyperlink_map_layout.total_size,
-        916,
+        912,
         "hyperlink_map section drifted"
     );
     assert_eq!(

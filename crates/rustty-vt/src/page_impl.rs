@@ -2000,7 +2000,7 @@ impl Page {
         let self_ptr: *mut Page = self;
         self.hyperlink_set.context.set_page(self_ptr);
         unsafe { self.hyperlink_set.release(base, value) };
-        unsafe { map.remove_by_ptr(entry.key_ptr) };
+        unsafe { map.remove_by_ptr_context(entry.key_ptr, &actx) };
         unsafe { (*cell).set_hyperlink(false) };
     }
 
@@ -2204,8 +2204,8 @@ impl Page {
         let actx = AutoContext::default();
         let entry = map.get_entry_context(src_offset, &actx).unwrap();
         let value = unsafe { *entry.value_ptr };
-        unsafe { map.remove_by_ptr(entry.key_ptr) };
-        map.put_assume_capacity_context(dst_offset, value, &actx);
+        unsafe { map.remove_by_ptr_context(entry.key_ptr, &actx) };
+        map.put_assume_capacity_no_clobber_context(dst_offset, value, &actx);
 
         // NOTE: We must not set src/dst.hyperlink here because this
         // function is used in various cases where we swap cell contents
@@ -2406,8 +2406,8 @@ impl Page {
         let actx = AutoContext::default();
         let entry = map.get_entry_context(src_offset, &actx).unwrap();
         let value = unsafe { *entry.value_ptr };
-        unsafe { map.remove_by_ptr(entry.key_ptr) };
-        map.put_assume_capacity_context(dst_offset, value, &actx);
+        unsafe { map.remove_by_ptr_context(entry.key_ptr, &actx) };
+        map.put_assume_capacity_no_clobber_context(dst_offset, value, &actx);
     }
 
     /// Clear the graphemes for a given cell.
@@ -2438,7 +2438,7 @@ impl Page {
         unsafe { self.grapheme_alloc.free(base, cps) };
 
         // Remove the entry
-        unsafe { map.remove_by_ptr(entry.key_ptr) };
+        unsafe { map.remove_by_ptr_context(entry.key_ptr, &actx) };
 
         // Mark that we no longer have graphemes by changing the content tag.
         unsafe { (*cell).set_content_tag(ContentTag::Codepoint) };

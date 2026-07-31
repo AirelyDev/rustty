@@ -107,14 +107,18 @@ impl PageList {
             //    5         5         5  |      6
             //    6         6         6  |      7
             //    7         7         7 <'      4
-            unsafe {
-                (*super::Node::page(node)).clone_row_from(
-                    &(*super::Node::page(next)),
-                    rows.add(super::Node::rows(node) as usize - 1),
-                    next_rows,
-                )
-            }
-            .map_err(|_| super::OutOfMemory)?;
+            //
+            // The copy may replace the destination node in order to
+            // increase its capacity. We can discard the replacement
+            // because we advance to the next node below, and the
+            // replacement is already linked in its place (so e.g. the
+            // `node.prev` access in the pin fixups below is correct).
+            let _ = self.clone_row_grow_capacity(
+                node,
+                unsafe { super::Node::rows(node) } as usize - 1,
+                unsafe { super::Node::page(next) },
+                next_rows,
+            );
 
             node = next;
             rows = next_rows;
@@ -324,14 +328,17 @@ impl PageList {
                     .ptr((*super::Node::page(next)).memory_ptr())
             };
 
-            unsafe {
-                (*super::Node::page(node)).clone_row_from(
-                    &(*super::Node::page(next)),
-                    rows.add(super::Node::rows(node) as usize - 1),
-                    next_rows,
-                )
-            }
-            .map_err(|_| super::OutOfMemory)?;
+            // The copy may replace the destination node in order to
+            // increase its capacity. We can discard the replacement
+            // because we advance to the next node below, and the
+            // replacement is already linked in its place (so e.g. the
+            // `node.prev` access in the pin fixups below is correct).
+            let _ = self.clone_row_grow_capacity(
+                node,
+                unsafe { super::Node::rows(node) } as usize - 1,
+                unsafe { super::Node::page(next) },
+                next_rows,
+            );
 
             node = next;
             rows = next_rows;

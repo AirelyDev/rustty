@@ -2856,6 +2856,37 @@ mod tests {
         assert_eq!(64u32, layout.hyperlink_map_layout.capacity);
     }
 
+    /// `hyperlinkCapacity()` must report the map's **max load**, not its raw
+    /// slot capacity (`7e14347c1`: `self.hyperlink_map.map(...).maxLoad()`).
+    ///
+    /// PORT NOTE: upstream ships no test for this hunk. It gets one here because
+    /// the two values differ only by the 80% load factor, so a test that merely
+    /// asserts "some capacity" — or compares against `hyperlink_map_layout
+    /// .capacity` — passes whichever accessor is wired up. This asserts the
+    /// exact max-load number AND that it is strictly below the raw capacity, so
+    /// reverting `maxLoad()` to `capacity()` fails it.
+    #[test]
+    fn page_hyperlinkCapacity_reports_max_load_not_raw_capacity() {
+        let hyperlink_count = 3usize;
+        let cap = Capacity {
+            cols: 1,
+            rows: 1,
+            hyperlink_bytes: (hyperlink_count * hyperlink_set_item_size())
+                as size::HyperlinkCountInt,
+            ..std_capacity()
+        };
+        let layout = Page::layout(cap);
+        let mut page = Page::init(cap).unwrap();
+
+        // 64 raw slots at an 80% load factor => 51 usable entries.
+        let raw_capacity = layout.hyperlink_map_layout.capacity;
+        assert_eq!(64u32, raw_capacity);
+        assert_eq!(51usize, page.hyperlink_capacity());
+        assert!(page.hyperlink_capacity() < raw_capacity as usize);
+
+        page.deinit();
+    }
+
     /// A shallow copy aliases the SAME backing mapping and never owns it.
     ///
     /// PORT NOTE (WS7 B2): the oracle expresses this as a plain Zig struct copy

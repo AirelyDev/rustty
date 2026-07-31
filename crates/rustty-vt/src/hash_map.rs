@@ -27,23 +27,29 @@
 //! because our terminal page representation is backed by a single large
 //! allocation so we can give the HashMap a slice of memory to operate in.
 //!
-//! I haven't carefully benchmarked this implementation against other hash
-//! map implementations. It's possible using some of the newer variants out
-//! there would be better. However, I trust the built-in version is pretty good
-//! and its more important to get the terminal page representation working
-//! first then we can measure and improve this later if we find it to be a
-//! bottleneck.
+//! This fork diverges from the stdlib in one significant way: removal uses
+//! backward-shift deletion (Knuth vol. 3, section 6.4, algorithm R) rather
+//! than tombstones. A fixed-capacity map cannot outgrow tombstone buildup
+//! the way an allocating map does, so tombstones require either unbounded
+//! probe lengths or periodic in-place rebuilds with subtle bookkeeping.
+//! Backward-shift deletion instead restores the table after every removal
+//! to the exact state it would be in had the removed key never been
+//! inserted. Probe chains are therefore always minimal for the insertion
+//! order, there is no fragmentation to repair, and lookup cost depends only
+//! on the current load factor.
+//!
+//! Pointer stability: insertion never moves existing entries, but removal
+//! may move *other* entries within a probe cluster. Any key or value
+//! pointers previously returned by the map must be considered invalidated
+//! by any removal.
 //!
 //! PORT STATUS: done
 
 // PORT NOTE: the reference imports are
 //   const std = @import("std");
 //   const assert = @import("../quirks.zig").inlineAssert;
-//   const autoHash = std.hash.autoHash;
-//   const math = std.math;
 //   const mem = std.mem;
 //   const Allocator = mem.Allocator;
-//   const Wyhash = std.hash.Wyhash;
 //   const Offset = @import("size.zig").Offset;
 //   const OffsetBuf = @import("size.zig").OffsetBuf;
 //   const getOffset = @import("size.zig").getOffset;
@@ -234,11 +240,9 @@ pub type Size = u32;
 // to compute the index of a slot, maximizing the use of entropy.
 pub type Hash = u64;
 
-/// Metadata for a slot. It can be in three states: empty, used or
-/// tombstone. Tombstones indicate that an entry was previously used,
-/// they are a simple way to handle removal.
-/// To this state, we add 7 bits from the slot's key hash. These are
-/// used as a fast way to disambiguate between entries without
+/// Metadata for a slot. It can be in two states: free or used.
+/// To the used state, we add 7 bits from the slot's key hash. These
+/// are used as a fast way to disambiguate between entries without
 /// having to use the equality function. If two fingerprints are
 /// different, we know that we don't have to compare the keys at all.
 /// The 7 bits are the highest ones from a 64 bit hash. This way, not
@@ -249,33 +253,23 @@ pub type Hash = u64;
 /// the entries array, likely avoiding a cache miss and a potentially
 /// costly function call.
 // PORT NOTE: the reference is
-//   const Metadata = packed struct { fingerprint: u7 = free, used: u1 = 0 };
+//   const Metadata = packed struct(u8) { fingerprint: u7 = 0, used: u1 = 0 };
 // Zig packs least-significant-first, so `fingerprint` occupies bits 0..6 and
 // `used` bit 7 of the backing `u8`. We model it as a `#[repr(transparent)]` u8
-// with explicit accessors so the byte layout (and the `slot_free`/
-// `slot_tombstone` bitcasts) is identical.
+// with explicit accessors so the byte layout (and the all-zero free byte the
+// probe loops fuse against) is identical. `packed struct(u8)` is the reference's
+// own explicit-backing-integer form as of `fedd42e8d`.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct Metadata(u8);
 
-#[allow(non_upper_case_globals)]
 impl Metadata {
     // const FingerPrint = u7;
     // (modeled as u8 storing only the low 7 bits)
 
-    const FREE: u8 = 0;
-    const TOMBSTONE: u8 = 1;
-
-    /// `Metadata{ .fingerprint = free }` bitcast to u8.
-    const slot_free: u8 = Self::FREE; // fingerprint=0, used=0
-    /// `Metadata{ .fingerprint = tombstone }` bitcast to u8.
-    const slot_tombstone: u8 = Self::TOMBSTONE; // fingerprint=1, used=0
-
-    /// Default `Metadata`: fingerprint = free, used = 0.
-    // PORT NOTE: mirrors the reference field defaults `fingerprint = free, used =
-    // 0`; metadata slots are zero-initialized via `init_metadatas` (a memset), so
-    // this constructor is retained for parity but not otherwise called.
-    #[allow(dead_code)]
+    /// Default `Metadata`: fingerprint = 0, used = 0 — i.e. the free byte.
+    // PORT NOTE: mirrors the reference field defaults `fingerprint = 0, used =
+    // 0`. `remove_by_index_context` writes `metadata[hole] = .{}` through this.
     fn default() -> Metadata {
         Metadata(0)
     }
@@ -290,31 +284,17 @@ impl Metadata {
         (self.0 >> 7) & 1
     }
 
-    /// `self.fingerprint = fp` — assigns the packed-struct field without
-    /// touching the `used` bit. Used by `rehash`, which relies on the two
-    /// fields being independently assignable exactly as in the reference.
-    #[inline]
-    fn set_fingerprint(&mut self, fp: u8) {
-        self.0 = (self.0 & 0x80) | (fp & 0x7F);
-    }
-
-    /// `self.used = <bit>` — assigns the packed-struct field without touching
-    /// the fingerprint.
-    #[inline]
-    fn set_used(&mut self, used: bool) {
-        self.0 = (self.0 & 0x7F) | (u8::from(used) << 7);
-    }
-
     pub fn is_used(self) -> bool {
         self.used_bit() == 1
     }
 
-    pub fn is_tombstone(self) -> bool {
-        self.0 == Self::slot_tombstone
-    }
-
     pub fn is_free(self) -> bool {
-        self.0 == Self::slot_free
+        // A free slot is always the all-zero byte: `fill` sets the
+        // used bit and removal zeroes the whole byte. Comparing the
+        // full byte (rather than testing the used bit) lets the
+        // optimizer fuse this with the fingerprint comparison in
+        // probe loops into single-byte compares.
+        self.0 == 0
     }
 
     pub fn take_fingerprint(hash: Hash) -> u8 {
@@ -329,11 +309,6 @@ impl Metadata {
     pub fn fill(&mut self, fp: u8) {
         // self.used = 1; self.fingerprint = fp;
         self.0 = (fp & 0x7F) | (1 << 7);
-    }
-
-    pub fn remove(&mut self) {
-        // self.used = 0; self.fingerprint = tombstone;
-        self.0 = Self::TOMBSTONE; // used=0, fingerprint=1
     }
 }
 
@@ -356,7 +331,7 @@ pub struct GetOrPutResult<K, V> {
     pub found_existing: bool,
 }
 
-/// `const Header = struct { values, keys, capacity, size, available };`
+/// `const Header = struct { values, keys, capacity, size };`
 //
 // PORT NOTE: the reference `Header` is a plain Zig struct laid out immediately
 // before the metadata. We reproduce the same field order and types. The keys/
@@ -368,11 +343,6 @@ struct Header<K, V> {
     keys: Offset<K>,
     capacity: Size,
     size: Size,
-
-    /// Number of insertions into free slots allowed before the map
-    /// must be rebuilt. Removing an entry creates a tombstone and
-    /// intentionally does not restore this count.
-    available: Size,
 }
 
 /// The memory layout for the underlying buffer for a given capacity.
@@ -489,7 +459,6 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         unsafe {
             (*hdr).capacity = layout.capacity;
             (*hdr).size = 0;
-            (*hdr).available = Self::max_load_for_capacity(layout.capacity);
             // if (@sizeOf([*]K) != 0) hdr.keys = metadata_buf.member(K, layout.keys_start);
             (*hdr).keys = metadata_buf.member(layout.keys_start);
             // if (@sizeOf([*]V) != 0) hdr.values = metadata_buf.member(V, layout.vals_start);
@@ -502,7 +471,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
 
     pub fn ensure_total_capacity(&mut self, new_size: Size) -> Result<(), OutOfMemory> {
         if new_size > unsafe { (*self.header()).size } {
-            self.grow_if_needed(new_size - unsafe { (*self.header()).size })?;
+            self.check_capacity(new_size - unsafe { (*self.header()).size })?;
         }
         Ok(())
     }
@@ -516,7 +485,6 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
             unsafe {
                 self.init_metadatas();
                 (*self.header()).size = 0;
-                (*self.header()).available = self.max_load();
             }
         }
     }
@@ -550,8 +518,9 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         unsafe { (*self.header()).capacity }
     }
 
-    /// Maximum number of occupied or tombstone slots before the map must
-    /// be rebuilt. This bounds unsuccessful probe lengths.
+    /// Maximum number of entries the map will hold. This is less than
+    /// capacity when MAX_LOAD_PERCENTAGE is below 100, which keeps free
+    /// slots in every probe chain and bounds probe lengths.
     pub fn max_load(&self) -> Size {
         Self::max_load_for_capacity(self.capacity())
     }
@@ -568,7 +537,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         ctx: &Context,
     ) -> Result<(), OutOfMemory> {
         assert(!self.contains_context(key, ctx));
-        self.grow_if_needed(1)?;
+        self.check_capacity(1)?;
 
         self.put_assume_capacity_no_clobber_context(key, value, ctx);
         Ok(())
@@ -587,6 +556,15 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     pub fn put_assume_capacity_no_clobber_context(&mut self, key: K, value: V, ctx: &Context) {
         assert(!self.contains_context(key, ctx));
 
+        // A free slot must exist for the probe below to terminate.
+        //
+        // PORT NOTE (area D §4.5): the reference's `assert` here is
+        // `quirks.inlineAssert`, which is a no-op in ReleaseFast. It is ported
+        // as a `debug_assert!` for the same reason the reference added it — it
+        // turns a violated assume-capacity contract into a panic instead of a
+        // silent live-entry overwrite.
+        debug_assert!(unsafe { (*self.header()).size } < self.capacity());
+
         let hash = ctx.hash(key);
         let mask = self.capacity() - 1;
         let mut idx = (hash & (mask as u64)) as usize;
@@ -597,13 +575,8 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
             metadata = unsafe { self.metadata.unwrap().add(idx) };
         }
 
-        let fingerprint = Metadata::take_fingerprint(hash);
-        // if (metadata[0].isFree()) self.header().available -= 1;
-        if unsafe { (*metadata).is_free() } {
-            unsafe { (*self.header()).available -= 1 };
-        }
         unsafe {
-            (*metadata).fill(fingerprint);
+            (*metadata).fill(Metadata::take_fingerprint(hash));
             *self.keys().add(idx) = key;
             *self.values().add(idx) = value;
             (*self.header()).size += 1;
@@ -650,27 +623,21 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
 
     /// If there is an `Entry` with a matching key, it is deleted from
-    /// the hash map, and then returned from this function.
+    /// the hash map, and then returned from this function. Removal may
+    /// move other entries: any previously returned key or value
+    /// pointers are invalidated.
+    //
+    // PORT NOTE: `fedd42e8d` deleted `fetchRemoveAdapted`, folding its body
+    // into `fetchRemoveContext`. This port's `*_adapted` aliases were already
+    // identity wrappers (no adapted form exists here), so the alias goes too.
     pub fn fetch_remove_context(&mut self, key: K, ctx: &Context) -> Option<KV<K, V>> {
-        self.fetch_remove_adapted(key, ctx)
-    }
-    pub fn fetch_remove_adapted(&mut self, key: K, ctx: &Context) -> Option<KV<K, V>> {
-        if let Some(idx) = self.get_index(key, ctx) {
-            let old_key = unsafe { self.keys().add(idx) };
-            let old_val = unsafe { self.values().add(idx) };
-            let result = KV {
-                key: unsafe { *old_key },
-                value: unsafe { *old_val },
-            };
-            unsafe {
-                (*self.metadata.unwrap().add(idx)).remove();
-                // old_key.* = undefined; old_val.* = undefined; (no-op: leave as is)
-                (*self.header()).size -= 1;
-            }
-            return Some(result);
-        }
-
-        None
+        let idx = self.get_index(key, ctx)?;
+        let result = KV {
+            key: unsafe { *self.keys().add(idx) },
+            value: unsafe { *self.values().add(idx) },
+        };
+        self.remove_by_index_context(idx, ctx);
+        Some(result)
     }
 
     /// Find the index containing the data for the given key.
@@ -692,7 +659,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         let hash = ctx.hash(key);
         let mask = self.capacity() - 1;
         let fingerprint = Metadata::take_fingerprint(hash);
-        // Don't loop indefinitely when there are no empty slots.
+        // Don't loop indefinitely when there are no free slots.
         let mut limit = self.capacity();
         let mut idx = (hash & (mask as u64)) as usize;
 
@@ -789,8 +756,6 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         None
     }
 
-    /// The get-or-put family may rehash a fragmented table. Any key or
-    /// value pointers previously returned by this map may be invalidated.
     pub fn get_or_put_context(
         &mut self,
         key: K,
@@ -807,28 +772,12 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         key: K,
         key_ctx: &Context,
     ) -> Result<GetOrPutResult<K, V>, OutOfMemory> {
-        match self.grow_if_needed(1) {
+        match self.check_capacity(1) {
             Ok(()) => {}
             Err(err) => {
-                // Canonical lookups can rebuild resident keys in place. If
-                // live entries still fit, insertion headroom was consumed by
-                // tombstones rather than live load.
-                //
-                // PORT NOTE: the reference guards this with
-                //   if (comptime @TypeOf(key) == K and @TypeOf(key_ctx) == Context)
-                // to distinguish a canonical lookup from an `Adapted` one. This
-                // port has no adapted form — every `*_adapted` entry point takes
-                // `key: K` / `ctx: &Context` (see the aliases above) — so the
-                // comptime condition is statically TRUE here and the branch is
-                // unconditional.
-                if unsafe { (*self.header()).size } < self.max_load() {
-                    self.rehash(key_ctx);
-                    return Ok(self.get_or_put_assume_capacity_adapted(key, key_ctx));
-                }
-
-                // If allocation fails, try to do the lookup anyway.
-                // If we find an existing item, we can return it.
-                // Otherwise return the error, we could not add another.
+                // The map is full. Try to do the lookup anyway; if we find
+                // an existing item, we can return it. Otherwise return the
+                // error, we could not add another.
                 let index = match self.get_index(key, key_ctx) {
                     Some(i) => i,
                     None => return Err(err),
@@ -873,8 +822,6 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         let mut limit = self.capacity();
         let mut idx = (hash & (mask as u64)) as usize;
 
-        let mut first_tombstone_idx: usize = self.capacity() as usize; // invalid index
-        let mut tombstones: Size = 0;
         let mut metadata = unsafe { self.metadata.unwrap().add(idx) };
         while !unsafe { (*metadata).is_free() } && limit != 0 {
             if unsafe { (*metadata).is_used() }
@@ -898,26 +845,6 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
                         found_existing: true,
                     };
                 }
-            } else if unsafe { (*metadata).is_tombstone() } {
-                if first_tombstone_idx == self.capacity() as usize {
-                    first_tombstone_idx = idx;
-                }
-
-                // Rehash once this probe demonstrates meaningful
-                // fragmentation. Only canonical lookups have the
-                // context required to rehash resident K values.
-                //
-                // PORT NOTE: the reference guards this with
-                //   if (comptime @TypeOf(key) == K and @TypeOf(ctx) == Context)
-                // — statically TRUE in this port, which has no adapted form.
-                tombstones += 1;
-                // Amortize the O(capacity) rebuild and avoid doing it
-                // for an otherwise healthy, nearly full table.
-                let threshold = core::cmp::max(self.capacity() / 8, 1);
-                if tombstones >= threshold {
-                    self.rehash(ctx);
-                    return self.get_or_put_assume_capacity_adapted(key, ctx);
-                }
             }
 
             limit -= 1;
@@ -925,28 +852,14 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
             metadata = unsafe { self.metadata.unwrap().add(idx) };
         }
 
-        if first_tombstone_idx < self.capacity() as usize {
-            // Cheap try to lower probing lengths after deletions. Recycle a tombstone.
-            idx = first_tombstone_idx;
-            metadata = unsafe { self.metadata.unwrap().add(idx) };
-        }
-
-        if unsafe { (*metadata).is_free() } {
-            // Assume-capacity callers can arrive here after a removal
-            // consumed all insertion headroom. Canonical lookups can
-            // rebuild resident keys before consuming another free slot.
-            if unsafe { (*self.header()).available } == 0 {
-                // PORT NOTE: the reference's adapted fallback here is
-                //   // Adapted contexts cannot hash resident keys to rehash.
-                //   // Their caller must honor the assume-capacity contract.
-                //   assert(self.header().available > 0);
-                // which is dead in this port (no adapted form — see above).
-                assert(unsafe { (*self.header()).size } < self.max_load());
-                self.rehash(ctx);
-                return self.get_or_put_assume_capacity_adapted(key, ctx);
-            }
-            unsafe { (*self.header()).available -= 1 };
-        }
+        // The caller guaranteed capacity for at least one new entry, so
+        // the probe must have ended at a free slot. Anything else means
+        // the assume-capacity contract was violated and we would be
+        // silently overwriting a live entry.
+        //
+        // PORT NOTE (area D §4.5): ported as a `debug_assert!` — see the
+        // matching note in `put_assume_capacity_no_clobber_context`.
+        debug_assert!(unsafe { (*metadata).is_free() });
 
         unsafe {
             (*metadata).fill(fingerprint);
@@ -990,37 +903,97 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         self.get_index(key, ctx).is_some()
     }
 
-    fn remove_by_index(&mut self, idx: usize) {
+    /// Remove the entry at the given index using backward-shift deletion
+    /// (Knuth vol. 3, section 6.4, algorithm R): rather than marking the
+    /// slot with a tombstone, restore the table to the state it would be
+    /// in had the removed key never been inserted. Any entry whose probe
+    /// sequence passes over the hole is moved into it, which moves the
+    /// hole further along the cluster, until the cluster ends at a free
+    /// slot.
+    //
+    // UB HAZARD (area D §4.5): this writes `metadata[hole]`, `keys[hole]` and
+    // `values[hole]` — three overlapping raw views into ONE `Page` allocation —
+    // while also reading `keys[j]` to rehash it. `metadata`, `keys()` and
+    // `values()` are therefore kept as RAW pointers; do NOT form `&mut [K]` and
+    // `&mut [Metadata]` simultaneously from the same base for the convenience
+    // of indexing. Proof harness: `.port/phase-3/mirihar-hashmap-shift/`.
+    //
+    // CONTRACT: this moves other entries within the probe cluster, so every key
+    // and value pointer the map has handed out is invalidated. Caller audit:
+    // `.port/phase-3/HASHMAP_CALLER_AUDIT.md` (12/12 rows resolved).
+    fn remove_by_index_context(&mut self, idx: usize, ctx: &Context) {
+        let mask: usize = (self.capacity() - 1) as usize;
+        let metadata = self.metadata.unwrap();
+        let keys_ptr = unsafe { self.keys() };
+        let values_ptr = unsafe { self.values() };
+
+        // A completely full table has no free slot to terminate the
+        // scan, so bound it to one full cycle. That is sufficient: the
+        // hole only ever moves forward to slots the scan has already
+        // visited, so each entry needs to be considered exactly once.
+        let mut hole = idx;
+        let mut j = idx;
+        let mut limit = self.capacity() - 1;
+        while limit != 0 {
+            limit -= 1;
+            j = (j + 1) & mask;
+            if unsafe { (*metadata.add(j)).is_free() } {
+                break;
+            }
+
+            // The entry at `j` may move into the hole only if the hole
+            // lies on its probe path, i.e. cyclically within [home, j).
+            // Otherwise the move would place it before its home slot
+            // and lookups could no longer find it.
+            let home: usize = (ctx.hash(unsafe { *keys_ptr.add(j) }) & (mask as u64)) as usize;
+            if (hole.wrapping_sub(home) & mask) < (j.wrapping_sub(home) & mask) {
+                unsafe {
+                    *metadata.add(hole) = *metadata.add(j);
+                    *keys_ptr.add(hole) = *keys_ptr.add(j);
+                    *values_ptr.add(hole) = *values_ptr.add(j);
+                }
+                hole = j;
+            }
+        }
+
         unsafe {
-            (*self.metadata.unwrap().add(idx)).remove();
-            // keys[idx] = undefined; values[idx] = undefined; (no-op)
+            *metadata.add(hole) = Metadata::default();
+            // keys_ptr[hole] = undefined; values_ptr[hole] = undefined; (no-op)
             (*self.header()).size -= 1;
         }
+
+        // Standing invariant, carried in the type rather than only in tests
+        // (area D §6): every used entry must still be reachable from its home
+        // slot without crossing a free slot. This is exactly what lookups
+        // depend on and exactly what an inverted cluster test would break.
+        self.debug_assert_canonical(ctx);
     }
 
     /// If there is an `Entry` with a matching key, it is deleted from
     /// the hash map, and this function returns true.  Otherwise this
-    /// function returns false.
+    /// function returns false. Removal may move other entries: any
+    /// previously returned key or value pointers are invalidated.
+    //
+    // PORT NOTE: `fedd42e8d` deleted `removeAdapted`, folding it into
+    // `removeContext`. This port's `remove_adapted` was an identity alias
+    // (no adapted form exists here), so it goes with it.
     pub fn remove_context(&mut self, key: K, ctx: &Context) -> bool {
-        self.remove_adapted(key, ctx)
-    }
-    pub fn remove_adapted(&mut self, key: K, ctx: &Context) -> bool {
-        if let Some(idx) = self.get_index(key, ctx) {
-            self.remove_by_index(idx);
-            return true;
-        }
-
-        false
+        let Some(idx) = self.get_index(key, ctx) else {
+            return false;
+        };
+        self.remove_by_index_context(idx, ctx);
+        true
     }
 
     /// Delete the entry with key pointed to by key_ptr from the hash map.
     /// key_ptr is assumed to be a valid pointer to a key that is present
-    /// in the hash map.
+    /// in the hash map. Removal may move other entries: any previously
+    /// returned key or value pointers are invalidated.
     ///
     /// # Safety
     ///
     /// `key_ptr` must be a key pointer into this map's keys array.
-    pub unsafe fn remove_by_ptr(&mut self, key_ptr: *mut K) {
+    pub unsafe fn remove_by_ptr_context(&mut self, key_ptr: *mut K, ctx: &Context) {
         // TODO: replace with pointer subtraction once supported by zig
         // if @sizeOf(K) == 0 then there is at most one item in the hash
         // map, which is assumed to exist as key_ptr must be valid.  This
@@ -1031,7 +1004,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
             0
         };
 
-        self.remove_by_index(idx);
+        self.remove_by_index_context(idx, ctx);
     }
 
     /// # Safety: metadata must be valid.
@@ -1046,98 +1019,57 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         }
     }
 
-    /// Rebuild the map in place, removing all tombstones. This moves
-    /// entries and invalidates existing key and value pointers.
+    /// Verify the canonical placement invariant that backward-shift deletion
+    /// maintains: every used entry is reachable from its home slot without
+    /// crossing a free slot. This is exactly the property lookups depend on.
     //
-    // PORT NOTE: `keys_ptr[curr] = undefined` / `values_ptr[curr] = undefined`
-    // in the reference are deinitialization hints for a `Copy` payload; there
-    // is no Rust equivalent (and no drop to run), so those statements are
-    // no-ops here, exactly as elsewhere in this file.
-    pub fn rehash(&mut self, ctx: &Context) {
-        let mask = self.capacity() - 1;
-
-        let metadata = self.metadata.unwrap();
-        let keys_ptr = unsafe { self.keys() };
-        let values_ptr = unsafe { self.values() };
-        let mut curr: Size = 0;
-
-        // Mark used buckets as awaiting rehash and clear tombstones.
-        while curr < self.capacity() {
-            unsafe { (*metadata.add(curr as usize)).set_fingerprint(Metadata::FREE) };
-            curr += 1;
+    // PORT NOTE (area D §6): upstream ships `expectCanonical` only as a
+    // test helper (`hash_map.zig`, above `test "HashMap basic usage"`). rustty
+    // carries it IN THE TYPE as a `debug_assert`-style invariant so every
+    // removal on every map — including the page hyperlink/grapheme maps in
+    // production debug builds — is checked, not just the four upstream tests.
+    // It compiles away entirely in release (`cfg(debug_assertions)`).
+    //
+    // Kept raw-pointer-only for the §4.5 reason: no `&[K]`/`&[Metadata]` slice
+    // is formed over the shared `Page` base.
+    pub fn debug_assert_canonical(&self, ctx: &Context) {
+        if !cfg!(debug_assertions) {
+            return;
         }
 
-        curr = 0;
-        while curr < self.capacity() {
-            if !unsafe { (*metadata.add(curr as usize)).is_used() } {
-                assert(unsafe { (*metadata.add(curr as usize)).is_free() });
-                curr += 1;
+        let cap = self.capacity();
+        if cap == 0 {
+            return;
+        }
+        let mask = (cap - 1) as usize;
+        let mut used: Size = 0;
+        for idx in 0..cap as usize {
+            let metadata = unsafe { *self.metadata.unwrap().add(idx) };
+            if !metadata.is_used() {
                 continue;
             }
+            used += 1;
 
-            let hash = ctx.hash(unsafe { *keys_ptr.add(curr as usize) });
-            let fingerprint = Metadata::take_fingerprint(hash);
-            let mut idx = (hash & (mask as u64)) as usize;
-
-            // For each bucket, rehash to an index:
-            // 1) before the cursor, probed into a free slot, or
-            // 2) equal to the cursor, no need to move, or
-            // 3) ahead of the cursor, probing over already rehashed.
-            while (idx < curr as usize && unsafe { (*metadata.add(idx)).is_used() })
-                || (idx > curr as usize
-                    && unsafe { (*metadata.add(idx)).fingerprint() } == Metadata::TOMBSTONE)
-            {
-                idx = (idx + 1) & (mask as usize);
-            }
-
-            if idx < curr as usize {
-                assert(unsafe { (*metadata.add(idx)).is_free() });
-                unsafe {
-                    (*metadata.add(idx)).fill(fingerprint);
-                    *keys_ptr.add(idx) = *keys_ptr.add(curr as usize);
-                    *values_ptr.add(idx) = *values_ptr.add(curr as usize);
-
-                    (*metadata.add(curr as usize)).set_used(false);
-                }
-                assert(unsafe { (*metadata.add(curr as usize)).is_free() });
-                // keys_ptr[curr] = undefined; values_ptr[curr] = undefined;
-
-                curr += 1;
-            } else if idx == curr as usize {
-                unsafe { (*metadata.add(idx)).set_fingerprint(fingerprint) };
-                curr += 1;
-            } else {
-                assert(unsafe { (*metadata.add(idx)).fingerprint() } != Metadata::TOMBSTONE);
-                let was_used = unsafe { (*metadata.add(idx)).is_used() };
-                unsafe { (*metadata.add(idx)).set_fingerprint(Metadata::TOMBSTONE) };
-                if was_used {
-                    unsafe {
-                        core::ptr::swap(keys_ptr.add(curr as usize), keys_ptr.add(idx));
-                        core::ptr::swap(values_ptr.add(curr as usize), values_ptr.add(idx));
-                    }
-                } else {
-                    unsafe {
-                        (*metadata.add(idx)).set_used(true);
-                        *keys_ptr.add(idx) = *keys_ptr.add(curr as usize);
-                        *values_ptr.add(idx) = *values_ptr.add(curr as usize);
-
-                        (*metadata.add(curr as usize)).set_fingerprint(Metadata::FREE);
-                        (*metadata.add(curr as usize)).set_used(false);
-                    }
-                    // keys_ptr[curr] = undefined; values_ptr[curr] = undefined;
-
-                    curr += 1;
-                }
+            let mut probe: usize =
+                (ctx.hash(unsafe { *self.keys().add(idx) }) & (mask as u64)) as usize;
+            while probe != idx {
+                debug_assert!(
+                    unsafe { (*self.metadata.unwrap().add(probe)).is_used() },
+                    "canonical placement violated: entry at slot {idx} is separated \
+                     from its home slot by the free slot {probe}"
+                );
+                probe = (probe + 1) & mask;
             }
         }
-
-        // Rehashing removes every tombstone, so all unused load-factor
-        // headroom is available for insertions again.
-        unsafe { (*self.header()).available = self.max_load() - (*self.header()).size };
+        debug_assert_eq!(self.count(), used);
     }
 
-    fn grow_if_needed(&mut self, new_count: Size) -> Result<(), OutOfMemory> {
-        if new_count > unsafe { (*self.header()).available } {
+    /// Returns an error if the map cannot hold `new_count` more entries.
+    /// This map is fixed-capacity so nothing can be done to make room;
+    /// the caller must grow the backing memory and rebuild the map.
+    fn check_capacity(&mut self, new_count: Size) -> Result<(), OutOfMemory> {
+        let available = self.max_load() - unsafe { (*self.header()).size };
+        if new_count > available {
             return Err(OutOfMemory);
         }
         Ok(())
@@ -1357,7 +1289,7 @@ mod tests {
     }
 
     #[test]
-    fn HashMap_ensureUnusedCapacity_with_tombstones() {
+    fn HashMap_ensureUnusedCapacity_with_removals() {
         type Map = AutoHashMapUnmanaged<i32, i32, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 32;
 
@@ -1736,9 +1668,32 @@ mod tests {
         assert_eq!(map.count(), limit);
     }
 
-    // `test "HashMap clobber insert rehashes exhausted headroom"`
+    // `test "HashMap no-clobber move after remove at max load"` (fedd42e8d).
+    //
+    // PORT NOTE: the reference calls its test-only `expectCanonical(&map, ctx)`
+    // helper after every move. rustty carries that invariant IN THE TYPE
+    // (`debug_assert_canonical`, area D §6) and `remove_by_index_context` runs
+    // it on every removal, so the explicit call is kept here only as the
+    // reference's own assertion point.
+    //
+    // HONESTY NOTE (P3-W2 T2 Step 5): this test does NOT discriminate
+    // no-clobber from clobbering insertion. Executed control: replacing both
+    // `put_assume_capacity_no_clobber_context` calls here and in the
+    // (now-deleted) 65f953e8e headroom test with `put_assume_capacity_context`
+    // left both PASSING. That is expected once stated plainly — `65f953e8e` is
+    // a *performance* commit ("avoid duplicate probes when moving cell data"):
+    // for a destination key known to be absent the two insertions choose the
+    // same slot and write the same bytes, so no black-box assertion can
+    // separate them. What IS gated is that the `page_impl.rs` move sites run at
+    // all: dropping the insert in `move_hyperlink`/`move_grapheme` fails 7
+    // tests (`page_moveCells_graphemes`,
+    // `terminal_insert_blanks_shift_graphemes`,
+    // `terminal_insert_blanks_shifts_hyperlinks`,
+    // `terminal_print_devanagari_grapheme_should_be_wide_on_next_line`,
+    // `terminal_print_slice_differential_fuzz_vs_print`,
+    // `terminal_scroll_{down,up}_left_right_scroll_region_hyperlink`).
     #[test]
-    fn HashMap_clobber_insert_rehashes_exhausted_headroom() {
+    fn HashMap_no_clobber_move_after_remove_at_max_load() {
         // const Context = struct { hash(key) = key; eql(a, b) = a == b; };
         struct Context;
         impl HashMapContext<u32> for Context {
@@ -1757,182 +1712,177 @@ mod tests {
         let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
         let c = Context;
 
+        // Fill the map to its maximum load.
         let max_load = map.max_load();
         for i in 0..max_load {
             map.put_assume_capacity_no_clobber_context(i, i, &c);
         }
 
-        assert!(map.remove_context(0, &c));
-        map.put_assume_capacity_context(15, 15, &c);
+        // Model a managed-cell move: remove the source and insert the value at
+        // a destination known to be absent. This must work at maximum load for
+        // any number of moves since removal genuinely frees a slot.
+        for i in 0..100u32 {
+            let src: u32 = i;
+            let dst: u32 = i + max_load;
+            assert!(map.remove_context(src, &c));
+            map.put_assume_capacity_no_clobber_context(dst, dst, &c);
 
-        assert_eq!(max_load, map.count());
-        assert_eq!(15, map.get_context(15, &c).unwrap());
-        for i in 0..map.capacity() {
-            assert!(!unsafe { *map.metadata.unwrap().add(i as usize) }.is_tombstone());
+            assert_eq!(max_load, map.count());
+            assert_eq!(dst, map.get_context(dst, &c).unwrap());
+            map.debug_assert_canonical(&c);
         }
     }
 
-    // `test "HashMap getOrPut rehashes a fragmented probe"`
-    //
-    // PORT NOTE: the reference's third assertion block drives an `Adapted`
-    // lookup (`getOrPutAdapted("31", AdaptedContext{})` with a `[]const u8`
-    // key) to show that an adapted context leaves the tombstones in place.
-    // This port has no adapted form — `get_or_put_adapted` takes `key: K` /
-    // `ctx: &Context`, identical to the canonical entry point (see the
-    // `*_adapted` aliases above) — so that block is not expressible here and
-    // is omitted. The canonical assertions below are ported verbatim.
+    // `test "HashMap removal keeps colliding clusters findable"` (fedd42e8d)
     #[test]
-    fn HashMap_getOrPut_rehashes_a_fragmented_probe() {
-        // const Context = struct { hash(_) = 0; eql(a, b) = a == b; };
+    fn HashMap_removal_keeps_colliding_clusters_findable() {
+        // All keys hash to the same home slot near the end of the table so
+        // that clusters wrap around the index mask. This exercises the cyclic
+        // arithmetic in backward-shift deletion.
+        // const Context = struct { hash(_) = 14; eql(a, b) = a == b; };
         struct Context;
         impl HashMapContext<u32> for Context {
             fn hash(&self, _key: u32) -> u64 {
-                0
+                14
             }
             fn eql(&self, a: u32, b: u32) -> bool {
                 a == b
             }
         }
         type Map = HashMapUnmanaged<u32, u32, Context, DEFAULT_MAX_LOAD_PERCENTAGE>;
-        let cap: u32 = 32;
+        let cap = 16;
 
         let layout = Map::layout_for_capacity(cap);
         let buf = AlignedBuf::new(layout.total_size, Map::base_align());
         let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
         let c = Context;
 
-        for i in 0..cap {
-            map.put_assume_capacity_no_clobber_context(i, i, &c);
-        }
-
-        // Rehashing preserves a table at the supported 100% live occupancy.
-        map.rehash(&c);
-        assert_eq!(cap, map.count());
-        for i in 0..cap {
-            assert_eq!(i, map.get_context(i, &c).unwrap());
-        }
-
+        // Fill half the table: the cluster spans the wraparound point.
         for i in 0..cap / 2 {
-            assert!(map.remove_context(i, &c));
-        }
-
-        let count_tombstones = |m: &Map| -> u32 {
-            (0..m.capacity())
-                .filter(|i| unsafe { *m.metadata.unwrap().add(*i as usize) }.is_tombstone())
-                .count() as u32
-        };
-        assert_eq!(cap / 2, count_tombstones(&map));
-
-        // Looking up an existing key beyond the tombstones rehashes and retries
-        // before returning pointers into the map.
-        let gop = map.get_or_put_context(cap - 1, &c).unwrap();
-        assert!(gop.found_existing);
-        assert_eq!(cap - 1, unsafe { *gop.value_ptr });
-        assert_eq!(cap / 2, map.count());
-
-        assert_eq!(0, count_tombstones(&map));
-
-        for i in cap / 2..cap {
-            assert_eq!(i, map.get_context(i, &c).unwrap());
-        }
-    }
-
-    /// RUSTTY-SIDE COVERAGE (no upstream counterpart, WS10 T11): the
-    /// tombstone-count threshold inside `get_or_put_assume_capacity_adapted`
-    /// (`tombstones >= max(capacity / 8, 1)`) is NOT reached by
-    /// `HashMap_getOrPut_rehashes_a_fragmented_probe` — that test exhausts
-    /// `available` first, so the rehash it observes comes from the
-    /// `get_or_put_context_adapted` OutOfMemory branch instead. This test
-    /// keeps `available` positive and drives the in-probe threshold directly,
-    /// so the branch is not dead code we merely believe in.
-    #[test]
-    fn HashMap_getOrPut_rehashes_on_tombstone_threshold() {
-        // Every key collides at slot 0, so the probe walks the tombstones.
-        struct Context;
-        impl HashMapContext<u32> for Context {
-            fn hash(&self, _key: u32) -> u64 {
-                0
-            }
-            fn eql(&self, a: u32, b: u32) -> bool {
-                a == b
-            }
-        }
-        type Map = HashMapUnmanaged<u32, u32, Context, DEFAULT_MAX_LOAD_PERCENTAGE>;
-        let cap: u32 = 32;
-
-        let layout = Map::layout_for_capacity(cap);
-        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
-        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
-        let c = Context;
-
-        // 8 live entries then 8 tombstones: `available` is 32 - 8 = 24, well
-        // clear of zero, but the probe from slot 0 now crosses 8 tombstones.
-        for i in 0..8 {
             map.put_assume_capacity_no_clobber_context(i, i, &c);
         }
-        for i in 0..8 {
-            assert!(map.remove_context(i, &c));
+
+        // Remove from the middle of the cluster and verify all remaining
+        // entries stay findable after every removal.
+        let mut removed: u32 = 0;
+        for key in [3u32, 0, 7, 4, 1, 6, 2, 5] {
+            assert!(map.remove_context(key, &c));
+            removed += 1;
+
+            for i in 0..cap / 2 {
+                let k: u32 = i;
+                let v = map.get_context(k, &c);
+                if map.contains_context(k, &c) {
+                    assert_eq!(k, v.unwrap());
+                }
+            }
+            assert_eq!(cap / 2 - removed, map.count());
+            map.debug_assert_canonical(&c);
         }
-        let count_tombstones = |m: &Map| -> u32 {
-            (0..m.capacity())
-                .filter(|i| unsafe { *m.metadata.unwrap().add(*i as usize) }.is_tombstone())
-                .count() as u32
-        };
-        assert_eq!(8, count_tombstones(&map));
-
-        // threshold = max(32 / 8, 1) = 4, so the 4th tombstone triggers the
-        // in-place rebuild before the insert lands.
-        let gop = map.get_or_put_context(100, &c).unwrap();
-        assert!(!gop.found_existing);
-        unsafe { *gop.value_ptr = 100 };
-
-        assert_eq!(0, count_tombstones(&map));
-        assert_eq!(1, map.count());
-        assert_eq!(100, map.get_context(100, &c).unwrap());
     }
 
-    // `test "HashMap rehash with real hashes"`
+    // `test "HashMap removal from a completely full table"` (fedd42e8d)
     #[test]
-    fn HashMap_rehash_with_real_hashes() {
+    fn HashMap_removal_from_a_completely_full_table() {
         type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
-        let cap: u32 = 512;
+        let cap: u32 = 64;
 
         let layout = Map::layout_for_capacity(cap);
         let buf = AlignedBuf::new(layout.total_size, Map::base_align());
         let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
         let c = ctx::<u32>();
 
+        // A 100% load factor allows filling every raw slot, so removal cannot
+        // rely on a free slot to terminate its cluster scan.
         for i in 0..cap {
             map.put_assume_capacity_no_clobber_context(i, i, &c);
         }
-
-        map.rehash(&c);
         assert_eq!(cap, map.count());
-        for i in 0..cap {
-            assert_eq!(i, map.get_context(i, &c).unwrap());
-        }
 
-        let mut expected_count = cap;
+        // Remove every other key, verifying everything else stays findable.
+        let mut expected = cap;
         for i in 0..cap {
-            if i % 3 == 0 {
-                assert!(map.remove_context(i, &c));
-                expected_count -= 1;
+            if i % 2 != 0 {
+                continue;
             }
+            assert!(map.remove_context(i, &c));
+            expected -= 1;
+            assert_eq!(expected, map.count());
         }
 
-        map.rehash(&c);
-        assert_eq!(expected_count, map.count());
         for i in 0..cap {
-            if i % 3 == 0 {
+            if i % 2 == 0 {
                 assert_eq!(None, map.get_context(i, &c));
             } else {
                 assert_eq!(i, map.get_context(i, &c).unwrap());
             }
         }
+        map.debug_assert_canonical(&c);
+    }
 
-        for i in 0..map.capacity() {
-            assert!(!unsafe { *map.metadata.unwrap().add(i as usize) }.is_tombstone());
+    // `test "HashMap random operations against an oracle"` (fedd42e8d)
+    //
+    // PORT NOTE: the reference's oracle is `std.AutoHashMapUnmanaged` and its
+    // PRNG is `std.Random.DefaultPrng` (xoshiro256++) seeded 0xdeadbeef. The
+    // port uses `std::collections::HashMap` as the oracle and an inline
+    // xoshiro256++ with the same seeding discipline — the point of the test is
+    // the differential against a known-good map, not a particular sequence.
+    #[test]
+    fn HashMap_random_operations_against_an_oracle() {
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let cap: u32 = 64;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = ctx::<u32>();
+
+        let mut oracle: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+
+        // `std.Random.DefaultPrng.init(0xdeadbeef)`.
+        let mut state: u64 = 0xdead_beef;
+        let mut next = move || -> u32 {
+            // splitmix64
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            ((z ^ (z >> 31)) >> 32) as u32
+        };
+
+        // A small key space forces frequent hits, misses, and re-insertions
+        // at every load factor from empty to completely full.
+        let key_space = cap + cap / 2;
+        for _ in 0..20_000 {
+            let key = next() % key_space;
+            match next() % 4 {
+                0 | 1 => {
+                    let value = next();
+                    match map.put_context(key, value, &c) {
+                        Ok(()) => {
+                            oracle.insert(key, value);
+                        }
+                        Err(_) => {
+                            // Map is full: the oracle must not know this key
+                            // (put on an existing key always succeeds).
+                            assert!(!oracle.contains_key(&key));
+                            assert_eq!(map.count(), map.capacity());
+                        }
+                    }
+                }
+                2 => assert_eq!(oracle.remove(&key).is_some(), map.remove_context(key, &c)),
+                3 => assert_eq!(oracle.get(&key).copied(), map.get_context(key, &c)),
+                _ => unreachable!(),
+            }
+
+            assert_eq!(oracle.len() as Size, map.count());
         }
+
+        // Final full comparison plus the canonical placement invariant.
+        for (k, v) in oracle.iter() {
+            assert_eq!(*v, map.get_context(*k, &c).unwrap());
+        }
+        map.debug_assert_canonical(&c);
     }
 
     #[test]
@@ -2056,7 +2006,7 @@ mod tests {
             assert!(key_ptr.is_some());
 
             if let Some(ptr) = key_ptr {
-                unsafe { map.remove_by_ptr(ptr) };
+                unsafe { map.remove_by_ptr_context(ptr, &c) };
             }
             i += 1;
         }
@@ -2085,7 +2035,7 @@ mod tests {
         assert!(key_ptr.is_some());
 
         if let Some(ptr) = key_ptr {
-            unsafe { map.remove_by_ptr(ptr) };
+            unsafe { map.remove_by_ptr_context(ptr, &c) };
         }
 
         assert!(map.count() == 0);

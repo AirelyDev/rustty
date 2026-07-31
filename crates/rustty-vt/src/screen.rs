@@ -1176,6 +1176,96 @@ impl Screen {
         Ok(new_node)
     }
 
+    /// Clone the cells in columns [x_start, x_end) of a source row into
+    /// the row at `dst_y` of the given node's page, increasing the node's
+    /// capacity as necessary to fit the managed memory (styles,
+    /// hyperlinks, etc.) of the copied cells.
+    ///
+    /// This is the Screen-level analog of PageList.cloneRowGrowCapacity:
+    /// capacity increases are routed through Screen.increaseCapacity so
+    /// that the cursor's style/hyperlink references are migrated when the
+    /// destination node is the cursor's page.
+    ///
+    /// Since increasing capacity replaces the node in the page list, the
+    /// (possibly replaced) node is returned and the caller must use it in
+    /// place of the old node. Tracked pins are updated automatically. The
+    /// source must NOT be on the given node since the node's page memory
+    /// may be freed on capacity increase.
+    ///
+    /// Callers use this mid-mutation (after rows have been rotated or
+    /// shifted), so a failure can't be propagated without leaving the
+    /// page list half-mutated (and corrupt). If the capacity can't be
+    /// increased (system OOM or the page is already at max capacity),
+    /// this panics: a crash is better than corruption.
+    //
+    // UB HAZARD (`P3-W2` T4 Step 3): `src_page` and `node.page()` are two raw
+    // `*mut Page`s and `increase_capacity` FREES the latter, which would leave
+    // `src_row` dangling on the retry if they aliased. The reference enforces
+    // this with `assert(src_page != node.page())`; the port encodes the
+    // disjointness as a `debug_assert!` on the node pointers, not a comment.
+    //
+    // NEGATIVE CONTROL EXECUTED (`P3-W2` T4 Step 4): dropping the retry (return
+    // `current` on the first clone error) FAILS both
+    // `screen_scroll_above_hyperlink_dense_row_to_{fresh,existing}_page`
+    // (`assertion left == right failed; left: 10, right: 2` — the destination
+    // page ends up with 2 of the 10 hyperlinks) AND both
+    // `terminal_{insert,delete}Lines_hyperlink_dense_row_crosses_page_boundary`.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn clone_partial_row_grow_capacity(
+        &mut self,
+        node: *mut pagelist::Node,
+        dst_y: usize,
+        src_page: *mut Page,
+        src_row: *const pagepkg::Row,
+        x_start: usize,
+        x_end: usize,
+    ) -> *mut pagelist::Node {
+        debug_assert!(
+            !core::ptr::eq(src_page, unsafe { pagelist::Node::page(node) }),
+            "clone_partial_row_grow_capacity: source page must not be the destination node's \
+             page; increase_capacity frees the destination page memory"
+        );
+
+        let mut current = node;
+        loop {
+            let cur_page: *mut Page = unsafe { pagelist::Node::page(current) };
+            let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
+            let res = unsafe {
+                (*cur_page).clone_partial_row_from(
+                    &*src_page,
+                    cur_rows.add(dst_y),
+                    src_row,
+                    x_start,
+                    x_end,
+                )
+            };
+            let Err(err) = res else {
+                return current;
+            };
+
+            // Adjust our page capacity to make room for what we
+            // didn't have space for and retry the copy.
+            current = match self.increase_capacity(
+                current,
+                pagelist::grow::IncreaseCapacity::for_clone_error(err),
+            ) {
+                Ok(n) => n,
+                // We can't gracefully recover from either of these
+                // here: our callers have already rotated or shifted
+                // rows, so returning an error would leave the page
+                // list half-mutated (and corrupt), so a crash is
+                // better.
+                Err(pagelist::grow::IncreaseCapacityError::OutOfMemory) => {
+                    panic!("increaseCapacity system allocator OOM")
+                }
+                Err(pagelist::grow::IncreaseCapacityError::OutOfSpace) => {
+                    panic!("increaseCapacity OutOfSpace")
+                }
+            };
+        }
+    }
+
     #[inline]
     pub fn cursor_cell_right(&mut self, n: size::CellCountInt) -> *mut pagepkg::Cell {
         debug_assert!(self.cursor.x + n < self.pages.cols);
@@ -1601,44 +1691,65 @@ impl Screen {
         &mut self,
         fresh_node: *mut crate::pagelist::Node,
     ) -> Result<(), OutOfMemory> {
+        // A fresh node given to us is always the newly allocated tail of
+        // the page list (see grow), which is where our iteration starts.
+        debug_assert!(fresh_node.is_null() || std::ptr::eq(fresh_node, self.pages.pages.last));
+
         let down = unsafe { (*self.cursor.page_pin).down(1) }.unwrap();
         self.cursor_change_pin(down);
 
         // Go through each of the pages following our pin, shift all rows
-        // down by one, and copy the last row of the previous page.
+        // down by one, and copy the last row of the previous page. We start
+        // at the tail, which is the only node that can be freshly allocated.
         let mut current = self.pages.pages.last;
         assert!(!current.is_null());
+        let mut current_is_fresh = !fresh_node.is_null();
         while !std::ptr::eq(current, unsafe { (*self.cursor.page_pin).node }) {
             let prev = unsafe { (*current).prev };
-            let prev_page: *mut Page = unsafe { crate::pagelist::Node::page(prev) };
-            let cur_page: *mut Page = unsafe { crate::pagelist::Node::page(current) };
-            let prev_rows = unsafe { (*prev_page).rows.ptr((*prev_page).memory_ptr()) };
-            let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
 
             // A newly allocated tail has no earlier references to invalidate.
-            if fresh_node.is_null() || !std::ptr::eq(current, fresh_node) {
+            if !current_is_fresh {
                 // Rotating this page moves every cached row coordinate down by one.
                 self.pages.invalidate_node_layout(current);
             }
 
             // Rotate the pages down: [ 0 1 2 3 ] => [ 3 0 1 2 ]
-            let cur_size_rows = unsafe { (*cur_page).size.rows } as usize;
-            fastmem::rotateOnceR(unsafe {
-                core::slice::from_raw_parts_mut(cur_rows, cur_size_rows)
-            });
+            {
+                let cur_page: *mut Page = unsafe { crate::pagelist::Node::page(current) };
+                let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
+                let cur_size_rows = unsafe { (*cur_page).size.rows } as usize;
+                fastmem::rotateOnceR(unsafe {
+                    core::slice::from_raw_parts_mut(cur_rows, cur_size_rows)
+                });
+            }
 
             // Copy the last row of the previous page to the top of current.
-            let prev_size_rows = unsafe { (*prev_page).size.rows } as usize;
-            unsafe {
-                (*cur_page)
-                    .clone_row_from(prev_page, cur_rows, prev_rows.add(prev_size_rows - 1))
-                    .map_err(|_| OutOfMemory)?
-            };
+            // If the current page doesn't have enough capacity for the
+            // managed memory of the copied row (styles, hyperlinks, etc.)
+            // then its capacity is increased and the copy retried, which
+            // may replace `current` in the page list. Our loop condition
+            // guarantees `current` is never the cursor page, and `prev` is
+            // unaffected by the replacement.
+            {
+                let prev_page: *mut Page = unsafe { crate::pagelist::Node::page(prev) };
+                let prev_rows = unsafe { (*prev_page).rows.ptr((*prev_page).memory_ptr()) };
+                let prev_size_rows = unsafe { (*prev_page).size.rows } as usize;
+                let cols = self.pages.cols as usize;
+                current = self.clone_partial_row_grow_capacity(
+                    current,
+                    0,
+                    prev_page,
+                    unsafe { prev_rows.add(prev_size_rows - 1) },
+                    0,
+                    cols,
+                );
+            }
 
             // Mark dirty on the page, since we are dirtying all rows with this.
-            unsafe { (*cur_page).dirty = true };
+            unsafe { (*crate::pagelist::Node::page(current)).dirty = true };
 
             current = prev;
+            current_is_fresh = false;
         }
 
         // Our current is our cursor page, we need to rotate down from
@@ -3319,9 +3430,9 @@ impl Screen {
                     page = unsafe { crate::pagelist::Node::page(new_node) };
                 }
 
-                // Canonical map insertion rehashes tombstones in place. Reaching
-                // this error therefore means live entries fill the usable map
-                // capacity and the page must grow.
+                // The hyperlink map is fixed-capacity, so reaching this error
+                // means live entries fill the usable map capacity and the page
+                // must grow.
                 let _ = self.increase_capacity(
                     unsafe { (*self.cursor.page_pin).node },
                     Some(IncreaseCapacity::HyperlinkBytes),
@@ -12526,6 +12637,179 @@ mod tests {
         assert!(s
             .pages
             .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+        s.deinit();
+    }
+
+    // test "Screen: scroll above hyperlink-dense row to fresh page"
+    #[test]
+    fn screen_scroll_above_hyperlink_dense_row_to_fresh_page() {
+        // Regression test for https://github.com/ghostty-org/ghostty/discussions/13160
+        //
+        // When a scroll-above operation pushes a row carrying more unique
+        // hyperlinks than a fresh page's default hyperlink capacity across
+        // a page boundary, the cross-page row clone must increase the
+        // destination page's capacity (like insertLines/deleteLines do)
+        // rather than error out mid-operation, which leaves the page list
+        // half-mutated and aborts later (e.g. in clearCells).
+        let mut s = mkscreen(10, 5, 10000);
+
+        // Fill the first page so it is exactly full and the cursor is on
+        // its last row (which is also the bottom row of the active area).
+        // The next grow() will then allocate a fresh page.
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
+        for _ in 0..(first_page_rows - 1) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false)
+        };
+        assert!(std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+        assert_eq!(
+            unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows },
+            unsafe {
+                (*crate::pagelist::Node::page(s.pages.pages.first))
+                    .size
+                    .rows
+            },
+        );
+        assert_eq!(s.pages.rows - 1, s.cursor.y);
+
+        // Fill the bottom row with unique hyperlinks: more than a fresh
+        // page can hold with default hyperlink capacity.
+        for i in 0..s.pages.cols {
+            let uri = format!("http://example.com/{i}").into_bytes();
+            s.start_hyperlink(&uri, None).unwrap();
+            s.test_write_string(b"A").unwrap();
+            s.end_hyperlink();
+        }
+        assert_eq!(s.pages.cols as usize, unsafe {
+            (*crate::pagelist::Node::page((*s.cursor.page_pin).node))
+                .hyperlink_set
+                .count() as usize
+        });
+
+        // Move the cursor above the bottom row and scroll. The dense row is
+        // pushed across the page boundary into the freshly allocated page.
+        s.cursor_absolute(0, 1);
+        s.cursor_scroll_above().unwrap();
+
+        // We must have created a second page and the dense row must now be
+        // the top row of that page.
+        assert!(!std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+
+        // All hyperlinks must have survived the scroll intact: every cell
+        // flagged as a hyperlink must resolve to a real entry in its page's
+        // hyperlink map. A half-applied scroll leaves cells whose hyperlink
+        // flag is set but that have no map entry, which aborts in
+        // clearCells later.
+        let mut node_ = s.pages.pages.first;
+        while !node_.is_null() {
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(node_) };
+            unsafe { (*page).assert_integrity() };
+            for y in 0..unsafe { (*page).size.rows } as usize {
+                let row = unsafe { (*page).get_row(y) };
+                if !unsafe { (*row).hyperlink() } {
+                    continue;
+                }
+                let cells = unsafe { (*page).get_cells(row) };
+                let cells: &mut [pagepkg::Cell] = unsafe { &mut *cells };
+                for cell in cells.iter_mut() {
+                    if !cell.hyperlink() {
+                        continue;
+                    }
+                    assert!(unsafe { (*page).lookup_hyperlink(cell) }.is_some());
+                }
+            }
+            node_ = unsafe { (*node_).next };
+        }
+        assert_eq!(s.pages.cols as usize, unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.last))
+                .hyperlink_set
+                .count() as usize
+        });
+
+        s.deinit();
+    }
+
+    // test "Screen: scroll above hyperlink-dense row to existing page"
+    #[test]
+    fn screen_scroll_above_hyperlink_dense_row_to_existing_page() {
+        // Same as the fresh page variant above but the destination page
+        // already exists (fresh_node == null path in cursorScrollAboveRotate).
+        let mut s = mkscreen(10, 5, 10000);
+
+        // Fill the first page so it is exactly full and the cursor is on
+        // its last row.
+        let first_page_rows = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
+        for _ in 0..(first_page_rows - 1) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false)
+        };
+        assert_eq!(s.pages.rows - 1, s.cursor.y);
+
+        // Fill the last row of the first page with unique hyperlinks:
+        // more than a page can hold with default hyperlink capacity.
+        for i in 0..s.pages.cols {
+            let uri = format!("http://example.com/{i}").into_bytes();
+            s.start_hyperlink(&uri, None).unwrap();
+            s.test_write_string(b"A").unwrap();
+            s.end_hyperlink();
+        }
+
+        // Scroll twice so the active area straddles the page boundary:
+        // the last two active rows are on a second page while the dense
+        // row remains the last row of the first page.
+        s.test_write_string(b"\n\n").unwrap();
+        assert!(!std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.last
+        ));
+
+        // Move the cursor to an active row that is still on the first page
+        // and above the dense row, then scroll. grow() has capacity in the
+        // last page so no fresh page is allocated, but the dense row still
+        // crosses the page boundary during the rotate.
+        s.cursor_absolute(0, 0);
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+        s.cursor_scroll_above().unwrap();
+
+        // All hyperlinks must have survived the scroll intact: every cell
+        // flagged as a hyperlink must resolve to a real entry in its page's
+        // hyperlink map.
+        let mut node_ = s.pages.pages.first;
+        while !node_.is_null() {
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(node_) };
+            unsafe { (*page).assert_integrity() };
+            for y in 0..unsafe { (*page).size.rows } as usize {
+                let row = unsafe { (*page).get_row(y) };
+                if !unsafe { (*row).hyperlink() } {
+                    continue;
+                }
+                let cells = unsafe { (*page).get_cells(row) };
+                let cells: &mut [pagepkg::Cell] = unsafe { &mut *cells };
+                for cell in cells.iter_mut() {
+                    if !cell.hyperlink() {
+                        continue;
+                    }
+                    assert!(unsafe { (*page).lookup_hyperlink(cell) }.is_some());
+                }
+            }
+            node_ = unsafe { (*node_).next };
+        }
+        assert_eq!(s.pages.cols as usize, unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.last))
+                .hyperlink_set
+                .count() as usize
+        });
+
         s.deinit();
     }
 
