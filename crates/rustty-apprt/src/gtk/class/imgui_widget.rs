@@ -56,6 +56,12 @@ const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 /// of the reference's `"ghostty_gtk"`.
 const BACKEND_PLATFORM_NAME: &CStr = c"rustty_gtk";
 
+/// PORTS: the reference `setCurrentContext`'s error set,
+/// `error{ContextNotInitialized}` (`imgui_widget.zig:129`) — a named tag, not a
+/// bare failure, so it is a named type here too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextNotInitialized;
+
 mod imp {
     use super::*;
 
@@ -287,11 +293,11 @@ impl ImguiWidget {
     /// Set our imgui context to be current, or return an error. This must be
     /// called before any Dear ImGui API calls so that they're made against the
     /// proper context. PORTS: `imgui_widget.zig:126-136` `setCurrentContext`.
-    pub fn set_current_context(&self) -> Result<(), ()> {
+    pub fn set_current_context(&self) -> Result<(), ContextNotInitialized> {
         let ig_context = self.imp().ig_context.get();
         if ig_context.is_null() {
             eprintln!("warn(gtk): Dear ImGui context not initialized");
-            return Err(());
+            return Err(ContextNotInitialized);
         }
         // SAFETY: non-null context handle owned by this widget.
         unsafe { cimgui::ImGui_SetCurrentContext(ig_context) };
@@ -441,7 +447,7 @@ impl ImguiWidget {
 
         // Add a tick callback to drive timed updates via the frame clock
         // (`:241-246`).
-        let id = this.add_tick_callback(|widget, clock| Self::tick_callback(widget, clock));
+        let id = this.add_tick_callback(Self::tick_callback);
         imp.tick_callback_id.set(Some(id));
     }
 

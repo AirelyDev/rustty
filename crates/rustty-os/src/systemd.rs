@@ -240,7 +240,11 @@ pub mod notify {
             // PORT NOTE: `ts.sec * std.time.us_per_s + @divFloor(ts.nsec, std.time.ns_per_us)`.
             const US_PER_S: i64 = 1_000_000;
             const NS_PER_US: i64 = 1_000;
-            let now = ts.tv_sec as i64 * US_PER_S + (ts.tv_nsec as i64).div_euclid(NS_PER_US);
+            // PORT NOTE: no conversion on either field, exactly like the
+            // reference expression above — `timespec.tv_sec`/`tv_nsec` are
+            // already `i64` on the 64-bit targets this builds for, and both a
+            // cast and a `From` are rejected here as no-ops.
+            let now = ts.tv_sec * US_PER_S + ts.tv_nsec.div_euclid(NS_PER_US);
 
             let message = format!("RELOADING=1\nMONOTONIC_USEC={now}");
             send(message.as_bytes());

@@ -2192,7 +2192,12 @@ impl Async {
 
     /// Clean up the async. This will forcibly deinitialize any resources
     /// and may result in erroneous wait callbacks to be fired.
-    pub fn deinit(&self) {
+    //
+    // PORT NOTE: the reference receiver is `self: *Async`; ported as `&mut self`
+    // to match — the same choice the darwin `Async.deinit` records. Callers bind
+    // their handle `mut` for it (the `Thread.init` errdefer chains), and a `&self`
+    // receiver here would make those bindings warn `unused_mut` on Linux only.
+    pub fn deinit(&mut self) {
         self.ev.deinit();
     }
 
@@ -7095,7 +7100,7 @@ mod tests {
     #[test]
     fn epoll_async_notify() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
-        let notifier = Async::init().unwrap();
+        let mut notifier = Async::init().unwrap();
 
         let mut wake = false;
         let mut c_wait = Completion::default();

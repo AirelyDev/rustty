@@ -556,7 +556,7 @@ fn cleanup(inner: &Rc<Inner>) {
         // `self.cleanup_timer = null` (`:540`). The source has already removed
         // itself (one-shot), so the id is simply dropped — `glib::SourceId` has no
         // `Drop`, so dropping it detaches nothing and cannot double-remove.
-        drop(state.cleanup_timer.take());
+        state.cleanup_timer = None;
 
         // `if (!self.alive) return SOURCE_REMOVE` (`:541`).
         if !inner.alive.get() {

@@ -12,10 +12,15 @@
 
 // bindgen output over libpng's public headers: silence the lints that fire on
 // machine-generated C-shaped Rust.
+// (`unnecessary_transmutes` fires on bindgen's own accessors for the 24-bit
+// bitfields libpng's headers declare on glibc targets — generated code we do
+// not hand-maintain, so it is silenced here rather than patched; same as
+// libxml2-sys/fontconfig-sys.)
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(dead_code)]
+#![allow(unnecessary_transmutes)]
 #![allow(clippy::all)]
 
 // Force-link the vendored zlib. libpng's `pngstruct.h` embeds a `z_stream` and

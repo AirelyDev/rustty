@@ -17,7 +17,10 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-#[cfg(not(windows))]
+// PORT NOTE: the reference's single `assert` call sits in the Darwin
+// `TIOCPTYGNAME` branch of `getTtyName`, which is a real `cfg` here, so the
+// import carries the same cfg.
+#[cfg(target_os = "macos")]
 use rustty_util::quirks::inlineAssert as assert;
 
 #[allow(dead_code)]

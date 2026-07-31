@@ -306,6 +306,14 @@ impl Keymap {
 //   _padding_end: u19 = 0   (bits 13..=31)
 // `@bitCast(self)` to/from `u32` is reproduced by `int()` below, which assembles
 // the bits at exactly those positions.
+//
+// PORT NOTE: the reference file is compiled only into the macOS build, so its
+// `CarbonMods` has no other-target existence. This port keeps the type (and the
+// `expected_values` test that pins its bit layout) portable so the ported test
+// runs everywhere, which means the type is live off Darwin only under `test` —
+// hence the cfg. `uc_key_translate` below stays Darwin-only because its sole
+// caller, `translate`, is.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, Default)]
 struct CarbonMods {
     meta: bool,
@@ -315,6 +323,7 @@ struct CarbonMods {
     ctrl: bool,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl CarbonMods {
     // const int: u32 = @bitCast(self);
     fn int(self) -> u32 {
@@ -326,6 +335,7 @@ impl CarbonMods {
     }
 
     /// Translate NSEventModifierFlags into the format used by UCKeyTranslate.
+    #[cfg(target_os = "macos")]
     fn uc_key_translate(self) -> u32 {
         let int: u32 = self.int();
         (int >> 8) & 0xFF

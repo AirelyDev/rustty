@@ -134,6 +134,12 @@ pub use rustty_os::resourcesDir;
 #[cfg(target_os = "macos")]
 pub type KeymapError = rustty_input::keymap_darwin::Error;
 /// See the macOS variant.
+//
+// PORT NOTE: off Darwin the reference's `Keymap` is `KeymapNoop`, whose
+// `init`/`reload` error sets carry no tags; the port spells that empty set as
+// the unit error, the same choice `keymap_noop.rs` records — hence the
+// `clippy::result_unit_err` allows on the two signatures below, matching that
+// module's per-occurrence allow.
 #[cfg(not(target_os = "macos"))]
 pub type KeymapError = ();
 
@@ -291,6 +297,9 @@ impl KeyEvent<'_> {
 }
 
 impl App {
+    // See the `KeymapError` note: off Darwin this is the noop keymap's empty
+    // error set, spelled as the unit error like `keymap_noop.rs`.
+    #[allow(clippy::result_unit_err)]
     pub fn init(
         core_app: *mut CoreApp,
         config: &Config,
@@ -415,6 +424,9 @@ impl App {
     }
 
     /// This should be called whenever the keyboard layout was changed.
+    // See the `KeymapError` note: off Darwin this is the noop keymap's empty
+    // error set, spelled as the unit error like `keymap_noop.rs`.
+    #[allow(clippy::result_unit_err)]
     pub fn reloadKeymap(&mut self) -> Result<(), KeymapError> {
         // Reload the keymap
         // try self.keymap.reload();
@@ -2567,6 +2579,12 @@ impl Inspector {
     // PORT NOTE (Task 3): the imgui frame delta-time setup (`io.DeltaTime`), ported
     // LIVE — pure dcimgui + `std::time` (no objc). A private helper called by
     // [`Inspector::renderMetal`]'s double-frame loop.
+    //
+    // PORT NOTE: carries `renderMetal`'s `#[cfg(target_os = "macos")]` (its sole
+    // caller, per the note there); the reference has no non-Darwin build of the
+    // Metal inspector path at all, so an unconditional definition would be dead
+    // code on every other target.
+    #[cfg(target_os = "macos")]
     fn newFrame(&mut self) -> Result<(), ApprtError> {
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
         let io = unsafe { dcimgui_sys::ImGui_GetIO() };

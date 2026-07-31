@@ -321,12 +321,15 @@ fn initThread() -> Result<(), InitThreadError> {
         // (R2: the app-name segment of the `"ghostty/sentry"` subdir is
         // sourced from rustty-identity, the identity source-of-truth crate,
         // not hardcoded — same as dir.rs.)
+        // PORT NOTE: spelled as the reference's explicit `break :cache_dir`
+        // rather than a bare tail expression — off Darwin the `break` above is
+        // `cfg`-stripped, and a labelled block whose label is never named warns.
         let subdir = format!("{}/sentry", rustty_identity::APP_NAME);
-        internal_os::xdg::cache(internal_os::xdg::Options {
+        break 'cache_dir internal_os::xdg::cache(internal_os::xdg::Options {
             subdir: Some(&subdir),
             ..Default::default()
         })
-        .map_err(InitThreadError::Dir)?
+        .map_err(InitThreadError::Dir)?;
     };
     // sentry.c.sentry_options_set_database_path_n(
     //     opts,

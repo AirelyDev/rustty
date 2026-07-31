@@ -3509,8 +3509,13 @@ fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
                 //     log.debug("killpg failed with EPERM, expected on Darwin and ignoring", .{});
                 //     break :killpg;
                 // }
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                if err == libc::EPERM {
+                //
+                // PORT NOTE: `comptime builtin.target.os.tag.isDarwin()` is a
+                // `const` fold of the cfg rather than a `cfg` attribute on the
+                // `if`, so the `break 'killpg` survives on every target — a
+                // labelled block whose label is never named warns off Darwin.
+                const IS_DARWIN: bool = cfg!(any(target_os = "macos", target_os = "ios"));
+                if IS_DARWIN && err == libc::EPERM {
                     // log.debug("killpg failed with EPERM, expected on Darwin and ignoring", .{});
                     break 'killpg;
                 }
@@ -4885,6 +4890,14 @@ impl PasswdPkg for OsPasswd {
 fn execCommand<P: PasswdPkg>(
     command: &configpkg::command::Command,
 ) -> Result<Vec<CString>, ExecCommandError> {
+    // PORT NOTE: the reference's `comptime passwdpkg: type` is read only by the
+    // `darwin:` block below, which is a real `cfg` here; the parameter stays in
+    // the signature on every target (the reference's does, and the callers —
+    // including the ported tests — pass it), so name it off Darwin rather than
+    // letting it read as extraneous.
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let _ = core::marker::PhantomData::<P>;
+
     // If we're on macOS, we have to use `login(1)` to get all of
     // the proper environment variables set, a login shell, and proper
     // hushlogin behavior.
