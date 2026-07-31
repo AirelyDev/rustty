@@ -208,6 +208,15 @@ pub struct Inspector {
     // renderer_info: widgets.renderer.Info,
     pub renderer_info: renderer::Info,
     // show_demo_window: bool,
+    //
+    // PORT NOTE: the field is declared UNCONDITIONALLY, exactly as the oracle
+    // does (`surface.zig:29`), even though its only read is the
+    // `debug_assertions`-gated demo window below. Cfg-gating the field to match
+    // its use would change the struct's shape between profiles and diverge from
+    // the reference; allowing dead_code only in the profile where it is
+    // genuinely unread keeps the shape and silences a warning that a
+    // `clippy --release -D warnings` lane would otherwise trip on.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     show_demo_window: bool,
 }
 

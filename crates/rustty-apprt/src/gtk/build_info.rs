@@ -36,6 +36,11 @@
 /// `N` must equal `a.len() + b.len()`; the caller supplies it as a const expr.
 /// Rust's std has no const `&str` concat, so we build the bytes ourselves and
 /// hand them back as an array a `const` item can then reinterpret as `&str`.
+///
+/// Both call sites are `debug_assertions`-gated, so in a release build this is
+/// unused. Allowed rather than cfg-gated: the helper is profile-independent and
+/// duplicating the gate here would just be a second place to keep in sync.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 const fn concat_bytes<const N: usize>(a: &str, b: &str) -> [u8; N] {
     let a = a.as_bytes();
     let b = b.as_bytes();
