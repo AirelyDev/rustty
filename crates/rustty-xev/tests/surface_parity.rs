@@ -185,6 +185,20 @@ const _: fn() = || {
 // ---------------------------------------------------------------------------
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+// MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): this test
+// drives a REAL `Loop::init` -> live `kqueue(2)`/`kevent64` (macOS) or
+// `epoll_create1`/`eventfd` (Linux) — foreign functions Miri cannot execute
+// ("unsupported operation: can't call foreign function `kqueue`"), the exact
+// same structural class as the ~30 `#[cfg_attr(miri, ignore)]` annotations
+// already carried by the `kqueue`/`epoll` unit tests. The annotation was simply
+// MISSING here, which left `cargo +nightly miri test -p rustty-xev` red on an
+// unsupported-operation abort (NOT on UB) even after the thread-pool aliasing
+// fixes (WS-XEV-UB). It runs natively (ci.sh HARD `cargo test --workspace`) and
+// is covered by the G6 ASan companion arm.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64 (macOS) / epoll/eventfd (Linux) syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm."
+)]
 fn public_loop_surface_is_live() {
     #[cfg(target_os = "linux")]
     let mut l = {
