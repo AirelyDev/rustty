@@ -168,7 +168,11 @@ impl PageList {
         self.viewport_pin_row_offset = None;
 
         if !opts.reflow {
-            return self.resize_without_reflow(opts);
+            self.resize_without_reflow(opts)?;
+            // Shrinking the active row count turns former active rows into
+            // scrollback even without reflow, which can cross the line limit.
+            self.enforce_max_lines();
+            return Ok(());
         }
 
         // Recalculate our minimum max size. This allows grow to work properly
@@ -180,6 +184,11 @@ impl PageList {
             opts.rows.unwrap_or(self.rows),
         );
         // errdefer self.min_max_size = old_min_max_size;
+
+        // Recalculate our minimum max lines for the same reasons as above.
+        let old_min_max_lines = self.min_max_lines;
+        self.min_max_lines = Self::min_max_lines(opts.cols.unwrap_or(self.cols));
+        // errdefer self.min_max_lines = old_min_max_lines;
 
         // On reflow, the main thing that causes reflow is column changes. If
         // only rows change, reflow is impossible. So we change our behavior based
@@ -209,6 +218,8 @@ impl PageList {
         if let Err(e) = r {
             // errdefer self.min_max_size = old_min_max_size;
             self.min_max_size = old_min_max_size;
+            // errdefer self.min_max_lines = old_min_max_lines;
+            self.min_max_lines = old_min_max_lines;
             return Err(e);
         }
 
@@ -223,6 +234,11 @@ impl PageList {
             }
             super::Viewport::Active | super::Viewport::Top => {}
         }
+
+        // Column reflow can change the physical history row count, and a row
+        // resize can move the active boundary. Both may expose whole old pages
+        // that are now eligible for line-limit pruning.
+        self.enforce_max_lines();
 
         Ok(())
     }
@@ -536,6 +552,13 @@ impl PageList {
             old_min_max_size
         };
         // errdefer self.min_max_size = old_min_max_size;
+        let old_min_max_lines = self.min_max_lines;
+        self.min_max_lines = if !opts.reflow {
+            Self::min_max_lines(opts.cols.unwrap_or(self.cols))
+        } else {
+            old_min_max_lines
+        };
+        // errdefer self.min_max_lines = old_min_max_lines;
 
         // PORT NOTE: the reference `errdefer self.min_max_size = old_min_max_size`
         // restores `min_max_size` on any error below. Both fallible paths
@@ -618,6 +641,8 @@ impl PageList {
                         if let Err(e) = self.resize_without_reflow_grow_cols(cols, chunk) {
                             // errdefer self.min_max_size = old_min_max_size;
                             self.min_max_size = old_min_max_size;
+                            // errdefer self.min_max_lines = old_min_max_lines;
+                            self.min_max_lines = old_min_max_lines;
                             return Err(e);
                         }
                     }

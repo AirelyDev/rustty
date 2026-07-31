@@ -24,7 +24,7 @@ use std::time::Instant;
 use super::access::Clone as CloneOpts;
 use super::resize::Resize;
 use super::scroll::Scroll;
-use super::{page_tracking, PageList};
+use super::{page_tracking, Options, PageList};
 use crate::point;
 
 /// The identical workload exercised by EVERY measurement:
@@ -34,7 +34,11 @@ use crate::point;
 fn workload() {
     // init(80, 24, large_max). A large max_size lets the ~2000 scrollback rows
     // accumulate without trimming, forcing many page allocations.
-    let mut s = PageList::init(80, 24, Some(64 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(64 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
 
     // grow_rows to ~2000 scrollback rows (24 active + 2000 scrollback). Each
     // overflow past a page's row capacity forces a new page-pool allocation.
@@ -175,7 +179,11 @@ fn run_workload_sampling_peak() -> usize {
         }
     };
 
-    let mut s = PageList::init(80, 24, Some(64 * 1024 * 1024)).unwrap();
+    let mut s = PageList::init(Options {
+        max_size: Some(64 * 1024 * 1024),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     sample(&mut peak);
     s.grow_rows(2000).unwrap();
     sample(&mut peak);

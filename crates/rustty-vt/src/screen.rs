@@ -610,7 +610,10 @@ impl Screen {
         // PORT NOTE: the reference `PageList.init` takes `?usize` and Zig coerces
         // the `usize` `opts.max_scrollback` into `Some(..)`; `0` therefore becomes
         // `Some(0)` (the no-scrollback case is captured by `no_scrollback` below).
-        let mut pages = PageList::init(opts.cols, opts.rows, Some(opts.max_scrollback))?;
+        let mut pages = PageList::init(pagelist::Options {
+            max_size: Some(opts.max_scrollback),
+            ..pagelist::Options::new(opts.cols, opts.rows)
+        })?;
 
         // Create our tracked pin for the cursor.
         // const page_pin = try pages.trackPin(.{ .node = pages.pages.first.? });

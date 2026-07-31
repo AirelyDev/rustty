@@ -1082,6 +1082,14 @@ pub struct PageList {
     /// and at least two pages for our algorithms.
     pub min_max_size: usize,
 
+    /// Maximum number of physical rows retained as scrollback. This excludes the
+    /// active area and is raised to `min_max_lines` when necessary.
+    pub explicit_max_lines: usize,
+
+    /// Minimum line limit required to retain one standard page worth of
+    /// scrollback at the current column count.
+    pub min_max_lines: usize,
+
     /// The total number of rows represented by this PageList. This is used
     /// specifically for scrollbar information so we can have the total size.
     pub total_rows: usize,
@@ -1250,6 +1258,49 @@ fn init_pages_tw_check(point: InitPagesFp) -> Result<(), OutOfMemory> {
     INIT_PAGES_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
+/// `PageList.Options`
+//
+// PORT NOTE: the reference declares `cols`/`rows` without defaults and
+// `max_size`/`max_lines` with `= null`. Rust has no per-field defaults, so
+// `Options::new(cols, rows)` supplies the two required fields plus the
+// reference's defaults for the rest and call sites override with struct-update
+// syntax (`Options { max_size: Some(0), ..Options::new(80, 24) }`), which is the
+// closest equivalent of the reference's `.{ .cols = 80, .rows = 24 }` form. We
+// deliberately do NOT implement `Default`: a zero `cols`/`rows` is never a valid
+// PageList and must not be reachable by omission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Options {
+    /// The initial active-area size. This can be resized with `resize`.
+    pub cols: size::CellCountInt,
+    pub rows: size::CellCountInt,
+
+    /// The maximum number of bytes allocated for pages. The effective limit
+    /// is raised when necessary to hold the active area. Null is unlimited.
+    pub max_size: Option<usize>,
+
+    /// The maximum number of scrollback rows, excluding the active
+    /// area. Rows are physical (viewed) rows, so a wrapped row counts as
+    /// multiple rows. Max line pruning only happens at page-boundaries
+    /// (the minimum internal allocation size) so in practice the max lines
+    /// is always slightly larger than configured.
+    ///
+    /// Null is unlimited.
+    pub max_lines: Option<usize>,
+}
+
+impl Options {
+    /// The reference's field defaults for everything but the required
+    /// `cols`/`rows`. See the PORT NOTE on `Options`.
+    pub const fn new(cols: size::CellCountInt, rows: size::CellCountInt) -> Options {
+        Options {
+            cols,
+            rows,
+            max_size: None,
+            max_lines: None,
+        }
+    }
+}
+
 impl PageList {
     /// Returns the minimum valid "max size" for a given number of rows and cols
     /// such that we can fit the active area AND at least two pages. Note we
@@ -1310,6 +1361,13 @@ impl PageList {
         std_size() * pages
     }
 
+    /// Returns the minimum line limit for a given column count. Line limits are
+    /// page-granular, so we always permit at least one standard page worth of
+    /// scrollback rows.
+    fn min_max_lines(cols: size::CellCountInt) -> usize {
+        Self::initial_capacity(cols).rows as usize
+    }
+
     /// Calculates the initial capacity for a new page for a given column
     /// count. This will attempt to fit within std_size at all times so we
     /// can use our memory pool, but if cols is too big, this will return a
@@ -1366,18 +1424,23 @@ impl PageList {
     /// top of the active area of the screen (important knowledge for quickly
     /// setting up cursors in Screen).
     ///
-    /// max_size is the maximum number of bytes that will be allocated for
+    /// `max_size` is the maximum number of bytes that will be allocated for
     /// pages. If this is smaller than the bytes required to show the viewport
     /// then max_size will be ignored and the viewport will be shown, but no
     /// scrollback will be created. max_size is always rounded down to the nearest
     /// terminal page size (not virtual memory page), otherwise we would always
     /// slightly exceed max_size in the limits.
     ///
-    /// If max_size is null then there is no defined limit and the screen will
-    /// grow forever. In reality, the limit is set to the byte limit that your
-    /// computer can address in memory. If you somehow require more than that
-    /// (due to disk paging) then please contribute that yourself and perhaps
-    /// search deep within yourself to find out why you need that.
+    /// `max_lines` is the maximum number of physical rows retained as scrollback,
+    /// excluding the active area. It is a page-granular heuristic: at least one
+    /// standard page worth of rows is permitted and only complete historical
+    /// pages are removed.
+    ///
+    /// If either limit is null then that dimension has no defined limit and the
+    /// screen will grow forever. In reality, the limit is set to the amount your
+    /// computer can address in memory. If you somehow require more than that (due
+    /// to disk paging) then please contribute that yourself and perhaps search
+    /// deep within yourself to find out why you need that.
     //
     // PORT NOTE: the reference takes `alloc: Allocator` for the node/pin pools
     // and `pageAllocator()` for the page pool. The `rustty_zigstd` pools and the
@@ -1386,11 +1449,10 @@ impl PageList {
     // `init_tw`/`initPages_tw` tripwire failpoints are exercised only by the
     // deferred test phase and are no-ops in non-test builds; see the tests
     // phase for the failpoint wiring.
-    pub fn init(
-        cols: size::CellCountInt,
-        rows: size::CellCountInt,
-        max_size: Option<usize>,
-    ) -> Result<PageList, OutOfMemory> {
+    pub fn init(opts: Options) -> Result<PageList, OutOfMemory> {
+        let cols = opts.cols;
+        let rows = opts.rows;
+
         // The screen starts with a single page that is the entire viewport,
         // and we'll split it thereafter if it gets too large and add more as
         // necessary.
@@ -1448,8 +1510,10 @@ impl PageList {
             page_serial_epoch: 0,
             page_compression: compress::IncrementalCompressionState::default(),
             page_size,
-            explicit_max_size: max_size.unwrap_or(usize::MAX),
+            explicit_max_size: opts.max_size.unwrap_or(usize::MAX),
             min_max_size,
+            explicit_max_lines: opts.max_lines.unwrap_or(usize::MAX),
+            min_max_lines: Self::min_max_lines(cols),
             total_rows: rows as usize,
             tracked_pins,
             viewport: Viewport::Active,
@@ -1673,6 +1737,21 @@ impl PageList {
             //     .{ self.total_rows, actual_total },
             // );
             return Err(IntegrityError::TotalRowsMismatch);
+        }
+
+        // A line limit may only be exceeded when the oldest page also contains
+        // active rows. Complete historical pages are always eligible for pruning.
+        if self.total_rows > self.rows as usize {
+            let history_rows = self.total_rows - self.rows as usize;
+            if history_rows > self.max_lines()
+                && !core::ptr::eq(self.pages.first, self.get_top_left(point::Tag::Active).node)
+            {
+                // log.warn(
+                //     "PageList integrity violation: max lines exceeded history={} max={}",
+                //     .{ history_rows, self.maxLines() },
+                // );
+                return Err(IntegrityError::MaxLinesExceeded);
+            }
         }
 
         // Verify that all our tracked pins point to valid pages.
@@ -2185,6 +2264,86 @@ impl PageList {
         core::cmp::max(self.explicit_max_size, self.min_max_size)
     }
 
+    /// Returns the effective scrollback row limit. At least one standard page
+    /// worth of rows is permitted so enforcement never has to split a page.
+    ///
+    /// Like `maxSize`, this is a heuristic. An unusually large page which contains
+    /// both history and active rows can temporarily exceed this value because only
+    /// complete historical pages are pruned.
+    fn max_lines(&self) -> usize {
+        core::cmp::max(self.explicit_max_lines, self.min_max_lines)
+    }
+
+    /// Prune complete historical pages until the line limit is satisfied or the
+    /// oldest remaining page overlaps the active area.
+    //
+    // PORT NOTE (UB HAZARD, P3-W3 T1 Step 3): the pin loop below writes
+    // `garbage = true` through the tracked-pin raw pointers while `erase_page`
+    // remaps those same pins. rustty's tracked pins are `*mut Pin` already; we
+    // deliberately never materialize a `&mut Pin` here, because such a reference
+    // would be invalidated by the interleaved `erase_page(&mut self)` call
+    // (Stacked Borrows: `&mut Page`/`&mut Pin` args re-read across a `&mut self`
+    // call are UB, unlike Zig's unprotected pointers).
+    pub(crate) fn enforce_max_lines(&mut self) {
+        if self.explicit_max_lines == usize::MAX {
+            return;
+        }
+
+        // A partially constructed clone can temporarily contain fewer rows than
+        // its active area. It has no scrollback to prune.
+        if self.total_rows <= self.rows as usize {
+            return;
+        }
+
+        // If we're lower then the limit we're good.
+        let max_lines = self.max_lines();
+        if self.total_rows - self.rows as usize <= max_lines {
+            return;
+        }
+
+        // Removing pages changes compression.
+        self.page_compression.mark_activity();
+
+        // Accumulate the row delta so viewport offsets are fixed up once
+        // after all eligible pages have been removed.
+        let mut removed: usize = 0;
+        while self.total_rows - self.rows as usize > max_lines {
+            let first = self.pages.first;
+
+            // The page containing the active top may also contain history. Keep
+            // that boundary page whole even if its history exceeds the heuristic.
+            if core::ptr::eq(first, self.get_top_left(point::Tag::Active).node) {
+                break;
+            }
+
+            let first_rows = unsafe { Node::rows(first) as usize };
+
+            // Automatic pruning invalidates the content represented by pins in
+            // the removed page. erasePage remaps them to the next page below but
+            // only the line-limit caller knows that their original content is
+            // gone, so mark them as garbage here.
+            for p in self.tracked_pins.keys() {
+                let p: *mut Pin = *p;
+                if core::ptr::eq(unsafe { (*p).node }, first) {
+                    unsafe { (*p).garbage = true };
+                }
+            }
+
+            // erasePage updates the list, pin targets, and byte accounting.
+            // Row accounting belongs to the caller because erasePage is also used
+            // by paths that already adjusted total_rows.
+            self.erase_page(first);
+            self.total_rows -= first_rows;
+            removed += first_rows;
+        }
+
+        // Reconcile viewport mode and cached row offsets with the combined prefix
+        // removal only after every page and pin points into the final list.
+        if removed > 0 {
+            self.fixup_viewport(removed);
+        }
+    }
+
     /// Checks if a pin is valid for this pagelist. This is a very slow and
     /// expensive operation since we traverse the entire linked list in the
     /// worst case. Only for runtime safety/debug.
@@ -2460,6 +2619,7 @@ impl Pin {
 // it ports to a Rust enum used as the `Err` variant of `verify_integrity`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegrityError {
+    MaxLinesExceeded,
     PageSerialInvalid,
     TotalRowsMismatch,
     TrackedPinInvalid,

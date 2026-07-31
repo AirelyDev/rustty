@@ -22,6 +22,7 @@
 //!
 //! Exit code is non-zero if the scrollback clear did not return at least 2 MiB.
 
+use rustty_vt::pagelist::Options;
 use rustty_vt::PageList;
 
 // macOS: `MADV_FREE_REUSABLE` removes pages from the process PHYSICAL FOOTPRINT
@@ -98,7 +99,11 @@ fn main() {
     let before = rss_bytes();
 
     // Grow ~10 MiB of scrollback (the default scrollback limit), then clear it.
-    let mut list = PageList::init(80, 24, Some(1 << 30)).unwrap();
+    let mut list = PageList::init(Options {
+        max_size: Some(1 << 30),
+        ..Options::new(80, 24)
+    })
+    .unwrap();
     while list.page_size < 10_000_000 {
         let _ = list.grow().unwrap();
     }

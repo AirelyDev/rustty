@@ -969,6 +969,8 @@ impl PageList {
             page_size,
             explicit_max_size: self.explicit_max_size,
             min_max_size: self.min_max_size,
+            explicit_max_lines: self.explicit_max_lines,
+            min_max_lines: self.min_max_lines,
             cols: self.cols,
             rows: self.rows,
             total_rows,
@@ -1002,6 +1004,9 @@ impl PageList {
             // Update our total rows to be our row size.
             result.total_rows = result.rows as usize;
         }
+
+        // A clone can copy more history than its inherited line limit.
+        result.enforce_max_lines();
 
         result.assert_integrity();
         Ok(result)
