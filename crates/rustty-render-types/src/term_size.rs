@@ -182,17 +182,38 @@ impl<T> Offset<T> {
 #[repr(C)]
 pub struct OffsetSlice<T> {
     pub offset: Offset<T>,
-    /// The 4 tail-padding bytes the field pair implies, named so that every
-    /// byte of an `OffsetSlice` written into a page mapping is initialized.
-    /// Always zero; never read.
+    /// The 4 tail-padding bytes the field pair implies **on a 64-bit target**,
+    /// named so that every byte of an `OffsetSlice` written into a page mapping
+    /// is initialized. Always zero; never read.
+    ///
+    /// PORT NOTE (P3-W6 T1): the field is `cfg`'d to 64-bit because on a 32-bit
+    /// target `usize` is 4 bytes, so `offset: u32` beside `len: u32` has NO tail
+    /// padding at all and declaring the field there would ADD 4 bytes — turning
+    /// a byte-completeness fix into an 8-vs-12 LAYOUT DIVERGENCE from the
+    /// oracle's `Offset(T).Slice`. That is not hypothetical: rustty builds
+    /// `rustty-vt-c` for `wasm32-unknown-unknown` (A5 arm (b) reads the export
+    /// list out of the `.wasm`), and the unconditional field made the two
+    /// `const _` asserts below fail at compile time, so the whole wasm arm of
+    /// A5 could not build. See the finding note on those asserts.
+    #[cfg(target_pointer_width = "64")]
     _padding: u32,
     pub len: usize,
 }
 
 // `OffsetSlice` must have no implicit padding at all, or the reshape above is
-// pointless. 4 + 4 + 8 == 16 at align 8.
-const _: () = assert!(core::mem::size_of::<OffsetSlice<u8>>() == 16);
-const _: () = assert!(core::mem::align_of::<OffsetSlice<u8>>() == 8);
+// pointless. 64-bit: 4 + 4 + 8 == 16 at align 8. 32-bit: 4 + 4 == 8 at align 4,
+// with no `_padding` field (see the PORT NOTE on it).
+//
+// FINDING (P3-W6 T1): these two asserts were written as literal `== 16` / `== 8`
+// and were therefore a compile ERROR on every 32-bit target from the moment they
+// landed (main @ 9d8fafb). Nothing caught it because no gate had ever built the
+// wasm target in a clean tree — A5 arm (b) SKIPS the `cargo build --target
+// wasm32-unknown-unknown` whenever `rustty_vt_c.wasm` already exists, so a
+// developer with a warm `target/` never saw it, and a fresh checkout got exit
+// 101 before A5 printed its first line. Expressed against `size_of::<usize>()`,
+// the assert now says what it means on both widths and still binds on both.
+const _: () = assert!(core::mem::size_of::<OffsetSlice<u8>>() == 2 * core::mem::size_of::<usize>());
+const _: () = assert!(core::mem::align_of::<OffsetSlice<u8>>() == core::mem::align_of::<usize>());
 
 // PORT NOTE: the reference `Offset(T).Slice` is a plain value type copied freely
 // (`var x = self.uri`); both fields are `Copy`, so the wrapper is `Copy`/`Clone`.
@@ -218,6 +239,7 @@ impl<T> OffsetSlice<T> {
     pub const fn new(offset: Offset<T>, len: usize) -> Self {
         OffsetSlice {
             offset,
+            #[cfg(target_pointer_width = "64")]
             _padding: 0,
             len,
         }

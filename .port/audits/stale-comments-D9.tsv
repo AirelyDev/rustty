@@ -35,3 +35,18 @@ crates/rustty-xev/src/io_uring.rs	2359	contract-ok	QUIRK RE-AFFIRMED. See the ep
 crates/rustty-xev/src/dynamic.rs	142	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
 crates/rustty-xev/src/dynamic.rs	2263	contract-ok	QUIRK RE-AFFIRMED. See the epoll.rs:992 row; same oracle and owner.
 crates/rustty-termio/tests/live_shell.rs	304	contract-ok	QUIRK RE-AFFIRMED. ORACLE=src/termio/Exec.zig RANGE=4749c4e93..6ad1fe7d8 VERDICT=a test-harness quirk note, not a carried oracle bug; re-read and still accurate.
+
+# --- P3-W6 T1: oracle-transcription drift found by hand (not by the heuristic)
+# A third stale-comment class: the transcribed ORACLE body itself goes stale
+# when upstream rewrites the function. The Rust code was migrated to the new
+# oracle shape but the `//` transcription above/beside it still shows the old
+# one, so the file reads as if the port diverged from upstream when it does not.
+# The grep heuristic cannot see this class at all (no Rust primitive is
+# involved); it is only findable by diffing the transcription against the
+# oracle rev. Recorded so the next resync sweep knows to look for it.
+crates/rustty-vt-c/src/grid_ref.rs	226	contract-ok	FIXED in P3-W6 T1. ORACLE=src/terminal/c/grid_ref.zig REV=421fe8dab. Transcription showed the pre-421fe8dab `p.node.data.getRowAndCell(...)` / `p.node.data.hyperlink_set` body; the Rust code at :257,268 already used the post-commit `Node::page(p.node)` boundary. Retranscribed to the `const terminal_page = p.node.page();` form.
+crates/rustty-vt-c/src/grid_ref.rs	253	contract-ok	FIXED in P3-W6 T1. Same oracle+rev; inline transcription inside grid_ref_hyperlink_uri.
+crates/rustty-vt-c/src/grid_ref.rs	267	contract-ok	FIXED in P3-W6 T1. Same oracle+rev; inline transcription of the lookupHyperlink line.
+crates/rustty-vt-c/src/grid_ref.rs	276	contract-ok	FIXED in P3-W6 T1. Same oracle+rev; inline transcription of the hyperlink_set/uri lines.
+crates/rustty-vt-c/src/grid_ref.rs	310	contract-ok	FIXED in P3-W6 T1. Same oracle+rev; grid_ref_style header transcription.
+crates/rustty-vt-c/src/grid_ref.rs	334	contract-ok	FIXED in P3-W6 T1. Same oracle+rev; grid_ref_style inline transcription.

@@ -116,6 +116,8 @@ pub struct Effects {
     pub pwd_changed: Option<PwdChangedFn>,
     pub size_cb: Option<SizeFn>,
     pub clipboard_write: Option<ClipboardWriteFn>,
+    pub desktop_notification: Option<DesktopNotificationFn>,
+    pub progress_report: Option<ProgressReportFn>,
 
     /// Scratch buffer for DA1 feature codes. The device attributes
     /// trampoline converts C feature codes into this buffer and returns
@@ -144,6 +146,8 @@ impl Default for Effects {
             pwd_changed: None,
             size_cb: None,
             clipboard_write: None,
+            desktop_notification: None,
+            progress_report: None,
             da_features_buf: [rustty_vt::device_attributes::Feature::AnsiColor; 64],
         }
     }
@@ -227,6 +231,81 @@ pub struct ClipboardWrite {
 // pub const ClipboardWriteFn = *const fn (Terminal, ?*anyopaque, *const ClipboardWrite) callconv(lib.calling_conv) clipboard.WriteResult;
 pub type ClipboardWriteFn =
     extern "C" fn(Terminal, *mut c_void, *const ClipboardWrite) -> clipboard::WriteResult;
+
+/// A request to show a desktop notification (OSC 9 / OSC 777).
+///
+/// C: GhosttyTerminalDesktopNotification -> RusttyTerminalDesktopNotification (R2)
+// pub const DesktopNotification = extern struct { size, title, body };
+//
+// PORT NOTE (byte-slice rule): `title`/`body` are `RusttyString`, i.e. a raw
+// `(ptr, len)` pair over the stream's own parse buffer — BYTES, not text. The
+// Rust side carries them as `&[u8]` end to end (`stream::ShowDesktopNotification`)
+// and never converts to `String`: an OSC 9 payload is whatever the program
+// wrote, and a lossy UTF-8 conversion would silently corrupt a non-UTF-8 title
+// on the way to the embedder.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DesktopNotification {
+    pub size: usize,
+    pub title: LibString,
+    pub body: LibString,
+}
+
+/// C function pointer type for the desktop_notification callback. The request
+/// and both strings are borrowed and only valid for the callback duration.
+// pub const DesktopNotificationFn = *const fn (Terminal, ?*anyopaque, *const DesktopNotification) callconv(lib.calling_conv) void;
+pub type DesktopNotificationFn = extern "C" fn(Terminal, *mut c_void, *const DesktopNotification);
+
+/// C: GhosttyTerminalProgressState -> RusttyTerminalProgressState (R2) —
+/// checked by the A5 enum-discriminant arm.
+// pub const ProgressState = ... (the shared `osc.Command.ProgressReport.State`)
+//
+// PORT NOTE: `628adaf30`'s Zig `LibEnum` factory is structurally N/A here —
+// rustty hand-authors each `#[repr(C)]` projection rather than generating it —
+// but the ENUM that commit shares is `47d602c42`'s type, so it lands with the
+// progress-report effect.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressState {
+    Remove = 0,
+    Set = 1,
+    Error = 2,
+    Indeterminate = 3,
+    Pause = 4,
+}
+
+impl ProgressState {
+    /// Project the pure-VT `osc::ProgressReportState` onto the C ABI enum.
+    /// The discriminants are identical by construction (same key order).
+    pub fn from_vt(s: rustty_vt::osc::ProgressReportState) -> ProgressState {
+        use rustty_vt::osc::ProgressReportState as S;
+        match s {
+            S::Remove => ProgressState::Remove,
+            S::Set => ProgressState::Set,
+            S::Error => ProgressState::Error,
+            S::Indeterminate => ProgressState::Indeterminate,
+            S::Pause => ProgressState::Pause,
+        }
+    }
+}
+
+/// A progress report emitted by the running program (OSC 9;4).
+///
+/// C: GhosttyTerminalProgressReport -> RusttyTerminalProgressReport (R2)
+// pub const ProgressReport = extern struct { size, state, progress };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ProgressReport {
+    pub size: usize,
+    pub state: ProgressState,
+    /// Progress percentage 0..=100, or `-1` when the report omitted it.
+    pub progress: i8,
+}
+
+/// C function pointer type for the progress_report callback. The report is
+/// borrowed and only valid for the callback duration.
+// pub const ProgressReportFn = *const fn (Terminal, ?*anyopaque, *const ProgressReport) callconv(lib.calling_conv) void;
+pub type ProgressReportFn = extern "C" fn(Terminal, *mut c_void, *const ProgressReport);
 
 /// C-compatible device attributes struct.
 /// C: GhosttyDeviceAttributes -> RusttyDeviceAttributes (R2)
@@ -572,6 +651,65 @@ impl Effects {
         };
         func(wrapper, userdata, &request)
     }
+
+    // fn desktopNotificationTrampoline(handler: *Handler, notification: Action.ShowDesktopNotification) void {
+    //     const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
+    //     const wrapper: *TerminalWrapper = @fieldParentPtr("stream", stream_ptr);
+    //     const func = wrapper.effects.desktop_notification orelse return;
+    //     const request: DesktopNotification = .{ ... };
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata, &request);
+    // }
+    pub(crate) fn desktop_notification_trampoline(
+        handler: &mut Handler<'static>,
+        notification: rustty_vt::stream::ShowDesktopNotification<'_>,
+    ) {
+        let wrapper = wrapper_from_handler(handler);
+        let Some(func) = (unsafe { (*wrapper).effects.desktop_notification }) else {
+            return;
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+
+        // The `size` field is the sized-struct contract: the embedder may only
+        // read fields present within it. It must be `size_of` the struct rustty
+        // actually built, never a literal.
+        let request = DesktopNotification {
+            size: std::mem::size_of::<DesktopNotification>(),
+            title: LibString {
+                ptr: notification.title.as_ptr(),
+                len: notification.title.len(),
+            },
+            body: LibString {
+                ptr: notification.body.as_ptr(),
+                len: notification.body.len(),
+            },
+        };
+        func(wrapper, userdata, &request);
+    }
+
+    // fn progressReportTrampoline(handler: *Handler, report: osc.Command.ProgressReport) void {
+    //     ... same @fieldParentPtr recovery ...
+    // }
+    pub(crate) fn progress_report_trampoline(
+        handler: &mut Handler<'static>,
+        report: rustty_vt::osc::ProgressReport,
+    ) {
+        let wrapper = wrapper_from_handler(handler);
+        let Some(func) = (unsafe { (*wrapper).effects.progress_report }) else {
+            return;
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+
+        // PORT NOTE: the `-1 == omitted` encoding and the 0..=100 clamp are
+        // `ProgressReport.cval()` in rustty-vt (osc/mod.rs), already ported;
+        // reuse it rather than re-deriving the encoding here.
+        let cval = report.cval();
+        let request = ProgressReport {
+            size: std::mem::size_of::<ProgressReport>(),
+            state: ProgressState::from_vt(report.state),
+            progress: cval.progress,
+        };
+        func(wrapper, userdata, &request);
+    }
 }
 
 // PORT NOTE: the reference uses `@enumFromInt` on the DA enums (always safe
@@ -847,6 +985,8 @@ fn new_(
         pwd_changed: Some(Effects::pwd_changed_trampoline),
         size: Some(Effects::size_trampoline),
         clipboard_write: Some(Effects::clipboard_write_trampoline),
+        desktop_notification: Some(Effects::desktop_notification_trampoline),
+        progress_report: Some(Effects::progress_report_trampoline),
     };
 
     // wrapper.* = .{ .terminal = t, .stream = .initAlloc(alloc, handler) };
@@ -1002,6 +1142,10 @@ pub enum Option_ {
     ClipboardWrite = 26,
     ScrollbackMaxBytes = 27,
     ScrollbackMaxLines = 28,
+    /// Input type: `DesktopNotificationFn` (oracle c3655ba25).
+    DesktopNotification = 29,
+    /// Input type: `ProgressReportFn` (oracle 47d602c42).
+    ProgressReport = 30,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -1145,6 +1289,18 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         Option_::ClipboardWrite => unsafe {
             (*terminal_).effects.clipboard_write =
                 std::mem::transmute::<*const c_void, Option<ClipboardWriteFn>>(value);
+        },
+
+        // .desktop_notification => wrapper.effects.desktop_notification = value,
+        Option_::DesktopNotification => unsafe {
+            (*terminal_).effects.desktop_notification =
+                std::mem::transmute::<*const c_void, Option<DesktopNotificationFn>>(value);
+        },
+
+        // .progress_report => wrapper.effects.progress_report = value,
+        Option_::ProgressReport => unsafe {
+            (*terminal_).effects.progress_report =
+                std::mem::transmute::<*const c_void, Option<ProgressReportFn>>(value);
         },
 
         // .title => {
@@ -1593,7 +1749,15 @@ pub union ScrollViewportCValue {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScrollViewportC {
-    pub tag: ScrollViewportTag,
+    /// D11 (P3-W6 T2): held as the C integer, NOT as `ScrollViewportTag`.
+    /// `rustty_terminal_scroll_viewport` takes this struct BY VALUE, so a
+    /// `ScrollViewportTag`-typed field is materialized by the callee prologue
+    /// and an undeclared value is instant UB there, before the `match` below can
+    /// run. `include/rustty/vt/terminal.h` itself declares
+    /// `RUSTTY_TERMINAL_SCROLL_VIEWPORT_MAX_VALUE`, so a conforming C caller can
+    /// write one. This is the IN-RANGE member of the D11 population: oracle
+    /// `3a2e28329` added `Row = 3` to this very enum.
+    pub tag: c_int,
     pub value: ScrollViewportCValue,
 }
 
@@ -1601,7 +1765,23 @@ pub struct ScrollViewportC {
 // and the `c_int`-width tag. Drift here fails the build.
 const _: () = assert!(size_of::<ScrollViewportCValue>() == size_of::<[u64; 2]>());
 const _: () = assert!(align_of::<ScrollViewportCValue>() == 8);
+// KEEP (P3-W6 T2 Step 1): this assert is what proves the `tag: c_int` field
+// leaves the published ABI provably unchanged.
 const _: () = assert!(size_of::<ScrollViewportTag>() == size_of::<c_int>());
+
+impl ScrollViewportTag {
+    /// Narrow an inbound C integer to a `ScrollViewportTag`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    pub fn from_c_int(v: c_int) -> Option<ScrollViewportTag> {
+        match v {
+            0 => Some(ScrollViewportTag::Top),
+            1 => Some(ScrollViewportTag::Bottom),
+            2 => Some(ScrollViewportTag::Delta),
+            3 => Some(ScrollViewportTag::Row),
+            _ => None,
+        }
+    }
+}
 
 // pub fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) ... {
 //     const t: *ZigTerminal = (terminal_ orelse return).terminal;
@@ -1621,7 +1801,16 @@ pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
     // SAFETY: `terminal_` is a live wrapper; `terminal` is its owned heap
     // terminal.
     let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
-    let zig_behavior = match behavior.tag {
+    // D11 (P3-W6 T2): the narrowing point for `behavior.tag`. Exactly the shape
+    // `compress` uses for its `mode_` (`:960`): an explicit `match` on the
+    // incoming C integer, the sound analog of `std.meta.intToEnum`. This export
+    // returns `void` — as the reference's does — so an undeclared tag takes the
+    // same early return as a null terminal handle above.
+    let zig_behavior = match ScrollViewportTag::from_c_int(behavior.tag) {
+        Some(t) => t,
+        None => return,
+    };
+    let zig_behavior = match zig_behavior {
         ScrollViewportTag::Top => ZigScrollViewport::Top,
         ScrollViewportTag::Bottom => ZigScrollViewport::Bottom,
         // SAFETY: the `delta` tag selects the `delta` union member (C ABI
@@ -2282,7 +2471,11 @@ pub unsafe fn grid_ref(terminal_: Terminal, pt: PointC, out_ref: *mut CGridRef) 
     let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
     let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
     // const zig_pt: point.Point = .fromC(pt);
-    let zig_pt = pt.from_c();
+    // D11 (P3-W6 T2): `pt.tag` is the raw C integer; `from_c` narrows it.
+    let zig_pt = match pt.from_c() {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
     // const p = t.screens.active.pages.pin(zig_pt) orelse return .invalid_value;
     let p = match unsafe { (*active).pages.pin(zig_pt) } {
         Some(p) => p,
@@ -2340,7 +2533,12 @@ pub unsafe fn grid_ref_track(
     let list: *mut rustty_vt::pagelist::PageList =
         unsafe { core::ptr::addr_of_mut!((*active).pages) };
     // const p = list.pin(.fromC(pt)) orelse return .invalid_value;
-    let p = match unsafe { (*list).pin(pt.from_c()) } {
+    // D11 (P3-W6 T2): `pt.tag` is the raw C integer; `from_c` narrows it.
+    let zig_pt = match pt.from_c() {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
+    let p = match unsafe { (*list).pin(zig_pt) } {
         Some(p) => p,
         None => return Result::InvalidValue,
     };
@@ -2762,7 +2960,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Top,
+                        tag: ScrollViewportTag::Top as c_int,
                         value: ScrollViewportCValue { _padding: [0; 2] },
                     },
                 )
@@ -2782,7 +2980,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Bottom,
+                        tag: ScrollViewportTag::Bottom as c_int,
                         value: ScrollViewportCValue { _padding: [0; 2] },
                     },
                 )
@@ -2802,7 +3000,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Delta,
+                        tag: ScrollViewportTag::Delta as c_int,
                         value: ScrollViewportCValue { delta: -3 },
                     },
                 )
@@ -2828,7 +3026,7 @@ mod tests {
             scroll_viewport(
                 std::ptr::null_mut(),
                 ScrollViewportC {
-                    tag: ScrollViewportTag::Top,
+                    tag: ScrollViewportTag::Top as c_int,
                     value: ScrollViewportCValue { _padding: [0; 2] },
                 },
             )
@@ -2861,7 +3059,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 0 },
                     },
                 )
@@ -2882,7 +3080,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 1 },
                     },
                 )
@@ -2910,7 +3108,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 9999 },
                     },
                 )
@@ -2962,7 +3160,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 0 },
                     },
                 )
@@ -2979,7 +3177,7 @@ mod tests {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: ScrollViewportTag::Row,
+                        tag: ScrollViewportTag::Row as c_int,
                         value: ScrollViewportCValue { row: 9999 },
                     },
                 )
@@ -3750,7 +3948,7 @@ mod tests {
     // active/viewport/screen tags used by the ported tests.
     fn pt_active(x: size::CellCountInt, y: u32) -> PointC {
         PointC {
-            tag: crate::point::TagC::Active,
+            tag: crate::point::TagC::Active as c_int,
             value: crate::point::PointCValue {
                 active: Coordinate { x, y },
             },
@@ -3758,7 +3956,7 @@ mod tests {
     }
     fn pt_viewport(x: size::CellCountInt, y: u32) -> PointC {
         PointC {
-            tag: crate::point::TagC::Viewport,
+            tag: crate::point::TagC::Viewport as c_int,
             value: crate::point::PointCValue {
                 viewport: Coordinate { x, y },
             },
@@ -3766,7 +3964,7 @@ mod tests {
     }
     fn pt_screen(x: size::CellCountInt, y: u32) -> PointC {
         PointC {
-            tag: crate::point::TagC::Screen,
+            tag: crate::point::TagC::Screen as c_int,
             value: crate::point::PointCValue {
                 screen: Coordinate { x, y },
             },
@@ -4898,6 +5096,176 @@ mod tests {
             assert_eq!(b"file:///home/user".as_slice(), unsafe {
                 (*zig_terminal(t)).get_pwd().unwrap()
             });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set desktop_notification callback" (oracle c3655ba25)
+    #[test]
+    fn set_desktop_notification_callback() {
+        static mut COUNT: usize = 0;
+        static mut LAST_TERMINAL: Terminal = std::ptr::null_mut();
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        static mut LAST_SIZE: usize = 0;
+        // PER THE BYTE-SLICE RULE: `Vec<u8>`, never `String`. The oracle keeps
+        // `[64]u8` + a length; the borrowed slices are raw pty bytes.
+        static mut LAST_TITLE: Vec<u8> = Vec::new();
+        static mut LAST_BODY: Vec<u8> = Vec::new();
+
+        extern "C" fn desktop_notification(
+            terminal_: Terminal,
+            ud: *mut c_void,
+            n: *const DesktopNotification,
+        ) {
+            unsafe {
+                COUNT += 1;
+                LAST_TERMINAL = terminal_;
+                LAST_USERDATA = ud;
+                LAST_SIZE = (*n).size;
+                LAST_TITLE = std::slice::from_raw_parts((*n).title.ptr, (*n).title.len).to_vec();
+                LAST_BODY = std::slice::from_raw_parts((*n).body.ptr, (*n).body.len).to_vec();
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                COUNT = 0;
+                LAST_TERMINAL = std::ptr::null_mut();
+                LAST_USERDATA = std::ptr::null_mut();
+            }
+
+            let mut sentinel: u8 = 88;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::DesktopNotification,
+                    desktop_notification as *const c_void,
+                )
+            });
+
+            // Split OSC 777 across writes to exercise the persistent VT parser.
+            vtw(t, b"\x1B]777;notify;Codex;");
+            assert_eq!(0usize, unsafe { COUNT });
+            vtw(t, b"Needs attention\x1B\\");
+            assert_eq!(1usize, unsafe { COUNT });
+            assert_eq!(t, unsafe { LAST_TERMINAL });
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+            // The sized-struct contract: `size` is `size_of` the struct rustty
+            // built, so a header/library ABI drift shows up here.
+            assert_eq!(std::mem::size_of::<DesktopNotification>(), unsafe {
+                LAST_SIZE
+            });
+            assert_eq!(b"Codex".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_TITLE)).as_slice()
+            });
+            assert_eq!(b"Needs attention".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_BODY)).as_slice()
+            });
+
+            // OSC 9 has no title and preserves its body.
+            vtw(t, b"\x1B]9;Build complete\x07");
+            assert_eq!(2usize, unsafe { COUNT });
+            assert_eq!(b"".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_TITLE)).as_slice()
+            });
+            assert_eq!(b"Build complete".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_BODY)).as_slice()
+            });
+
+            // Removing the callback takes effect immediately.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::DesktopNotification, std::ptr::null())
+            });
+            vtw(t, b"\x1B]9;Build complete\x07");
+            assert_eq!(2usize, unsafe { COUNT });
+
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set progress_report callback" (oracle 47d602c42)
+    #[test]
+    fn set_progress_report_callback() {
+        static mut COUNT: usize = 0;
+        static mut LAST_TERMINAL: Terminal = std::ptr::null_mut();
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        static mut LAST_SIZE: usize = 0;
+        static mut LAST_STATE: ProgressState = ProgressState::Remove;
+        static mut LAST_PROGRESS: i8 = 0;
+
+        extern "C" fn progress_report(
+            terminal_: Terminal,
+            ud: *mut c_void,
+            r: *const ProgressReport,
+        ) {
+            unsafe {
+                COUNT += 1;
+                LAST_TERMINAL = terminal_;
+                LAST_USERDATA = ud;
+                LAST_SIZE = (*r).size;
+                LAST_STATE = (*r).state;
+                LAST_PROGRESS = (*r).progress;
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                COUNT = 0;
+                LAST_TERMINAL = std::ptr::null_mut();
+                LAST_USERDATA = std::ptr::null_mut();
+            }
+
+            let mut sentinel: u8 = 88;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ProgressReport, progress_report as *const c_void)
+            });
+
+            // Split across writes to exercise the persistent VT parser.
+            vtw(t, b"\x1B]9;4;1;");
+            assert_eq!(0usize, unsafe { COUNT });
+            vtw(t, b"42\x1B\\");
+            assert_eq!(1usize, unsafe { COUNT });
+            assert_eq!(t, unsafe { LAST_TERMINAL });
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+            assert_eq!(std::mem::size_of::<ProgressReport>(), unsafe { LAST_SIZE });
+            assert_eq!(ProgressState::Set, unsafe { LAST_STATE });
+            assert_eq!(42i8, unsafe { LAST_PROGRESS });
+
+            // An omitted percentage crosses the ABI as -1, not as 0.
+            vtw(t, b"\x1B]9;4;3\x1B\\");
+            assert_eq!(2usize, unsafe { COUNT });
+            assert_eq!(ProgressState::Indeterminate, unsafe { LAST_STATE });
+            assert_eq!(-1i8, unsafe { LAST_PROGRESS });
+
+            // Removing the callback takes effect immediately.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ProgressReport, std::ptr::null())
+            });
+            vtw(t, b"\x1B]9;4;1;7\x1B\\");
+            assert_eq!(2usize, unsafe { COUNT });
+
             unsafe { free(t) };
         });
     }

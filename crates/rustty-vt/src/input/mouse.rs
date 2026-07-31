@@ -36,6 +36,24 @@ pub enum ButtonState {
     Press,
 }
 
+impl ButtonState {
+    /// Narrow an inbound C integer to a `ButtonState`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): `rustty_surface_mouse_button` and
+    /// `rustty_inspector_mouse_button` receive this by value across the C ABI.
+    /// A `#[repr(C)]` enum parameter is materialized by the callee prologue, so
+    /// an out-of-range value is UB before any check runs; the C side takes
+    /// `c_int` and narrows here. PRE-EXISTING; not in the Phase 3 range.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<ButtonState> {
+        match v {
+            0 => Some(ButtonState::Release),
+            1 => Some(ButtonState::Press),
+            _ => None,
+        }
+    }
+}
+
 /// C: RusttyMouseButton (R2) — checked by the A5 enum-discriminant arm.
 /// Possible mouse buttons. We only track up to 11 because that's the maximum
 /// button input that terminal mouse tracking handles without becoming
@@ -66,6 +84,29 @@ pub enum Button {
 }
 
 impl Button {
+    /// Narrow an inbound C integer to a `Button`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): see `ButtonState::from_c_int`; same two exports, same
+    /// by-value hazard. PRE-EXISTING; not in the Phase 3 range.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<Button> {
+        match v {
+            0 => Some(Button::Unknown),
+            1 => Some(Button::Left),
+            2 => Some(Button::Right),
+            3 => Some(Button::Middle),
+            4 => Some(Button::Four),
+            5 => Some(Button::Five),
+            6 => Some(Button::Six),
+            7 => Some(Button::Seven),
+            8 => Some(Button::Eight),
+            9 => Some(Button::Nine),
+            10 => Some(Button::Ten),
+            11 => Some(Button::Eleven),
+            _ => None,
+        }
+    }
+
     /// The maximum value in this enum. This can be used to create a densely
     /// packed array, for example.
     // PORT NOTE: the reference computes this at comptime by iterating the enum

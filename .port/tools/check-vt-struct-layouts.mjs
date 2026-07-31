@@ -148,15 +148,13 @@ const rusttyKeys = new Set(Object.keys(LAYOUT).map((k) => k.replace(/^Rustty/, "
 // made inside 4749c4e93..6ad1fe7d8 and is a Phase 3 port item, not a defect.
 // Each row must name an owner and a trigger. The stale check underneath means
 // this list can only shrink: port the change and the row must be deleted.
-const REGISTRY_RESIDUALS = {
-  // in the oracle registry at origin/main, absent at the pin and in rustty
-  TerminalDesktopNotification:
-    "added upstream beyond the pin; owner P3-W6 (C-API surface + effects). " +
-    "Trigger: porting the desktop-notification C struct.",
-  TerminalProgressReport:
-    "added upstream beyond the pin; owner P3-W6 (C-API surface + effects). " +
-    "Trigger: porting the ConEmu progress-report C struct.",
-};
+//
+// EMPTY as of P3-W6 T3: both rows (TerminalDesktopNotification,
+// TerminalProgressReport) were retired by porting the structs, exactly as their
+// triggers prescribed. The stale check below is what forced it — registering the
+// two structs turned the gate RED with "delete the row" rather than letting the
+// allowlist rot silently.
+const REGISTRY_RESIDUALS = {};
 const missingHere = [...oracleKeys]
   .filter((k) => !rusttyKeys.has(k) && !REGISTRY_RESIDUALS[k])
   .sort();

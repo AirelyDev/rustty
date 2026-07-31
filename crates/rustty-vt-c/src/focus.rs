@@ -30,7 +30,33 @@ pub enum FocusEvent {
     Lost = 1,
 }
 
+// D11 (P3-W6 T2). `size_of` proves the ABI is unchanged by taking the value as
+// a `c_int` in the exported signature: this enum IS a C `int` enum.
+const _: () =
+    assert!(std::mem::size_of::<FocusEvent>() == std::mem::size_of::<std::os::raw::c_int>());
+
 impl FocusEvent {
+    /// Narrow an inbound C integer to a `FocusEvent`, mirroring
+    /// `std.meta.intToEnum`. Returns `None` for any value outside the declared
+    /// range.
+    ///
+    /// D11 (P3-W6 T2): `rustty_focus_encode` takes this value as a plain
+    /// `c_int` and narrows it HERE, rather than declaring `FocusEvent` as the C
+    /// parameter type. The difference is not stylistic: a `#[repr(C)]` enum
+    /// parameter is materialized by the callee's PROLOGUE, so an out-of-range
+    /// tag is UB before any defensive code of ours can run — there is no
+    /// "check it first". And the value is reachable: `include/rustty/vt/focus.h`
+    /// itself declares `RUSTTY_FOCUS_EVENT_MAX_VALUE`, i.e. the published header
+    /// documents an out-of-range enumerator a conforming C caller may pass.
+    /// Same reasoning as the `ReportState` PORT NOTE at `modes.rs:19`.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<FocusEvent> {
+        match v {
+            0 => Some(FocusEvent::Gained),
+            1 => Some(FocusEvent::Lost),
+            _ => None,
+        }
+    }
+
     /// Project the C-ABI focus event onto the rustty-vt source-of-truth `Event`.
     pub fn to_vt(self) -> terminal_focus::Event {
         match self {

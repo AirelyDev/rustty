@@ -60,15 +60,19 @@ const setField = (base, t, f, val) => {
 const rdU32 = (p) => new DataView(buf()).getUint32(p, true);
 
 // --- 1. terminal_new(cols=80, rows=24) ---
-const TOPT = LAYOUT['RusttyTerminalOptions'].size;
-const optsPtr = ex.rustty_wasm_alloc_u8_array(TOPT);
-new Uint8Array(buf(), optsPtr, TOPT).fill(0);
-setField(optsPtr, 'RusttyTerminalOptions', 'cols', 80);
-setField(optsPtr, 'RusttyTerminalOptions', 'rows', 24);
-setField(optsPtr, 'RusttyTerminalOptions', 'max_scrollback', 0);
+//
+// STALE-TOOL FIX (P3-W6 T7): this used to build a `RusttyTerminalOptions` struct
+// in wasm memory and pass a pointer to it. `P3-W3 T5` (oracle 03d5fa268) REMOVED
+// that struct from the ABI — `rustty_terminal_new` now takes `cols`/`rows`
+// directly, and `types.rs:762` asserts the name is ABSENT from `type_json`. So
+// `LAYOUT['RusttyTerminalOptions'].size` threw a TypeError on the first line,
+// i.e. this tool has been dead since that commit.
+//
+// It has no CI caller (nothing under .port/ or .github/ invokes it), which is
+// exactly why nobody noticed. Ported forward rather than deleted: it is the only
+// end-to-end wasm exercise of the C ABI that exists.
 const termSlot = ex.rustty_wasm_alloc_opaque();
-const r1 = ex.rustty_terminal_new(0, termSlot, optsPtr);
-ex.rustty_wasm_free_u8_array(optsPtr, TOPT);
+const r1 = ex.rustty_terminal_new(0, termSlot, 80, 24);
 if (r1 !== SUCCESS) throw new Error('rustty_terminal_new -> ' + r1);
 const term = rdU32(termSlot);
 ex.rustty_wasm_free_opaque(termSlot);

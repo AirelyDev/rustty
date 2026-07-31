@@ -123,6 +123,33 @@ pub enum Data {
     Generation = 2,
 }
 
+// D11 (P3-W6 T2): proves taking this value as a `c_int` in the exported
+// signature leaves the ABI unchanged.
+const _: () = assert!(std::mem::size_of::<Data>() == std::mem::size_of::<std::os::raw::c_int>());
+
+impl Data {
+    /// Narrow an inbound C integer to a `Data`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): `rustty_kitty_graphics_get` takes the selector as a
+    /// plain `c_int` and narrows it HERE. A `#[repr(C)]` enum parameter is
+    /// materialized in the callee prologue, so an out-of-range tag is UB before
+    /// any check can run, and the published header declares
+    /// `RUSTTY_KITTY_GRAPHICS_DATA_MAX_VALUE`. See `modes.rs:19`.
+    /// `Invalid = 0` is IN range and keeps its existing `.invalid_value`
+    /// disposition inside `get`; only genuinely undeclared integers are `None`.
+    ///
+    /// PRE-EXISTING: predates the Phase 3 resync range.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<Data> {
+        match v {
+            0 => Some(Data::Invalid),
+            1 => Some(Data::PlacementIterator),
+            2 => Some(Data::Generation),
+            _ => None,
+        }
+    }
+}
+
 // PORT NOTE: the reference `Data.OutType` maps `.invalid => void`,
 // `.placement_iterator => PlacementIterator`, `.generation => u64`. The typed
 // body below dispatches on the tag and casts `out` to the matching type, so the
@@ -147,6 +174,34 @@ pub enum PlacementData {
     Columns = 10,
     Rows = 11,
     Z = 12,
+}
+
+// D11 (P3-W6 T2): see `Data::from_c_int`; same rule, same header hazard
+// (`RUSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_MAX_VALUE`). PRE-EXISTING.
+const _: () =
+    assert!(std::mem::size_of::<PlacementData>() == std::mem::size_of::<std::os::raw::c_int>());
+
+impl PlacementData {
+    /// Narrow an inbound C integer to a `PlacementData`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<PlacementData> {
+        match v {
+            0 => Some(PlacementData::Invalid),
+            1 => Some(PlacementData::ImageId),
+            2 => Some(PlacementData::PlacementId),
+            3 => Some(PlacementData::IsVirtual),
+            4 => Some(PlacementData::XOffset),
+            5 => Some(PlacementData::YOffset),
+            6 => Some(PlacementData::SourceX),
+            7 => Some(PlacementData::SourceY),
+            8 => Some(PlacementData::SourceWidth),
+            9 => Some(PlacementData::SourceHeight),
+            10 => Some(PlacementData::Columns),
+            11 => Some(PlacementData::Rows),
+            12 => Some(PlacementData::Z),
+            _ => None,
+        }
+    }
 }
 
 // PORT NOTE: the reference `PlacementData.OutType` maps `.image_id`/`.placement_id`
@@ -311,6 +366,31 @@ pub enum ImageData {
     DataPtr = 7,
     DataLen = 8,
     Generation = 9,
+}
+
+// D11 (P3-W6 T2): see `Data::from_c_int`; same rule, same header hazard
+// (`RUSTTY_KITTY_GRAPHICS_IMAGE_DATA_MAX_VALUE`). PRE-EXISTING.
+const _: () =
+    assert!(std::mem::size_of::<ImageData>() == std::mem::size_of::<std::os::raw::c_int>());
+
+impl ImageData {
+    /// Narrow an inbound C integer to an `ImageData`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<ImageData> {
+        match v {
+            0 => Some(ImageData::Invalid),
+            1 => Some(ImageData::Id),
+            2 => Some(ImageData::Number),
+            3 => Some(ImageData::Width),
+            4 => Some(ImageData::Height),
+            5 => Some(ImageData::Format),
+            6 => Some(ImageData::Compression),
+            7 => Some(ImageData::DataPtr),
+            8 => Some(ImageData::DataLen),
+            9 => Some(ImageData::Generation),
+            _ => None,
+        }
+    }
 }
 
 // PORT NOTE: the reference `ImageData.OutType` maps `.id`/`.number`/`.width`/

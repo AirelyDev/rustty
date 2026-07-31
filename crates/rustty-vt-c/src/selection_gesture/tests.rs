@@ -7,12 +7,13 @@ use crate::point::{PointC, PointCValue, TagC};
 use crate::result::Result;
 use crate::test_util::with_test_allocator;
 use rustty_vt::point::Coordinate as ZigCoordinate;
+use std::os::raw::c_int;
 
 // PORT NOTE: `point.Point.C` literal `.{ .tag = .active, .value = .{ .active =
 // .{ .x, .y } } }` -> a `PointC` with the active union member.
 fn active_point(x: u16, y: u16) -> PointC {
     PointC {
-        tag: TagC::Active,
+        tag: TagC::Active as c_int,
         value: PointCValue {
             active: ZigCoordinate { x, y: y as u32 },
         },

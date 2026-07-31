@@ -165,9 +165,18 @@ pub struct PageEntryId {
 }
 
 // `PageEntryId` must have no implicit padding at all, or the reshape above is
-// pointless. 16 + 4 + 1 + 3 == 24 at align 8, the oracle's `@sizeOf` too.
-const _: () = assert!(core::mem::size_of::<PageEntryId>() == 24);
-const _: () = assert!(core::mem::align_of::<PageEntryId>() == 8);
+// pointless. 64-bit: 16 + 4 + 1 + 3 == 24 at align 8, the oracle's `@sizeOf`
+// too. 32-bit: `OffsetSlice` is 8 there (its `_padding` is 64-bit-only), so
+// 8 + 4 + 1 + 3 == 16 at align 4 — still byte-complete, the `[u8; 3]` is
+// required on BOTH widths. Only the literals were width-specific.
+//
+// FINDING (P3-W6 T1): as with `OffsetSlice`'s pair, these literal asserts were a
+// hard compile error on any 32-bit target from the moment they landed
+// (main @ 9d8fafb), and no gate saw it because A5's wasm build is skipped when a
+// stale `.wasm` is present. Written against `size_of::<usize>()` they bind on
+// both widths.
+const _: () = assert!(core::mem::size_of::<PageEntryId>() == 2 * core::mem::size_of::<usize>() + 8);
+const _: () = assert!(core::mem::align_of::<PageEntryId>() == core::mem::align_of::<usize>());
 
 /// `std.meta.activeTag(PageEntry.Id)` — the reference's union tag.
 #[repr(u8)]

@@ -48,7 +48,33 @@ pub enum LogLevel {
     Debug = 3,
 }
 
+// D11 (P3-W6 T2): proves taking this value as a `c_int` in the exported
+// signature leaves the ABI unchanged.
+const _: () =
+    assert!(std::mem::size_of::<LogLevel>() == std::mem::size_of::<std::os::raw::c_int>());
+
 impl LogLevel {
+    /// Narrow an inbound C integer to a `LogLevel`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): `rustty_sys_log_stderr` takes the level as a plain
+    /// `c_int` and narrows it HERE. A `#[repr(C)]` enum parameter is
+    /// materialized in the callee prologue, so an out-of-range tag is UB before
+    /// any check of ours could run, and `include/rustty/vt/sys.h` itself
+    /// declares `RUSTTY_SYS_LOG_LEVEL_MAX_VALUE`. See `modes.rs:19`.
+    ///
+    /// PRE-EXISTING: this defect predates the Phase 3 resync range; it is not
+    /// attributable to any commit in it.
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<LogLevel> {
+        match v {
+            0 => Some(LogLevel::Error),
+            1 => Some(LogLevel::Warning),
+            2 => Some(LogLevel::Info),
+            3 => Some(LogLevel::Debug),
+            _ => None,
+        }
+    }
+
     // pub fn fromStd(level: std.log.Level) LogLevel { ... }
     // PORT NOTE: rustty has no `std.log.Level`; the equivalent is the `StdLevel`
     // shim below mirroring Zig's `{ err, warn, info, debug }`.

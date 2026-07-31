@@ -149,6 +149,19 @@ pub struct Effects<'a> {
     // clipboard_write: ?*const fn (*Handler, clipboard.Write) clipboard.WriteResult
     pub clipboard_write: Option<fn(&mut Handler<'a>, clipboard::Write) -> clipboard::WriteResult>,
 
+    /// Called when the running program requests a desktop notification
+    /// via OSC 9 or OSC 777. The title and body are borrowed and only
+    /// valid for the duration of the callback.
+    // desktop_notification: ?*const fn (*Handler, Action.ShowDesktopNotification) void
+    //
+    // PORT NOTE: the `for<'b>` is the Rust spelling of "borrowed and only valid
+    // for the duration of the callback" — the title/body slices point into the
+    // stream's own parse buffer, so they must NOT be tied to the handler's `'a`
+    // (which outlives any one call). A higher-ranked bound is what stops a
+    // callback from stashing them.
+    pub desktop_notification:
+        Option<for<'b> fn(&mut Handler<'a>, stream::ShowDesktopNotification<'b>)>,
+
     /// Called in response to a color scheme DSR query (CSI ? 996 n).
     /// Returns the current color scheme. Return null to silently
     /// ignore the query.
@@ -185,6 +198,10 @@ pub struct Effects<'a> {
     // pwd_changed: ?*const fn (*Handler) void
     pub pwd_changed: Option<fn(&mut Handler<'a>)>,
 
+    /// Called when the running program reports progress via OSC 9;4.
+    // progress_report: ?*const fn (*Handler, osc.Command.ProgressReport) void
+    pub progress_report: Option<fn(&mut Handler<'a>, osc::ProgressReport)>,
+
     /// Called in response to an XTVERSION query. Returns the version
     /// string to report (e.g. "ghostty 1.2.3"). The returned memory
     /// must be valid for the lifetime of the call. The maximum length
@@ -202,8 +219,10 @@ impl<'a> Effects<'a> {
         bell: None,
         clipboard_write: None,
         color_scheme: None,
+        desktop_notification: None,
         device_attributes: None,
         enquiry: None,
+        progress_report: None,
         size: None,
         title_changed: None,
         pwd_changed: None,
@@ -1939,11 +1958,35 @@ impl<'a> stream::Handler for Handler<'a> {
         self.do_report_pwd(v.url);
     }
 
-    // .show_desktop_notification => {} (have no terminal-modifying effect)
-    fn show_desktop_notification(&mut self, v: stream::ShowDesktopNotification) {}
+    // .show_desktop_notification => self.desktopNotification(value),
+    //
+    // Was a deliberate no-op stub matching the pin; wired to the
+    // `desktop_notification` effect by oracle c3655ba25.
+    fn show_desktop_notification(&mut self, v: stream::ShowDesktopNotification) {
+        // fn desktopNotification(self, notification) void {
+        //     const func = self.effects.desktop_notification orelse return;
+        //     func(self, notification);
+        // }
+        let Some(func) = self.effects.desktop_notification else {
+            return;
+        };
+        func(self, v);
+    }
 
-    // .progress_report => {} (have no terminal-modifying effect)
-    fn progress_report(&mut self, v: osc::ProgressReport) {}
+    // .progress_report => self.progressReport(value),
+    //
+    // Was a deliberate no-op stub matching the pin; wired to the
+    // `progress_report` effect by oracle 47d602c42.
+    fn progress_report(&mut self, v: osc::ProgressReport) {
+        // fn progressReport(self, report) void {
+        //     const func = self.effects.progress_report orelse return;
+        //     func(self, report);
+        // }
+        let Some(func) = self.effects.progress_report else {
+            return;
+        };
+        func(self, v);
+    }
 
     // fn clipboardContents(self: *Handler, kind: u8, data: []const u8) !void
     //
@@ -3142,6 +3185,150 @@ mod tests {
             // Query an unknown mode
             s.next_slice(b"\x1B[?9999$p");
             assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?9999;0$y");
+        }
+
+        t.deinit(Global);
+    }
+
+    // Capture cells for the desktop_notification effect test (oracle c3655ba25).
+    // Same `S`-struct-via-thread-local shape the clipboard test below uses.
+    //
+    // PER THE BYTE-SLICE RULE the captured title/body are `Vec<u8>`, never
+    // `String`: OSC 9 / OSC 777 payloads are raw bytes from the pty and a
+    // lossy UTF-8 conversion here would make the test unable to see a
+    // non-UTF-8 title at all.
+    thread_local! {
+        static DN_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static DN_TITLE: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static DN_BODY: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn cap_desktop_notification(_: &mut Handler, n: stream::ShowDesktopNotification) {
+        DN_COUNT.with(|c| c.set(c.get() + 1));
+        DN_TITLE.with(|c| *c.borrow_mut() = n.title.to_vec());
+        DN_BODY.with(|c| *c.borrow_mut() = n.body.to_vec());
+    }
+
+    // test "desktop_notification effect callback" (oracle c3655ba25)
+    #[test]
+    fn desktop_notification_effect_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // A null callback (the default readonly effects) silently ignores
+        // notifications and leaves the terminal usable.
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1B]9;Ignored\x1B\\AfterNotification");
+        }
+        let str_ = t.plain_string(Global).unwrap();
+        assert_eq!(b"AfterNotification".as_slice(), str_.as_slice());
+
+        t.full_reset();
+
+        DN_COUNT.with(|c| c.set(0));
+        DN_TITLE.with(|c| c.borrow_mut().clear());
+        DN_BODY.with(|c| c.borrow_mut().clear());
+
+        let mut s = t.vt_stream();
+        s.handler.effects.desktop_notification = Some(cap_desktop_notification);
+
+        // OSC 9 is split across writes and carries only a body.
+        s.next_slice(b"\x1B]9;Build ");
+        assert_eq!(0usize, DN_COUNT.with(|c| c.get()));
+        s.next_slice(b"complete\x1B\\");
+        assert_eq!(1usize, DN_COUNT.with(|c| c.get()));
+        assert_eq!(
+            b"".as_slice(),
+            DN_TITLE.with(|c| c.borrow().clone()).as_slice()
+        );
+        assert_eq!(
+            b"Build complete".as_slice(),
+            DN_BODY.with(|c| c.borrow().clone()).as_slice()
+        );
+
+        // OSC 777 preserves its separate title and body fields.
+        s.next_slice(b"\x1B]777;notify;Codex;Needs attention\x07");
+        assert_eq!(2usize, DN_COUNT.with(|c| c.get()));
+        assert_eq!(
+            b"Codex".as_slice(),
+            DN_TITLE.with(|c| c.borrow().clone()).as_slice()
+        );
+        assert_eq!(
+            b"Needs attention".as_slice(),
+            DN_BODY.with(|c| c.borrow().clone()).as_slice()
+        );
+
+        t.deinit(Global);
+    }
+
+    // Capture cells for the progress_report effect test (oracle 47d602c42).
+    thread_local! {
+        static PR_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static PR_STATE: core::cell::Cell<osc::ProgressReportState> =
+            const { core::cell::Cell::new(osc::ProgressReportState::Remove) };
+        static PR_PROGRESS: core::cell::Cell<Option<u8>> = const { core::cell::Cell::new(None) };
+    }
+
+    fn cap_progress_report(_: &mut Handler, r: osc::ProgressReport) {
+        PR_COUNT.with(|c| c.set(c.get() + 1));
+        PR_STATE.with(|c| c.set(r.state));
+        PR_PROGRESS.with(|c| c.set(r.progress));
+    }
+
+    // test "progress_report effect callback" (oracle 47d602c42)
+    #[test]
+    fn progress_report_effect_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // A null callback (the default readonly effects) silently ignores reports.
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1B]9;4;1;25\x1B\\");
+        }
+
+        PR_COUNT.with(|c| c.set(0));
+        PR_STATE.with(|c| c.set(osc::ProgressReportState::Remove));
+        PR_PROGRESS.with(|c| c.set(None));
+
+        let mut s = t.vt_stream();
+        s.handler.effects.progress_report = Some(cap_progress_report);
+
+        let cases: &[(&[u8], osc::ProgressReportState, Option<u8>)] = &[
+            (b"\x1B]9;4;0;\x1B\\", osc::ProgressReportState::Remove, None),
+            (
+                b"\x1B]9;4;1;42\x07",
+                osc::ProgressReportState::Set,
+                Some(42),
+            ),
+            (
+                b"\x1B]9;4;2;7\x1B\\",
+                osc::ProgressReportState::Error,
+                Some(7),
+            ),
+            (
+                b"\x1B]9;4;3\x1B\\",
+                osc::ProgressReportState::Indeterminate,
+                None,
+            ),
+            (
+                b"\x1B]9;4;4;75\x1B\\",
+                osc::ProgressReportState::Pause,
+                Some(75),
+            ),
+        ];
+
+        for (i, (sequence, state, progress)) in cases.iter().enumerate() {
+            let expected_count = i + 1;
+            // Split each sequence to verify parsing survives PTY read boundaries.
+            let midpoint = sequence.len() / 2;
+            s.next_slice(&sequence[0..midpoint]);
+            assert_eq!(expected_count - 1, PR_COUNT.with(|c| c.get()));
+            s.next_slice(&sequence[midpoint..]);
+            assert_eq!(expected_count, PR_COUNT.with(|c| c.get()));
+            assert_eq!(*state, PR_STATE.with(|c| c.get()));
+            assert_eq!(*progress, PR_PROGRESS.with(|c| c.get()));
         }
 
         t.deinit(Global);

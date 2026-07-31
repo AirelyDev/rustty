@@ -224,12 +224,13 @@ pub unsafe fn grid_ref_graphemes(
 
 // pub fn grid_ref_hyperlink_uri(ref: *const CGridRef, out_buf: ?[*]u8, buf_len: usize, out_len: *usize) ... {
 //     const p = ref.toPin() orelse return .invalid_value;
-//     const rac = p.node.data.getRowAndCell(p.x, p.y);
+//     const terminal_page = p.node.page();
+//     const rac = terminal_page.getRowAndCell(p.x, p.y);
 //     const cell = rac.cell;
 //     if (!cell.hyperlink) { out_len.* = 0; return .success; }
-//     const link_id = p.node.data.lookupHyperlink(cell) orelse { out_len.* = 0; return .success; };
-//     const entry = p.node.data.hyperlink_set.get(p.node.data.memory, link_id);
-//     const uri = entry.uri.slice(p.node.data.memory);
+//     const link_id = terminal_page.lookupHyperlink(cell) orelse { out_len.* = 0; return .success; };
+//     const entry = terminal_page.hyperlink_set.get(terminal_page.memory, link_id);
+//     const uri = entry.uri.slice(terminal_page.memory);
 //     if (out_buf == null or buf_len < uri.len) { out_len.* = uri.len; return .out_of_space; }
 //     @memcpy(out_buf.?[0..uri.len], uri);
 //     out_len.* = uri.len;
@@ -249,7 +250,8 @@ pub unsafe fn grid_ref_hyperlink_uri(
         Some(p) => p,
         None => return Result::InvalidValue,
     };
-    // const rac = p.node.data.getRowAndCell(p.x, p.y);
+    // const terminal_page = p.node.page();
+    // const rac = terminal_page.getRowAndCell(p.x, p.y);
     // const cell = rac.cell;
     // SAFETY: `p.node` is a live page node (the pin came from a valid ref).
     let rac = unsafe {
@@ -263,7 +265,7 @@ pub unsafe fn grid_ref_hyperlink_uri(
         return Result::Success;
     }
 
-    // const link_id = p.node.data.lookupHyperlink(cell) orelse { out_len.* = 0; return .success; };
+    // const link_id = terminal_page.lookupHyperlink(cell) orelse { out_len.* = 0; return .success; };
     let link_id = match unsafe { (*rustty_vt::pagelist::Node::page(p.node)).lookup_hyperlink(cell) }
     {
         Some(id) => id,
@@ -272,8 +274,8 @@ pub unsafe fn grid_ref_hyperlink_uri(
             return Result::Success;
         }
     };
-    // const entry = p.node.data.hyperlink_set.get(p.node.data.memory, link_id);
-    // const uri = entry.uri.slice(p.node.data.memory);
+    // const entry = terminal_page.hyperlink_set.get(terminal_page.memory, link_id);
+    // const uri = entry.uri.slice(terminal_page.memory);
     // SAFETY: `link_id` was just looked up against this page's hyperlink set; the
     // page memory base outlives the borrowed `uri` slice (read immediately).
     let uri: &[u8] = unsafe {
@@ -307,7 +309,8 @@ pub unsafe fn grid_ref_hyperlink_uri(
 //         if (cell.style_id == stylepkg.default_id) {
 //             o.* = .fromStyle(.{});
 //         } else {
-//             o.* = .fromStyle(p.node.data.styles.get(p.node.data.memory, cell.style_id).*);
+//             const terminal_page = p.node.page();
+//             o.* = .fromStyle(terminal_page.styles.get(terminal_page.memory, cell.style_id).*);
 //         }
 //     }
 //     return .success;
@@ -330,7 +333,8 @@ pub unsafe fn grid_ref_style(ref_: *const CGridRef, out: *mut Style) -> Result {
             // SAFETY: `out` is a valid writable `Style`.
             unsafe { *out = Style::from_style(rustty_vt::style::Style::default()) };
         } else {
-            // else o.* = .fromStyle(p.node.data.styles.get(p.node.data.memory, cell.style_id).*);
+            // else { const terminal_page = p.node.page();
+            //        o.* = .fromStyle(terminal_page.styles.get(terminal_page.memory, cell.style_id).*); }
             // SAFETY: `cell.style_id` is a live style id for this page; the page
             // memory base outlives the read; `out` is a valid writable `Style`.
             let style = unsafe {

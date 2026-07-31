@@ -264,7 +264,13 @@ pub unsafe fn tracked_grid_ref_set(
     let active = unsafe { (*t).screens.active };
     let list: *mut PageList = unsafe { core::ptr::addr_of_mut!((*active).pages) };
     // const p = list.pin(point.Point.fromC(pt)) orelse return .invalid_value;
-    let p = match unsafe { (*list).pin(pt.from_c()) } {
+    // D11 (P3-W6 T2): `pt.tag` is the raw C integer; `from_c` narrows it and is
+    // `None` for an undeclared tag, which takes the same `.invalid_value` exit.
+    let zig_pt = match pt.from_c() {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
+    let p = match unsafe { (*list).pin(zig_pt) } {
         Some(p) => p,
         None => return Result::InvalidValue,
     };

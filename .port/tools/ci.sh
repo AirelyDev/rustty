@@ -481,8 +481,27 @@ GATE_REGISTRY=(
   # rustty_terminal_scroll_viewport(behavior.tag), whose ScrollViewportTag
   # gained `Row = 3` in 3a2e28329 inside the Phase 3 range. A gate that lands
   # green is unproven; this one is provably non-vacuous the day it lands.
-  # PROGRESS while P3-W6 T2 sweeps the sites; promote to HARD after that.
-  "D11|PROGRESS|bash $GATES/check_closed_enum_abi.sh"
+  #
+  # HARD as of P3-W6 T2, with the gate's ALLOWLIST EMPTY. All 33 sites are
+  # closed: the C parameter (or by-value struct field) is the C integer type and
+  # every one has an explicit `from_c_int` narrowing point, the shape
+  # crates/rustty-vt-c/src/modes.rs:26 `ReportState(pub c_int)` established. A
+  # `const _: () = assert!(size_of::<E>() == size_of::<c_int>())` sits beside
+  # each narrowed enum, so the published ABI is provably unchanged. Because the
+  # allowlist is empty AND a stale allowlist row is itself a FAIL, this gate can
+  # now only ever move in one direction.
+  "D11|HARD|bash $GATES/check_closed_enum_abi.sh"
+  # D11r — the RUNTIME half of D11 (P3-W6 T2 Step 4). D11 is a SOURCE scanner and
+  # is satisfied by the parameter TYPE alone, so it cannot tell a narrowing point
+  # that REJECTS an undeclared value from one that silently clamps it. D11r
+  # compiles a real C program against the published header + shipped dylib,
+  # passes the `…_MAX_VALUE` enumerator the header itself declares, and asserts a
+  # DEFINED result comes back — plus that the in-range enumerators are unchanged.
+  # PROVEN NON-REDUNDANT: replacing one `from_c_int`'s `_ => None` with a clamp
+  # leaves D11 GREEN and turns D11r RED (2 checks). That test could not be
+  # written correctly before T2: the parameter was the closed enum, so the call
+  # was UB and there was no defined answer to assert.
+  "D11r|HARD|sh $GATES/check_closed_enum_abi_runtime.sh"
   # A3 — the rustty-embed.h product-umbrella ABI gate (rebrand Task 4; formerly
   # the ghostty.h byte-freeze). Asserts include/rustty-embed.h is EXACTLY
   # ghostty's upstream include/ghostty.h (read from the pinned $ORACLE_HEADER_PATH

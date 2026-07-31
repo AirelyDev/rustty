@@ -570,7 +570,16 @@ pub unsafe extern "C" fn rustty_app_key(app: *mut App, event: KeyEvent) -> bool 
     //     return false;
     // };
     // SAFETY: `event.text` validity is the caller's contract (KeyEvent::keyEvent).
-    let kev = unsafe { event.keyEvent() };
+    // D11 (P3-W6 T2): `event.action` is the raw C integer; `keyEvent()` narrows
+    // it and is `None` for an undeclared value, which takes the same
+    // "error processing key event" exit the reference uses for a failed event.
+    let kev = match unsafe { event.keyEvent() } {
+        Some(v) => v,
+        None => {
+            eprintln!("error processing key event: action out of range");
+            return false;
+        }
+    };
     // SAFETY: `app` validity is the caller's contract.
     match unsafe { (*app).keyEvent(KeyTarget::App, kev) } {
         Ok(v) => v,
@@ -601,7 +610,9 @@ pub unsafe extern "C" fn rustty_config_key_is_binding(
     //     return false;
     // };
     // SAFETY: `event.text` validity is the caller's contract (KeyEvent::keyEvent).
-    let core_event = match unsafe { event.keyEvent() }.core() {
+    // D11 (P3-W6 T2): `keyEvent()` narrows `event.action`; `None` folds into the
+    // same "error processing key event" exit the reference already has here.
+    let core_event = match unsafe { event.keyEvent() }.and_then(|e| e.core()) {
         Some(v) => v,
         None => {
             eprintln!("error processing key event");
@@ -1748,7 +1759,16 @@ pub unsafe extern "C" fn rustty_surface_key(surface: *mut Surface, event: KeyEve
     //     return false;
     // };
     // SAFETY: `event.text` validity is the caller's contract (KeyEvent::keyEvent).
-    let kev = unsafe { event.keyEvent() };
+    // D11 (P3-W6 T2): `event.action` is the raw C integer; `keyEvent()` narrows
+    // it and is `None` for an undeclared value, which takes the same
+    // "error processing key event" exit the reference uses for a failed event.
+    let kev = match unsafe { event.keyEvent() } {
+        Some(v) => v,
+        None => {
+            eprintln!("error processing key event: action out of range");
+            return false;
+        }
+    };
     // SAFETY: `surface`/`surface.app` validity is the caller's contract.
     match unsafe { (*(*surface).app).keyEvent(KeyTarget::Surface(surface), kev) } {
         Ok(v) => v,
@@ -1781,7 +1801,9 @@ pub unsafe extern "C" fn rustty_surface_key_is_binding(
     //     return false;
     // };
     // SAFETY: `event.text` validity is the caller's contract (KeyEvent::keyEvent).
-    let core_event = match unsafe { event.keyEvent() }.core() {
+    // D11 (P3-W6 T2): `keyEvent()` narrows `event.action`; `None` folds into the
+    // same "error processing key event" exit the reference already has here.
+    let core_event = match unsafe { event.keyEvent() }.and_then(|e| e.core()) {
         Some(v) => v,
         None => {
             eprintln!("error processing key event");
@@ -1874,10 +1896,23 @@ pub unsafe extern "C" fn rustty_surface_mouse_captured(surface: *mut Surface) ->
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_mouse_button(
     surface: *mut Surface,
-    action: mouse::ButtonState,
-    button: mouse::Button,
+    // D11 (P3-W6 T2): inbound as the C integers, narrowed below.
+    action: c_int,
+    button: c_int,
     mods: c_int,
 ) -> bool {
+    // D11: `include/rustty-embed.h` declares both enums with a `_MAX_VALUE`
+    // enumerator, so an out-of-range value is reachable from conforming C and
+    // materializing it as a `#[repr(C)]` enum in the prologue would be UB.
+    // This export returns `bool`; `false` ("event not consumed") is the same
+    // answer the reference gives for an event it cannot act on.
+    let (action, button) = match (
+        mouse::ButtonState::from_c_int(action),
+        mouse::Button::from_c_int(button),
+    ) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return false,
+    };
     // return surface.mouseButtonCallback(
     //     action,
     //     button,
@@ -2348,10 +2383,20 @@ pub unsafe extern "C" fn rustty_inspector_set_content_scale(ptr: *mut Inspector,
 #[no_mangle]
 pub unsafe extern "C" fn rustty_inspector_mouse_button(
     ptr: *mut Inspector,
-    action: mouse::ButtonState,
-    button: mouse::Button,
+    // D11 (P3-W6 T2): inbound as the C integers, narrowed below.
+    action: c_int,
+    button: c_int,
     mods: c_int,
 ) {
+    // D11: see `rustty_inspector_key`. `void` return, so an undeclared value is
+    // dropped rather than dispatched on.
+    let (action, button) = match (
+        mouse::ButtonState::from_c_int(action),
+        mouse::Button::from_c_int(button),
+    ) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return,
+    };
     // ptr.mouseButtonCallback(
     //     action,
     //     button,
@@ -2420,10 +2465,25 @@ pub unsafe extern "C" fn rustty_inspector_mouse_scroll(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_inspector_key(
     ptr: *mut Inspector,
-    action: key::Action,
-    key: key::Key,
+    // D11 (P3-W6 T2): inbound as the C integers, narrowed below.
+    action: c_int,
+    key: c_int,
     c_mods: c_int,
 ) {
+    // D11: `include/rustty-embed.h` declares both of these enums with a
+    // `_MAX_VALUE` enumerator, so a conforming C caller can write a value
+    // outside the declared range. Materializing it as the Rust `#[repr(C)]`
+    // enum in the callee prologue would be instant UB, so both cross as
+    // `c_int`. This export returns `void`; an undeclared value takes the same
+    // "log and return" disposition the reference uses for a failed key event
+    // just below.
+    let (action, key) = match (key::Action::from_c_int(action), key::Key::from_c_int(key)) {
+        (Some(a), Some(k)) => (a, k),
+        _ => {
+            eprintln!("error processing key event: action/key out of range");
+            return;
+        }
+    };
     // ptr.keyCallback(
     //     action,
     //     key,

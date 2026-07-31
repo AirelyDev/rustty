@@ -26,6 +26,7 @@ use crate::terminal::Terminal;
 use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_vt::terminal::Terminal as ZigTerminal;
 use std::mem::{align_of, size_of};
+use std::os::raw::c_int;
 
 // const log = std.log.scoped(.selection_c);
 
@@ -58,7 +59,34 @@ pub enum Adjustment {
     EndOfLine = 9,
 }
 
+// D11 (P3-W6 T2): proves taking this value as a `c_int` in the exported
+// signature leaves the ABI unchanged.
+const _: () = assert!(size_of::<Adjustment>() == size_of::<c_int>());
+
 impl Adjustment {
+    /// Narrow an inbound C integer to an `Adjustment`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2): `rustty_terminal_selection_adjust` takes the adjustment
+    /// as a plain `c_int` and narrows it HERE — see `focus.rs`'s
+    /// `FocusEvent::from_c_int` for the full rationale and `modes.rs:19` for the
+    /// sanctioned open-enum shape. PRE-EXISTING; not in the Phase 3 range.
+    pub fn from_c_int(v: c_int) -> Option<Adjustment> {
+        match v {
+            0 => Some(Adjustment::Left),
+            1 => Some(Adjustment::Right),
+            2 => Some(Adjustment::Up),
+            3 => Some(Adjustment::Down),
+            4 => Some(Adjustment::Home),
+            5 => Some(Adjustment::End),
+            6 => Some(Adjustment::PageUp),
+            7 => Some(Adjustment::PageDown),
+            8 => Some(Adjustment::BeginningOfLine),
+            9 => Some(Adjustment::EndOfLine),
+            _ => None,
+        }
+    }
+
     // PORT NOTE: bridge to the pure-VT `selection::Adjustment`; discriminants are
     // identical by construction (same key order).
     fn to_zig(self) -> rustty_vt::selection::Adjustment {
@@ -88,7 +116,23 @@ pub enum Order {
     MirroredReverse = 3,
 }
 
+// D11 (P3-W6 T2): proves the `c_int` parameter form leaves the ABI unchanged.
+const _: () = assert!(size_of::<Order>() == size_of::<c_int>());
+
 impl Order {
+    /// Narrow an inbound C integer to an `Order`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    /// D11 (P3-W6 T2); see `Adjustment::from_c_int`. PRE-EXISTING.
+    pub fn from_c_int(v: c_int) -> Option<Order> {
+        match v {
+            0 => Some(Order::Forward),
+            1 => Some(Order::Reverse),
+            2 => Some(Order::MirroredForward),
+            3 => Some(Order::MirroredReverse),
+            _ => None,
+        }
+    }
+
     // PORT NOTE: bridges to/from the pure-VT `selection::Order`; discriminants are
     // identical by construction (same key order).
     fn to_zig(self) -> rustty_vt::selection::Order {
@@ -125,7 +169,27 @@ pub enum Format {
     Html = 2,
 }
 
+// D11 (P3-W6 T2): `Format` is not a direct parameter anywhere — it is the
+// `emit` FIELD of the by-value `FormatOptions` struct that
+// `rustty_formatter_terminal_new`, `rustty_terminal_selection_format_alloc` and
+// `_format_buf` take. A closed enum reached through a by-value struct field is
+// materialized by the callee prologue exactly as a bare parameter is, so the
+// field is declared `c_int` and narrowed at each of those three exports.
+const _: () = assert!(size_of::<Format>() == size_of::<c_int>());
+
 impl Format {
+    /// Narrow an inbound C integer to a `Format`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    /// D11 (P3-W6 T2). PRE-EXISTING.
+    pub fn from_c_int(v: c_int) -> Option<Format> {
+        match v {
+            0 => Some(Format::Plain),
+            1 => Some(Format::Vt),
+            2 => Some(Format::Html),
+            _ => None,
+        }
+    }
+
     // PORT NOTE: bridge to the pure-VT `formatter::Format`. The discriminants are
     // identical by construction (same key order plain/vt/html).
     pub fn to_zig(self) -> rustty_vt::formatter::Format {
@@ -262,7 +326,13 @@ pub struct SelectLineOptions {
 #[derive(Clone, Copy)]
 pub struct FormatOptions {
     pub size: usize,
-    pub emit: Format,
+    /// D11 (P3-W6 T2): held as the C integer, NOT as `Format`. This struct is
+    /// taken BY VALUE by `rustty_terminal_selection_format_alloc` and
+    /// `_format_buf`, so a `Format`-typed field would be materialized by the
+    /// callee prologue — the same UB a bare closed-enum parameter has, one level
+    /// down. Narrowed in `selection_formatter` with `Format::from_c_int`, which
+    /// is where the oracle's `intToEnum` guard lives too.
+    pub emit: c_int,
     pub unwrap: bool,
     pub trim: bool,
     pub selection: *const CSelection,
@@ -811,9 +881,19 @@ fn format_selection(
 // }
 //
 // PORT NOTE: the `intToEnum(Format, @intFromEnum(opts.emit))` guard rejects an
-// out-of-range `emit`. In rustty `opts.emit` is already a valid `#[repr(C)] Format`
-// (the raw-`c_int` range check lives in the lib.rs `extern "C"` wrapper, per the
-// cell/key pattern), so the guard is tautological here and folds into `emit.to_zig()`.
+// out-of-range `emit`, and it is PORTED LIVE below.
+//
+// CORRECTION (D11, P3-W6 T2). This note used to read: "In rustty `opts.emit` is
+// already a valid `#[repr(C)] Format` (the raw-`c_int` range check lives in the
+// lib.rs `extern \"C\"` wrapper, per the cell/key pattern), so the guard is
+// tautological here and folds into `emit.to_zig()`." Both halves were WRONG.
+// There was no range check in the `extern \"C\"` wrapper — `FormatOptions` is
+// taken BY VALUE, so nothing in lib.rs ever saw `emit` as an integer — and
+// "already a valid `Format`" was assuming the conclusion: the C caller supplies
+// the bytes, and a `Format`-typed field means an out-of-range value is
+// materialized as a `Format` in the prologue, which is UB, not a valid value.
+// The oracle's guard was load-bearing and the port had silently dropped it.
+// `emit` is now a `c_int` field and this is the narrowing point.
 fn selection_formatter<'a>(
     t: *mut ZigTerminal,
     opts: FormatOptions,
@@ -823,7 +903,10 @@ fn selection_formatter<'a>(
         return Err(FormatError::InvalidValue);
     }
     // _ = std.meta.intToEnum(Format, @intFromEnum(opts.emit)) catch return error.InvalidValue;
-    let emit = opts.emit.to_zig();
+    let emit = match Format::from_c_int(opts.emit) {
+        Some(f) => f.to_zig(),
+        None => return Err(FormatError::InvalidValue),
+    };
 
     // const sel = if (opts.selection) |sel| sel.toZig() orelse return error.InvalidValue
     //             else t.screens.active.selection orelse return error.NoValue;
@@ -1084,7 +1167,12 @@ pub unsafe fn contains(
     // const screen = t.screens.active;
     let screen = unsafe { (*t).screens.active };
     // const pin = screen.pages.pin(.fromC(pt)) orelse return .invalid_value;
-    let pin = match unsafe { (*screen).pages.pin(pt.from_c()) } {
+    // D11 (P3-W6 T2): `pt.tag` is the raw C integer; `from_c` narrows it.
+    let zig_pt = match pt.from_c() {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
+    let pin = match unsafe { (*screen).pages.pin(zig_pt) } {
         Some(p) => p,
         None => return Result::InvalidValue,
     };
@@ -1156,7 +1244,7 @@ mod tests {
     // analog constructs `PointC { tag, value }` with the active union member.
     fn active_point(x: u16, y: u16) -> PointC {
         PointC {
-            tag: TagC::Active,
+            tag: TagC::Active as c_int,
             value: PointCValue {
                 active: Coordinate { x, y: y as u32 },
             },
@@ -1209,7 +1297,7 @@ mod tests {
 
             // const opts: FormatOptions = .{ .emit = .plain, .unwrap = true, .trim = true };
             let opts = FormatOptions {
-                emit: Format::Plain,
+                emit: Format::Plain as c_int,
                 unwrap: true,
                 trim: true,
                 ..format_options_default()
@@ -1284,7 +1372,7 @@ mod tests {
             };
             // const opts: FormatOptions = .{ .emit = .plain, .unwrap = true, .trim = true, .selection = &sel };
             let opts = FormatOptions {
-                emit: Format::Plain,
+                emit: Format::Plain as c_int,
                 unwrap: true,
                 trim: true,
                 selection: &sel as *const CSelection,
@@ -1332,7 +1420,7 @@ mod tests {
             let mut out_len: usize = 123;
             // try testing.expectEqual(Result.no_value, format_alloc(t, &test_allocator, .{ .emit = .plain, .unwrap = true, .trim = true }, &out_ptr, &out_len));
             let opts = FormatOptions {
-                emit: Format::Plain,
+                emit: Format::Plain as c_int,
                 unwrap: true,
                 trim: true,
                 ..format_options_default()
@@ -1361,7 +1449,7 @@ mod tests {
     fn format_options_default() -> FormatOptions {
         FormatOptions {
             size: size_of::<FormatOptions>(),
-            emit: Format::Plain,
+            emit: Format::Plain as c_int,
             unwrap: false,
             trim: false,
             selection: std::ptr::null(),

@@ -170,7 +170,16 @@ pub union CValue {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct AttributeC {
-    pub tag: Tag,
+    /// D11 (P3-W6 T2): held as the C integer, NOT as `Tag`.
+    /// `rustty_sgr_attribute_tag` takes `AttributeC` BY VALUE, so a `Tag`-typed
+    /// field is materialized by the callee prologue and an undeclared value is
+    /// UB there — even though nothing in this crate DISPATCHES on an inbound
+    /// tag. That is the subtle part of this rule: the UB is in the
+    /// materialization, not in the use, so "we never read it" is not a defence.
+    /// `attribute_tag` remains the reference's pure pass-through (`return
+    /// attr.tag;`) and therefore needs no narrowing point; `cval` writes the
+    /// discriminant with `as c_int`.
+    pub tag: c_int,
     pub value: CValue,
 }
 
@@ -198,141 +207,141 @@ impl AttributeC {
         };
         match attr {
             sgr::Attribute::Unset => AttributeC {
-                tag: Tag::Unset,
+                tag: Tag::Unset as c_int,
                 value: zero,
             },
             sgr::Attribute::Unknown(v) => AttributeC {
-                tag: Tag::Unknown,
+                tag: Tag::Unknown as c_int,
                 value: CValue {
                     unknown: unknown_cval(v),
                 },
             },
             sgr::Attribute::Bold => AttributeC {
-                tag: Tag::Bold,
+                tag: Tag::Bold as c_int,
                 value: zero,
             },
             sgr::Attribute::ResetBold => AttributeC {
-                tag: Tag::ResetBold,
+                tag: Tag::ResetBold as c_int,
                 value: zero,
             },
             sgr::Attribute::Italic => AttributeC {
-                tag: Tag::Italic,
+                tag: Tag::Italic as c_int,
                 value: zero,
             },
             sgr::Attribute::ResetItalic => AttributeC {
-                tag: Tag::ResetItalic,
+                tag: Tag::ResetItalic as c_int,
                 value: zero,
             },
             sgr::Attribute::Faint => AttributeC {
-                tag: Tag::Faint,
+                tag: Tag::Faint as c_int,
                 value: zero,
             },
             sgr::Attribute::Underline(v) => AttributeC {
-                tag: Tag::Underline,
+                tag: Tag::Underline as c_int,
                 value: CValue {
                     underline: underline_cval(v),
                 },
             },
             sgr::Attribute::UnderlineColor(v) => AttributeC {
-                tag: Tag::UnderlineColor,
+                tag: Tag::UnderlineColor as c_int,
                 value: CValue { underline_color: v },
             },
             sgr::Attribute::Color256Underline(v) => AttributeC {
-                tag: Tag::Color256Underline,
+                tag: Tag::Color256Underline as c_int,
                 value: CValue {
                     color_256_underline: v,
                 },
             },
             sgr::Attribute::ResetUnderlineColor => AttributeC {
-                tag: Tag::ResetUnderlineColor,
+                tag: Tag::ResetUnderlineColor as c_int,
                 value: zero,
             },
             sgr::Attribute::Overline => AttributeC {
-                tag: Tag::Overline,
+                tag: Tag::Overline as c_int,
                 value: zero,
             },
             sgr::Attribute::ResetOverline => AttributeC {
-                tag: Tag::ResetOverline,
+                tag: Tag::ResetOverline as c_int,
                 value: zero,
             },
             sgr::Attribute::Blink => AttributeC {
-                tag: Tag::Blink,
+                tag: Tag::Blink as c_int,
                 value: zero,
             },
             sgr::Attribute::ResetBlink => AttributeC {
-                tag: Tag::ResetBlink,
+                tag: Tag::ResetBlink as c_int,
                 value: zero,
             },
             sgr::Attribute::Inverse => AttributeC {
-                tag: Tag::Inverse,
+                tag: Tag::Inverse as c_int,
                 value: zero,
             },
             sgr::Attribute::ResetInverse => AttributeC {
-                tag: Tag::ResetInverse,
+                tag: Tag::ResetInverse as c_int,
                 value: zero,
             },
             sgr::Attribute::Invisible => AttributeC {
-                tag: Tag::Invisible,
+                tag: Tag::Invisible as c_int,
                 value: zero,
             },
             sgr::Attribute::ResetInvisible => AttributeC {
-                tag: Tag::ResetInvisible,
+                tag: Tag::ResetInvisible as c_int,
                 value: zero,
             },
             sgr::Attribute::Strikethrough => AttributeC {
-                tag: Tag::Strikethrough,
+                tag: Tag::Strikethrough as c_int,
                 value: zero,
             },
             sgr::Attribute::ResetStrikethrough => AttributeC {
-                tag: Tag::ResetStrikethrough,
+                tag: Tag::ResetStrikethrough as c_int,
                 value: zero,
             },
             sgr::Attribute::DirectColorFg(v) => AttributeC {
-                tag: Tag::DirectColorFg,
+                tag: Tag::DirectColorFg as c_int,
                 value: CValue { direct_color_fg: v },
             },
             sgr::Attribute::DirectColorBg(v) => AttributeC {
-                tag: Tag::DirectColorBg,
+                tag: Tag::DirectColorBg as c_int,
                 value: CValue { direct_color_bg: v },
             },
             sgr::Attribute::Color8Bg(v) => AttributeC {
-                tag: Tag::Color8Bg,
+                tag: Tag::Color8Bg as c_int,
                 value: CValue {
                     color_8_bg: v.cval(),
                 },
             },
             sgr::Attribute::Color8Fg(v) => AttributeC {
-                tag: Tag::Color8Fg,
+                tag: Tag::Color8Fg as c_int,
                 value: CValue {
                     color_8_fg: v.cval(),
                 },
             },
             sgr::Attribute::ResetFg => AttributeC {
-                tag: Tag::ResetFg,
+                tag: Tag::ResetFg as c_int,
                 value: zero,
             },
             sgr::Attribute::ResetBg => AttributeC {
-                tag: Tag::ResetBg,
+                tag: Tag::ResetBg as c_int,
                 value: zero,
             },
             sgr::Attribute::Color8BrightBg(v) => AttributeC {
-                tag: Tag::Color8BrightBg,
+                tag: Tag::Color8BrightBg as c_int,
                 value: CValue {
                     color_8_bright_bg: v.cval(),
                 },
             },
             sgr::Attribute::Color8BrightFg(v) => AttributeC {
-                tag: Tag::Color8BrightFg,
+                tag: Tag::Color8BrightFg as c_int,
                 value: CValue {
                     color_8_bright_fg: v.cval(),
                 },
             },
             sgr::Attribute::Color256Bg(v) => AttributeC {
-                tag: Tag::Color256Bg,
+                tag: Tag::Color256Bg as c_int,
                 value: CValue { color_256_bg: v },
             },
             sgr::Attribute::Color256Fg(v) => AttributeC {
-                tag: Tag::Color256Fg,
+                tag: Tag::Color256Fg as c_int,
                 value: CValue { color_256_fg: v },
             },
         }
@@ -635,7 +644,11 @@ pub unsafe fn unknown_partial(unknown: UnknownC, ptr: *mut *const u16) -> usize 
 
 /// PORT NOTE: `pub fn attribute_tag(attr: sgr.Attribute.C) callconv(...)
 /// sgr.Attribute.Tag`.
-pub fn attribute_tag(attr: AttributeC) -> Tag {
+/// D11 (P3-W6 T2): the return type is `c_int`, not `Tag`. The reference body is
+/// a pure pass-through of the stored tag, and the stored tag is now the raw C
+/// integer; re-narrowing it here would invent a failure mode the reference does
+/// not have. ABI-identical (`RusttySgrAttributeTag` is an `int` enum).
+pub fn attribute_tag(attr: AttributeC) -> c_int {
     // return attr.tag;
     attr.tag
 }
@@ -733,7 +746,7 @@ mod tests {
             // Verify we get bold
             // var attr: sgr.Attribute.C = undefined;
             let mut attr: AttributeC = AttributeC {
-                tag: Tag::Unset,
+                tag: Tag::Unset as c_int,
                 value: CValue {
                     _padding: [0u64; 8],
                 },
@@ -741,7 +754,7 @@ mod tests {
             // try testing.expect(next(p, &attr));
             assert!(unsafe { next(p, &mut attr) });
             // try testing.expectEqual(.bold, attr.tag);
-            assert_eq!(Tag::Bold, attr.tag);
+            assert_eq!(Tag::Bold as c_int, attr.tag);
 
             // Nothing else
             // try testing.expect(!next(p, &attr));
