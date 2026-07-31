@@ -216,6 +216,41 @@ impl App {
         }
     }
 
+    /// PORTS: `winproto.zig:82-92` `App.bindGlobalShortcuts`. "Bind all global
+    /// keybinds through a mechanism native to the windowing protocol. Returns false
+    /// if there is none; the caller should then fall back to the XDG desktop
+    /// portal."
+    ///
+    /// Only the `wayland` arm can return `true`, and only when the compositor
+    /// advertises `vicinae_hotkey_manager_v1`; `noop` and `x11` return `false`
+    /// unconditionally (`noop.zig:40-46`, `x11.zig:162-169`), so nothing in the
+    /// shipped portal implementation becomes dead code.
+    pub fn bind_global_shortcuts(
+        &mut self,
+        shortcuts: &crate::gtk::class::global_shortcuts::GlobalShortcuts,
+        config: &CoreConfig,
+    ) -> bool {
+        match self {
+            App::None(v) => v.bind_global_shortcuts(shortcuts, config),
+            #[cfg(feature = "wayland")]
+            App::Wayland(v) => v.bind_global_shortcuts(shortcuts, config),
+            #[cfg(feature = "x11")]
+            App::X11(v) => v.bind_global_shortcuts(shortcuts, config),
+        }
+    }
+
+    /// PORTS: `winproto.zig:94-99` `App.clearGlobalShortcuts`. "Unbind all global
+    /// keybinds bound via bindGlobalShortcuts."
+    pub fn clear_global_shortcuts(&mut self) {
+        match self {
+            App::None(v) => v.clear_global_shortcuts(),
+            #[cfg(feature = "wayland")]
+            App::Wayland(v) => v.clear_global_shortcuts(),
+            #[cfg(feature = "x11")]
+            App::X11(v) => v.clear_global_shortcuts(),
+        }
+    }
+
     /// PORTS: `winproto.zig:71-81` `App.initQuickTerminal`. Dispatch to the active
     /// arm — [`class::window::Window`]'s `propQuickTerminal` (`window.zig:1204`)
     /// initializes the quick terminal at the app layer. On a noop-only build this

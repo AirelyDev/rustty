@@ -313,10 +313,16 @@ fn code_msgids_all_wrapped_and_in_pot() {
     // `window.blp:307` only — after `xtask update-translations` its `.pot` block no
     // longer carries any code reference. Changing this number is a deliberate act:
     // add or remove a code-side msgid, regenerate, then update it here.
+    //
+    // 24 -> 27 (`P3-W11 T4`, the Wayland hotkeys series): the three
+    // `globalShortcutBindFailed` msgids ("The keybind was revoked by the system.",
+    // "The keybind was denied by the system.", "Global keybind unavailable") land
+    // WITH their call site in `class/application.rs`, never before it — an
+    // unreachable msgid is exactly the shape Direction 2 below is written to fail on.
     assert_eq!(
         expected.len(),
-        24,
-        "the code-side catalog msgid set changed (was 24). If you added/removed a \
+        27,
+        "the code-side catalog msgid set changed (was 27). If you added/removed a \
          `tr(c\"…\")`/`gettext_(c\"…\")` call site and regenerated the .pot, update \
          this count deliberately; if you did not, extraction lost a keyword and \
          every other assertion here just became vacuous. Set: {expected:#?}"

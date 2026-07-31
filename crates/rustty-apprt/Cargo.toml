@@ -68,7 +68,7 @@ gtk-v4_16 = ["gtk", "gtk4/v4_16"]
 # selected these stay OFF and zero Wayland/X11 protocol crates are pulled. The
 # `wayland` arm lands in L5.4, `x11` in L6, each turning its arm on and adding its
 # own protocol-crate deps.
-wayland = ["gtk", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols", "dep:wayland-protocols-plasma", "dep:gtk4-layer-shell"]
+wayland = ["gtk", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols", "dep:wayland-protocols-plasma", "dep:wayland-scanner", "dep:bitflags", "dep:gtk4-layer-shell"]
 x11 = ["gtk", "dep:gdk4-x11"]
 
 [dependencies]
@@ -315,6 +315,23 @@ wayland-client = { version = "0.31", optional = true }
 wayland-backend = { version = "0.3", optional = true, features = ["client_system"] }
 wayland-protocols = { version = "0.32", optional = true, features = ["client", "staging"] }
 wayland-protocols-plasma = { version = "0.3", optional = true, features = ["client"] }
+# `vicinae_hotkey_v1` has no crates.io binding (it is not in `wayland-protocols`:
+# unratified, testing-phase, authored by the vicinae launcher project), so the
+# client bindings are generated in-tree from the vendored
+# `protocols/vicinae-hotkey-v1.xml` by `wayland-scanner`'s `generate_interfaces!` /
+# `generate_client_code!` proc macros — the exact mechanism `wayland-protocols`
+# uses internally. See `src/gtk/winproto/wayland/vicinae.rs`. This is the Rust
+# counterpart of the reference's `build.zig` `wayland_scanner.addCustomProtocol`
+# step for the same XML. NOT a build-dependency: wayland-rs 0.31 moved scanning
+# from a build script into proc macros, which read the XML at macro-expansion time
+# relative to `CARGO_MANIFEST_DIR` (`build.rs` still emits the `rerun-if-changed`).
+wayland-scanner = { version = "0.31", optional = true }
+# `wayland-scanner` expands a protocol's `bitfield="true"` enum into a
+# `bitflags::bitflags!` invocation referring to the crate by bare path, so the
+# generating crate must have `bitflags` in scope. `vicinae_hotkey_manager_v1`'s
+# `modifiers` is such an enum. Same major version wayland-client itself uses (one
+# copy in the lock).
+bitflags = { version = "2", optional = true }
 # Quick-terminal layer-shell backend (feature = "wayland"): gtk4-layer-shell binds
 # libgtk4-layer-shell (pkg-config gtk4-layer-shell-0), the wlr-layer-shell wrapper
 # GTK's own toplevel does not expose. 0.8 tracks gtk4-rs 0.11, matching the stack

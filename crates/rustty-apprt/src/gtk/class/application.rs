@@ -71,8 +71,9 @@ use rustty_config::Config as CoreConfig;
 use super::command_palette::ActionBoxed;
 use super::config::Config;
 use super::config_errors_dialog::ConfigErrorsDialog;
-use super::global_shortcuts::GlobalShortcuts;
+use super::global_shortcuts::{BindFailed, GlobalShortcuts};
 use super::tab::TabOverrides;
+use crate::gtk::i18n::tr;
 use crate::gtk::portal::OpenUri;
 use crate::gtk::surface::Surface as ApprtSurface;
 use crate::gtk::{build_info, ext, winproto, WeakRef};
@@ -320,6 +321,12 @@ mod imp {
         /// production carries no extra field.
         #[cfg(test)]
         pub global_shortcut_trigger_count: Cell<u64>,
+
+        /// TEST-ONLY counter: how many times `bind-failed` reached
+        /// [`Self::global_shortcut_bind_failed`]. Lets the KAT assert the failure
+        /// SIGNAL actually fired, rather than that nothing errored.
+        #[cfg(test)]
+        pub global_shortcut_bind_failed_count: Cell<u64>,
     }
 
     #[glib::object_subclass]
@@ -831,6 +838,17 @@ mod imp {
                 None
             });
 
+            // `_ = GlobalShortcuts.signals.@"bind-failed".connect(...)`
+            // (`:1475-1481`) -> `globalShortcutBindFailed` (`:1691-1725`).
+            let this_weak = obj.downgrade();
+            global_shortcuts.connect_local("bind-failed", false, move |args| {
+                let failure: BindFailed = args[1].get().expect("bind-failed carries a BindFailed");
+                if let Some(app) = this_weak.upgrade() {
+                    app.imp().global_shortcut_bind_failed(&failure);
+                }
+                None
+            });
+
             // Store the owned strong ref (Invariant 12: manually held, never
             // parented; cleared to release).
             self.global_shortcuts
@@ -854,6 +872,33 @@ mod imp {
             if let Some(thunk) = self.perform_all_action_thunk.borrow().as_ref() {
                 thunk(action.0.clone());
             }
+        }
+
+        /// PORTS: `application.zig:1691-1725` `globalShortcutBindFailed` — "May fire
+        /// before any window exists, hence a desktop notification rather than a
+        /// toast."
+        ///
+        /// The visible half of the per-binding failure channel: without it a keybind
+        /// the compositor denied or revoked is a keybind that silently does nothing.
+        ///
+        /// `pub(super)` (the reference's method is file-private) so the KAT in the
+        /// outer module's `mod tests` can drive it directly.
+        pub(super) fn global_shortcut_bind_failed(&self, failure: &BindFailed) {
+            #[cfg(test)]
+            self.global_shortcut_bind_failed_count
+                .set(self.global_shortcut_bind_failed_count.get() + 1);
+
+            let (title, body) = super::bind_failed_notification(failure);
+            // `Action.desktopNotification(self, .app, .{ .title, .body })`
+            // (`:1721-1724`).
+            action::desktop_notification(
+                &self.obj(),
+                Target::<super::AppTargetHandle>::App,
+                rustty_apprt_api::action::DesktopNotification {
+                    title: title.as_bytes(),
+                    body: body.as_bytes(),
+                },
+            );
         }
 
         /// PORTS: `application.zig:1608-1653` `showConfigErrorsDialog`. Presents (or
@@ -1512,6 +1557,53 @@ unsafe extern "C" fn handle_sigusr2(ud: glib::ffi::gpointer) -> glib::ffi::gbool
 
     // `return @intFromBool(glib.SOURCE_CONTINUE)` (`:1523`).
     glib::ffi::GTRUE
+}
+
+/// PORTS: `application.zig:1700-1719` — the pure string-assembly half of
+/// `globalShortcutBindFailed`, split out so it is testable with no GApplication, no
+/// D-Bus and no compositor. Returns `(title, body)`.
+///
+/// The body is `"<trigger label>: <detail>"`, where the detail is the
+/// compositor-supplied `message` when it is non-empty and one of two translated
+/// fallbacks otherwise (`:1707-1713`). The trigger label falls back to `"?"` when
+/// the trigger cannot be rendered (`:1701-1705`).
+///
+/// PORT NOTE (byte fidelity): `failure.message` is compositor wire data
+/// ([`Vec<u8>`]); it is decoded lossily HERE, at the one place it becomes
+/// user-facing display text, and nowhere earlier.
+///
+/// PORT NOTE: the reference formats into a fixed 512-byte buffer and RETURNS
+/// (raising no notification at all) when the body does not fit (`:1715-1720`,
+/// `catch return`). rustty's `String` grows, so the notification is always raised;
+/// a notification silently dropped for length is a defect, not behaviour worth
+/// reproducing.
+pub(crate) fn bind_failed_notification(failure: &BindFailed) -> (String, String) {
+    // `key.labelFromTrigger(&writer, failure.trigger) catch false` → `"?"`
+    // (`:1700-1705`).
+    let label = {
+        let mut buf = String::new();
+        if crate::gtk::key::label_from_trigger(&mut buf, failure.trigger) {
+            buf
+        } else {
+            "?".to_owned()
+        }
+    };
+
+    // `if (failure.message[0] != 0) break :detail failure.message;` (`:1708`).
+    let detail: String = if failure.message.is_empty() {
+        if failure.revoked {
+            tr(c"The keybind was revoked by the system.").to_owned()
+        } else {
+            tr(c"The keybind was denied by the system.").to_owned()
+        }
+    } else {
+        String::from_utf8_lossy(&failure.message).into_owned()
+    };
+
+    (
+        tr(c"Global keybind unavailable").to_owned(),
+        format!("{label}: {detail}"),
+    )
 }
 
 /// A zero-sized [`CoreSurfaceHandle`] used only to name the `C` type parameter of
@@ -4510,6 +4602,118 @@ mod tests {
             app.imp().global_shortcut_trigger_count.get(),
             1,
             "the trigger handler must reach the core dispatch exactly once"
+        );
+    }
+
+    /// PORTS: `application.zig:1700-1719` — the notification body assembly. Pure
+    /// string work: no display, no D-Bus, no compositor, so NOT `#[ignore]`d. This
+    /// is where the user-visible content of the whole `bind-failed` channel lives.
+    #[test]
+    fn application_bind_failed_notification_body() {
+        use rustty_input::binding::{Trigger, TriggerKey};
+        use rustty_vt::input::key_mods::Mods;
+
+        let trigger = Trigger {
+            key: TriggerKey::Unicode('q' as u32),
+            mods: Mods {
+                super_: true,
+                ..Default::default()
+            },
+        };
+
+        // A non-empty compositor message is used verbatim (`:1708`).
+        let (title, body) = bind_failed_notification(&BindFailed {
+            trigger,
+            action: rustty_input::binding::Action::NewWindow,
+            message: b"already held by vicinae".to_vec(),
+            revoked: false,
+        });
+        assert_eq!(title, "Global keybind unavailable");
+        assert_eq!(body, "Super+Q: already held by vicinae");
+
+        // Empty message + denied -> the "denied" fallback (`:1710-1712`).
+        let (_, body) = bind_failed_notification(&BindFailed {
+            trigger,
+            action: rustty_input::binding::Action::NewWindow,
+            message: Vec::new(),
+            revoked: false,
+        });
+        assert_eq!(body, "Super+Q: The keybind was denied by the system.");
+
+        // Empty message + revoked -> the "revoked" fallback (`:1710-1711`). This
+        // pair is the reason the `revoked` flag is carried at all: a test of only
+        // one arm passes with the flag ignored.
+        let (_, body) = bind_failed_notification(&BindFailed {
+            trigger,
+            action: rustty_input::binding::Action::NewWindow,
+            message: Vec::new(),
+            revoked: true,
+        });
+        assert_eq!(body, "Super+Q: The keybind was revoked by the system.");
+
+        // An unformattable trigger degrades to "?" rather than dropping the
+        // notification (`:1701-1705`).
+        let (_, body) = bind_failed_notification(&BindFailed {
+            trigger: Trigger {
+                key: TriggerKey::CatchAll,
+                mods: Mods::default(),
+            },
+            action: rustty_input::binding::Action::NewWindow,
+            message: b"nope".to_vec(),
+            revoked: false,
+        });
+        assert_eq!(body, "?: nope");
+    }
+
+    /// PORTS: `application.zig:1475-1481` — the `bind-failed` connection. Emitting
+    /// the signal on the app's own `GlobalShortcuts` must reach
+    /// `globalShortcutBindFailed`. Asserts the HANDLER FIRED (the counter), not
+    /// merely that emitting did not error.
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn application_bind_failed_signal_reaches_the_handler() {
+        use rustty_input::binding::{Trigger, TriggerKey};
+        use rustty_vt::input::key_mods::Mods;
+
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+
+        use gio::prelude::ApplicationExt as _;
+
+        let app = build_test_app(std::ptr::null_mut());
+        // `startup` is what runs `startupGlobalShortcuts` and makes the connection.
+        app.register(gio::Cancellable::NONE).expect("register");
+
+        let gs: GlobalShortcuts = app
+            .imp()
+            .global_shortcuts
+            .borrow()
+            .clone()
+            .expect("startup created the GlobalShortcuts object")
+            .downcast()
+            .expect("it is a GhosttyGlobalShortcuts");
+
+        assert_eq!(app.imp().global_shortcut_bind_failed_count.get(), 0);
+
+        gs.emit_bind_failed(&BindFailed {
+            trigger: Trigger {
+                key: TriggerKey::Unicode('q' as u32),
+                mods: Mods {
+                    super_: true,
+                    ..Default::default()
+                },
+            },
+            action: rustty_input::binding::Action::NewWindow,
+            message: Vec::new(),
+            revoked: false,
+        });
+
+        assert_eq!(
+            app.imp().global_shortcut_bind_failed_count.get(),
+            1,
+            "the bind-failed signal must reach globalShortcutBindFailed exactly once"
         );
     }
 

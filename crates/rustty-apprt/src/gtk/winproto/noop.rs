@@ -83,6 +83,24 @@ impl App {
         Ok(())
     }
 
+    /// PORTS: `noop.zig:40-46` `App.bindGlobalShortcuts`. The no-op backend has no
+    /// windowing protocol at all, so it never binds anything and the caller falls
+    /// back to the XDG desktop portal.
+    #[allow(clippy::unused_self)]
+    #[must_use]
+    pub fn bind_global_shortcuts(
+        &mut self,
+        _shortcuts: &crate::gtk::class::global_shortcuts::GlobalShortcuts,
+        _config: &CoreConfig,
+    ) -> bool {
+        false
+    }
+
+    /// PORTS: `noop.zig:47` `App.clearGlobalShortcuts`. Nothing was bound, so
+    /// nothing is cleared (the reference's empty body).
+    #[allow(clippy::unused_self)]
+    pub fn clear_global_shortcuts(&mut self) {}
+
     // PORT NOTE: the reference's `eventMods` (`noop.zig:26-32`),
     // `initQuickTerminal` (`noop.zig:37`), and the `Window`-parameterized methods
     // reference `input.Mods`, `*gdk.Device`, and `class/window.zig` (`ApprtWindow`)

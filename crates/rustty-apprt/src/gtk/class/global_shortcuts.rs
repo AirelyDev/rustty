@@ -71,9 +71,44 @@ use gtk4::subclass::prelude::*;
 use super::command_palette::ActionBoxed;
 use super::config::Config;
 
-use rustty_input::binding::{Action, Value};
+use rustty_input::binding::{Action, Trigger, Value};
 
 use crate::gtk::key;
+
+/// PORTS: `global_shortcuts.zig:85-101` `GlobalShortcuts.BindFailed` — "A global
+/// shortcut that failed to bind or was revoked."
+///
+/// The per-binding failure channel the `vicinae_hotkey_v1` winproto path needs and
+/// the XDG portal path has no analogue for: the compositor answers every bind
+/// request individually with `bound` / `denied(reason, message)` / `revoked(reason,
+/// message)`, and a denial that went nowhere would leave the user with a keybind
+/// that silently does nothing.
+///
+/// PORT NOTE (`:88` "Only valid for the duration of the signal emission"): the
+/// reference's `message` is a borrowed `[*:0]const u8` pointing into the Wayland
+/// event's buffer, which is why its lifetime is the emission. A `#[glib::Boxed]`
+/// type must be `Clone`, and the boxed value outlives the emission in gtk4-rs'
+/// `Value` machinery, so the port OWNS the message. The observable contract is
+/// unchanged and strictly safer.
+///
+/// PORT NOTE (byte fidelity): `message` is compositor-supplied wire data, so it is
+/// kept as [`Vec<u8>`] rather than a lossy `String`. It is decoded (lossily, for
+/// display only) at the one place it reaches a user — the desktop notification
+/// body in [`super::application`].
+// No `Eq`: `Binding.Action` carries `f64` payloads, so it is `PartialEq` only.
+#[derive(Clone, Debug, PartialEq, glib::Boxed)]
+#[boxed_type(name = "GhosttyGlobalShortcutsBindFailed", nullable)]
+pub struct BindFailed {
+    /// PORTS: `global_shortcuts.zig:86` `trigger: Binding.Trigger`.
+    pub trigger: Trigger,
+    /// PORTS: `global_shortcuts.zig:87` `action: Binding.Action`.
+    pub action: Action,
+    /// PORTS: `global_shortcuts.zig:89-90` `message` — "May be empty."
+    pub message: Vec<u8>,
+    /// PORTS: `global_shortcuts.zig:92-93` `revoked` — "Revoked after binding
+    /// rather than denied up front."
+    pub revoked: bool,
+}
 
 mod imp {
     use super::*;
@@ -143,6 +178,9 @@ mod imp {
         /// boxed action GType the `trigger` signal param needs interned.
         fn class_init(_klass: &mut Self::Class) {
             ActionBoxed::ensure_type();
+            // The `bind-failed` signal param needs its boxed GType interned too
+            // (`global_shortcuts.zig:97-100` `defineBoxed`).
+            super::BindFailed::ensure_type();
         }
     }
 
@@ -174,14 +212,23 @@ mod imp {
 
     #[glib::derived_properties]
     impl ObjectImpl for GlobalShortcuts {
-        /// PORTS: `global_shortcuts.zig:90-102` `signals` — `trigger`, carrying the
-        /// activated action (`&.{*const Binding.Action}` → [`ActionBoxed`]).
+        /// PORTS: `global_shortcuts.zig:103-127` `signals` — `trigger`, carrying the
+        /// activated action (`&.{*const Binding.Action}` → [`ActionBoxed`]), and
+        /// `bind-failed`, carrying the failed binding (`&.{*const BindFailed}` →
+        /// [`super::BindFailed`]).
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
-                vec![glib::subclass::Signal::builder("trigger")
-                    .param_types([ActionBoxed::static_type()])
-                    .build()]
+                vec![
+                    glib::subclass::Signal::builder("trigger")
+                        .param_types([ActionBoxed::static_type()])
+                        .build(),
+                    // `pub const @"bind-failed"` (`:117-126`) — "Emitted when a
+                    // global shortcut fails to bind or is revoked."
+                    glib::subclass::Signal::builder("bind-failed")
+                        .param_types([super::BindFailed::static_type()])
+                        .build(),
+                ]
             })
         }
 
@@ -237,6 +284,38 @@ impl GlobalShortcuts {
             let Some(config) = config.as_ref() else {
                 return;
             };
+
+            // "Prefer a windowing protocol native mechanism over the XDG desktop
+            // portal when available." (`:184-190`, oracle `88bd4fdce`). Returns
+            // false on `noop`/`x11` and on a Wayland compositor that does not
+            // advertise `vicinae_hotkey_manager_v1`, in which case we fall through
+            // to the portal path below — the two mechanisms are ADDITIVE WITH
+            // PREFERENCE, not a replacement.
+            //
+            // IMPLEMENTATION HAZARD (`RefCell`): `Application::winproto()` hands out
+            // a `Ref<'_, winproto::App>` while `bind_global_shortcuts`/
+            // `clear_global_shortcuts` need `&mut`, so BOTH call sites go through
+            // `winproto_mut()` and neither may straddle a live `winproto()` borrow.
+            // `close()` above took (and dropped) its own `RefMut` inside its own
+            // statement; this one is likewise a statement temporary. Holding either
+            // across the other turns the upstream crash fix into a `RefCell`
+            // double-borrow panic.
+            if let Some(app) = app_default() {
+                if app.winproto_mut().bind_global_shortcuts(self, config.get()) {
+                    eprintln!("debug(gtk): global shortcuts bound via winproto");
+                    return;
+                }
+            }
+
+            // DELIBERATE DIVERGENCE (recorded, `P3-W11 T4` / `P3-W8 T6 Step 2`):
+            // upstream `0a117e079` adds `if (priv.dbus_connection == null) return;`
+            // here (`:192-193`), before the map is built. rustty KEEPS building the
+            // map without a bus: two KATs assert exactly that
+            // (`global_shortcuts_refresh_builds_map_without_dbus`,
+            // `…_clears_prior_map`), and upstream's early return is only an
+            // optimisation — `request()` already returns instead of unwrapping a
+            // null connection (`:349-360`), so once a bus exists the observable
+            // behaviour is identical.
             build_shortcut_map(config.get())
         };
 
@@ -254,6 +333,21 @@ impl GlobalShortcuts {
     /// session, and clear the map.
     fn close(&self) {
         let imp = self.imp();
+
+        // `Application.default().winproto().clearGlobalShortcuts();` (`:141-146`,
+        // oracle `0a117e079`'s tail) — UNCONDITIONAL, i.e. not behind the
+        // `dbus_connection` check, because the winproto bindings exist precisely
+        // when the portal session does not. "This is safe to call even if the
+        // winproto was already deinitialized, which happens during application
+        // teardown." — in rustty the `RefCell<winproto::App>` always holds a live
+        // (possibly `.none`) arm, so the same call is safe for the same reason.
+        //
+        // Routed through `winproto_mut()`: `clear_global_shortcuts` needs `&mut`
+        // (see the hazard note in `refresh`). Taken and dropped within this one
+        // statement so `refresh`'s own `winproto_mut()` cannot double-borrow.
+        if let Some(app) = app_default() {
+            app.winproto_mut().clear_global_shortcuts();
+        }
 
         // `:113-121` — dropping a `SignalSubscription` unsubscribes it.
         //
@@ -323,7 +417,20 @@ impl GlobalShortcuts {
         // performed ok` in `application.rs`.
         eprintln!("debug(gtk): global shortcut dispatch map-hit id={shortcut_id}");
 
-        self.emit_by_name::<()>("trigger", &[&ActionBoxed(action)]);
+        // `self.emitTrigger(&action)` (`:605`).
+        self.emit_trigger(&action);
+    }
+
+    /// PORTS: `global_shortcuts.zig:607-616` `emitTrigger` — "Emit the trigger
+    /// signal. Public for winproto shortcut backends."
+    pub fn emit_trigger(&self, action: &Action) {
+        self.emit_by_name::<()>("trigger", &[&ActionBoxed(action.clone())]);
+    }
+
+    /// PORTS: `global_shortcuts.zig:618-626` `emitBindFailed` — "Emit the
+    /// bind-failed signal. Public for winproto shortcut backends."
+    pub fn emit_bind_failed(&self, failure: &BindFailed) {
+        self.emit_by_name::<()>("bind-failed", &[&failure.clone()]);
     }
 
     /// The current portal shortcut map (id → action), in registration order.
@@ -692,6 +799,21 @@ pub(crate) fn session_handle_from_results(results: &glib::Variant) -> Option<Str
 /// has a `error.WriteFailed` arm that warns and skips; `xdg_shortcut_from_trigger`
 /// returns a growable `String` here so only the `null` arm (an untranslatable
 /// trigger — `catch_all`, or a key with no GDK keysym name) can skip a bind.
+/// The default [`Application`](super::application::Application), or `None`.
+///
+/// PORT NOTE: the reference reaches the app with `Application.default()`
+/// (`global_shortcuts.zig:143`), which asserts a default `GApplication` exists —
+/// true for every reachable runtime path, because this class is only ever created
+/// by `startupGlobalShortcuts`. rustty's headless KATs construct a
+/// `GlobalShortcuts` standalone (no `GApplication` at all), and rustty's
+/// `Application::default()` panics in that case, so the winproto hops go through
+/// this non-asserting probe. On the live path it is exactly `Application::default()`;
+/// the `None` arm is reachable only from a test that has no application.
+fn app_default() -> Option<super::application::Application> {
+    use gtk4::prelude::Cast as _;
+    gio::Application::default().and_then(|a| a.downcast::<super::application::Application>().ok())
+}
+
 pub(crate) fn build_shortcut_map(config: &rustty_config::Config) -> Vec<(String, Action)> {
     let mut map: Vec<(String, Action)> = Vec::new();
 
@@ -1030,6 +1152,51 @@ mod tests {
             *seen.borrow(),
             vec![Action::NewWindow],
             "only a mapped shortcut id emits trigger"
+        );
+    }
+
+    /// PORTS: `global_shortcuts.zig:117-126,618-626` — `emitBindFailed` puts the
+    /// failure on the `bind-failed` signal, which is the ONLY channel a denied or
+    /// revoked winproto binding has. Written in the style of
+    /// `global_shortcuts_activation_emits_trigger`: the assertion is that the
+    /// signal actually FIRED with the payload intact, not that nothing errored —
+    /// a keybind that silently no-ops is the failure mode this whole series exists
+    /// to prevent.
+    #[test]
+    fn global_shortcuts_emit_bind_failed_reaches_the_signal() {
+        use std::cell::RefCell as StdRefCell;
+        use std::rc::Rc;
+
+        let gs = GlobalShortcuts::new();
+
+        let seen: Rc<StdRefCell<Vec<BindFailed>>> = Rc::new(StdRefCell::new(Vec::new()));
+        let seen_cb = seen.clone();
+        gs.connect_local("bind-failed", false, move |args| {
+            let boxed: BindFailed = args[1].get().expect("bind-failed carries a BindFailed");
+            seen_cb.borrow_mut().push(boxed);
+            None
+        });
+
+        let trigger = Trigger {
+            key: rustty_input::binding::TriggerKey::Unicode('q' as u32),
+            mods: rustty_vt::input::key_mods::Mods {
+                super_: true,
+                ..Default::default()
+            },
+        };
+        let failure = BindFailed {
+            trigger,
+            action: Action::NewWindow,
+            message: b"already bound".to_vec(),
+            revoked: true,
+        };
+        gs.emit_bind_failed(&failure);
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![failure],
+            "emit_bind_failed must deliver the whole failure (trigger, action, \
+             message bytes and the revoked flag) to the signal"
         );
     }
 }

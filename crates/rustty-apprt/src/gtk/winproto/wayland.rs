@@ -55,7 +55,9 @@
 //!   — instead of the init snapshot it used to keep.
 
 mod globals;
+pub mod hotkeys;
 mod queue_source;
+mod vicinae;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -173,7 +175,7 @@ impl App {
     /// or the registry roundtrip fails, return an error.
     pub fn init(
         gdk_display: &gdk4::Display,
-        _app_id: &str,
+        app_id: &str,
         _config: &CoreConfig,
     ) -> Result<Option<App>, WinprotoError> {
         // `gobject.ext.cast(gdk_wayland.WaylandDisplay, gdk_display) orelse return null`
@@ -200,7 +202,10 @@ impl App {
         // `display.getRegistry()` (`Globals.zig:82`).
         let registry = display.get_registry(&qh, ());
 
-        let mut boxed = Box::new(Globals::new(conn, qh, registry));
+        // `hotkeys: try .init(alloc, app_id)` (`wayland.zig:54`) — carried inside
+        // `Globals` because that is the wayland-rs dispatch state; see
+        // `hotkeys.rs`'s module docs.
+        let mut boxed = Box::new(Globals::new(conn, qh, registry, app_id));
 
         // First roundtrip: enumerate + bind globals + install listeners
         // (`Globals.zig:84`).
@@ -233,11 +238,70 @@ impl App {
         }))
     }
 
-    /// PORTS: `wayland.zig:58-60` `App.deinit`. The [`Connection`] (in `globals`)
-    /// is dropped here; because the backend is guest-mode it does NOT destroy GDK's
-    /// `wl_display` (§1.11).
-    #[allow(clippy::unused_self)]
-    pub fn deinit(&mut self) {}
+    /// PORTS: `wayland.zig:64-67` `App.deinit`. `self.hotkeys.deinit()` (`:65`)
+    /// destroys every live `vicinae_hotkey_v1` object; the [`Connection`] (in
+    /// `globals`) is dropped with the `Rc`, and because the backend is guest-mode
+    /// it does NOT destroy GDK's `wl_display` (§1.11).
+    pub fn deinit(&mut self) {
+        if let Ok(mut pump) = self.pump.try_borrow_mut() {
+            pump.globals.hotkeys_mut().deinit();
+        }
+    }
+
+    /// PORTS: `wayland.zig:69-77` `App.bindGlobalShortcuts`.
+    ///
+    /// ```zig
+    /// const manager = self.globals.get(.vicinae_hotkey_manager) orelse return false;
+    /// self.hotkeys.bind(manager, shortcuts, config);
+    /// return true;
+    /// ```
+    ///
+    /// Returning `false` when the compositor does not advertise the global is the
+    /// hinge of the whole series: on mutter/KWin/wlroots (none of which implement
+    /// `vicinae_hotkey_v1` today) this is ALWAYS the outcome and the caller takes
+    /// the XDG portal path unchanged.
+    pub fn bind_global_shortcuts(
+        &mut self,
+        shortcuts: &crate::gtk::class::global_shortcuts::GlobalShortcuts,
+        config: &CoreConfig,
+    ) -> bool {
+        let Ok(mut pump) = self.pump.try_borrow_mut() else {
+            // The pump is borrowed only by the queue GSource's own dispatch, which
+            // never re-enters here (a `bind-failed`/`trigger` emission is deferred
+            // out of that borrow — `hotkeys.rs` module docs). Fail closed: report
+            // "no native mechanism" so the portal fallback still runs.
+            return false;
+        };
+        let globals = pump.globals.as_mut();
+        let Some(manager) = globals.vicinae_hotkey_manager().cloned() else {
+            return false;
+        };
+        let qh = globals.qh().clone();
+        globals.hotkeys_mut().bind(&manager, &qh, shortcuts, config);
+        // The bind requests are queued on the connection; push them out so the
+        // compositor answers without waiting for an unrelated flush.
+        let _ = pump.event_queue.flush();
+        true
+    }
+
+    /// PORTS: `wayland.zig:79-81` `App.clearGlobalShortcuts` —
+    /// `self.hotkeys.clear()`.
+    pub fn clear_global_shortcuts(&mut self) {
+        if let Ok(mut pump) = self.pump.try_borrow_mut() {
+            pump.globals.hotkeys_mut().clear();
+            let _ = pump.event_queue.flush();
+        }
+    }
+
+    /// OBSERVABILITY (not in the reference): `(entries, live bindings)` from the
+    /// hotkey table, so a KAT can assert that a bind actually TOOK EFFECT rather
+    /// than merely that nothing errored. See `hotkeys.rs`.
+    #[must_use]
+    pub fn hotkeys_summary(&self) -> (usize, usize) {
+        let pump = self.pump.borrow();
+        let h = pump.globals.hotkeys();
+        (h.entry_count(), h.bound_count())
+    }
 
     /// PORTS: `wayland.zig:62-68` `App.eventMods`. Returns `None`, so
     /// [`super::App::event_mods`] falls back to `key::translateMods`

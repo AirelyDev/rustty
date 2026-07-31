@@ -1173,6 +1173,7 @@ name = "rustty-apprt"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "bitflags",
  "cc",
  "dcimgui-sys",
  "fontconfig-sys",
@@ -1211,6 +1212,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-plasma",
+ "wayland-scanner",
 ]
 
 [[package]]

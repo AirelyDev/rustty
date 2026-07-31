@@ -95,6 +95,31 @@ pub fn xdg_shortcut_from_trigger(trigger: Trigger) -> Option<String> {
     Some(out)
 }
 
+/// PORTS: `key.zig:60-67` `keysymFromTrigger`. Returns the keysym (identical to
+/// a GDK keyval) for a trigger key, or `None` if the trigger has no keysym
+/// representation (a `catch_all`).
+///
+/// This is the trigger→wire conversion the `vicinae_hotkey_v1` bind request needs
+/// ([`winproto::wayland`]'s `Hotkeys`); unlike [`write_trigger_key`] it produces
+/// the NUMBER rather than the keysym NAME, and unlike that function it never fails
+/// for a `unicode` trigger — `gdk_unicode_to_keyval` always yields a keyval
+/// (falling back to the `0x01000000 | codepoint` Unicode-keysym encoding for
+/// codepoints with no legacy keysym).
+///
+/// PORT NOTE: the reference returns `?c_uint`; a GDK keyval is a `guint32`, so the
+/// port returns `Option<u32>`.
+#[must_use]
+pub fn keysym_from_trigger(trigger: Trigger) -> Option<u32> {
+    match trigger.key {
+        // `.physical => |k| keyvalFromKey(k)` (`key.zig:63`).
+        TriggerKey::Physical(k) => keyval_from_key(k).map(IntoGlib::into_glib),
+        // `.unicode => |cp| gdk.unicodeToKeyval(cp)` (`key.zig:64`).
+        TriggerKey::Unicode(cp) => Some(gdk4::unicode_to_keyval(cp)),
+        // `.catch_all => null` (`key.zig:65`).
+        TriggerKey::CatchAll => None,
+    }
+}
+
 /// PORTS: `key.zig:60-82` `writeTriggerKey`. Appends the key portion of a
 /// trigger in GDK-keysym-name form; returns `false` for a `catch_all` key or an
 /// unmappable physical/unicode key.
@@ -579,6 +604,35 @@ mod tests {
         assert_eq!(
             xdg_shortcut_from_trigger(trigger(all, TriggerKey::Unicode(92))).as_deref(),
             Some("SHIFT+CTRL+ALT+LOGO+backslash")
+        );
+    }
+
+    /// PORTS: `key.zig:340-360` `test "keysymFromTrigger"` verbatim. Display-free
+    /// (`gdk_unicode_to_keyval` and the static keymap need no GDK display).
+    #[test]
+    fn key_keysym_from_trigger() {
+        // Unicode keys use the keysym numbering (latin-1 maps directly).
+        assert_eq!(
+            keysym_from_trigger(trigger(
+                Mods {
+                    super_: true,
+                    ..Mods::default()
+                },
+                TriggerKey::Unicode('q' as u32),
+            )),
+            Some('q' as u32)
+        );
+
+        // Physical keys map through our keymap.
+        assert_eq!(
+            keysym_from_trigger(trigger(Mods::default(), TriggerKey::Physical(Key::KeyA))),
+            Some(gdk4::Key::a.into_glib())
+        );
+
+        // catch_all has no keysym representation.
+        assert_eq!(
+            keysym_from_trigger(trigger(Mods::default(), TriggerKey::CatchAll)),
+            None
         );
     }
 

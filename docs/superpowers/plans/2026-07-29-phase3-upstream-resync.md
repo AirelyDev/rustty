@@ -3327,11 +3327,52 @@ and the end-to-end "report reaches the pty" assertion. `rustty-core` has no
 | 1 — `P3-W6 T4` kitty temp-file -> directory | **LANDED** (`4d690b4`) |
 | 2 — `P3-W6 T5` kitty transient usage / eviction | **LANDED** (`e67ff42`) |
 | 3 — `P3-W6 T6` viewport fingerprint reuse | **LANDED** (`1a139c8`), Miri harness at `.port/phase-3/mirihar-fingerprint-update` |
-| 4 — `P3-W8 T6`/`T7` Wayland hotkeys (F-W1..F-W4) | **NOT STARTED — see below** |
+| 4 — `P3-W8 T6`/`T7` Wayland hotkeys (F-W1..F-W4) | **LANDED 2026-07-31** on `p3-wayland-hotkeys`; F-W1..F-W4 all ported, i18n msgids landed with the code, portal gate extended and green on live mutter. Wire-path (compositor-side) verification is debt `V22` with a runnable fake-compositor recipe and an `#[ignore]`d marker test — the ONLY thing deferred; see below |
 | 5 — `P3-W8 T5` step 3 `gtk-horizontal-tab-scroll` | **LANDED** (`9dff03b`), verified on the Linux VM |
 | 6 — **V21** Surface visibility KAT | **(a) DISCHARGED** (`21cfb81`); **(b) PARTIAL**, still owned here |
 
-### Task 4 remains OPEN and owned by `P3-W11`
+### Task 4 — LANDED 2026-07-31 (branch `p3-wayland-hotkeys`)
+
+The description below is the ORIGINAL scoping, kept for provenance. What actually
+landed, whole, in one branch:
+
+* **F-W1** `key::keysym_from_trigger` + the oracle's own test verbatim;
+  `winproto::App::{bind,clear}_global_shortcuts` dispatch with `noop`/`x11`
+  returning `false`; `GlobalShortcuts::BindFailed` boxed type + the `bind-failed`
+  signal + public `emit_trigger`/`emit_bind_failed`;
+  `Application::global_shortcut_bind_failed` → `desktop_notification`. The
+  `RefCell` hazard is handled by taking `winproto_mut()` as a per-statement
+  temporary in BOTH `close()` and `refresh()`; **the hazard was proven real** — a
+  deliberately held `winproto()` `Ref` across `close()`'s `RefMut` aborts the live
+  app with `RefCell already borrowed`.
+* **F-W2** `refresh()` tries winproto first and logs
+  `global shortcuts bound via winproto`. rustty's "headless refresh still builds
+  the map" divergence is KEPT and recorded in `MAIN_PARITY.md`.
+* **F-W3** `crates/rustty-apprt/protocols/vicinae-hotkey-v1.xml` vendored verbatim
+  (305 lines, copyright header intact); `wayland-scanner` proc-macro codegen in
+  `src/gtk/winproto/wayland/vicinae.rs` (wayland-rs 0.31 scans in the macro, not a
+  build script; `build.rs` supplies the `rerun-if-changed` edge, plus a `bitflags`
+  dependency the generated bitfield needs); `Tag::VicinaeHotkeyManager` + registry
+  bind.
+* **F-W4** `winproto/wayland/hotkeys.rs` — entry selection, `manager.bind`, the
+  listener state machine, `Entry::fail` → `emit_bind_failed`. Two FORCED
+  divergences, documented in that file's module docs and in `MAIN_PARITY.md`:
+  the entry table lives in `Globals` with a `HotkeyId` userdata token (wayland-rs
+  dispatches through one queue-state type with `Send + Sync` userdata), and signal
+  emissions are deferred out of the queue-dispatch `RefCell` borrow (a `trigger`
+  runs an arbitrary keybind action, and `toggle_quick_terminal` re-enters that
+  same `RefCell`).
+* **The 3 i18n msgids landed WITH the code**, via `xtask update-translations`;
+  `code_msgids_all_wrapped_and_in_pot`'s pinned count went 24 → 27.
+* **Verification:** unit + headed KATs on the Linux VM under
+  `--features gtk,wayland,x11`; live-GNOME graceful-absence KAT; and
+  `ws15_globalshortcuts_portal_gate.sh` extended with the "the winproto arm must
+  DECLINE on mutter" assertion, which was itself proven non-vacuous.
+* **Deferred, exactly as `P3-W8 T7 Step 4` licenses:** the fake-compositor harness
+  for the wire path — `VERIFICATION_DEBT.md` **V22**, with a runnable recipe and
+  an `#[ignore = "needs fake vicinae compositor"]` marker test.
+
+### Original scoping (historical)
 
 Nothing of F-W1..F-W4 exists. It was not started because it is not a sweep-sized
 item and starting it half-way would have produced exactly the silent-no-op
