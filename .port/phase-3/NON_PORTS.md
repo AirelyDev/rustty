@@ -193,3 +193,33 @@ the real `errno` from the failed call. Cosmetic (log text only), but wrong.
 * **`E2` `bed47168c`** — added and **reverted** (`60121a039`) inside the range.
   Not a non-port: a **trap** for anyone porting commit-by-commit instead of from
   the range diff. Confirmed handled by WS10 T20's own commit message.
+
+---
+
+# `check_tests_ported.py` delta from the two file deletions (P3-W7 T4)
+
+Mirroring upstream's `src/os/args.zig` + `src/os/env.zig` deletions moves five
+tests to a different CRATE, which the per-crate name matcher in
+`.port/tools/gates/check_tests_ported.py` reports as five new `os::` MISSING
+rows. **No test was deleted.** The delta, recorded rather than silently dropped:
+
+| reference name (still present at the PIN) | now lives in |
+|---|---|
+| `os::appendEnv empty` | `crates/rustty-termio/src/exec.rs::tests::appendEnv_empty` |
+| `os::appendEnv existing` | `crates/rustty-termio/src/exec.rs::tests::appendEnv_existing` |
+| `os::prependEnv empty` | `crates/rustty-termio/src/shell_integration.rs::tests::prependEnv_empty` |
+| `os::prependEnv existing` | `crates/rustty-termio/src/shell_integration.rs::tests::prependEnv_existing` |
+| `os::args` | `crates/rustty-args/tests/os_args_seam.rs::args` |
+
+The oracle names are still matchable only because the **pin has not advanced
+yet**: upstream deleted all five along with their files. This is the same
+mechanism `README.md`'s re-vet assertion **P3-RV2** describes for G3b — the pin
+advance (`P3-W10`) resolves it **by construction**, because the reference names
+cease to exist. Until then the five rows are expected, and a per-file
+`GHOSTTY_SRC` override to paper over them is **forbidden** (it is the spoof hole
+`.port/tools/ci.sh` closed for G1b).
+
+Three other `check_tests_ported.py` MISSING rows (`config::fromHex`,
+`vt::PageList compact insufficient savings returns null`,
+`vt::PageList compact std_size page returns null`) are **pre-existing** and not
+this workstream's.
