@@ -28,7 +28,7 @@ use super::resize::Resize;
 use super::scroll::Scroll;
 use super::{
     std_capacity, std_size, IntegrityError, Key, Limits, NodeData, Options, Owned, PageList, Pin,
-    Storage, Viewport,
+    PreservedPage, Storage, Viewport,
 };
 use crate::page::{Capacity, Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
@@ -2968,6 +2968,262 @@ fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
         // Restore so deinit's accounting sees a resident page.
         let _ = super::Node::page(node);
     }
+    s.deinit();
+}
+
+/// Read a compressed node's encoded bytes without restoring it.
+///
+/// PORT NOTE: the reference spells this `node.data.compressed.encoded`. rustty's
+/// `NodeData` payload is reached through the same raw `compressed_payload`
+/// projection the module itself uses, so the read forms no `&NodeData`.
+///
+/// # Panics
+/// Panics if the node is resident.
+fn compressed_encoded_for_test(node: *const super::Node) -> Vec<u8> {
+    unsafe {
+        let data = core::ptr::addr_of!((*node).data);
+        assert_eq!(NodeData::tag(data), NodeData::TAG_COMPRESSED);
+        (*NodeData::compressed_payload(data)).encoded.clone()
+    }
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList preserved page keeps
+/// compressed storage"` (9156ada16).
+///
+/// PORT NOTE: the reference brackets `pagePreservingState` with two
+/// `testing.FailingAllocator` arms — one proving the RESIDENT case never
+/// allocates, one proving that a failed decode allocation leaves the node and
+/// its stats untouched. rustty's `page_preserving_state` takes no allocator (it
+/// uses the global allocator and panics on OOM), so the second arm has no
+/// injectable seam and is not ported. The first arm survives structurally and is
+/// asserted below: the resident case returns `PreservedPage::Borrowed` pointing
+/// at the live page, a variant that owns no buffer and therefore cannot have
+/// allocated or copied anything.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — the cost is page-mapping/LZ4 volume, not assertion overhead, so the debug-assertions-off G6c lane does not rescue it either. Covered natively + by ASan."
+)]
+#[test]
+fn pagelist_preserved_page_keeps_compressed_storage() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let node = s.pages.first;
+    let resident = unsafe { super::Node::page(node) };
+    unsafe {
+        (*resident).dirty = true;
+        *(*resident).get_row_and_cell(3, 2).cell = Cell::init('X' as u32);
+    }
+
+    // Resident nodes can be borrowed without allocating an unnecessary copy.
+    {
+        let mut preserved = unsafe { super::Node::page_preserving_state(node) };
+        match preserved {
+            PreservedPage::Borrowed(p) => assert_eq!(p, resident as *const Page),
+            PreservedPage::Owned { .. } => panic!("a resident page must be borrowed, not copied"),
+        }
+        preserved.deinit();
+    }
+
+    let (retained_ptr, memory_len, expected) = unsafe {
+        let ptr = (*resident).memory_ptr() as *mut u8;
+        let len = (*resident).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+
+    assert!(s.compress_page(node));
+    let stats = s.memory_stats();
+    let expected_encoded = compressed_encoded_for_test(node);
+
+    // Test decommit simulates physical reclamation by clearing the retained
+    // mapping. A preserved page must decode elsewhere rather than restoring it.
+    assert!(
+        unsafe { core::slice::from_raw_parts(retained_ptr, memory_len) }
+            .iter()
+            .all(|&b| b == 0)
+    );
+
+    let mut preserved = unsafe { super::Node::page_preserving_state(node) };
+    match preserved {
+        PreservedPage::Borrowed(_) => {
+            panic!("a compressed page must be decoded into an owned copy")
+        }
+        PreservedPage::Owned { .. } => {}
+    }
+    let page_ = preserved.page();
+
+    unsafe {
+        assert_ne!((*page_).memory_ptr(), retained_ptr as *const u8);
+        assert_eq!(
+            core::slice::from_raw_parts((*page_).memory_ptr(), memory_len),
+            &expected[..]
+        );
+        assert!((*page_).dirty);
+        assert_eq!(
+            'X' as u32,
+            (*(*page_).get_row_and_cell(3, 2).cell).content_codepoint()
+        );
+    }
+    preserved.deinit();
+
+    // The node still owns the same compressed representation, and neither its
+    // storage accounting nor its discarded raw mapping changed while cloning.
+    assert_eq!(unsafe { super::Node::storage(node) }, Storage::Compressed);
+    assert_eq!(stats, s.memory_stats());
+    assert_eq!(
+        unsafe { (*super::Node::metadata(node)).memory_ptr() },
+        retained_ptr as *const u8
+    );
+    assert!(
+        unsafe { core::slice::from_raw_parts(retained_ptr, memory_len) }
+            .iter()
+            .all(|&b| b == 0)
+    );
+    assert_eq!(expected_encoded, compressed_encoded_for_test(node));
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList compresses only complete cold
+/// history pages"` (9156ada16).
+///
+/// The boundary node — the one holding the active area's top-left row — has a
+/// historical prefix, so compressing it would decommit rows that are on screen.
+/// The pass must stop there, and every node from it onward must stay resident.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — the cost is page-mapping/LZ4 volume, not assertion overhead, so the debug-assertions-off G6c lane does not rescue it either. Covered natively + by ASan."
+)]
+#[test]
+fn pagelist_compresses_only_complete_cold_history_pages() {
+    // More active rows than one page at these dimensions can hold ensures the
+    // active area spans multiple nodes when the pass chooses its boundary.
+    let active_rows = PageList::initial_capacity(80).rows + 1;
+    let mut s = PageList::init(Options::new(80, active_rows)).unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+
+    // Move the active top into the boundary page so it has both a historical
+    // prefix and active rows while the active area still spans later pages.
+    let _ = s.grow().unwrap();
+
+    let active = s.get_top_left(point::Tag::Active);
+    let active_node = active.node;
+    assert!(active.y > 0);
+    assert_ne!(active_node, s.pages.last);
+
+    let mut expected_compressed: usize = 0;
+    let mut expected_raw_bytes: usize = 0;
+    let mut current = s.pages.first;
+    while !current.is_null() {
+        if current == active_node {
+            break;
+        }
+        expected_compressed += 1;
+        expected_raw_bytes += unsafe { (*super::Node::metadata(current)).memory_len() };
+        current = unsafe { (*current).next };
+    }
+    assert_eq!(2, expected_compressed);
+
+    let first = s.pages.first;
+    let (first_memory, first_len, expected) = unsafe {
+        let page = super::Node::page(first);
+        *(*page).get_row_and_cell(0, 0).cell = Cell::init('X' as u32);
+        let ptr = (*page).memory_ptr();
+        let len = (*page).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+    let page_size = s.page_size;
+
+    let _ = s.compress(CompressionMode::Full);
+    let memory = s.memory_stats();
+    assert_eq!(expected_compressed, memory.compressed_pages);
+    assert_eq!(expected_raw_bytes, memory.decommitted_raw_bytes);
+    assert!(memory.encoded_bytes < memory.decommitted_raw_bytes);
+    assert_eq!(page_size, s.page_size);
+
+    let mut actual_encoded_bytes: usize = 0;
+    current = s.pages.first;
+    while !current.is_null() {
+        if current == active_node {
+            break;
+        }
+        assert!(unsafe { super::Node::is_compressed(current) });
+        actual_encoded_bytes += compressed_encoded_for_test(current).len();
+        current = unsafe { (*current).next };
+    }
+    assert_eq!(actual_encoded_bytes, memory.encoded_bytes);
+    current = active_node;
+    while !current.is_null() {
+        assert!(!unsafe { super::Node::is_compressed(current) });
+        current = unsafe { (*current).next };
+    }
+
+    // Restoring the oldest page preserves both the mapping identity and all of
+    // its bytes even though the pass discarded its physical pages.
+    assert_eq!(first_memory, unsafe {
+        (*super::Node::metadata(first)).memory_ptr()
+    });
+    unsafe {
+        let page = super::Node::page(first);
+        assert_eq!(
+            core::slice::from_raw_parts((*page).memory_ptr(), first_len),
+            &expected[..]
+        );
+        assert_eq!(first_memory, (*page).memory_ptr());
+    }
+
+    s.deinit();
+}
+
+/// PORTS: oracle@main PageList.zig `test "PageList compression uses temporary
+/// scratch for oversized pages"` (9156ada16).
+///
+/// A page grown past `std_size` cannot borrow a pool item for its encode
+/// scratch, so `compress_page` falls back to a temporary allocation. The node
+/// must still end up compressed, keep its exact retained mapping, and decode
+/// back byte-identically.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — the cost is page-mapping/LZ4 volume, not assertion overhead, so the debug-assertions-off G6c lane does not rescue it either. Covered natively + by ASan."
+)]
+#[test]
+fn pagelist_compression_uses_temporary_scratch_for_oversized_pages() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let mut node = s.pages.first;
+    while unsafe { (*super::Node::page(node)).memory_len() } <= std_size() {
+        node = s
+            .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+    }
+
+    let (memory_ptr, memory_len, expected) = unsafe {
+        let page = super::Node::page(node);
+        let ptr = (*page).memory_ptr();
+        let len = (*page).memory_len();
+        (ptr, len, core::slice::from_raw_parts(ptr, len).to_vec())
+    };
+    let page_size = s.page_size;
+
+    assert!(s.compress_page(node));
+    assert!(unsafe { super::Node::is_compressed(node) });
+    assert_eq!(page_size, s.page_size);
+    assert_eq!(memory_ptr, unsafe {
+        (*super::Node::metadata(node)).memory_ptr()
+    });
+    assert_eq!(memory_len, unsafe {
+        (*super::Node::metadata(node)).memory_len()
+    });
+
+    unsafe {
+        let page = super::Node::page(node);
+        assert_eq!(
+            core::slice::from_raw_parts((*page).memory_ptr(), memory_len),
+            &expected[..]
+        );
+        assert!(!super::Node::is_compressed(node));
+        assert_eq!(memory_ptr, (*page).memory_ptr());
+    }
+
     s.deinit();
 }
 
