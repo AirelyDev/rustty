@@ -96,3 +96,6 @@ example/**/build/
 # Restored Zig dependency caches (.port/tools/restore_zig_deps.sh materializes these
 # from hash-pinned tarballs; they are downloads, not sources).
 **/zig-pkg/
+
+# Miri lane run logs (large, regenerated per run; findings are committed in FINDINGS.md)
+.port/phase-3/miri/*.log
