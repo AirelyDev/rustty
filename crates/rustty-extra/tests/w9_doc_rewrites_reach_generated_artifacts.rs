@@ -44,6 +44,19 @@ fn text(bytes: Vec<u8>) -> String {
 }
 
 #[test]
+// MIRI EXCEPTION (rustty-extra webgen/mdgen family): this drives BOTH
+// `mdgen::man_5_markdown()` and `webgen::config_mdx()`, the two generators
+// already registered as Miri-intractable in .port/phase-2/MIRI_EXCEPTIONS.md
+// ("Family 4"): O(config fields x document length) substring scanning that is
+// milliseconds natively and does not finish under the interpreter (measured
+// again here: no completion after 30+ minutes in the ci.sh G6 lane, where it
+// was the reason rustty-extra's Miri run never terminated). The module has no
+// `unsafe`; the native run in ci.sh's `cargo test --workspace` is the control.
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-extra webgen/mdgen): intractable \
+     doc-generation scan — see .port/phase-2/MIRI_EXCEPTIONS.md Family 4"
+)]
 fn background_blur_and_keybind_doc_rewrites_reach_man5_and_webdata() {
     let man5 = text(rustty_extra::mdgen::man_5_markdown());
     let web = text(rustty_extra::webgen::config_mdx());

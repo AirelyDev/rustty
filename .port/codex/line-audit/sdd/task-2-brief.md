@@ -114,7 +114,7 @@ python3 .port/codex/line-audit/scripts/build_universe.py \
   --rustty /Users/gael/projects/rustty \
   --ghostty /Users/gael/projects/ghostty \
   --output .port/codex/line-audit/universe.jsonl \
-  --expect-rustty-revision fa02b36cc21eadcd8eaa8f68ae0bf1ec759ddc83 \
+  --expect-rustty-revision 2bd45ccc79ae4ab6bdcb8cb95d5a99d0d8d44816 \
   --expect-ghostty-revision 6ad1fe7d8cbda36c77b337a96c9bea8a77883699
 ```
 

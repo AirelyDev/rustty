@@ -17,7 +17,7 @@ const uucode = @import("uucode");
 //
 // plus the 8192-entry grapheme-break precompute, computed bit-for-bit the same
 // way ghostty's src/unicode/grapheme.zig embeds it at comptime — via
-// uucode.x.grapheme.computeGraphemeBreakNoControl over every
+// uucode.grapheme.computeGraphemeBreakNoControl over every
 // (state, gb1, gb2) key.
 //
 // The reference's `props_uucode.zig` / `symbols_uucode.zig` `test "... tables
@@ -47,8 +47,8 @@ const MAX_CP: u32 = 0x10FFFF; // uucode.config.max_code_point
 // be diffed against an INDEPENDENT regeneration.
 const Key = packed struct(u13) {
     state: uucode.grapheme.BreakState,
-    gb1: uucode.x.types.GraphemeBreakNoControl,
-    gb2: uucode.x.types.GraphemeBreakNoControl,
+    gb1: uucode.types.GraphemeBreakNoControl,
+    gb2: uucode.types.GraphemeBreakNoControl,
 
     fn index(self: Key) usize {
         return @intCast(@as(u13, @bitCast(self)));
@@ -72,17 +72,17 @@ const grapheme_precompute = precompute: {
     };
 
     @setEvalBranchQuota(1_000_000);
-    const info = @typeInfo(uucode.x.types.GraphemeBreakNoControl).@"enum";
+    const info = @typeInfo(uucode.types.GraphemeBreakNoControl).@"enum";
     for (0..max_state_int + 1) |state_int| {
         for (info.fields) |field1| {
             for (info.fields) |field2| {
                 var state: uucode.grapheme.BreakState = @enumFromInt(state_int);
                 const key: Key = .{
-                    .gb1 = @field(uucode.x.types.GraphemeBreakNoControl, field1.name),
-                    .gb2 = @field(uucode.x.types.GraphemeBreakNoControl, field2.name),
+                    .gb1 = @field(uucode.types.GraphemeBreakNoControl, field1.name),
+                    .gb2 = @field(uucode.types.GraphemeBreakNoControl, field2.name),
                     .state = state,
                 };
-                const v = uucode.x.grapheme.computeGraphemeBreakNoControl(
+                const v = uucode.grapheme.computeGraphemeBreakNoControl(
                     key.gb1,
                     key.gb2,
                     &state,
@@ -95,45 +95,33 @@ const grapheme_precompute = precompute: {
     break :precompute result;
 };
 
-fn createIn(dir: []const u8, name: []const u8) !std.fs.File {
+fn writeIn(io: std.Io, dir: []const u8, name: []const u8, data: []const u8) !void {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ dir, name });
-    return std.fs.cwd().createFile(path, .{});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data });
 }
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+// zig 0.16 removed `std.process.argsAlloc` and the `std.fs.cwd()` blocking file
+// API; argv now arrives through the `std.process.Init` main parameter and file
+// I/O goes through `std.Io` / `std.Io.Dir` (see std/start.zig callMain).
+// Bumped in lockstep with ghostty e8525c0fd "Update to Zig 0.16.0".
+pub fn main(init: std.process.Init) !void {
+    const alloc = init.arena.allocator();
+    const io = init.io;
 
-    const args = try std.process.argsAlloc(alloc);
+    const args = try init.minimal.args.toSlice(alloc);
     if (args.len < 2) {
         std.debug.print("usage: uucode-oracle <out-dir>\n", .{});
         std.process.exit(2);
     }
     const out_dir = args[1];
-    std.fs.cwd().makePath(out_dir) catch {};
+    std.Io.Dir.cwd().createDirPath(io, out_dir) catch {};
 
-    var bw: [1 << 16]u8 = undefined;
-    var bs: [1 << 16]u8 = undefined;
-    var bf: [1 << 16]u8 = undefined;
-    var bg: [1 << 16]u8 = undefined;
-
-    var fw = try createIn(out_dir, "width.bin");
-    defer fw.close();
-    var ww = fw.writer(&bw);
-
-    var fs = try createIn(out_dir, "symbol.bin");
-    defer fs.close();
-    var sw = fs.writer(&bs);
-
-    var ff = try createIn(out_dir, "props_flags.bin");
-    defer ff.close();
-    var flw = ff.writer(&bf);
-
-    var fg = try createIn(out_dir, "props_gb.bin");
-    defer fg.close();
-    var gbw = fg.writer(&bg);
+    const n = MAX_CP + 1;
+    const width_buf = try alloc.alloc(u8, n);
+    const symbol_buf = try alloc.alloc(u8, n);
+    const flags_buf = try alloc.alloc(u8, n);
+    const gb_buf = try alloc.alloc(u8, n);
 
     var cp: u32 = 0;
     while (cp <= MAX_CP) : (cp += 1) {
@@ -143,26 +131,21 @@ pub fn main() !void {
         const evb: u8 = @intFromBool(uucode.get(.is_emoji_vs_base, @intCast(cp)));
         const gb = uucode.get(.grapheme_break_no_control, @intCast(cp));
 
-        const flags: u8 = (width & 0x3) | (wzg << 2) | (evb << 3);
-
-        try ww.interface.writeByte(width);
-        try sw.interface.writeByte(sym);
-        try flw.interface.writeByte(flags);
-        try gbw.interface.writeByte(@intFromEnum(gb));
+        width_buf[cp] = width;
+        symbol_buf[cp] = sym;
+        flags_buf[cp] = (width & 0x3) | (wzg << 2) | (evb << 3);
+        gb_buf[cp] = @intFromEnum(gb);
     }
-    try ww.interface.flush();
-    try sw.interface.flush();
-    try flw.interface.flush();
-    try gbw.interface.flush();
+
+    try writeIn(io, out_dir, "width.bin", width_buf);
+    try writeIn(io, out_dir, "symbol.bin", symbol_buf);
+    try writeIn(io, out_dir, "props_flags.bin", flags_buf);
+    try writeIn(io, out_dir, "props_gb.bin", gb_buf);
 
     // Grapheme precompute (8192 entries, 1 byte each).
-    var bp: [1 << 16]u8 = undefined;
-    var fp = try createIn(out_dir, "grapheme.bin");
-    defer fp.close();
-    var pw = fp.writer(&bp);
-    for (grapheme_precompute) |v| {
-        const byte: u8 = @as(u4, @bitCast(v));
-        try pw.interface.writeByte(byte);
+    var precompute_buf: [grapheme_precompute.len]u8 = undefined;
+    for (grapheme_precompute, 0..) |v, i| {
+        precompute_buf[i] = @as(u4, @bitCast(v));
     }
-    try pw.interface.flush();
+    try writeIn(io, out_dir, "grapheme.bin", &precompute_buf);
 }

@@ -498,6 +498,19 @@ fn scrollback_compression() {
 
 // test "ScrollbackCompression restores cold terminal pages" {
 #[test]
+// MIRI EXCEPTION (rustty-bench scrollback_compression, SIMD-FFI class): the
+// restore/drain corpora are fed through `Stream::next_slice`, which calls
+// `rustty_simd_decode_utf8_until_control_seq` (highway C++). Miri hard-errors
+// on the first foreign call and takes the whole lib binary with it. Identical
+// to the `#[cfg_attr(miri, ignore)]` on `rustty-vt`'s
+// `stream_print_slice_matches_per_byte` (WS10 T16), and the vt-side raw-pointer
+// writes these corpora reach ARE Miri-covered there. Registered in
+// .port/phase-2/MIRI_EXCEPTIONS.md ("rustty-bench — the 2026-07-31 CI triage").
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench): Stream::next_slice calls \
+     the SIMD C++ decoder — see MIRI_EXCEPTIONS.md"
+)]
 fn scrollback_compression_restores_cold_terminal_pages() {
     let alloc = Allocator;
     // const impl: *ScrollbackCompression = try .create(testing.allocator, .{
@@ -553,6 +566,14 @@ fn scrollback_compression_restores_cold_terminal_pages() {
 
 // test "ScrollbackCompression drains incremental compression steps" {
 #[test]
+// MIRI EXCEPTION (rustty-bench scrollback_compression, SIMD-FFI class) — same
+// cause and same registration as `scrollback_compression_restores_cold_terminal_pages`
+// above (`Stream::next_slice` -> `rustty_simd_decode_utf8_until_control_seq`).
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench): Stream::next_slice calls \
+     the SIMD C++ decoder — see MIRI_EXCEPTIONS.md"
+)]
 fn scrollback_compression_drains_incremental_compression_steps() {
     let alloc = Allocator;
     let mut impl_ = ScrollbackCompression::create(

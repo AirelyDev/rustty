@@ -99,7 +99,7 @@ def _required(record: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
 
 
 def _enum(record: dict[str, Any], field: str, values: set[str]) -> list[str]:
-    if field in record and record[field] not in values:
+    if field in record and (not isinstance(record[field], str) or record[field] not in values):
         return [f"{field} must be one of: {', '.join(sorted(values))}"]
     return []
 
@@ -179,7 +179,7 @@ def validate_file(record: dict) -> list[str]:
             diagnostics.append("empty content_kind requires line_count of zero")
     if record.get("content_kind") == "binary" and record.get("line_count") != 0:
         diagnostics.append("binary content_kind requires line_count of zero")
-    if record.get("scope_class") in _NONSEMANTIC_DISPOSITIONS:
+    if isinstance(record.get("scope_class"), str) and record["scope_class"] in _NONSEMANTIC_DISPOSITIONS:
         for field in ("classification_reason", "classification_evidence"):
             if not _nonempty_string(record.get(field)):
                 diagnostics.append(f"{field} must be nonempty for a non-semantic scope_class")
@@ -218,9 +218,10 @@ def validate_primary(record: dict) -> list[str]:
             for index, tag in enumerate(record["risk_tags"]):
                 if not isinstance(tag, str) or not _RISK_TAG_RE.fullmatch(tag):
                     diagnostics.append(f"risk tag at index {index} must be nonempty lowercase snake_case")
-                elif tag in seen:
-                    diagnostics.append(f"duplicate risk tag: {tag}")
-                seen.add(tag)
+                else:
+                    if tag in seen:
+                        diagnostics.append(f"duplicate risk tag: {tag}")
+                    seen.add(tag)
     if "counterparts" in record:
         if not isinstance(record["counterparts"], list):
             diagnostics.append("counterparts must be an array")
@@ -239,7 +240,11 @@ def validate_primary(record: dict) -> list[str]:
             diagnostics.append(f"{field} must be a string")
     if "reviewed_at" in record and not _timestamp_is_valid(record["reviewed_at"]):
         diagnostics.append("reviewed_at must be an RFC 3339 UTC timestamp ending in Z")
-    if record.get("scope_class") == "semantic_required" and record.get("disposition") not in {None, "pending"}:
+    if (
+        record.get("scope_class") == "semantic_required"
+        and record.get("disposition") is not None
+        and record.get("disposition") != "pending"
+    ):
         for field in ("contract", "analysis", "reachability", "verification", "observed_result"):
             if not _nonempty_string(record.get(field)):
                 diagnostics.append(f"{field} must be nonempty for a final semantic disposition")
@@ -247,7 +252,7 @@ def validate_primary(record: dict) -> list[str]:
         if not isinstance(record.get("finding_ids"), list) or not any(_nonempty_string(item) for item in record["finding_ids"]):
             diagnostics.append("parity_gap requires at least one nonempty finding_ids entry")
     scope_class = record.get("scope_class")
-    if scope_class in _NONSEMANTIC_DISPOSITIONS:
+    if isinstance(scope_class, str) and scope_class in _NONSEMANTIC_DISPOSITIONS:
         expected = _NONSEMANTIC_DISPOSITIONS[scope_class]
         if record.get("disposition") != expected:
             diagnostics.append(f"{scope_class} requires disposition {expected}")
@@ -271,7 +276,7 @@ def validate_primary_with_file(primary: dict, file_record: dict | None) -> list[
         diagnostics.append("primary and file record must have matching repo, revision, and path")
     if primary.get("scope_class") != file_record.get("scope_class"):
         diagnostics.append("primary and file record must have matching scope_class")
-    if primary.get("scope_class") in _NONSEMANTIC_DISPOSITIONS:
+    if isinstance(primary.get("scope_class"), str) and primary["scope_class"] in _NONSEMANTIC_DISPOSITIONS:
         for field in ("classification_reason", "classification_evidence"):
             if not _nonempty_string(file_record.get(field)):
                 diagnostics.append(f"file record {field} must be nonempty for a non-semantic primary")

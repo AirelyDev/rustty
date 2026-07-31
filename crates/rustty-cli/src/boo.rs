@@ -520,6 +520,20 @@ mod tests {
     // the reference's `std.debug.assert(cell_idx == self.buffer.len)`. Proves the
     // build.rs generator + `inflate_raw` reproduce the asset byte-faithfully.
     #[test]
+    // MIRI EXCEPTION (rustty-cli boo): `decompress_frames` calls the vendored
+    // zlib 1.3.1 through `zlib-sys::inflate_raw`, and Miri hard-errors on the
+    // first foreign call ("can't call foreign function `inflateInit2_`"),
+    // aborting the whole rustty-cli lib binary. The C is the thing under test
+    // here — a `cfg(miri)` stand-in would make the round-trip assertion
+    // vacuous — so this is the same class as `rustty-zigimg/tests/codec.rs`
+    // ("calls the vendored zlib + Wuffs via FFI"). Compensating controls and
+    // the 4-criterion justification: .port/phase-2/MIRI_EXCEPTIONS.md,
+    // "rustty-cli `boo` framedata (vendored zlib FFI)".
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli boo): vendored zlib FFI \
+         (inflateInit2_) — runs natively + ASan; see MIRI_EXCEPTIONS.md"
+    )]
     fn decompress_frames_round_trip() {
         let decompressed = decompress_frames().expect("inflate framedata");
         let frames: Vec<&[u8]> = decompressed.split(|&b| b == 0x01).collect();

@@ -1,0 +1,45 @@
+# upstream-assertion-drift.tsv — G2 ledger for reference tests UPSTREAM SHRANK.
+# Gate: .port/tools/gates/check_assertions.py  (read only by that gate)
+#
+# WHY THIS EXISTS
+#   G2 compares each ported test's assertion count against
+#   `.port/phase-0/inventory/tests.jsonl`, frozen at the ORIGINAL oracle pin
+#   `4749c4e93`. The pin has since advanced to `6ad1fe7d8` (365 commits). When
+#   upstream REWRITES a test with fewer assertions, a faithful port (R1: follow
+#   upstream) ends up below the FROZEN number and G2 calls it WEAKENED — a false
+#   RED created by the frozen contract, not by a real gap. See
+#   `.port/phase-3/CENSUS_DELTA.md` for the same blind spot at census level.
+#
+# WHY A LEDGER ROW IS NOT ENOUGH ON ITS OWN (R5: never weaken a gate)
+#   A ledger that the gate simply TRUSTS is an unconditional subtraction with
+#   extra steps: anyone could park a row here and hide a genuinely gutted test.
+#   So every row is RE-VERIFIED AT RUNTIME against the LIVE oracle before it is
+#   honored. For each row the gate:
+#     1. re-runs the phase-0 tokenizer (`extract_tests.py`, the SAME script that
+#        produced the frozen inventory, so the counts are comparable) over
+#        `../ghostty/src` and looks the test up by name;
+#     2. requires the live assertion count to EQUAL column `live` — a row that
+#        misstates the live tree is RED;
+#     3. requires `live` < `frozen` — a row claiming a shrink that did not
+#        happen is RED;
+#     4. requires the ported test to still meet the LIVE bar
+#        (rust >= live) — the parity check is re-based on the live oracle, never
+#        removed;
+#     5. requires `upstream_commit` to exist in the oracle AND to have touched
+#        the oracle file the test lives in — the evidence must be real;
+#     6. requires the row to be USED. A row that no longer corresponds to a
+#        would-be-WEAKENED test is STALE and RED (same rule as D1's allowlist),
+#        so rows cannot silently accumulate.
+#   If the oracle checkout is absent the rows cannot be verified, and the gate
+#   exits 3 (BLOCKED) — surfaced by ci.sh as a warning, never a silent green.
+#
+# SCHEMA (6 tab-separated columns; '#' comments and blank lines ignored)
+#   1 crate            G2 crate id (the `crate` column of the G2 report)
+#   2 test             reference test name, exactly as in tests.jsonl
+#   3 frozen           assertion count in the frozen phase-0 inventory
+#   4 live             assertion count in the LIVE oracle (re-measured each run)
+#   5 upstream_commit  the oracle commit that shrank it (must touch the file)
+#   6 notes            what upstream did, and what the port did in response
+#
+crate	test	frozen	live	upstream_commit	notes
+os	desktop environment	10	8	f8e13f31e	Upstream rewrote the test to build a LOCAL `std.process.Environ.Map` per case instead of mutating the process environment with setenv/unsetenv ("Fix desktop detection tests when running from Gnome"; the switch prongs were also collapsed with `inline .macos, .windows` in e8525c0fd). That deleted the two redundant unsetenv-then-expect-`.other` assertions: 10 -> 8. rustty follows upstream (crates/rustty-os/src/desktop.rs `desktop_environment`) and has 9 assertions — Rust cannot collapse the macos/windows prongs the way Zig's `inline` switch does, so it spends one assertion per platform arm where Zig spends one for both. 9 >= 8 live, so nothing was weakened; only the frozen 10 is unreachable.

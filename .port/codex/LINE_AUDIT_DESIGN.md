@@ -1,13 +1,17 @@
 # Exhaustive Line-Level Parity Audit Design
 
 **Date:** 2026-07-31  
-**Rustty baseline:** `fa02b36cc21eadcd8eaa8f68ae0bf1ec759ddc83`  
+**Rustty baseline:** `2bd45ccc79ae4ab6bdcb8cb95d5a99d0d8d44816`  
 **Ghostty baseline:** `6ad1fe7d8cbda36c77b337a96c9bea8a77883699`
 
-The Rustty baseline advanced during Task 2 from the earlier audit revision
-`5243303fbb2f2cfd0832edfb8fa49d72ce322d81`. The first generated universe was
-immediately invalidated rather than credited. This baseline records the new
-authoritative `HEAD`; later drift must trigger the same invalidation rule.
+The Rustty baseline advanced during Task 2 from the earlier audit revisions
+`5243303fbb2f2cfd0832edfb8fa49d72ce322d81` and
+`fa02b36cc21eadcd8eaa8f68ae0bf1ec759ddc83`. Both earlier generated universes
+were immediately invalidated rather than credited. This baseline records the
+new authoritative `HEAD`; later drift must trigger the same invalidation rule.
+The pinned tree now contains an earlier generated `universe.jsonl`. Its record
+binds that committed blob version; regeneration does not require the working
+output to hash itself.
 
 ## Objective
 

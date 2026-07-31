@@ -125,3 +125,41 @@ entry point.
 **Revert-proof.** Restoring the test to `&[u8]` + `start_hyperlink` reproduces
 the identical strongly-protected abort; restored → clean.
 
+
+## G6 / G6c — the 2026-07-31 CI triage (first full `ci.sh` on merged `main`)
+
+**G6c: re-measured GREEN on current `main`, no change made.**
+`check_leaks.sh --debug-assertions-off` → `test result: ok. 82 passed; 0 failed;
+0 ignored; 2239 filtered out; finished in 2690.31s`, i.e. the vacuity floor (82,
+derived from the `cfg_attr(all(miri, debug_assertions))` annotations) is met
+exactly, so `-C debug-assertions=off` really reached rustc. The ci.sh RED predates
+the adversarial MIRI-EXCEPTION re-vet and the xev Stacked-Borrows fix and does not
+reproduce.
+
+**Measurement hazard worth recording.** The first attempt at this lane was heading
+for the gate's 5400s hard bound — 90 minutes in, 11 of 82 tests done — purely
+because three other Miri lanes were running on the same box. Given the machine to
+itself it finished in 45 minutes. Two consequences: (1) G6c needs an
+otherwise-idle host or it flaps on the bound and reports "the lane did not
+finish"; (2) killed Miri runs ORPHAN their `miri` child, which reparents to PID 1
+and keeps burning a core — three such orphans were found and killed during this
+triage. Always `killtree`, then re-check `ps`, before trusting a timing.
+
+**G6: the lane could not previously reach most crates.** Miri aborts the WHOLE
+test binary at the first foreign call, so a single test took each crate down with
+it: `dladdr` (rustty-bench), `os_log_create` (rustty-core), `inflateInit2_`
+(rustty-cli), `objc_autoreleasePoolPush` (rustty-os), plus rustty-extra never
+terminating on an un-annotated doc-generation test. Fixed per
+`.port/phase-2/MIRI_EXCEPTIONS.md` (`cfg(miri)` no-ops for the two instrumentation
+SINKS; measured per-test exceptions for the 6 tests that genuinely cross a
+boundary). Verified after the fix: rustty-bench 16 passed/3 ignored,
+rustty-os 42/23, rustty-cli 54/16.
+
+**Still open at hand-off:** `rustty-core`'s
+`renderer_seam::compression_tests::change_config_restarts_the_pass_only_on_disabled_to_enabled`
+ran for 35+ minutes under Miri without completing (twice) and was killed, so
+rustty-core's lane has no verdict yet — it is a candidate for the
+allocation-volume exception class, but that must be MEASURED with a bound
+(`.port/tools/miri-run.sh`) before anything is annotated. Crates after
+`rustty-extra` in the lane order were never reached by any run in this triage and
+remain unverified.

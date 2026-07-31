@@ -77,6 +77,15 @@ unsafe impl GlobalAlloc for Probe {
     }
 }
 
+// D6-ALLOW(counting/failing probe, not an allocator substitution): this lives in
+// an integration test target (`tests/`), so it exists only in this one test
+// binary and can never enter a shipped build. It does not blind ASan/LSan the
+// way oven-sh/bun#30875's mimalloc did: every success arm forwards to
+// `std::alloc::System`, i.e. plain `malloc`/`free`, which the sanitizer
+// interceptors still see; it only bumps a thread-local counter first. The ARMED
+// arm returns null WITHOUT allocating — a refused allocation is nothing for a
+// sanitizer to track, so no allocation is hidden from it. Same shape and same
+// rationale as the D6-ALLOW in `rustty-renderer/src/link.rs`.
 #[global_allocator]
 static PROBE: Probe = Probe;
 

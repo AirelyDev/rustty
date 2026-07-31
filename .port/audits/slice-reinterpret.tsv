@@ -1,7 +1,9 @@
 # slice-reinterpret.tsv — detector D1 allowlist (kills Bun regression Class 1, oven-sh/bun#31188).
 # Generated: 2026-07-12
 # Gate: .port/tools/gates/check_slice_reinterpret.sh
-# Oracle: /Users/gael/projects/ghostty pinned @ 4749c4e9 (every zig_origin resolves against this pin).
+# Oracle: /Users/gael/projects/ghostty pinned @ 6ad1fe7d8 (every zig_origin resolves against this pin).
+#   (was 4749c4e9; the two page_impl.rs rows were re-audited against the new pin on 2026-07-31 —
+#    both @ptrCast sites still exist upstream, only their line numbers moved.)
 #
 # WHY THIS AUDIT EXISTS (Bun Class 1):
 #   Zig's `bun.reinterpretSlice(u16, buf)` / `@as([]T, @ptrCast(x))` silently @divTrunc
@@ -39,7 +41,7 @@
 #
 # ---------------------------------------------------------------------------------------------
 site	decision	zig_origin	test	notes
-crates/rustty-vt/src/page_impl.rs:1779	exact-len-proven	src/terminal/page.zig:1122 `@memset(@as([]u64, @ptrCast(src_cells)), 0)`	cell_layout_size_align	Cell is `#[repr(transparent)] struct Cell(u64)`; size_of::<Cell>()==8==size_of::<u64>() (cell_layout_size_align asserts 8/8). The reinterpret passes `len` (the CELL count) as the u64 count, so len cells == len u64s byte-for-byte — no slop is representable. Faithful to Zig @ptrCast slice, whose recomputed len is identical because @sizeOf(Cell)==@sizeOf(u64).
-crates/rustty-vt/src/page_impl.rs:1957	exact-len-proven	src/terminal/page.zig:1269 `@memset(@as([]u64, @ptrCast(cells)), 0)`	cell_layout_size_align	Same proof as page_impl.rs:1779: Cell is repr(transparent) over u64 (8 bytes, proven by cell_layout_size_align); count passed is `span` (cell count) so span cells == span u64s exactly. No non-exact length path exists.
+crates/rustty-vt/src/page_impl.rs:1786	exact-len-proven	src/terminal/page.zig:1142 `@memset(@as([]u64, @ptrCast(src_cells)), 0)`	cell_layout_size_align	RE-AUDITED 2026-07-31 (line drift 1779->1786 from 9d8fafb/389dde0/f79d83a, which inserted code ABOVE this site; the reinterpret expression itself is byte-identical and the zig origin moved 1122->1142 with the oracle pin bump 4749c4e93->6ad1fe7d8, unchanged in substance). Cell is `#[repr(transparent)] struct Cell(u64)`; size_of::<Cell>()==8==size_of::<u64>() (cell_layout_size_align asserts 8/8). The reinterpret passes `len` (the CELL count) as the u64 count, so len cells == len u64s byte-for-byte — no slop is representable. Faithful to Zig @ptrCast slice, whose recomputed len is identical because @sizeOf(Cell)==@sizeOf(u64).
+crates/rustty-vt/src/page_impl.rs:1964	exact-len-proven	src/terminal/page.zig:1289 `@memset(@as([]u64, @ptrCast(cells)), 0)`	cell_layout_size_align	RE-AUDITED 2026-07-31 (line drift 1957->1964, same cause; expression byte-identical; zig origin 1269->1289 at pin 6ad1fe7d8). Same proof as page_impl.rs:1786: Cell is repr(transparent) over u64 (8 bytes, proven by cell_layout_size_align); count passed is `span` (cell count) so span cells == span u64s exactly. No non-exact length path exists.
 crates/rustty-vt/src/bitmap_allocator.rs:799	exact-len-proven	src/terminal/bitmap_allocator.zig:499 `bm.free(buf, ptr)` (test "BitmapAllocator alloc non-byte", :481)	BitmapAllocator_alloc_non_byte	In-test reconstruction of the `&[u32]` (u21 stand-in) just returned by `alloc::<u32>(..,1)`, to hand back to `free`. Element type is unchanged (u32→u32) and the length is the compile-time literal `1`, identical to the allocation count asserted three lines above — a same-type, same-count rebuild, not a byte-widening. No truncation is representable.
 crates/rustty-vt/src/bitmap_allocator.rs:831	exact-len-proven	src/terminal/bitmap_allocator.zig:524 `bm.free(buf, ptr)` (test "BitmapAllocator alloc non-byte multi-chunk", :505)	BitmapAllocator_alloc_non_byte_multi_chunk	In-test reconstruction of the `&[u32]` (u21 stand-in) returned by `alloc::<u32>(..,6)` for `free`; length is the literal `6`, matching `assert_eq!(6, ptr.len())` in the same test. Same-type, same-count rebuild — no widening, no slop path.

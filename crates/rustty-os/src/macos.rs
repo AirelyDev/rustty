@@ -226,8 +226,12 @@ pub use self::oslog::{Log, LogType};
 
 mod oslog {
     use std::ffi::{c_void, CStr, CString};
+    // Only the `extern` block below names `c_char`, and that block is
+    // `cfg(not(miri))` (see the MIRI ACCOMMODATION note).
+    #[cfg(not(miri))]
     use std::os::raw::c_char;
 
+    #[cfg(not(miri))]
     extern "C" {
         // os_log_t os_log_create(const char *subsystem, const char *category);
         fn os_log_create(subsystem: *const c_char, category: *const c_char) -> *mut c_void;
@@ -238,6 +242,53 @@ mod oslog {
         // cbits/log_shim.c
         fn rustty_os_log_with_type(log: *mut c_void, typ: u8, msg: *const c_char);
     }
+
+    // ----------------------------------------------------------------------
+    // MIRI ACCOMMODATION (not a port deviation). Miri hard-errors the moment a
+    // foreign function is CALLED ("can't call foreign function `os_log_create`
+    // on OS `macos`"), which aborts the whole test binary — so every crate that
+    // reaches a log site (rustty-core's `logging::log`, and through it much of
+    // the workspace) would have to leave the Miri lane entirely.
+    //
+    // Unified logging is a SINK: nothing a test asserts on can observe whether
+    // a line reached `os_log`. So under `cfg(miri)` the four libSystem entry
+    // points become no-ops over an opaque non-null handle, and every line of
+    // PORTED Rust above them — the `CString` construction, the interior-NUL
+    // truncation path, the handle lifetime — still runs, and is still
+    // Stacked-Borrows-checked. `not(miri)` keeps the real calls, so no shipped
+    // build is affected. Same class and same rationale as the `cfg(miri)`
+    // futex stand-ins in `rustty-xev/src/thread_pool.rs` and the `cfg(miri)`
+    // page allocator in `rustty-os/src/page_allocator.rs`.
+    //
+    // The alternative — `#[cfg_attr(miri, ignore)]` on every test that can
+    // reach a log call — would delete real Miri coverage of pure-Rust code to
+    // work around a limitation in a sink. That is the trade this arm refuses.
+    #[cfg(miri)]
+    mod miri_ffi {
+        use std::ffi::c_void;
+        use std::os::raw::c_char;
+
+        /// An opaque, never-dereferenced stand-in for `os_log_t`. Non-null so
+        /// the real code's null checks behave as they do on a live handle.
+        // `without_provenance_mut` rather than `1 as *mut _`: Miri warns on
+        // integer-to-pointer casts, and this pointer is never dereferenced.
+        const MIRI_LOG: *mut c_void = std::ptr::without_provenance_mut(1);
+
+        pub unsafe fn os_log_create(
+            _subsystem: *const c_char,
+            _category: *const c_char,
+        ) -> *mut c_void {
+            MIRI_LOG
+        }
+        pub unsafe fn os_release(_object: *mut c_void) {}
+        /// `true`, so the emit path above is exercised rather than short-circuited.
+        pub unsafe fn os_log_type_enabled(_log: *mut c_void, _typ: u8) -> bool {
+            true
+        }
+        pub unsafe fn rustty_os_log_with_type(_log: *mut c_void, _typ: u8, _msg: *const c_char) {}
+    }
+    #[cfg(miri)]
+    use miri_ffi::{os_log_create, os_log_type_enabled, os_release, rustty_os_log_with_type};
 
     // pub const Log = opaque { ... };
     pub struct Log(*mut c_void);
@@ -315,11 +366,16 @@ mod oslog {
 pub mod signpost {
     use std::ffi::{c_void, CStr};
     use std::mem::MaybeUninit;
-    use std::os::raw::{c_char, c_int};
+    use std::os::raw::c_char;
+    // `c_int` is only the `dladdr` return type, and that `extern` block is
+    // `cfg(not(miri))` (see the MIRI ACCOMMODATION note).
+    #[cfg(not(miri))]
+    use std::os::raw::c_int;
     use std::sync::atomic::{AtomicPtr, Ordering};
 
     use super::Log;
 
+    #[cfg(not(miri))]
     extern "C" {
         // extern "c" fn dladdr(addr: ?*const anyopaque, info: *DlInfo) c_int;
         fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int;
@@ -343,6 +399,70 @@ pub mod signpost {
             size: u32,
         );
     }
+
+    // ----------------------------------------------------------------------
+    // MIRI ACCOMMODATION (not a port deviation) — see the identical note on the
+    // `oslog` FFI above. `Benchmark::run` opens a signpost interval on Darwin
+    // (faithful to `Benchmark.zig:44-66`), so under Miri EVERY rustty-bench
+    // test aborts on `dladdr` before its parser ever runs. Instruments
+    // signposts are pure instrumentation: no test observes them. Under
+    // `cfg(miri)` the five libSystem entry points become no-ops over an opaque
+    // handle — `init` still stores a non-null DSO handle, so its idempotence
+    // and `emit_with_name`'s `assert(!dso.is_null())` still bind — and every
+    // line of ported Rust around them stays in the Miri lane.
+    #[cfg(miri)]
+    mod miri_ffi {
+        use std::ffi::c_void;
+        use std::os::raw::{c_char, c_int};
+
+        use super::DlInfo;
+
+        /// Never dereferenced; only stored as the DSO handle / hashed into ids.
+        const MIRI_HANDLE: *mut c_void = std::ptr::without_provenance_mut(1);
+
+        /// Fills only `dli_fbase`, the one field `init` reads, and reports
+        /// success — the shape `init`'s `assert(result != 0)` requires.
+        pub unsafe fn dladdr(_addr: *const c_void, info: *mut DlInfo) -> c_int {
+            unsafe {
+                (*info).dli_fname = std::ptr::null();
+                (*info).dli_fbase = MIRI_HANDLE;
+                (*info).dli_sname = std::ptr::null();
+                (*info).dli_saddr = std::ptr::null_mut();
+            }
+            1
+        }
+        /// `true`, so callers take the emitting path rather than skipping it.
+        pub unsafe fn os_signpost_enabled(_log: *mut c_void) -> bool {
+            true
+        }
+        pub unsafe fn os_signpost_id_generate(_log: *mut c_void) -> u64 {
+            1
+        }
+        pub unsafe fn os_signpost_id_make_with_pointer(
+            _log: *mut c_void,
+            ptr: *const c_void,
+        ) -> u64 {
+            // The real call hashes the address (null -> the null id).
+            ptr as u64
+        }
+        #[allow(clippy::too_many_arguments)]
+        pub unsafe fn _os_signpost_emit_with_name_impl(
+            _dso: *mut c_void,
+            _log: *mut c_void,
+            _typ: u8,
+            _spid: u64,
+            _name: *const c_char,
+            _format: *const c_char,
+            _buf: *mut u8,
+            _size: u32,
+        ) {
+        }
+    }
+    #[cfg(miri)]
+    use miri_ffi::{
+        _os_signpost_emit_with_name_impl, dladdr, os_signpost_enabled, os_signpost_id_generate,
+        os_signpost_id_make_with_pointer,
+    };
 
     // const DlInfo = extern struct { ... };
     #[repr(C)]

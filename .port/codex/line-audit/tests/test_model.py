@@ -149,6 +149,56 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(any("content_kind" in item for item in diagnostics))
         self.assertTrue(any("scope_class" in item for item in diagnostics))
 
+    def test_every_enum_site_accepts_list_and_object_values_without_losing_diagnostics(self):
+        for field in ("repo", "content_kind", "scope_class"):
+            for invalid in ([], {}):
+                with self.subTest(validator="file", field=field, invalid=type(invalid).__name__):
+                    record = valid_file(**{field: invalid})
+                    record.pop("sha256")
+                    diagnostics = validate_file(record)
+                    self.assertTrue(any("missing required field: sha256" in item for item in diagnostics))
+                    self.assertTrue(any(field in item for item in diagnostics))
+
+        for field in ("repo", "scope_class", "disposition"):
+            for invalid in ([], {}):
+                with self.subTest(validator="primary", field=field, invalid=type(invalid).__name__):
+                    record = valid_primary(**{field: invalid})
+                    record.pop("contract")
+                    diagnostics = validate_primary(record)
+                    self.assertTrue(any("missing required field: contract" in item for item in diagnostics))
+                    self.assertTrue(any(field in item for item in diagnostics))
+
+        for invalid in ([], {}):
+            with self.subTest(validator="counterpart", invalid=type(invalid).__name__):
+                record = valid_primary()
+                record.pop("contract")
+                record["counterparts"][0]["repo"] = invalid
+                diagnostics = validate_primary(record)
+                self.assertTrue(any("missing required field: contract" in item for item in diagnostics))
+                self.assertTrue(any("counterparts[0]" in item and "repo" in item for item in diagnostics))
+
+            with self.subTest(validator="primary_with_file", invalid=type(invalid).__name__):
+                record = valid_primary(scope_class=invalid)
+                record.pop("contract")
+                diagnostics = validate_primary_with_file(record, valid_file())
+                self.assertTrue(any("missing required field: contract" in item for item in diagnostics))
+                self.assertTrue(any("scope_class" in item for item in diagnostics))
+
+            with self.subTest(validator="review_verdict", invalid=type(invalid).__name__):
+                record = valid_review(verdict=invalid)
+                record.pop("falsification")
+                diagnostics = validate_review(record)
+                self.assertTrue(any("missing required field: falsification" in item for item in diagnostics))
+                self.assertTrue(any("verdict" in item for item in diagnostics))
+
+            with self.subTest(validator="checked_source", invalid=type(invalid).__name__):
+                record = valid_review()
+                record.pop("falsification")
+                record["source_ranges_checked"][0]["repo"] = invalid
+                diagnostics = validate_review(record)
+                self.assertTrue(any("missing required field: falsification" in item for item in diagnostics))
+                self.assertTrue(any("source_ranges_checked[0]" in item and "repo" in item for item in diagnostics))
+
     def test_file_rejects_booleans_for_integer_fields(self):
         diagnostics = validate_file(valid_file(byte_length=True, line_count=False))
         self.assertTrue(any("byte_length" in item for item in diagnostics))
@@ -195,6 +245,23 @@ class ValidationTests(unittest.TestCase):
         diagnostics = validate_primary(valid_primary(risk_tags=["parser", "parser", "Bad-tag", ""]))
         self.assertTrue(any("duplicate risk tag" in item for item in diagnostics))
         self.assertGreaterEqual(sum("risk tag" in item for item in diagnostics), 3)
+
+    def test_primary_risk_tags_accept_every_json_value_and_preserve_other_diagnostics(self):
+        record = valid_primary(risk_tags=[{}])
+        record.pop("contract")
+
+        diagnostics = validate_primary(record)
+
+        self.assertTrue(any("missing required field: contract" in item for item in diagnostics))
+        self.assertTrue(any("contract must be nonempty" in item for item in diagnostics))
+        self.assertTrue(any("risk tag at index 0" in item for item in diagnostics))
+
+        diagnostics = validate_primary(valid_primary(
+            risk_tags=[[], {}, 7, None, True, "parser", "parser"]
+        ))
+        for index in range(5):
+            self.assertTrue(any(f"risk tag at index {index}" in item for item in diagnostics), index)
+        self.assertTrue(any("duplicate risk tag: parser" in item for item in diagnostics))
 
     def test_primary_rejects_invalid_timestamp(self):
         diagnostics = validate_primary(valid_primary(reviewed_at="2026-07-31 12:34:56+00:00"))

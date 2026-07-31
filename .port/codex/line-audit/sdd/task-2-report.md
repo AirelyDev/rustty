@@ -169,3 +169,39 @@ New `universe.jsonl` SHA-256:
 fully clean. Rustty's only status entry remained the audit-scoped untracked
 `.port/codex/` directory; no file outside `.port/codex/line-audit/` changed,
 and nothing was staged or committed.
+
+## Repin validation round 2
+
+The authoritative committed pins for this round were:
+
+```text
+rustty   2bd45ccc79ae4ab6bdcb8cb95d5a99d0d8d44816
+ghostty  6ad1fe7d8cbda36c77b337a96c9bea8a77883699
+```
+
+`universe.jsonl` was regenerated from those exact pins with the Task 2 CLI.
+Measured generation runtime was `real 133.86s` (`user 51.53s`, `sys 71.90s`).
+The Rustty committed tree includes a prior generated universe; this run treats
+that file as an ordinary committed blob, so its new record hashes the prior
+committed blob rather than attempting a self-referential fixed point.
+
+A fresh parse of the resulting JSONL validated every record with Task 1's
+`validate_file`; total diagnostics: `0`.
+
+| Repository | Files | Text | Binary | Empty | Physical text lines |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ghostty | 5,781 | 1,761 | 4,014 | 6 | 515,483 |
+| rustty | 5,369 | 5,164 | 168 | 37 | 2,588,106 |
+| total | 11,150 | 6,925 | 4,182 | 43 | 3,103,589 |
+
+New `universe.jsonl` SHA-256:
+
+```text
+d2ce9a50a8ca31bc5f3bab936bc34bc9b5898af59ab3d5f34c31c29af5c0eed3
+```
+
+The checked Ghostty `HEAD` remains the stated pin. Rustty `HEAD` also matches
+the stated authoritative pin. No staging or commits were performed. The
+shared Rustty worktree contains concurrent audit-artifact changes under
+`.port/codex/`; this repin round modified only
+`.port/codex/line-audit/universe.jsonl` and this report.

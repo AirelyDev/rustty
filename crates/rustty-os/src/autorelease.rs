@@ -36,6 +36,17 @@ pub fn autoreleasepool<T, F: FnOnce() -> T>(f: F) -> T {
 mod tests {
     // Cross-platform: the shim is value-transparent.
     #[test]
+    // MIRI EXCEPTION (rustty-os autorelease, Objective-C runtime class): on
+    // Darwin the shim is `objc2::rc::autoreleasepool`, so even this
+    // value-transparency check calls `objc_autoreleasePoolPush` — a foreign
+    // function Miri cannot execute, which aborts the whole rustty-os lib
+    // binary. Registered in .port/phase-2/MIRI_EXCEPTIONS.md ("rustty-os
+    // autorelease — the 2026-07-31 CI triage").
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os): objc_autoreleasePoolPush \
+         is a foreign function — see MIRI_EXCEPTIONS.md"
+    )]
     fn returns_closure_value() {
         assert_eq!(super::autoreleasepool(|| 7), 7);
     }
@@ -45,6 +56,16 @@ mod tests {
     // deferral punted; a no-op shim would leave the +1 alive and fail this).
     #[cfg(target_os = "macos")]
     #[test]
+    // MIRI EXCEPTION (rustty-os autorelease, Objective-C runtime class): drives
+    // the real objc runtime (`objc_getClass`, `retainCount`, `autorelease`).
+    // The whole point of the test is that the POOL drains, which only the real
+    // runtime can demonstrate — there is nothing to stand in for it. Same
+    // registration as `returns_closure_value` above.
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os): drives the real \
+         Objective-C runtime — see MIRI_EXCEPTIONS.md"
+    )]
     fn pool_drains_autoreleased_references() {
         use objc2::msg_send;
         use objc2::rc::Retained;
