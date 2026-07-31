@@ -292,7 +292,16 @@ def row_is_beyond_pin(text):
 # rejection.
 ENV_BLOCKED = re.compile(r"\bENVIRONMENT-BLOCKED\b")
 ENV_BLOCKED_ON = re.compile(r"^\*\*Blocked on:\*\*\s*(\S.*)$", re.M)
-ENV_PORTED = re.compile(r"^\s*PORTED:\s*(\S+)\s*$", re.M)
+# NOTE the `.+` rather than `\S+`: repo paths CONTAIN SPACES (e.g.
+# `macos/Sources/Features/Terminal/Window Styles/...`). With `\S+` those lines
+# matched NOTHING, so V19's two window-style artifacts had ALWAYS been invisible
+# to the disk-resolution check — the row passed only because a space-free path
+# happened to sit alongside them. Had that one line ever been removed, the row
+# would have gone RED for a reason unrelated to its content, and the more
+# dangerous direction is the silent one: a row could claim ENVIRONMENT-BLOCKED
+# while pointing exclusively at paths this regex could not see, which is exactly
+# the "assertable rather than provable" hole the marker exists to close.
+ENV_PORTED = re.compile(r"^\s*PORTED:\s*(.+?)\s*$", re.M)
 
 
 def environment_blocked_status(body):
