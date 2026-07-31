@@ -653,15 +653,6 @@ mod tests {
         }
     }
 
-    // PORT NOTE: `.{ .cols = 80, .rows = 24, .max_scrollback = 0 }`
-    fn term_opts() -> terminal_c::Options {
-        terminal_c::Options {
-            cols: 80,
-            rows: 24,
-            max_scrollback: 0,
-        }
-    }
-
     // PORT NOTE: setopt takes the option as the raw `c_int` discriminant (the
     // lib.rs `extern "C"` wrapper guards the range); the tests pass it directly.
     unsafe fn setopt_v<T>(e: Encoder, option: Option_, v: &T) {
@@ -740,7 +731,7 @@ mod tests {
 
             let mut t: terminal_c::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(calloc, &mut t, term_opts())
+                terminal_c::new(calloc, &mut t, 80, 24)
             });
 
             // const event_mode: TrackingMode = .any;
@@ -773,7 +764,7 @@ mod tests {
         with_test_allocator(|calloc| {
             let mut t: terminal_c::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(calloc, &mut t, term_opts())
+                terminal_c::new(calloc, &mut t, 80, 24)
             });
             // setopt_from_terminal(null, t);
             unsafe { setopt_from_terminal(std::ptr::null_mut(), t) };

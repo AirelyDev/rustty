@@ -74,12 +74,7 @@ RusttyClipboardWriteResult on_clipboard_write(
 int main() {
   // Create a terminal
   RusttyTerminal terminal = NULL;
-  RusttyTerminalOptions opts = {
-    .cols = 80,
-    .rows = 24,
-    .max_scrollback = 0,
-  };
-  if (rustty_terminal_new(NULL, &terminal, opts) != RUSTTY_SUCCESS) {
+  if (rustty_terminal_new(NULL, &terminal, 80, 24) != RUSTTY_SUCCESS) {
     fprintf(stderr, "Failed to create terminal\n");
     return 1;
   }

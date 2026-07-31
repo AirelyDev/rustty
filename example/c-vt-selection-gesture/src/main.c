@@ -54,12 +54,7 @@ static RusttySelectionGestureEvent new_event(
 
 int main() {
   RusttyTerminal terminal;
-  RusttyTerminalOptions opts = {
-    .cols = 20,
-    .rows = 4,
-    .max_scrollback = 100,
-  };
-  RusttyResult result = rustty_terminal_new(NULL, &terminal, opts);
+  RusttyResult result = rustty_terminal_new(NULL, &terminal, 20, 4);
   assert(result == RUSTTY_SUCCESS);
 
   vt_write(terminal, "hello world\r\nsecond line");

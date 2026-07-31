@@ -230,17 +230,7 @@ fn with_terminal_state<F: FnOnce(Result, terminal_c::Terminal, Result, RenderSta
     f: F,
 ) {
     let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
-    let terminal_new_result = unsafe {
-        terminal_c::new(
-            alloc,
-            &mut terminal,
-            terminal_c::Options {
-                cols,
-                rows,
-                max_scrollback: 10_000,
-            },
-        )
-    };
+    let terminal_new_result = unsafe { terminal_c::new(alloc, &mut terminal, cols, rows) };
 
     let mut state: RenderState = std::ptr::null_mut();
     let state_new_result = unsafe { new(Some(alloc), &mut state) };

@@ -1447,15 +1447,7 @@ mod tests {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, .{ .cols = 80, .rows = 24, .max_scrollback = 0 }));
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
             // defer terminal_c.free(t);
 
@@ -1503,15 +1495,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             let mut graphics: KittyGraphics = core::ptr::null_mut();
@@ -1561,15 +1545,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // Transmit and display a 1x2 RGB image (image_id=1, placement_id=1).
@@ -1654,15 +1630,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // Transmit image 1 then display it twice with different placement IDs.
@@ -1752,15 +1720,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // Transmit image 1.
@@ -1913,15 +1873,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             let mut graphics: KittyGraphics = core::ptr::null_mut();
@@ -1949,15 +1901,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // Transmit a 1x2 RGB image with image_id=1.
@@ -2046,15 +1990,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // Set cell size so grid calculations are deterministic.
@@ -2143,15 +2079,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // 80 cols * 10px = 800px, 24 rows * 20px = 480px.
@@ -2232,15 +2160,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // 80 cols * 10px = 800px, 24 rows * 20px = 480px.
@@ -2320,15 +2240,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             assert_eq!(Result::Success, unsafe {
@@ -2388,15 +2300,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 5,
-                        max_scrollback: 100,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 5)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 5, 10, 20)
@@ -2457,15 +2361,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 5,
-                        max_scrollback: 100,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 5)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 5, 10, 20)
@@ -2530,15 +2426,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 5,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 5)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 5, 10, 20)
@@ -2600,15 +2488,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 5,
-                        max_scrollback: 100,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 5)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 5, 10, 20)
@@ -2692,15 +2572,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 24, 10, 20)
@@ -2761,15 +2633,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 24, 10, 20)
@@ -2838,15 +2702,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 24, 10, 20)
@@ -2953,15 +2809,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 24, 10, 20)
@@ -3023,15 +2871,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 5,
-                        max_scrollback: 100,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 5)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 5, 10, 20)
@@ -3112,15 +2952,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 24, 10, 20)
@@ -3233,15 +3065,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
             assert_eq!(Result::Success, unsafe {
                 terminal_c::resize(t, 80, 24, 10, 20)
@@ -3367,15 +3191,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             let mut graphics: KittyGraphics = core::ptr::null_mut();
@@ -3466,15 +3282,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // Transmit a 1x2 RGB image with id=1.
@@ -3581,15 +3389,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             vt_write(t, b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\");
@@ -3651,15 +3451,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             // Transmit a zlib-compressed 1x1 RGB image (o=z). The payload is
@@ -3739,15 +3531,7 @@ mod tests {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal_c::new(
-                    ta as *const CAllocator,
-                    &mut t,
-                    terminal_c::Options {
-                        cols: 80,
-                        rows: 24,
-                        max_scrollback: 0,
-                    },
-                )
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
             });
 
             let mut graphics: KittyGraphics = core::ptr::null_mut();

@@ -26,12 +26,7 @@ int main(void) {
   // from the terminal. The render state captures a snapshot of everything
   // needed to draw a frame.
   RusttyTerminal terminal = NULL;
-  RusttyTerminalOptions terminal_opts = {
-      .cols = 40,
-      .rows = 5,
-      .max_scrollback = 10000,
-  };
-  result = rustty_terminal_new(NULL, &terminal, terminal_opts);
+  result = rustty_terminal_new(NULL, &terminal, 40, 5);
   assert(result == RUSTTY_SUCCESS);
 
   RusttyRenderState render_state = NULL;

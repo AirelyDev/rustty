@@ -7,12 +7,7 @@
 int main() {
   // Create a terminal with a small grid
   RusttyTerminal terminal;
-  RusttyTerminalOptions opts = {
-    .cols = 80,
-    .rows = 24,
-    .max_scrollback = 0,
-  };
-  RusttyResult result = rustty_terminal_new(NULL, &terminal, opts);
+  RusttyResult result = rustty_terminal_new(NULL, &terminal, 80, 24);
   assert(result == RUSTTY_SUCCESS);
 
   // Write some VT-encoded content into the terminal

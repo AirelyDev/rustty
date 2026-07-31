@@ -181,7 +181,7 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
     use crate::selection_gesture::{Behaviors, Geometry};
     use crate::size_report::Size as SizeReportSize;
     use crate::style::{Color as StyleColor, Style};
-    use crate::terminal::{Options as TerminalOptionsRoot, ScrollViewport, TerminalScrollbar};
+    use crate::terminal::{ScrollViewport, TerminalScrollbar};
     use rustty_lib::types::{Buffer, String as LibString};
     use rustty_vt::point::Coordinate as PointCoordinate;
 
@@ -572,19 +572,8 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
                 ]
             ),
         ),
-        // .{ "GhosttyTerminalOptions", StructInfo.init(terminal.Options) },
-        (
-            "RusttyTerminalOptions",
-            struct_info!(
-                TerminalOptionsRoot,
-                [
-                    // cols/rows: CellCountInt (u16) -> "u16"; max_scrollback: usize -> "u64"
-                    ("cols", u16, cols, "u16"),
-                    ("rows", u16, rows, "u16"),
-                    ("max_scrollback", usize, max_scrollback, "u64"),
-                ]
-            ),
-        ),
+        // (oracle 03d5fa268 REMOVED the `GhosttyTerminalOptions` row along with
+        // the struct itself; `json_parses` asserts the name is absent.)
         // .{ "GhosttyTerminalScrollbar", StructInfo.init(terminal.TerminalScrollbar) },
         (
             "RusttyTerminalScrollbar",
@@ -715,8 +704,6 @@ mod tests {
         let root = root.as_object();
 
         // Verify we have all expected structs
-        // try testing.expect(root.contains("GhosttyTerminalOptions"));
-        assert!(root.iter().any(|(k, _)| k == "RusttyTerminalOptions"));
         // try testing.expect(root.contains("GhosttyFormatterTerminalOptions"));
         assert!(root
             .iter()
@@ -738,27 +725,12 @@ mod tests {
         assert!(clip_write_fields.iter().any(|(k, _)| k == "contents"));
         assert!(clip_write_fields.iter().any(|(k, _)| k == "contents_len"));
 
-        // Verify GhosttyTerminalOptions fields
-        let term_opts = get(root, "RusttyTerminalOptions").as_object();
-        // try testing.expect(term_opts.contains("size"));
-        assert!(term_opts.iter().any(|(k, _)| k == "size"));
-        // try testing.expect(term_opts.contains("align"));
-        assert!(term_opts.iter().any(|(k, _)| k == "align"));
-        // try testing.expect(term_opts.contains("fields"));
-        assert!(term_opts.iter().any(|(k, _)| k == "fields"));
-
-        let fields = get(term_opts, "fields").as_object();
-        // try testing.expect(fields.contains("cols"));
-        assert!(fields.iter().any(|(k, _)| k == "cols"));
-        // try testing.expect(fields.contains("rows"));
-        assert!(fields.iter().any(|(k, _)| k == "rows"));
-        // try testing.expect(fields.contains("max_scrollback"));
-        assert!(fields.iter().any(|(k, _)| k == "max_scrollback"));
-
-        // Verify field offsets make sense (cols should be at 0)
-        let cols = get(fields, "cols").as_object();
-        // try testing.expectEqual(0, cols.get("offset").?.integer);
-        assert_eq!(0, get(cols, "offset").as_int());
+        // try testing.expect(!root.contains("GhosttyTerminalOptions"));
+        //
+        // The NEGATIVE assertion oracle 03d5fa268 replaced the field checks
+        // with: the options struct left the ABI entirely, and a re-introduction
+        // must fail here rather than pass silently.
+        assert!(!root.iter().any(|(k, _)| k == "RusttyTerminalOptions"));
     }
 
     // test "struct sizes are non-zero" {

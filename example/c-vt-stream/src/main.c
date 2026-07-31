@@ -7,12 +7,7 @@ int main(void) {
   //! [vt-stream-init]
   // Create a terminal
   RusttyTerminal terminal;
-  RusttyTerminalOptions opts = {
-    .cols = 80,
-    .rows = 24,
-    .max_scrollback = 0,
-  };
-  RusttyResult result = rustty_terminal_new(NULL, &terminal, opts);
+  RusttyResult result = rustty_terminal_new(NULL, &terminal, 80, 24);
   assert(result == RUSTTY_SUCCESS);
   //! [vt-stream-init]
 

@@ -1180,18 +1180,29 @@ fn row_data_from_c_int(v: c_int) -> Option<row::RowData> {
 
 // PORT NOTE: range-checked `c_int -> enum` projections for the terminal get/set
 // guards (the `std.meta.intToEnum` guard on the raw `c_int` crossing the C
-// boundary). `TerminalData`/`Option` are contiguous `#[repr(C)]` enums.
-const TERMINAL_DATA_COUNT: c_int = 33; // contiguous 0..=32
+// boundary). `Option` is a contiguous `#[repr(C)]` enum; `TerminalData` is NOT
+// (see below).
+//
+// `TerminalData` stops being contiguous at `P3-W3` T5: oracle `a27e04e8f` adds
+// `scrollback_max_bytes = 34` / `scrollback_max_lines = 35` while `33`
+// (`vt_processing_error`, oracle `439d35e27`) is not yet ported and its
+// discriminant is deliberately left as a hole so 34/35 keep upstream's ABI
+// numbering. A plain `0..N` range check would `transmute` 33 into an
+// UNINHABITED enum value — instant UB — so the hole is rejected explicitly.
+// When `P3-W4 T5` lands 33, delete `TERMINAL_DATA_HOLES`'s entry (NOT the
+// mechanism: 36+ may reopen a hole).
+const TERMINAL_DATA_MAX: c_int = 35;
+const TERMINAL_DATA_HOLES: &[c_int] = &[33];
 fn terminal_data_from_c_int(v: c_int) -> Option<terminal::TerminalData> {
-    if (0..TERMINAL_DATA_COUNT).contains(&v) {
-        // SAFETY: `v` is a valid `TerminalData` discriminant (range-checked above).
+    if (0..=TERMINAL_DATA_MAX).contains(&v) && !TERMINAL_DATA_HOLES.contains(&v) {
+        // SAFETY: `v` is a valid `TerminalData` discriminant (checked above).
         Some(unsafe { std::mem::transmute::<c_int, terminal::TerminalData>(v) })
     } else {
         None
     }
 }
 
-const TERMINAL_OPTION_COUNT: c_int = 27; // contiguous 0..=26 (26 = clipboard_write, WS5 T17)
+const TERMINAL_OPTION_COUNT: c_int = 29; // contiguous 0..=28 (27/28 = scrollback max bytes/lines)
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
     if (0..TERMINAL_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
@@ -2415,7 +2426,8 @@ fn selection_gesture_event_option_from_c_int(v: c_int) -> Option<selection_gestu
 // `terminal_new -> terminal.new`). The `set` `intToEnum` runtime-safety guard
 // lives inside `terminal::set` on the raw `c_int` option; the `mode_*`/`get`
 // guards run inside the ported module fns (the C-ABI enum args are crossed
-// directly). `Options`/`ScrollViewport`/`TerminalData` are `#[repr(C)]`.
+// directly). `ScrollViewport`/`TerminalData` are `#[repr(C)]` (oracle
+// 03d5fa268 removed the `Options` struct from the ABI entirely).
 
 // pub const terminal_new = terminal.new;  (ghostty_terminal_new)
 /// C: rustty_terminal_new
@@ -2427,10 +2439,11 @@ fn selection_gesture_event_option_from_c_int(v: c_int) -> Option<selection_gestu
 pub unsafe extern "C" fn rustty_terminal_new(
     alloc: *const rustty_lib::allocator::Allocator,
     result: *mut terminal::Terminal,
-    opts: terminal::Options,
+    cols: u16,
+    rows: u16,
 ) -> c_int {
     // SAFETY: `alloc`/`result` validity is the caller's contract.
-    unsafe { terminal::new(alloc, result, opts) }.to_c_int()
+    unsafe { terminal::new(alloc, result, cols, rows) }.to_c_int()
 }
 
 // pub const terminal_free = terminal.free;  (ghostty_terminal_free)

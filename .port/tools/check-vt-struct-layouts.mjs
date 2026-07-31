@@ -156,11 +156,6 @@ const REGISTRY_RESIDUALS = {
   TerminalProgressReport:
     "added upstream beyond the pin; owner P3-W6 (C-API surface + effects). " +
     "Trigger: porting the ConEmu progress-report C struct.",
-  // in rustty (and at the pin), removed from the registry upstream
-  TerminalOptions:
-    "registered at the pin (4749c4e93 src/terminal/c/types.zig) and removed " +
-    "upstream beyond it; owner P3-W6. Trigger: porting that removal. Until " +
-    "then keeping it is the R1-faithful state for the PINNED oracle.",
 };
 const missingHere = [...oracleKeys]
   .filter((k) => !rusttyKeys.has(k) && !REGISTRY_RESIDUALS[k])

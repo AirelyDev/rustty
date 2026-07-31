@@ -49,12 +49,7 @@ static void print_selection(
 
 int main() {
   RusttyTerminal terminal;
-  RusttyTerminalOptions opts = {
-    .cols = 80,
-    .rows = 8,
-    .max_scrollback = 0,
-  };
-  RusttyResult result = rustty_terminal_new(NULL, &terminal, opts);
+  RusttyResult result = rustty_terminal_new(NULL, &terminal, 80, 8);
   assert(result == RUSTTY_SUCCESS);
 
   // A realistic shell transcript with OSC 133 semantic prompt markers.

@@ -42,8 +42,7 @@
  * @code{.c}
  * // Create a terminal and feed it some VT data that changes modes
  * RusttyTerminal terminal;
- * rustty_terminal_new(NULL, &terminal,
- *     (RusttyTerminalOptions){.cols = 80, .rows = 24, .max_scrollback = 0});
+ * rustty_terminal_new(NULL, &terminal, 80, 24);
  *
  * // Application might write data that enables Kitty keyboard protocol, etc.
  * rustty_terminal_vt_write(terminal, vt_data, vt_len);

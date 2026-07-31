@@ -312,15 +312,7 @@ mod tests {
             let mut term: terminal::Terminal = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, terminal_c.new(..., .{ .cols=5, .rows=2, .max_scrollback=10_000 }));
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut term,
-                    terminal::Options {
-                        cols: 5,
-                        rows: 2,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut term, 5, 2)
             });
             // defer terminal_c.free(terminal);
 
@@ -376,15 +368,7 @@ mod tests {
         with_test_allocator(|alloc| {
             let mut term: terminal::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut term,
-                    terminal::Options {
-                        cols: 5,
-                        rows: 2,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut term, 5, 2)
             });
 
             // terminal_c.vt_write(terminal, "A", 1);
@@ -422,15 +406,7 @@ mod tests {
         with_test_allocator(|alloc| {
             let mut term: terminal::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut term,
-                    terminal::Options {
-                        cols: 5,
-                        rows: 2,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut term, 5, 2)
             });
 
             // terminal_c.vt_write(terminal, "\x1b[?1049hA", 9);
@@ -495,15 +471,7 @@ mod tests {
         with_test_allocator(|alloc| {
             let mut term: terminal::Terminal = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
-                terminal::new(
-                    alloc,
-                    &mut term,
-                    terminal::Options {
-                        cols: 5,
-                        rows: 2,
-                        max_scrollback: 10_000,
-                    },
-                )
+                terminal::new(alloc, &mut term, 5, 2)
             });
 
             // terminal_c.vt_write(terminal, "A", 1);

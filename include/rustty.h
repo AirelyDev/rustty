@@ -234,6 +234,7 @@ typedef enum {
 } RowData;
 
 /**
+ * C: RusttySgrAttributeTag (R2) — checked by the A5 enum-discriminant arm.
  * The C ABI compatible tag type for `Attribute`.
  */
 typedef enum {
@@ -271,7 +272,7 @@ typedef enum {
 } Tag;
 
 /**
- * C: GhosttySelectionFormat -> RusttySelectionFormat (R2) — the `enum(c_int)` projection of `formatter.Format`.
+ * C: GhosttySelectionFormat -> RusttyFormatterFormat (R2) — the `enum(c_int)` projection of `formatter.Format`.
  */
 typedef enum {
     FORMAT_FORMAT_PLAIN = 0,
@@ -340,6 +341,7 @@ typedef enum {
 } RowCellsData;
 
 /**
+ * C: RusttyTerminalScrollViewportTag (R2) — checked by the A5 enum-discriminant arm.
  * The C ABI compatible tag for `ScrollViewport`.
  */
 typedef enum {
@@ -386,10 +388,12 @@ typedef enum {
     TERMINAL_DATA_TERMINAL_DATA_KITTY_GRAPHICS = 30,
     TERMINAL_DATA_TERMINAL_DATA_SELECTION = 31,
     TERMINAL_DATA_TERMINAL_DATA_VIEWPORT_ACTIVE = 32,
+    TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_MAX_BYTES = 34,
+    TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_MAX_LINES = 35,
 } TerminalData;
 
 /**
- * C: GhosttySelectionAdjustment -> RusttySelectionAdjustment (R2) — the `enum(c_int)` projection of
+ * C: GhosttySelectionAdjustment -> RusttySelectionAdjust (R2) — the `enum(c_int)` projection of
  * `Selection.Adjustment`.
  */
 typedef enum {
@@ -416,6 +420,7 @@ typedef enum {
 } Order;
 
 /**
+ * C: RusttyPointTag (R2) — checked by the A5 enum-discriminant arm.
  * The C ABI compatible tag type for `Point`.
  */
 typedef enum {
@@ -757,15 +762,6 @@ typedef RowCellsWrapper *RowCells;
  * C: GhosttySelectionGesture -> RusttySelectionGesture (R2)
  */
 typedef GestureWrapper *Gesture;
-
-/**
- * C: GhosttyTerminalOptions -> RusttyTerminalOptions (R2)
- */
-typedef struct {
-    CellCountInt cols;
-    CellCountInt rows;
-    uintptr_t max_scrollback;
-} Options;
 
 /**
  * The C ABI compatible union value for `ScrollViewport`.
@@ -2111,7 +2107,7 @@ int rustty_selection_gesture_event_set(Event event, int option, const void *valu
  * `alloc`, if non-null, must point to a valid allocator; `result` must be a
  * valid, writable pointer to a terminal handle.
  */
-int rustty_terminal_new(const Allocator *alloc, Terminal *result, Options opts);
+int rustty_terminal_new(const Allocator *alloc, Terminal *result, uint16_t cols, uint16_t rows);
 
 /**
  * C: rustty_terminal_free
