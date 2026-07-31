@@ -3,14 +3,14 @@
 The theme files in this directory are derived from the
 [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
 collection (via ghostty's pinned `iterm2_themes` release tarball
-`ghostty-themes-release-20260608-160426-8c84dd1.tgz` — see `README.md` for full
+`ghostty-themes-release-20260720-153658-97e244c.tgz` — see `README.md` for full
 provenance). The collection is MIT-licensed; the upstream `LICENSE` text is
 reproduced verbatim below.
 
 This file is repo-side attribution only: it is `.md`, so `xtask`'s theme
 emitter excludes it from the app bundle (mirroring ghostty's
 `exclude_extensions = &.{".md"}`), keeping the shipped corpus byte- and
-count-identical (534 files) to ghostty's.
+count-identical (592 files) to ghostty's.
 
 ---
 

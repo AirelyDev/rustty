@@ -9,15 +9,33 @@ self-contained) and no network fetch of the upstream tarball.
 
 Vendored byte-for-byte from ghostty's `iterm2_themes` build dependency:
 
-- Upstream tarball: `ghostty-themes-release-20260608-160426-8c84dd1.tgz`
+- Upstream tarball: `ghostty-themes-release-20260720-153658-97e244c.tgz`
   (`https://deps.files.ghostty.org/`), pinned in ghostty's `build.zig.zon`
   under the `iterm2_themes` dependency
-  (hash `N-V-__8AAM7eAwCK4N5RemHoJXGZr7eQl49L6r8y1WJhzZGl`).
+  (hash `N-V-__8AAGxKBAAjYkT1jYUiOZDXQuj0u34ndIjAWxiR1KX9`).
+  Re-vendored by `P3-W9 T5` (oracle `4c1d69696` `b513f1b20` `02504bcce`
+  `07a56d08b` `dc8d38503`) from `…20260608-160426-8c84dd1`: **+58 themes,
+  4 content updates** (the four `Catppuccin *` files), 0 removals.
 - Ghostty installs it via `src/build/GhosttyResources.zig` (the `emit_themes`
   block) into `share/ghostty/themes`, `exclude_extensions = &.{".md"}`.
-- **534** theme files, byte-identical to the upstream set (this `README.md` is
-  the only non-theme file here and is **excluded on emit** — mirroring ghostty's
-  `.md` exclusion, so the shipped count stays exactly 534).
+- **592** theme files, byte-identical to the upstream set (`README.md` and
+  `LICENSE.md` are the only non-theme files here and are **excluded on emit** —
+  mirroring ghostty's `.md` exclusion, so the shipped count stays exactly 592).
+
+## The digest gate (`G-THEMES`) — read this before re-vendoring
+
+`xtask/src/res_themes.rs` asserts the emitted corpus has exactly 592 files.
+That catches an added or deleted theme and **nothing else** — content drift
+inside an existing theme file is invisible to a count, and only ONE theme body
+is ever read by a test (`0x96f`, spot-checked for `palette = 0=`). Since the
+four `Catppuccin *` files changed CONTENT in this very bump, that is not a
+hypothetical.
+
+`crates/rustty-extra/themes.manifest` therefore carries a SHA-256 per file plus
+a total digest over the rows, checked by
+`.port/tools/gates/check_theme_corpus.py`. After a deliberate re-vendor, run
+`python3 .port/tools/gates/check_theme_corpus.py --write` and commit the
+manifest with the corpus.
 
 ## R2 identity note — install path IS rebranded (Task 14 correction)
 
@@ -33,13 +51,22 @@ side (an earlier version of this note claimed otherwise; that claim was
 verified false and corrected — see Task 14's report).
 
 Do not hand-edit these theme files — they are upstream data. To refresh,
-re-vendor verbatim from the pinned `iterm2_themes` tarball.
+re-vendor verbatim from the pinned `iterm2_themes` tarball
+(`.port/phase-3/w9-revendor-themes.py <extracted-dir>`, which preserves the
+single R2 filename rename below), then regenerate the digest manifest.
+
+**R2 filename rename (exactly one).** Upstream ships
+`Ghostty Default Style Dark`; rustty vendors it as
+`Rustty Default Style Dark`, contents byte-identical. It is the only identity
+token anywhere in the corpus — no theme BODY contains one (proven by the
+byte-compare in `.port/phase-3/w9-themes-diff.py`, which reported 0
+content changes outside the four Catppuccin files).
 
 ## Licensing
 
 The corpus derives from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
 (MIT); the upstream license text is vendored verbatim in `LICENSE.md` in this
 directory (repo-side attribution — excluded from the app bundle by the `.md`
-emit filter, keeping the shipped set exactly 534 files like ghostty's).
+emit filter, keeping the shipped set exactly 592 files like ghostty's).
 Per-theme copyright belongs to each theme's author (see the upstream license's
 final clause).
