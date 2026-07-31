@@ -300,6 +300,17 @@ impl TerminalStream {
 // terminal state it updates. The deleted print-only handler ignored every
 // non-print action, so it could not have moved the cursor.
 #[test]
+// MIRI EXCEPTION (rustty-bench terminal_stream, file I/O class): the step
+// function reads its corpus from a real file, so this test `File::create`s one
+// — and Miri's isolation forbids `open` ("`open` not available when isolation
+// is enabled"), aborting the whole rustty-bench lib binary. Same class as
+// `rustty-vaxis/tests/ucd_provenance.rs`. Registered in
+// .port/phase-2/MIRI_EXCEPTIONS.md ("rustty-bench — the 2026-07-31 CI triage").
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench): writes/reads a real corpus \
+     file; Miri isolation forbids `open` — see MIRI_EXCEPTIONS.md"
+)]
 fn terminal_stream_uses_the_full_terminal_handler() {
     use std::io::Write as _;
 

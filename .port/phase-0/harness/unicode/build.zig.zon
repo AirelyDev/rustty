@@ -2,14 +2,23 @@
     .name = .rustty_unicode_oracle,
     .version = "0.0.0",
     .fingerprint = 0x72676de086409988,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         // uucode 0.2.0 — the EXACT dependency ghostty pins (see ghostty
         // build.zig.zon). This is harness-only tooling (R3): no rustty Cargo
         // crate depends on uucode.
+        //
+        // Bumped in lockstep with ghostty e8525c0fd "Update to Zig 0.16.0",
+        // which moved this pin from
+        //   uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9
+        // to the revision below (jacobsandlund/uucode 2826a37a) and rewrote
+        // src/build/uucode_config.zig for the new component API. The width /
+        // is_symbol FORMULAS are unchanged by that commit — only the API
+        // shape — so the expected table contents are identical and this gate
+        // stays exactly as strict as before.
         .uucode = .{
-            .url = "https://deps.files.ghostty.org/uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9.tar.gz",
-            .hash = "uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9",
+            .url = "https://deps.files.ghostty.org/uucode-2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz",
+            .hash = "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",
         },
     },
     .paths = .{""},

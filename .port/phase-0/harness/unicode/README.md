@@ -56,7 +56,7 @@ exhaustive differential ≥ the reference. This is NOT a weakening (R5); see
 ```
 
 The grapheme precompute is regenerated INDEPENDENTLY in the oracle via
-`uucode.x.grapheme.computeGraphemeBreakNoControl` over every `(state, gb1, gb2)`
+`uucode.grapheme.computeGraphemeBreakNoControl` over every `(state, gb1, gb2)`
 key — exactly the comptime logic ghostty's `src/unicode/grapheme.zig` embeds.
 The rust side re-encodes rustty's *runtime* `Precompute::DATA` (via the
 `harness_precompute_bytes()` accessor in `grapheme.rs`), so the table actually

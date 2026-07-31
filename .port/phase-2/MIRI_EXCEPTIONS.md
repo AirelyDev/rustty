@@ -2060,6 +2060,19 @@ G6 lane and belong here.
 
 **Verdict: KEEP all three; documentation gap closed.**
 
+**Family 4 addendum, 2026-07-31 (CI triage).** A FOURTH test in this family was
+un-annotated and is why `rustty-extra`'s G6 Miri lane never terminated in the
+first full `ci.sh` run on merged `main`:
+`crates/rustty-extra/tests/w9_doc_rewrites_reach_generated_artifacts.rs::background_blur_and_keybind_doc_rewrites_reach_man5_and_webdata`
+(P3-W9 T2). It calls `mdgen::man_5_markdown()` **and** `webgen::config_mdx()` —
+both generators in the table above — then substring-scans both documents for 13
+sentences. Measured: milliseconds natively (it runs in ci.sh's
+`cargo test --workspace`), **no completion after 30+ minutes** under Miri in the
+ci.sh lane, sitting in `running 1 test` exactly like `config_mdx_frontmatter_and_grouping`.
+Same 4-criterion basis as the three above (no `unsafe` in the module; the cost is
+the same O(fields x len) scanning). Now annotated with the same
+`#[cfg_attr(miri, ignore = "MIRI EXCEPTION …")]` form.
+
 ### Two smaller things this pass checked
 
 * **Env-var test selection — checked, and clean.** Miri does not forward host env
@@ -2077,3 +2090,75 @@ G6 lane and belong here.
   (`search/pagelist.rs:870`, `search/screen.rs:2721`, `search/screen.rs:2793`, …).
   Harmless to coverage, noisy in every Miri log. Left alone deliberately —
   dropping either changes which lane the test is excluded from.
+
+## rustty-cli `boo` framedata (vendored zlib FFI) — added 2026-07-31 (CI triage)
+
+`crates/rustty-cli/src/boo.rs::tests::decompress_frames_round_trip` —
+**Miri EXCEPTED (vendored zlib FFI).** Same class as
+`crates/rustty-zigimg/tests/codec.rs` above.
+
+Found by the first full `ci.sh` run on merged `main`: the G6 Miri lane for
+`rustty-cli` died on `error: unsupported operation: can't call foreign function
+`inflateInit2_` on OS `macos`` (`zlib-sys/src/lib.rs:291`, via
+`boo::decompress_frames` at `boo.rs:505`). Miri aborts the whole test binary at
+the first foreign call, so this one test was taking the crate's entire lib
+surface down with it.
+
+The four criteria, in the form this file uses for the FFI class:
+
+1. **Miri cannot run it at all** — not slow, *impossible*: `inflate_raw` enters
+   the vendored zlib 1.3.1 C. Re-verified 2026-07-31 from the ci.sh G6 log.
+2. **Passes natively** — `cargo test -p rustty-cli boo::` is green in ci.sh's
+   HARD `cargo test --workspace` step, which runs this test for real.
+3. **No uncovered unsafe path** — the excepted test contains no `unsafe`; the
+   `unsafe` it reaches lives in `zlib-sys::inflate_impl`, whose FFI-boundary
+   memory safety is an ASan question, not a Miri one (`zlib-sys` is a
+   `crates-sys` crate and is routed to the ASan lane by `check_leaks.sh`'s
+   `is_ffi()` `*-sys` rule). Everything `boo.rs` owns — the frame splitter,
+   `update_frame`'s span parser, the cell buffer — is exercised by the other
+   `boo` tests, which stay Miri-live.
+4. **A stand-in would be vacuous, not equivalent** — the deliberate contrast
+   with the `cfg(miri)` accommodations in `rustty-os/src/macos.rs` (os_log /
+   signpost), landed in the same triage: those stub a *sink* nothing asserts on,
+   so the ported Rust keeps running under Miri. Here the C IS the assertion
+   (`decompress_frames` must reproduce the asset byte-faithfully), so stubbing
+   it would leave a test that proves nothing. Excepting it is honest; stubbing
+   it would not be.
+
+## rustty-bench — the 2026-07-31 CI triage (3 tests)
+
+The first full `ci.sh` run on merged `main` had `rustty-bench`'s G6 Miri lane
+dying on `dladdr` before a single test finished. Two distinct causes, fixed two
+different ways — the split is the point:
+
+**Not excepted: the `os_signpost` instrumentation.** `Benchmark::run` opens an
+Instruments signpost interval on Darwin (faithful to `Benchmark.zig:44-66`), so
+`macos::signpost::init` -> `dladdr` ran in EVERY bench test. Nothing asserts on
+signposts; they are a sink. That is now a `cfg(miri)` no-op arm in
+`crates/rustty-os/src/macos.rs` (alongside the same treatment for the `os_log`
+sink), so all 19 bench tests stay in the Miri lane instead of 19 exceptions
+being written. `cfg(miri)`-only, `not(miri)` keeps the real libSystem calls, and
+the precedent is `rustty-xev`'s `cfg(miri)` futex stand-ins and
+`rustty-os`'s `cfg(miri)` page allocator.
+
+**Excepted: the 3 tests that genuinely cross a boundary Miri cannot cross.**
+Measured per test, each in its own Miri process (`.port/phase-3/citriage-bench-miri-probe.sh`
+— Miri aborts the whole binary at the first offence, so a lane run only ever
+names one). 16 of 19 are Miri-GREEN and stay that way; these 3 are not:
+
+| Test | class | measured |
+|---|---|---|
+| `scrollback_compression::scrollback_compression_restores_cold_terminal_pages` | SIMD FFI | `can't call foreign function `rustty_simd_decode_utf8_until_control_seq`` (highway C++, via `Stream::next_slice`) |
+| `scrollback_compression::scrollback_compression_drains_incremental_compression_steps` | SIMD FFI | as above |
+| `terminal_stream::terminal_stream_uses_the_full_terminal_handler` | file I/O | `` `open` not available when isolation is enabled `` (`File::create` of its corpus) |
+
+4-criterion basis. (1) **Impossible, not slow** — a foreign call and a forbidden
+syscall; no budget makes either work. (2) **Pass natively** — all three run in
+ci.sh's HARD `cargo test --workspace`. (3) **No uncovered unsafe path** — the
+`unsafe` these reach is `rustty-simd`'s FFI wrapper (a `crates-sys` consumer,
+routed to the ASan lane by `check_leaks.sh`'s `is_ffi()`) and `rustty-vt`'s
+page/cell writes, which are Miri-covered by the vt lane's own tests; the exact
+same pairing already justifies `rustty-vt::stream_print_slice_matches_per_byte`.
+(4) **The remaining 16 bench tests are Miri-live**, including every parser
+benchmark — the excepted set is "the tests that cross into C or the filesystem",
+not "the tests that cover the crate".
