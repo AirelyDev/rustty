@@ -3998,78 +3998,19 @@ impl Terminal {
                 // one page to another. This is the slow path.
                 // if (src_p.node != dst_p.node) {
                 if !std::ptr::eq(src_p.node, unsafe { (*cur_p).node }) {
-                    // dst_p.node.data.clonePartialRowFrom(
-                    //     &src_p.node.data, dst_row, src_row,
-                    //     self.scrolling_region.left, self.scrolling_region.right + 1,
-                    // ) catch |err| { ... continue; };
-                    let dst_page: *mut Page = unsafe { crate::pagelist::Node::page((*cur_p).node) };
-                    let src_page: *const Page = unsafe { crate::pagelist::Node::page(src_p.node) };
-                    let clone_res = unsafe {
-                        (*dst_page).clone_partial_row_from(
-                            src_page,
-                            cur_row,
-                            src_row,
-                            self.scrolling_region.left as usize,
-                            (self.scrolling_region.right + 1) as usize,
-                        )
-                    };
-                    if let Err(err) = clone_res {
-                        // Adjust our page capacity to make
-                        // room for we didn't have space for
-                        // _ = self.screens.active.increaseCapacity(dst_p.node, switch (err) {...})
-                        //     catch |e| switch (e) {...};
-                        let adjustment = match err {
-                            // Rehash the sets
-                            pagepkg::CloneFromError::StyleSetNeedsRehash
-                            | pagepkg::CloneFromError::HyperlinkSetNeedsRehash => None,
-
-                            // Increase style memory
-                            pagepkg::CloneFromError::StyleSetOutOfMemory => {
-                                Some(pagelist::grow::IncreaseCapacity::Styles)
-                            }
-
-                            // Increase string memory
-                            pagepkg::CloneFromError::StringAllocOutOfMemory => {
-                                Some(pagelist::grow::IncreaseCapacity::StringBytes)
-                            }
-
-                            // Increase hyperlink memory
-                            pagepkg::CloneFromError::HyperlinkSetOutOfMemory
-                            | pagepkg::CloneFromError::HyperlinkMapOutOfMemory => {
-                                Some(pagelist::grow::IncreaseCapacity::HyperlinkBytes)
-                            }
-
-                            // Increase grapheme memory
-                            pagepkg::CloneFromError::GraphemeMapOutOfMemory
-                            | pagepkg::CloneFromError::GraphemeAllocOutOfMemory => {
-                                Some(pagelist::grow::IncreaseCapacity::GraphemeBytes)
-                            }
-                        };
-                        let cur_node = unsafe { (*cur_p).node };
-                        match self.active_mut().increase_capacity(cur_node, adjustment) {
-                            Ok(_) => {}
-                            Err(e) => match e {
-                                // System OOM. We have no way to recover from this
-                                // currently. We should probably change insertLines
-                                // to raise an error here.
-                                pagelist::grow::IncreaseCapacityError::OutOfMemory => {
-                                    panic!("increaseCapacity system allocator OOM")
-                                }
-
-                                // The page can't accommodate the managed memory required
-                                // for this operation. We previously just corrupted
-                                // memory here so a crash is better. The right long
-                                // term solution is to allocate a new page here
-                                // move this row to the new page, and start over.
-                                pagelist::grow::IncreaseCapacityError::OutOfSpace => {
-                                    panic!("increaseCapacity OutOfSpace")
-                                }
-                            },
-                        }
-
-                        // Continue the loop to try handling this row again.
-                        continue;
-                    }
+                    // The copy may replace the destination node in order
+                    // to increase its capacity. Our pins are tracked so
+                    // they update automatically; we can discard the
+                    // replacement because the remainder of this iteration
+                    // only accesses rows through the pins.
+                    let dst_node = unsafe { (*cur_p).node };
+                    let dst_y = unsafe { (*cur_p).y } as usize;
+                    let src_page: *mut Page = unsafe { crate::pagelist::Node::page(src_p.node) };
+                    let x_start = self.scrolling_region.left as usize;
+                    let x_end = (self.scrolling_region.right + 1) as usize;
+                    let _ = self.active_mut().clone_partial_row_grow_capacity(
+                        dst_node, dst_y, src_page, src_row, x_start, x_end,
+                    );
                 } else {
                     // if (!left_right) {
                     if !left_right {
@@ -4296,68 +4237,19 @@ impl Terminal {
                 // one page to another. This is the slow path.
                 // if (src_p.node != dst_p.node) {
                 if !std::ptr::eq(src_p.node, unsafe { (*cur_p).node }) {
-                    // dst_p.node.data.clonePartialRowFrom(...) catch |err| { ... continue; };
-                    let dst_page: *mut Page = unsafe { crate::pagelist::Node::page((*cur_p).node) };
-                    let src_page: *const Page = unsafe { crate::pagelist::Node::page(src_p.node) };
-                    let clone_res = unsafe {
-                        (*dst_page).clone_partial_row_from(
-                            src_page,
-                            cur_row,
-                            src_row,
-                            self.scrolling_region.left as usize,
-                            (self.scrolling_region.right + 1) as usize,
-                        )
-                    };
-                    if let Err(err) = clone_res {
-                        // Adjust our page capacity to make
-                        // room for we didn't have space for
-                        // _ = self.screens.active.increaseCapacity(dst_p.node, switch (err) {...})
-                        //     catch |e| switch (e) {...};
-                        let adjustment = match err {
-                            // Rehash the sets
-                            pagepkg::CloneFromError::StyleSetNeedsRehash
-                            | pagepkg::CloneFromError::HyperlinkSetNeedsRehash => None,
-
-                            // Increase style memory
-                            pagepkg::CloneFromError::StyleSetOutOfMemory => {
-                                Some(pagelist::grow::IncreaseCapacity::Styles)
-                            }
-
-                            // Increase string memory
-                            pagepkg::CloneFromError::StringAllocOutOfMemory => {
-                                Some(pagelist::grow::IncreaseCapacity::StringBytes)
-                            }
-
-                            // Increase hyperlink memory
-                            pagepkg::CloneFromError::HyperlinkSetOutOfMemory
-                            | pagepkg::CloneFromError::HyperlinkMapOutOfMemory => {
-                                Some(pagelist::grow::IncreaseCapacity::HyperlinkBytes)
-                            }
-
-                            // Increase grapheme memory
-                            pagepkg::CloneFromError::GraphemeMapOutOfMemory
-                            | pagepkg::CloneFromError::GraphemeAllocOutOfMemory => {
-                                Some(pagelist::grow::IncreaseCapacity::GraphemeBytes)
-                            }
-                        };
-                        let cur_node = unsafe { (*cur_p).node };
-                        match self.active_mut().increase_capacity(cur_node, adjustment) {
-                            Ok(_) => {}
-                            Err(e) => match e {
-                                // See insertLines
-                                pagelist::grow::IncreaseCapacityError::OutOfMemory => {
-                                    panic!("increaseCapacity system allocator OOM")
-                                }
-
-                                pagelist::grow::IncreaseCapacityError::OutOfSpace => {
-                                    panic!("increaseCapacity OutOfSpace")
-                                }
-                            },
-                        }
-
-                        // Continue the loop to try handling this row again.
-                        continue;
-                    }
+                    // The copy may replace the destination node in order
+                    // to increase its capacity. Our pins are tracked so
+                    // they update automatically; we can discard the
+                    // replacement because the remainder of this iteration
+                    // only accesses rows through the pins.
+                    let dst_node = unsafe { (*cur_p).node };
+                    let dst_y = unsafe { (*cur_p).y } as usize;
+                    let src_page: *mut Page = unsafe { crate::pagelist::Node::page(src_p.node) };
+                    let x_start = self.scrolling_region.left as usize;
+                    let x_end = (self.scrolling_region.right + 1) as usize;
+                    let _ = self.active_mut().clone_partial_row_grow_capacity(
+                        dst_node, dst_y, src_page, src_row, x_start, x_end,
+                    );
                 } else {
                     // if (!left_right) {
                     if !left_right {
@@ -14458,6 +14350,238 @@ mod tests {
         {
             let str = t.plain_string(Global).unwrap();
             assert_eq!(str.as_slice(), "   12".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    #[allow(non_snake_case)]
+    // test "Terminal: insertLines hyperlink-dense row crosses page boundary"
+    #[test]
+    fn terminal_insertLines_hyperlink_dense_row_crosses_page_boundary() {
+        // Regression test for the cross-page copy of insertLines: when the
+        // shifted row carries more unique hyperlinks than the destination
+        // page's hyperlink capacity, the copy must increase the destination
+        // page's capacity and retry rather than corrupting the page list.
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        // Fill the first page so it is exactly full, then two more rows so
+        // the second page holds the last two active rows (y=3 and y=4).
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity(t.active_mut().pages.pages.first).rows };
+        for _ in 0..(first_page_rows + 1) {
+            t.linefeed().unwrap();
+        }
+        assert!(!std::ptr::eq(
+            t.active_mut().pages.pages.first,
+            t.active_mut().pages.pages.last
+        ));
+        assert_eq!(2, unsafe {
+            crate::pagelist::Node::rows(t.active_mut().pages.pages.last)
+        });
+
+        // Marker rows so we can verify the shift afterwards.
+        t.set_cursor_pos(1, 1);
+        t.print_string(b"0").unwrap();
+        t.set_cursor_pos(2, 1);
+        t.print_string(b"1").unwrap();
+        t.set_cursor_pos(4, 1);
+        t.print_string(b"3").unwrap();
+        t.set_cursor_pos(5, 1);
+        t.print_string(b"4").unwrap();
+
+        // Fill the last row of the first page (active y=2) with unique
+        // hyperlinks: more than the second page can hold with its default
+        // hyperlink capacity. Writing them grows the first page's capacity
+        // as needed; the second page keeps its default capacity.
+        t.set_cursor_pos(3, 1);
+        for i in 0..10u32 {
+            let uri = format!("http://example.com/{i}").into_bytes();
+            t.active_mut().start_hyperlink(&uri, None).unwrap();
+            t.print('A' as u32 + i).unwrap();
+            t.active_mut().end_hyperlink();
+        }
+        {
+            let pin = t
+                .active_mut()
+                .pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 2 }))
+                .unwrap();
+            assert!(std::ptr::eq(t.active_mut().pages.pages.first, pin.node));
+            assert_eq!(
+                unsafe { crate::pagelist::Node::rows(pin.node) } as usize - 1,
+                pin.y as usize
+            );
+        }
+        assert!(
+            unsafe {
+                (*crate::pagelist::Node::page(t.active_mut().pages.pages.last))
+                    .hyperlink_set
+                    .layout
+                    .cap
+            } < 10,
+            "the destination page must NOT already fit the dense row, or the retry never runs"
+        );
+
+        // Insert a line at the top: every row shifts down by one and the
+        // dense row crosses the page boundary into the second page.
+        t.set_cursor_pos(1, 1);
+        t.insert_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), b"\n0\n1\nABCDEFGHIJ\n3");
+        }
+
+        // The second page's hyperlink capacity had to grow to receive the
+        // row, proving the capacity-retry path ran.
+        assert!(
+            unsafe {
+                (*crate::pagelist::Node::page(t.active_mut().pages.pages.last))
+                    .hyperlink_set
+                    .layout
+                    .cap
+            } >= 10
+        );
+
+        // Every cell of the dense row must still resolve to a real
+        // hyperlink entry with the correct URI. A half-applied shift
+        // leaves cells whose hyperlink flag is set but that have no map
+        // entry, which aborts in clearCells later.
+        for x in 0..10u16 {
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x, y: 3 }))
+                .unwrap();
+            assert!(unsafe { (*list_cell.cell).hyperlink() });
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(list_cell.node) };
+            let id = unsafe { (*page).lookup_hyperlink(list_cell.cell) }.unwrap();
+            let link = unsafe { (*page).hyperlink_set.get((*page).memory_ptr(), id) };
+            let uri = format!("http://example.com/{x}").into_bytes();
+            assert_eq!(uri, unsafe {
+                (*link).uri.slice((*page).memory_ptr()).to_vec()
+            });
+        }
+
+        // All pages must pass integrity checks.
+        let mut node_ = t.active_mut().pages.pages.first;
+        while !node_.is_null() {
+            unsafe { (*crate::pagelist::Node::page(node_)).assert_integrity() };
+            node_ = unsafe { (*node_).next };
+        }
+
+        t.deinit(Global);
+    }
+
+    #[allow(non_snake_case)]
+    // test "Terminal: deleteLines hyperlink-dense row crosses page boundary"
+    #[test]
+    fn terminal_deleteLines_hyperlink_dense_row_crosses_page_boundary() {
+        // Regression test for the cross-page copy of deleteLines: when the
+        // shifted row carries more unique hyperlinks than the destination
+        // page's hyperlink capacity, the copy must increase the destination
+        // page's capacity and retry rather than corrupting the page list.
+        //
+        // This is the mirror of the insertLines variant: the dense row
+        // starts as the first row of the second page and is pulled up into
+        // the first page, which also happens to be the cursor's page so
+        // this exercises the cursor accounting of the capacity increase.
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity(t.active_mut().pages.pages.first).rows };
+        for _ in 0..(first_page_rows + 1) {
+            t.linefeed().unwrap();
+        }
+        assert!(!std::ptr::eq(
+            t.active_mut().pages.pages.first,
+            t.active_mut().pages.pages.last
+        ));
+        assert_eq!(2, unsafe {
+            crate::pagelist::Node::rows(t.active_mut().pages.pages.last)
+        });
+
+        // Marker rows so we can verify the shift afterwards.
+        t.set_cursor_pos(1, 1);
+        t.print_string(b"0").unwrap();
+        t.set_cursor_pos(2, 1);
+        t.print_string(b"1").unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print_string(b"2").unwrap();
+        t.set_cursor_pos(5, 1);
+        t.print_string(b"4").unwrap();
+
+        // Fill the first row of the second page (active y=3) with unique
+        // hyperlinks: more than the first page can hold with its default
+        // hyperlink capacity.
+        t.set_cursor_pos(4, 1);
+        for i in 0..10u32 {
+            let uri = format!("http://example.com/{i}").into_bytes();
+            t.active_mut().start_hyperlink(&uri, None).unwrap();
+            t.print('A' as u32 + i).unwrap();
+            t.active_mut().end_hyperlink();
+        }
+        {
+            let pin = t
+                .active_mut()
+                .pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 3 }))
+                .unwrap();
+            assert!(std::ptr::eq(t.active_mut().pages.pages.last, pin.node));
+            assert_eq!(0, pin.y);
+        }
+        assert!(
+            unsafe {
+                (*crate::pagelist::Node::page(t.active_mut().pages.pages.first))
+                    .hyperlink_set
+                    .layout
+                    .cap
+            } < 10,
+            "the destination page must NOT already fit the dense row, or the retry never runs"
+        );
+
+        // Delete the top line: every row shifts up by one and the dense
+        // row crosses the page boundary into the first page.
+        t.set_cursor_pos(1, 1);
+        t.delete_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), b"1\n2\nABCDEFGHIJ\n4");
+        }
+
+        // The first page's hyperlink capacity had to grow to receive the
+        // row, proving the capacity-retry path ran.
+        assert!(
+            unsafe {
+                (*crate::pagelist::Node::page(t.active_mut().pages.pages.first))
+                    .hyperlink_set
+                    .layout
+                    .cap
+            } >= 10
+        );
+
+        for x in 0..10u16 {
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x, y: 2 }))
+                .unwrap();
+            assert!(unsafe { (*list_cell.cell).hyperlink() });
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(list_cell.node) };
+            let id = unsafe { (*page).lookup_hyperlink(list_cell.cell) }.unwrap();
+            let link = unsafe { (*page).hyperlink_set.get((*page).memory_ptr(), id) };
+            let uri = format!("http://example.com/{x}").into_bytes();
+            assert_eq!(uri, unsafe {
+                (*link).uri.slice((*page).memory_ptr()).to_vec()
+            });
+        }
+
+        let mut node_ = t.active_mut().pages.pages.first;
+        while !node_.is_null() {
+            unsafe { (*crate::pagelist::Node::page(node_)).assert_integrity() };
+            node_ = unsafe { (*node_).next };
         }
 
         t.deinit(Global);

@@ -467,6 +467,66 @@ impl PageList {
     /// with the same capacity. This is a special case used for rehashing since
     /// the logic is otherwise the same. In this case, OutOfMemory is the
     /// only possible error.
+    /// Clone the given source row into the row at `dst_y` of the given
+    /// node's page, increasing the node's capacity as necessary to fit the
+    /// source row's managed memory (styles, hyperlinks, etc.).
+    ///
+    /// Since increasing capacity replaces the node in the page list, the
+    /// (possibly replaced) node is returned and the caller must use it in
+    /// place of the old node. The source must NOT be on the given node
+    /// since the node's page memory may be freed on capacity increase.
+    //
+    // UB HAZARD (`P3-W2` T4 Step 3): `src_page` and `node.page()` are two raw
+    // `*mut Page`s and `increase_capacity` FREES the latter. If they were the
+    // same allocation, `src_row` would dangle on the retry. The reference states
+    // the requirement in prose and enforces it with
+    // `assert(src_page != node.page())`; the port encodes the disjointness as a
+    // `debug_assert!` on the node pointers rather than leaving it a comment.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn clone_row_grow_capacity(
+        &mut self,
+        node: *mut Node,
+        dst_y: usize,
+        src_page: *mut Page,
+        src_row: *const crate::page::Row,
+    ) -> *mut Node {
+        debug_assert!(
+            !core::ptr::eq(src_page, unsafe { Node::page(node) }),
+            "clone_row_grow_capacity: source page must not be the destination node's page; \
+             increase_capacity frees the destination page memory"
+        );
+
+        let mut current = node;
+        loop {
+            let cur_page: *mut Page = unsafe { Node::page(current) };
+            let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
+            let res =
+                unsafe { (*cur_page).clone_row_from(&*src_page, cur_rows.add(dst_y), src_row) };
+            let Err(err) = res else {
+                return current;
+            };
+
+            // Adjust our page capacity to make room for what we
+            // didn't have space for.
+            current = match self.increase_capacity(current, IncreaseCapacity::for_clone_error(err))
+            {
+                Ok(n) => n,
+                // We can't gracefully recover from either of these
+                // here: our callers have already rotated rows, so
+                // returning an error would leave the page list
+                // half-mutated (and corrupt), so a crash is better.
+                Err(IncreaseCapacityError::OutOfMemory) => {
+                    panic!("increaseCapacity system allocator OOM")
+                }
+                Err(IncreaseCapacityError::OutOfSpace) => {
+                    panic!("increaseCapacity OutOfSpace")
+                }
+            };
+
+            // Retry the row copy with the increased capacity.
+        }
+    }
+
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn increase_capacity(
         &mut self,
@@ -724,6 +784,35 @@ pub enum IncreaseCapacity {
     GraphemeBytes,
     HyperlinkBytes,
     StringBytes,
+}
+
+impl IncreaseCapacity {
+    /// Returns the capacity dimension that must be increased for the
+    /// given row clone error to succeed on retry, or null if the page
+    /// only needs to be rehashed at its current capacity.
+    pub fn for_clone_error(err: crate::page::CloneFromError) -> Option<IncreaseCapacity> {
+        use crate::page::CloneFromError;
+        match err {
+            // Rehash the sets
+            CloneFromError::StyleSetNeedsRehash | CloneFromError::HyperlinkSetNeedsRehash => None,
+
+            // Increase style memory
+            CloneFromError::StyleSetOutOfMemory => Some(IncreaseCapacity::Styles),
+
+            // Increase string memory
+            CloneFromError::StringAllocOutOfMemory => Some(IncreaseCapacity::StringBytes),
+
+            // Increase hyperlink memory
+            CloneFromError::HyperlinkSetOutOfMemory | CloneFromError::HyperlinkMapOutOfMemory => {
+                Some(IncreaseCapacity::HyperlinkBytes)
+            }
+
+            // Increase grapheme memory
+            CloneFromError::GraphemeMapOutOfMemory | CloneFromError::GraphemeAllocOutOfMemory => {
+                Some(IncreaseCapacity::GraphemeBytes)
+            }
+        }
+    }
 }
 
 /// `PageList.IncreaseCapacityError`

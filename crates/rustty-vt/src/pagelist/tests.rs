@@ -12883,3 +12883,261 @@ fn pagelist_increaseCapacity_from_zero_terminates_within_a_bounded_retry() {
 
     s.deinit();
 }
+
+// ref: test "PageList eraseRow hyperlink-dense row crosses page boundary"
+#[test]
+fn pagelist_eraseRow_hyperlink_dense_row_crosses_page_boundary() {
+    // Regression test: when eraseRow shifts rows up across a page
+    // boundary, the top row of the next page is cloned into the last
+    // row of the previous page. If the previous page doesn't have
+    // enough capacity for the managed memory of that row (hyperlinks,
+    // styles, etc.) the error propagated out AFTER the previous page
+    // had already been rotated and its tracked pins moved, leaving
+    // the page list half-mutated.
+    //
+    // eraseRow must instead increase the destination page's capacity
+    // and retry, the same way insertLines/deleteLines and
+    // cursorScrollAbove handle their cross-page copies.
+    let mut s = PageList::init(80, 10, None).unwrap();
+
+    // Grow to two pages so our active area straddles them: the first
+    // page is exactly full and the second page holds the last 5 rows
+    // of the active area.
+    {
+        let page = unsafe { super::Node::page(s.pages.last) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        let n = unsafe { (*page).capacity.rows - (*page).size.rows };
+        for _ in 0..n {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { (*page).pause_integrity_checks(false) };
+        s.grow_rows(5).unwrap();
+        assert_eq!(2, s.total_pages());
+        assert_eq!(5, unsafe { super::Node::rows(s.pages.last) } as usize);
+    }
+
+    // Mark each active row with a codepoint so we can verify the
+    // shift afterwards. Row y gets codepoint '0' + y at x = 0.
+    for y in 0..10u32 {
+        let row_pin = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y }))
+            .unwrap();
+        let rac = unsafe {
+            (*super::Node::page(row_pin.node))
+                .get_row_and_cell(row_pin.x as usize, row_pin.y as usize)
+        };
+        unsafe { *rac.cell = cell_codepoint('0' as u32 + y) };
+    }
+
+    // Fill the top row of the second page (active y=5) with more
+    // unique hyperlinks ('A' through 'J') than the first page's
+    // default hyperlink capacity can hold. We must increase the
+    // second page's capacity to even create such a row; the first
+    // page keeps its default capacity.
+    let link_count: usize = 10;
+    while unsafe { (*super::Node::page(s.pages.last)).hyperlink_set.layout.cap } <= link_count {
+        let _ = s
+            .increase_capacity(s.pages.last, Some(IncreaseCapacity::HyperlinkBytes))
+            .unwrap();
+    }
+    assert!(
+        unsafe { (*super::Node::page(s.pages.first)).hyperlink_set.layout.cap } < link_count,
+        "the first page must NOT already fit the dense row, or the retry path never runs"
+    );
+    {
+        let page = unsafe { super::Node::page(s.pages.last) };
+        for x in 0..link_count {
+            let uri = format!("http://example.com/{x}").into_bytes();
+            let id = unsafe {
+                (*page).insert_hyperlink(hyperlink::Hyperlink {
+                    id: hyperlink::HyperlinkId::Implicit(x as size::OffsetInt),
+                    uri,
+                })
+            }
+            .unwrap();
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
+            unsafe { *rac.cell = cell_codepoint('A' as u32 + x as u32) };
+            unsafe { (*page).set_hyperlink(rac.row, rac.cell, id) }.unwrap();
+            unsafe { (*page).hyperlink_set.use_id((*page).memory_ptr(), id) };
+        }
+    }
+
+    // Track a pin in the shifted region of the first page to verify
+    // it survives the capacity change of its node.
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 3, y: 1 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Erase the first active row. The dense hyperlink row must cross
+    // the page boundary into the first page, which requires growing
+    // the first page's hyperlink capacity.
+    s.erase_row(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+
+    // Every remaining row shifted up by one: the '0' marker row was
+    // erased, the dense row moved up across the page boundary to
+    // row 4, and the last row was cleared.
+    let expected: [u32; 10] = [
+        '1' as u32, '2' as u32, '3' as u32, '4' as u32, 'A' as u32, '6' as u32, '7' as u32,
+        '8' as u32, '9' as u32, 0,
+    ];
+    for (y, cp) in expected.iter().enumerate() {
+        let list_cell = s
+            .get_cell(point::Point::Active(point::Coordinate {
+                x: 0,
+                y: y as u32,
+            }))
+            .unwrap();
+        assert_eq!(*cp, unsafe { (*list_cell.cell).codepoint() });
+    }
+
+    // Every cell of the dense row must still resolve to a real
+    // hyperlink entry with the correct URI. A half-applied erase
+    // leaves cells whose hyperlink flag is set but that have no map
+    // entry, which aborts in clearCells later.
+    for x in 0..link_count {
+        let list_cell = s
+            .get_cell(point::Point::Active(point::Coordinate {
+                x: x as u16,
+                y: 4,
+            }))
+            .unwrap();
+        assert!(unsafe { (*list_cell.cell).hyperlink() });
+        let page: *mut Page = unsafe { super::Node::page(list_cell.node) };
+        let id = unsafe { (*page).lookup_hyperlink(list_cell.cell) }.unwrap();
+        let link = unsafe { (*page).hyperlink_set.get((*page).memory_ptr(), id) };
+        let uri = format!("http://example.com/{x}").into_bytes();
+        assert_eq!(uri, unsafe {
+            (*link).uri.slice((*page).memory_ptr()).to_vec()
+        });
+    }
+
+    // All pages must pass integrity checks.
+    let mut node_ = s.pages.first;
+    while !node_.is_null() {
+        unsafe { (*super::Node::page(node_)).assert_integrity() };
+        node_ = unsafe { (*node_).next };
+    }
+
+    // Our tracked pin shifted up by one row and still points into
+    // the (possibly replaced) first page.
+    assert!(std::ptr::eq(s.pages.first, unsafe { (*p).node }));
+    let p_pt = s
+        .point_from_pin(point::Tag::Active, unsafe { *p })
+        .unwrap()
+        .coord();
+    assert_eq!(3, p_pt.x);
+    assert_eq!(0, p_pt.y);
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded hyperlink-dense row crosses page boundary"
+#[test]
+fn pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary() {
+    // Same as the eraseRow variant above but for eraseRowBounded,
+    // which has the same rotate-then-clone structure and had the
+    // same bug: a cross-page row clone failure propagated out after
+    // the first page had already been rotated.
+    let mut s = PageList::init(80, 10, None).unwrap();
+
+    {
+        let page = unsafe { super::Node::page(s.pages.last) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        let n = unsafe { (*page).capacity.rows - (*page).size.rows };
+        for _ in 0..n {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { (*page).pause_integrity_checks(false) };
+        s.grow_rows(5).unwrap();
+        assert_eq!(2, s.total_pages());
+        assert_eq!(5, unsafe { super::Node::rows(s.pages.last) } as usize);
+    }
+
+    for y in 0..10u32 {
+        let row_pin = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y }))
+            .unwrap();
+        let rac = unsafe {
+            (*super::Node::page(row_pin.node))
+                .get_row_and_cell(row_pin.x as usize, row_pin.y as usize)
+        };
+        unsafe { *rac.cell = cell_codepoint('0' as u32 + y) };
+    }
+
+    let link_count: usize = 10;
+    while unsafe { (*super::Node::page(s.pages.last)).hyperlink_set.layout.cap } <= link_count {
+        let _ = s
+            .increase_capacity(s.pages.last, Some(IncreaseCapacity::HyperlinkBytes))
+            .unwrap();
+    }
+    assert!(
+        unsafe { (*super::Node::page(s.pages.first)).hyperlink_set.layout.cap } < link_count,
+        "the first page must NOT already fit the dense row, or the retry path never runs"
+    );
+    {
+        let page = unsafe { super::Node::page(s.pages.last) };
+        for x in 0..link_count {
+            let uri = format!("http://example.com/{x}").into_bytes();
+            let id = unsafe {
+                (*page).insert_hyperlink(hyperlink::Hyperlink {
+                    id: hyperlink::HyperlinkId::Implicit(x as size::OffsetInt),
+                    uri,
+                })
+            }
+            .unwrap();
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
+            unsafe { *rac.cell = cell_codepoint('A' as u32 + x as u32) };
+            unsafe { (*page).set_hyperlink(rac.row, rac.cell, id) }.unwrap();
+            unsafe { (*page).hyperlink_set.use_id((*page).memory_ptr(), id) };
+        }
+    }
+
+    // Erase the first active row, bounded to the whole active area so
+    // the shift crosses the page boundary exactly as eraseRow does.
+    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 0 }), 10)
+        .unwrap();
+
+    let expected: [u32; 10] = [
+        '1' as u32, '2' as u32, '3' as u32, '4' as u32, 'A' as u32, '6' as u32, '7' as u32,
+        '8' as u32, '9' as u32, 0,
+    ];
+    for (y, cp) in expected.iter().enumerate() {
+        let list_cell = s
+            .get_cell(point::Point::Active(point::Coordinate {
+                x: 0,
+                y: y as u32,
+            }))
+            .unwrap();
+        assert_eq!(*cp, unsafe { (*list_cell.cell).codepoint() });
+    }
+
+    for x in 0..link_count {
+        let list_cell = s
+            .get_cell(point::Point::Active(point::Coordinate {
+                x: x as u16,
+                y: 4,
+            }))
+            .unwrap();
+        assert!(unsafe { (*list_cell.cell).hyperlink() });
+        let page: *mut Page = unsafe { super::Node::page(list_cell.node) };
+        let id = unsafe { (*page).lookup_hyperlink(list_cell.cell) }.unwrap();
+        let link = unsafe { (*page).hyperlink_set.get((*page).memory_ptr(), id) };
+        let uri = format!("http://example.com/{x}").into_bytes();
+        assert_eq!(uri, unsafe {
+            (*link).uri.slice((*page).memory_ptr()).to_vec()
+        });
+    }
+
+    let mut node_ = s.pages.first;
+    while !node_.is_null() {
+        unsafe { (*super::Node::page(node_)).assert_integrity() };
+        node_ = unsafe { (*node_).next };
+    }
+
+    s.deinit();
+}
