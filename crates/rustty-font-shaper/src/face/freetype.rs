@@ -107,7 +107,11 @@ impl From<rustty_font::atlas::ReserveError> for Error {
 // it is NOT a dependency of this tier; this is a faithful local stand-in with the
 // same fields and defaults (`src/config/Config.zig`'s `FreetypeLoadFlags`), wired
 // to the real config type when config DI lands.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// PORT NOTE (`Hash`): `SharedGridSet.Key.hash` feeds this value to
+// `std.hash.autoHash`, which walks a packed struct field-by-field. The derive
+// reproduces that; without it two grids differing ONLY in load flags collide on
+// the same cache key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FreetypeLoadFlags {
     pub hinting: bool,
     // PORT NOTE: Zig field `@"force-autohint"`.

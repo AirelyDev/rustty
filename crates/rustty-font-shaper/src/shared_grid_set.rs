@@ -1022,8 +1022,21 @@ impl Key {
         // autoHash(hasher, self.metric_modifiers.count());
         self.metric_modifiers.len().hash(hasher);
         // autoHash(hasher, self.freetype_load_flags);
-        // (freetype_load_flags is `()`; hashing it contributes nothing, matching a
-        // void field.)
+        //
+        // PORT NOTE: on the `void`-arm backends (macOS `coretext`, wasm
+        // `web_canvas`) `FreetypeLoadFlags` is `()`, whose `Hash` impl feeds the
+        // hasher nothing — exactly matching `autoHash` of a `void` field. On the
+        // freetype-active backends it is the 5-bool stand-in and the derived
+        // `Hash` walks the fields, as `autoHash` walks a packed struct.
+        //
+        // PARITY: on the `void`-arm backends clippy's `unit_hash`/`unit_arg`
+        // fire because hashing `()` is a no-op — which is PRECISELY the
+        // reference's behaviour for `autoHash` of a `void` field. Suppressing
+        // the call instead would drop the freetype-active arm, where the field
+        // MUST be hashed (two configs differing only in `freetype-load-flags`
+        // would otherwise collide on the same cached grid).
+        #[allow(clippy::unit_hash, clippy::unit_arg)]
+        self.freetype_load_flags.hash(hasher);
         // if (self.metric_modifiers.count() > 0) {
         if !self.metric_modifiers.is_empty() {
             // inline for (@typeInfo(Metrics.Key).@"enum".fields) |field| {

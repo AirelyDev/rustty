@@ -1192,14 +1192,69 @@ pub fn font_shared_grid_set_derived_config(
         adjust_box_thickness: config.adjust_box_thickness,
         adjust_icon_height: config.adjust_icon_height,
         // .@"freetype-load-flags" = if (FreetypeLoadFlags != void) config.@"freetype-load-flags" else {},
-        //
-        // PORT NOTE: on macOS the shaper's `FreetypeLoadFlags` is `()` (the
-        // reference `void` arm — exact). On freetype targets the shaper
-        // currently carries its `_private` scaffold (face/mod.rs), so the
-        // config value flows when that DI lands with the Linux freetype
-        // backend; the default is the placeholder until then.
-        freetype_load_flags: rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+        freetype_load_flags: derived_freetype_load_flags(&config.freetype_load_flags),
     }
+}
+
+/// The field-for-field projection of the global config's
+/// `config.FreetypeLoadFlags` onto the shaper tier's stand-in for that same
+/// reference type (`face::freetype::FreetypeLoadFlags`).
+///
+/// PORT NOTE (Rust-only glue, break #9 DI realization): in the reference these
+/// are ONE type — `font.face.FreetypeLoadFlags` IS `config.FreetypeLoadFlags`
+/// on every freetype-active backend, so `SharedGridSet.zig:528` can assign it
+/// straight across. rustty's break #9 keeps `rustty-font-shaper` off
+/// `rustty-config`, so the shaper declares a structurally identical stand-in
+/// (`face/freetype.rs`) and this function is the DI bridge. It is the only
+/// place the two spellings meet; every field must be threaded or the user's
+/// `freetype-load-flags` setting is silently dropped.
+//
+// Compiled on every non-wasm target (the shaper's `freetype` module is likewise
+// `cfg(not(wasm32))`), so it is unit-testable on macOS even though macOS's
+// active backend is `coretext` and takes the `void` arm below.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn freetype_load_flags_from_config(
+    c: &configpkg::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::freetype::FreetypeLoadFlags {
+    rustty_font_shaper::face::freetype::FreetypeLoadFlags {
+        hinting: c.hinting,
+        // PORT NOTE: Zig field `@"force-autohint"`.
+        force_autohint: c.force_autohint,
+        monochrome: c.monochrome,
+        autohint: c.autohint,
+        light: c.light,
+    }
+}
+
+/// `if (font.face.FreetypeLoadFlags != void) config.@"freetype-load-flags" else {}`
+/// — the reference's comptime backend selector, modeled with `cfg(target_os)`
+/// exactly as `face/mod.rs` models `options.backend.hasFreetype()`.
+//
+// macOS default backend is `coretext` → `hasFreetype()` is false → `void`
+// (Rust `()`), and the config value is legitimately dropped, matching the
+// reference `else {}` arm.
+#[cfg(target_os = "macos")]
+fn derived_freetype_load_flags(
+    _c: &configpkg::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::FreetypeLoadFlags {
+}
+
+// Linux default backend is `fontconfig_freetype` → `hasFreetype()` is true →
+// the configured value flows through.
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+fn derived_freetype_load_flags(
+    c: &configpkg::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::FreetypeLoadFlags {
+    freetype_load_flags_from_config(c)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn derived_freetype_load_flags(
+    _c: &configpkg::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::FreetypeLoadFlags {
+    // The `web_canvas` backend's `hasFreetype()` is likewise false; the shaper's
+    // wasm placeholder is the `void` arm.
+    rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT
 }
 
 /// PORT NOTE (GROWTH POINT, Rust-only glue): the shared *inferred*-error
@@ -13983,5 +14038,121 @@ mod inspector_lifecycle_tests {
         }
 
         insp.deinit(Allocator);
+    }
+}
+
+// `freetype-load-flags` DI-bridge KAT (`fix-freetype-tmux` lane).
+//
+// The bug this pins: `font_shared_grid_set_derived_config` used to assign
+// `face::FREETYPE_LOAD_FLAGS_DEFAULT` unconditionally, so a user's configured
+// `freetype-load-flags` was parsed, accepted, and then silently discarded on
+// every freetype-active build. The reference assigns
+// `if (FreetypeLoadFlags != void) config.@"freetype-load-flags" else {}`
+// (`SharedGridSet.zig:528`).
+#[cfg(test)]
+mod freetype_load_flags_tests {
+    use super::*;
+
+    /// A value where EVERY field is the opposite of
+    /// `config::FreetypeLoadFlags::default()`, so any test below fails if the
+    /// implementation substitutes the default for the configured value.
+    fn all_flipped() -> configpkg::value_types::FreetypeLoadFlags {
+        let d = configpkg::value_types::FreetypeLoadFlags::default();
+        let flipped = configpkg::value_types::FreetypeLoadFlags {
+            hinting: !d.hinting,
+            force_autohint: !d.force_autohint,
+            monochrome: !d.monochrome,
+            autohint: !d.autohint,
+            light: !d.light,
+        };
+        assert_ne!(flipped, d, "the fixture must be non-default");
+        flipped
+    }
+
+    // The DI bridge threads all five fields; a hard-coded default fails here.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn from_config_threads_every_field() {
+        let cfg = all_flipped();
+        let got = freetype_load_flags_from_config(&cfg);
+
+        assert_eq!(got.hinting, cfg.hinting);
+        assert_eq!(got.force_autohint, cfg.force_autohint);
+        assert_eq!(got.monochrome, cfg.monochrome);
+        assert_eq!(got.autohint, cfg.autohint);
+        assert_eq!(got.light, cfg.light);
+
+        // And the whole value must differ from the shaper-tier default — the
+        // exact discrimination the original bug lacked.
+        assert_ne!(
+            got,
+            rustty_font_shaper::face::freetype::FreetypeLoadFlags::DEFAULT,
+            "a non-default config must NOT map onto the default load flags"
+        );
+    }
+
+    // The two tiers' stand-ins for the reference's single
+    // `config.FreetypeLoadFlags` must stay field-identical: if a field is added
+    // to one and not the other this stops compiling / stops round-tripping.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn default_round_trips_exactly() {
+        let d = configpkg::value_types::FreetypeLoadFlags::default();
+        assert_eq!(
+            freetype_load_flags_from_config(&d),
+            rustty_font_shaper::face::freetype::FreetypeLoadFlags::DEFAULT,
+        );
+    }
+
+    // `SharedGridSet.Key.hash` feeds the load flags to the hasher
+    // (`autoHash(hasher, self.freetype_load_flags)`); the port used to skip that
+    // field outright, so two grids differing ONLY in `freetype-load-flags` hashed
+    // identically and the second config silently reused the first's cached grid.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_flags_are_hash_distinguishing() {
+        use core::hash::{Hash, Hasher};
+
+        fn h(v: rustty_font_shaper::face::freetype::FreetypeLoadFlags) -> u64 {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            v.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        let d = rustty_font_shaper::face::freetype::FreetypeLoadFlags::DEFAULT;
+        assert_ne!(
+            h(d),
+            h(freetype_load_flags_from_config(&all_flipped())),
+            "two distinct load-flag configs must not collide on the same grid key"
+        );
+    }
+
+    // The reference's `else {}` (void) arm: on the macOS `coretext` backend
+    // `hasFreetype()` is false, so the config value IS legitimately dropped and
+    // the shaper type is `()`. There is nothing runtime to assert (a `#[test]`
+    // comparing two unit values always succeeds — a worthless test), so the arm
+    // is pinned at COMPILE time instead: the selected type must be zero-sized.
+    #[cfg(target_os = "macos")]
+    const _: () = assert!(size_of::<rustty_font_shaper::face::FreetypeLoadFlags>() == 0);
+
+    // THE ORIGINAL BUG, at the exact site that had it. Only compiles/runs on the
+    // freetype-active backends (Linux `fontconfig_freetype`), because on macOS
+    // the reference itself takes the `void` arm and there is nothing to thread.
+    #[test]
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    fn derived_config_carries_the_configured_flags() {
+        let mut config = configpkg::Config::default();
+        config.freetype_load_flags = all_flipped();
+
+        let derived = font_shared_grid_set_derived_config(&config);
+        assert_eq!(
+            derived.freetype_load_flags,
+            freetype_load_flags_from_config(&config.freetype_load_flags),
+        );
+        assert_ne!(
+            derived.freetype_load_flags,
+            rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+            "regression: the configured freetype-load-flags were replaced by the default"
+        );
     }
 }

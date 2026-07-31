@@ -140,7 +140,7 @@ pub type FreetypeLoadFlags = ();
 /// backend (break #9: config injected via DI, so `rustty-config` is not a dep of
 /// this tier). `hasFreetype()` is false on `web_canvas`, so this carries no flags.
 #[cfg(target_arch = "wasm32")]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct FreetypeLoadFlags {
     _private: (),
 }
