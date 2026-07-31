@@ -66,13 +66,17 @@ fn x11_window_add_subprocess_env_publishes_windowid() {
     assert!(xid != 0, "a realized X11 surface must have a non-zero XID");
 
     let mut wp = WinprotoWindow::init(&app, &window).expect("winproto Window::init");
-    let mut env: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    // P3-W7 byte-typed the subprocess env map (`EnvMap` is Zig byte-slices, so
+    // rustty spells it `HashMap<Vec<u8>, Vec<u8>>`); this `x11`-feature-gated
+    // test was not updated with it and has not compiled since. Found and fixed
+    // in P3-W8 T5 while building the GTK arm on the Linux VM.
+    let mut env: std::collections::HashMap<Vec<u8>, Vec<u8>> = std::collections::HashMap::new();
     wp.add_subprocess_env(&mut env)
         .expect("add_subprocess_env must succeed on the X11 arm");
 
     assert_eq!(
-        env.get("WINDOWID").map(String::as_str),
-        Some(xid.to_string().as_str()),
+        env.get(b"WINDOWID".as_slice()).map(Vec::as_slice),
+        Some(xid.to_string().as_bytes()),
         "WINDOWID must be the window's XID in decimal (x11.zig:320-329)"
     );
     eprintln!("KAT: WINDOWID = {xid} (matches X11Surface::xid())");

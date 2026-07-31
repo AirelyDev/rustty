@@ -742,8 +742,126 @@ mod imp {
                 }
             }
 
+            // Connect after GTK's compute-size handler so our size wins
+            // (`window.zig:1365-1374`, oracle `004c88e41`, P3-W8 T5).
+            //
+            // PORT NOTE: `gdk4::prelude::ToplevelExtManual::connect_compute_size`
+            // exists but hard-codes `connect_raw`, i.e. `after = false`; the
+            // reference explicitly needs `.{ .after = true }` so our size wins
+            // over GTK's own handler. There is no gtk4-rs spelling for an "after"
+            // `compute-size` connection, so this connects the trampoline directly
+            // with `G_CONNECT_AFTER` — the same trampoline shape gdk4 uses,
+            // minus the `ToplevelSize` wrapper (the two `gdk_toplevel_size_*`
+            // calls are made on the raw pointer instead).
+            if let Some(gdk_surface) = obj.surface() {
+                if let Ok(toplevel) = gdk_surface.clone().downcast::<gdk4::Toplevel>() {
+                    use glib::translate::ToGlibPtr;
+                    let data: *mut glib::WeakRef<super::Window> =
+                        Box::into_raw(Box::new(obj.downgrade()));
+                    // SAFETY: `toplevel` is a live GdkToplevel; `data` is a
+                    // leaked `Box<WeakRef<Window>>` reclaimed by
+                    // `compute_size_destroy` when the signal handler is
+                    // destroyed (i.e. when the toplevel is finalized).
+                    unsafe {
+                        glib::gobject_ffi::g_signal_connect_data(
+                            <gdk4::Toplevel as ToGlibPtr<'_, *mut gdk4::ffi::GdkToplevel>>::to_glib_none(
+                                &toplevel,
+                            )
+                            .0 as *mut glib::gobject_ffi::GObject,
+                            c"compute-size".as_ptr(),
+                            Some(std::mem::transmute::<
+                                unsafe extern "C" fn(
+                                    *mut gdk4::ffi::GdkToplevel,
+                                    *mut gdk4::ffi::GdkToplevelSize,
+                                    glib::ffi::gpointer,
+                                ),
+                                unsafe extern "C" fn(),
+                            >(compute_size_trampoline)),
+                            data.cast(),
+                            Some(compute_size_destroy),
+                            glib::gobject_ffi::G_CONNECT_AFTER,
+                        );
+                    }
+                }
+            }
+
+            // Notify every displayed surface when the compositor changes the
+            // Wayland xdg_toplevel suspended state (`window.zig:1377-1385`,
+            // oracle `2f3814ca5`, P3-W8 T5).
+            {
+                let obj_weak = obj.downgrade();
+                obj.connect_notify_local(Some("suspended"), move |_, _| {
+                    if let Some(win) = obj_weak.upgrade() {
+                        win.imp().prop_suspended();
+                    }
+                });
+            }
+
             // Always sync appearance on realize (`window.zig:1337`).
             self.sync_appearance();
+        }
+
+        /// PORTS: `window.zig:1159-1189` `toplevelComputeSize` (oracle
+        /// `004c88e41`, P3-W8 T5). GTK clamps the requested size to the
+        /// compositor-reported bounds, which go stale when the window moves to a
+        /// larger monitor.
+        ///
+        /// Split out of the signal closure so the guard conditions are testable
+        /// without a live toplevel: `compute_size_decision` is the pure
+        /// predicate, and this is the thin GDK wrapper around it.
+        pub(super) fn toplevel_compute_size(&self, size: *mut gdk4::ffi::GdkToplevelSize) {
+            let obj = self.obj();
+
+            // The compositor/quick terminal own the size in these states.
+            // if (self.isMaximized() or self.isFullscreen() or
+            //     self.isQuickTerminal()) return;
+            if obj.is_maximized() || obj.is_fullscreen() || obj.is_quick_terminal() {
+                return;
+            }
+
+            // If there's no GdkSurface yet these dimensions will be zero size
+            // which will make the window start out as small as possible. These
+            // checks ensure we don't start with a 0, 0 window size.
+            let Some(gdk_surface) = obj.surface() else {
+                return;
+            };
+            let w = gdk_surface.width();
+            let h = gdk_surface.height();
+
+            // var bounds_w: c_int = undefined; var bounds_h: c_int = undefined;
+            // size.getBounds(&bounds_w, &bounds_h);
+            let mut bounds_w: i32 = 0;
+            let mut bounds_h: i32 = 0;
+            // SAFETY: `size` is the live `GdkToplevelSize` GTK handed the
+            // `compute-size` handler; valid for the duration of the emission.
+            unsafe {
+                gdk4::ffi::gdk_toplevel_size_get_bounds(size, &mut bounds_w, &mut bounds_h);
+            }
+
+            if compute_size_decision(w, h, bounds_w, bounds_h) {
+                // size.setSize(w, h);
+                // SAFETY: as above.
+                unsafe { gdk4::ffi::gdk_toplevel_size_set_size(size, w, h) };
+            }
+        }
+
+        /// PORTS: `window.zig:1387-1396` `propSuspended` (oracle `2f3814ca5`).
+        /// The compositor changed the toplevel's suspended state, so every
+        /// surface of the selected tab re-derives its occlusion.
+        pub(super) fn prop_suspended(&self) {
+            // const tab = self.getSelectedTab() orelse return;
+            let Some(tab) = self.get_selected_tab() else {
+                return;
+            };
+            // const tree = tab.getSurfaceTree() orelse return;
+            let Some(tree) = tab.get_surface_tree() else {
+                return;
+            };
+            // var it = tree.iterator();
+            // while (it.next()) |entry| entry.view.updateOcclusion();
+            for surface in tree_surfaces(&tree) {
+                surface.update_occlusion();
+            }
         }
 
         // ---- Window decoration (window.zig:920-956) ------------------------
@@ -1244,6 +1362,75 @@ mod imp {
             target_property: *const std::os::raw::c_char,
             flags: u32,
         );
+    }
+
+    /// The pure half of `toplevelComputeSize` (oracle `004c88e41`, P3-W8 T5):
+    /// given the realized surface size and the compositor-reported bounds,
+    /// should we re-assert the current size?
+    ///
+    /// Extracted so every guard condition the reference expresses as an early
+    /// `return` is testable **without a live toplevel or a second monitor** —
+    /// see `compute_size_decision_guards`. The two conditions that need a real
+    /// window (maximized / fullscreen / quick-terminal, and the presence of a
+    /// `GdkSurface`) stay in `toplevel_compute_size`.
+    pub(super) fn compute_size_decision(w: i32, h: i32, bounds_w: i32, bounds_h: i32) -> bool {
+        // if (w <= 0 or h <= 0) return;
+        if w <= 0 || h <= 0 {
+            return false;
+        }
+
+        // GTK clamps the requested size to the compositor-reported bounds, which
+        // go stale when the window moves to a larger monitor. Only re-assert the
+        // current size when it exceeds those bounds; otherwise let GTK's default
+        // sizing win so a freshly-mapped window isn't forced to a tiny size.
+        // if (bounds_w <= 0 or bounds_h <= 0) return;
+        if bounds_w <= 0 || bounds_h <= 0 {
+            return false;
+        }
+        // if (w <= bounds_w and h <= bounds_h) return;
+        if w <= bounds_w && h <= bounds_h {
+            return false;
+        }
+
+        true
+    }
+
+    /// `compute-size` trampoline, connected with `G_CONNECT_AFTER`. Mirrors
+    /// gdk4's own `compute_size_trampoline`, minus the `ToplevelSize` wrapper.
+    ///
+    /// # Safety
+    /// Called by GObject with a live `GdkToplevelSize` and the `user_data`
+    /// pointer installed by `realize` (a leaked `Box<WeakRef<Window>>`).
+    unsafe extern "C" fn compute_size_trampoline(
+        _this: *mut gdk4::ffi::GdkToplevel,
+        size: *mut gdk4::ffi::GdkToplevelSize,
+        user_data: glib::ffi::gpointer,
+    ) {
+        // SAFETY: `user_data` is the leaked box installed at connect time and is
+        // alive until `compute_size_destroy` runs.
+        let weak: &glib::WeakRef<super::Window> =
+            unsafe { &*(user_data as *const glib::WeakRef<super::Window>) };
+        let Some(win) = weak.upgrade() else {
+            return;
+        };
+        win.imp().toplevel_compute_size(size);
+    }
+
+    /// `GClosureNotify` for [`compute_size_trampoline`]'s user data.
+    ///
+    /// # Safety
+    /// Called by GObject exactly once, with the pointer installed at connect
+    /// time.
+    unsafe extern "C" fn compute_size_destroy(
+        data: glib::ffi::gpointer,
+        _closure: *mut glib::gobject_ffi::GClosure,
+    ) {
+        if data.is_null() {
+            return;
+        }
+        // SAFETY: `data` is the `Box::into_raw` pointer from `realize`, freed
+        // exactly once here.
+        drop(unsafe { Box::from_raw(data as *mut glib::WeakRef<super::Window>) });
     }
 
     /// Snapshot the surfaces of a [`Tree`] — the reference's `tree.iterator()`
@@ -2086,6 +2273,41 @@ mod tests {
     use super::*;
     use glib::translate::ToGlibPtr;
     use std::ffi::c_void;
+
+    /// Every guard condition of `toplevelComputeSize` that does not need a live
+    /// toplevel (oracle `004c88e41`, P3-W8 T5).
+    ///
+    /// VERIFICATION HONESTY: this covers the zero-size and zero-bounds early
+    /// returns and the "only when it exceeds the bounds" rule. It does **NOT**
+    /// verify the geometry effect the commit exists for — that needs the window
+    /// to move to a *larger* monitor, i.e. two heads, and the project's VM has
+    /// one. The maximized / fullscreen / quick-terminal guards are likewise
+    /// only reviewed, not exercised. See `.port/phase-2/VERIFICATION_DEBT.md`
+    /// row **V20**.
+    #[test]
+    fn compute_size_decision_guards() {
+        // Zero / negative surface size: never re-assert (a freshly-realized
+        // window would otherwise be forced to 0x0).
+        assert!(!imp::compute_size_decision(0, 100, 800, 600));
+        assert!(!imp::compute_size_decision(100, 0, 800, 600));
+        assert!(!imp::compute_size_decision(-1, 100, 800, 600));
+        assert!(!imp::compute_size_decision(100, -1, 800, 600));
+
+        // Zero / negative compositor bounds: the compositor has not reported
+        // anything usable, so leave GTK's default sizing alone.
+        assert!(!imp::compute_size_decision(1000, 800, 0, 600));
+        assert!(!imp::compute_size_decision(1000, 800, 800, 0));
+        assert!(!imp::compute_size_decision(1000, 800, -1, -1));
+
+        // Within bounds (including exactly at them): let GTK win.
+        assert!(!imp::compute_size_decision(800, 600, 800, 600));
+        assert!(!imp::compute_size_decision(640, 480, 800, 600));
+
+        // Exceeds the stale bounds in either axis: re-assert.
+        assert!(imp::compute_size_decision(1000, 600, 800, 600));
+        assert!(imp::compute_size_decision(800, 900, 800, 600));
+        assert!(imp::compute_size_decision(3440, 1440, 1512, 982));
+    }
 
     /// Build a process-global default [`Application`] the way the app-lifecycle
     /// KAT does (`tests/gtk_application.rs`): opaque non-null `rt_app`/`core_app`

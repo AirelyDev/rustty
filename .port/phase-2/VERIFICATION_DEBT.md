@@ -1489,3 +1489,84 @@ run-loop turn — that the app's surface registry no longer contains the pointer
 (`rustty_app_surface_count` or equivalent). Under the pre-`a6edca2d7` detached-`Task`
 path that assertion fails, because the free is still queued.
 
+
+---
+
+## V20. `P3-W8 T5` apprt/GTK: occlusion-on-suspend and the monitor clamp are ported but not behaviourally verified — **OWNER: `P3-W8` follow-up** [2026-07-30]
+
+Both items **compile and their headless assertions pass on the Fedora VM**
+(`cargo check`/`cargo test -p rustty-apprt --features gtk,wayland,x11`). Neither
+has been observed doing the thing it exists for. Recorded here rather than
+claimed green.
+
+### V20a. `2f3814ca5` honor suspended window state — **the headed control was NOT run**
+
+**Ported:** `crates/rustty-apprt/src/gtk/class/surface.rs`
+`Surface::update_occlusion()` (now no-argument, `pub`, deriving
+`mapped && !window_suspended()`) + `window_suspended()` via
+`gtk::Window::is_suspended`; `crates/rustty-apprt/src/gtk/class/window.rs`
+`realize()` connects `notify::suspended` → `prop_suspended()` → every surface of
+the selected tab's tree.
+
+**Not run:** the plan's `P3-W8 T5 Step 4` control — run headed on the VM,
+minimise (or fully cover) the window, and assert the occlusion callback fires
+**and frame production stops**. It was not executed in the P3-W8 lane; there is
+no unit-level substitute, because the whole content of the change is that a live
+compositor's `xdg_toplevel.suspended` reaches the core surface, and a test of the
+`mapped && !suspended` conjunction on its own would be vacuous.
+
+**Recipe (VM, `ssh gael@192.168.64.4`):**
+
+```sh
+export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
+cd ~/projects/rustty
+# BUILD FIRST, TO COMPLETION — never build concurrently with headed compositor
+# work on this VM (that combination preceded three crashes).
+cargo build -p rustty --features gtk,wayland
+RUSTTY_LOG=debug ./target/debug/rustty 2>&1 | tee /tmp/occl.log &
+# then, in the GNOME session: minimise the window, wait ~2s, restore it.
+```
+
+Assert in `/tmp/occl.log`: the occlusion path runs on minimise with
+`visible=false` and again with `visible=true` on restore, and that no frames are
+produced in between (the renderer thread's frame counter / draw log line).
+mutter does advertise `xdg_toplevel.suspended` for minimised windows, so this is
+reproducible on the one head the VM has — **unlike V20b it needs no second
+monitor**, only a headed session.
+
+### V20b. `004c88e41` clamp the max window size to the current monitor — **"logic reviewed + guard conditions unit tested, geometry effect unverified"**
+
+**Ported:** `crates/rustty-apprt/src/gtk/class/window.rs`
+`imp::compute_size_decision` (the pure predicate) + `imp::toplevel_compute_size`
+(the GDK wrapper) + a `G_CONNECT_AFTER` `compute-size` connection on the
+realized `gdk::Toplevel`.
+
+**Binding question closed (assessment F §6 open question 4):** `gdk4` **0.11.4**
+does have `ToplevelExtManual::connect_compute_size`, `ToplevelSize::bounds()` and
+`ToplevelSize::set_size()` — verified by reading
+`~/.cargo/registry/src/index.crates.io-*/gdk4-0.11.4/src/toplevel.rs` and
+`src/toplevel_size.rs` on the VM. The cost therefore stays **M**, no manual
+`gdk_toplevel_size_*` FFI needed for the accessors. One divergence: gtk4-rs's
+`connect_compute_size` hard-codes `after = false`, and the reference needs
+`.{ .after = true }`, so the trampoline is connected directly with
+`g_signal_connect_data(..., G_CONNECT_AFTER)`.
+
+**Verified:** `compute_size_decision_guards`
+(`crates/rustty-apprt/src/gtk/class/window.rs`) covers the zero-size,
+zero-bounds, within-bounds and exceeds-bounds arms. Two independent negative
+controls were **run on the VM and observed to fail**:
+deleting `if w <= bounds_w && h <= bounds_h { return false; }` →
+`assertion failed: !imp::compute_size_decision(800, 600, 800, 600)`; deleting
+`if bounds_w <= 0 || bounds_h <= 0 { return false; }` →
+`assertion failed: !imp::compute_size_decision(1000, 800, 0, 600)`.
+
+**NOT verified:** the geometry effect. Reproducing it needs the window to move to
+a **larger** monitor, i.e. two heads; the VM has one. Also unexercised: the
+maximized / fullscreen / quick-terminal early returns and the
+"no GdkSurface yet" return, which need a live toplevel.
+
+**Recipe:** a second head. Either a physical dual-monitor host, or GNOME's
+`--virtual-monitor` / a second `wayland-headless` output if the session supports
+it. Move a window from the smaller to the larger monitor and confirm it can then
+be resized past the smaller monitor's dimensions.
+
