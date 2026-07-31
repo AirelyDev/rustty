@@ -181,6 +181,7 @@ def run(args):
         return 2
 
     overall_red = 0
+    skipped = []
     for crate in crates:
         rust_files = scope_port if scope_port is not None else crate_rust_files(crate)
         # only meaningful for crates that have been ported (non-stub).
@@ -190,6 +191,23 @@ def run(args):
         # gate the way a literal `PORT STATUS: done` grep let them.
         done = G.is_claimed_done(crate)
         if not (args.strict or done or args.crate or scope_port is not None):
+            # ANNOUNCE the skip. This used to be a bare `continue`, and the
+            # silence was the problem: a default run printed 22 `G3b [crate]`
+            # lines out of 29 workspace crates, and nothing said the other seven
+            # existed. `renderer` IS in the crate map (35 oracle files, including
+            # Thread.zig) — it was simply never reached, so "G3b GREEN" said
+            # nothing about it. Across apprt/apprt-api/bin/cfg-fmt/font/input/
+            # renderer that is 169 of 512 mapped oracle files, 33% of the corpus,
+            # invisible to the reader.
+            #
+            # Skipping in-progress crates is the right BEHAVIOUR — their comment
+            # drift is expected and would drown the signal. Skipping them
+            # invisibly is not. This changes no verdict; it makes the scope of the
+            # verdict legible.
+            n_ref = len(crate_ref_files(crate, cm))
+            print(f"G3b [{crate}]: SKIPPED — PORT STATUS is not done "
+                  f"({n_ref} oracle file(s) unexamined)")
+            skipped.append((crate, n_ref))
             continue
         ref_norm = []
         for f in (scope_ref if scope_ref is not None else crate_ref_files(crate, cm)):
@@ -318,6 +336,16 @@ def run(args):
             overall_red = 1
             for rc in missing[:25]:
                 print(f"    MISSING ref comment: {rc[:100]}")
+
+    # State the scope of the verdict alongside the verdict. A GREEN that silently
+    # covers 67% of the corpus reads exactly like one that covers all of it.
+    if skipped:
+        n_files = sum(n for _c, n in skipped)
+        print(f"\nG3b SCOPE: {len(skipped)} crate(s) SKIPPED (PORT STATUS not done) "
+              f"= {n_files} oracle file(s) unexamined: "
+              f"{', '.join(c for c, _n in sorted(skipped))}")
+        print("  The verdict below covers the EXAMINED crates only. Use --strict or "
+              "--crate <name> to include a skipped crate.")
 
     if overall_red:
         G.emit(G.RED, "dropped reference comment(s) — see MISSING above (R1 violation)")
