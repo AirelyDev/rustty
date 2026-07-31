@@ -45,6 +45,12 @@ already RED at 218 before the advance, so this is a change in a tracked number, 
 | args, build-config, core, crash, datastruct, extra, inspector, render-types, synthetic, terminfo, util | — | 0 -> 0 | unchanged |
 | **TOTAL** | | **218 -> 334** | |
 
+The `missing` counts are exact. The `resolved`/`new` split in `g3b_delta_table.txt` is a **lower
+bound** on both sides: `g3b_before.txt` was captured with the gate's default per-crate print cap of
+25 rows, so for `config`, `os`, `termio` and `vt` the before-side sentence list is truncated. The
+after-side list is complete (334 of 334) because the cap was lifted for `g3b_after.txt`. Every
+crate moved in *both* directions — e.g. `config` is ~26 resolved against 4 new, not a clean −26.
+
 ### Negative control (plan `T3 Step 5`) — PASSED
 
 The failure mode being guarded against is "the gate goes quiet" (the `_vt_header_baseline.txt`
