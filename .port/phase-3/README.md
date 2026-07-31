@@ -157,3 +157,16 @@ New/changed gates from `P3-W0`:
 | **D11** `check_closed_enum_abi.sh` | no closed `#[repr(C)]` enum is received by value across the C ABI | **RED by design** — 33 sites / 27 exports, owner `P3-W6 T2` |
 | **G-BENCH** `check_bench_tests.sh` | + oracle-driven action-set parity, both directions | GREEN |
 | `ci.sh --lz4-slow` | the exhaustive LZ4 differential actually runs (marker-checked) | opt-in lane, PASS |
+
+---
+
+## `P3-W10` — the oracle sync point advance (2026-07-31)
+
+* **[`w10/`](w10/)** — the before/after evidence for advancing the oracle working
+  tree `4749c4e93 -> 6ad1fe7d8` (the one irreversible act in the program), plus
+  the per-crate G3b delta and a per-file attribution of all 334 remaining MISSING
+  reference sentences. Read `w10/README.md` first: an advance is **bidirectional**
+  (it adds head's new reference text as well as removing what upstream deleted),
+  which the plan did not model. G3b's total moved **218 -> 334**, the `config` row
+  **30 -> 4**, and the four survivors plus G1's twelve named test misses are
+  recorded there as OPEN with an owner, not closed.

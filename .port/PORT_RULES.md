@@ -309,13 +309,19 @@ the divergence is decided explicitly per site, never inherited silently:
 
 - A standing main-parity workflow (`.port/phase-2/wf-main-parity.js`, lands via
   plan Task 19; ledger `.port/phase-2/MAIN_PARITY.md`) enumerates every
-  upstream ghostty commit (since the pinned reference SHA, `4749c4e9`)
+  upstream ghostty commit (since the pinned reference SHA, `6ad1fe7d8` — advanced
+  from `4749c4e9` by `P3-W10 T3` on 2026-07-31; see `.port/ORACLE_SYNC.md`)
   touching ported files; each gets a verdict
   ported/missing/partial/not-applicable with file:line evidence and 2-vote adversarial
   verification; missing ones are ported WITH the same commit's test hunks. It
   runs as a standing per-sub-project ritual. The reference checkout at
   `/Users/gael/projects/ghostty` stays read-only: `git fetch` is the one
-  sanctioned write (remote refs only), never checkout/pull/reset.
+  sanctioned write (remote refs only), never checkout/pull/reset. The **sole**
+  exception is a deliberate pin advance, which requires that no other lane is
+  active and follows the checklist in `.port/ORACLE_SYNC.md` ("Advancing the pin").
+  Note `.port/phase-2/MAIN_PARITY.md` was triaged at `53bd14fec` scoped to
+  `src/`+`include/`, so it cannot speak for `53bd14fec..6ad1fe7d8`; the Phase-3
+  record is `docs/superpowers/plans/2026-07-29-phase3-upstream-resync.md` + `.port/phase-3/`.
 - Doctrine: updating the reference checkout does not port anything — "a merge does NOT
   port the fix; only an explicit .rs change does."
 - Every escaped defect gets `tests/regression/issue_NNN.rs` with a documented fail-first

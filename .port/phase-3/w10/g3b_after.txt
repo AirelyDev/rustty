@@ -1,0 +1,400 @@
+G3b [args]: distinctive ref comments=185 missing=0 review=1
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+G3b [bench]: distinctive ref comments=133 missing=5 review=0
+    MISSING ref comment: avoiding a per-chunk memcpy through an intermediate reader
+    MISSING ref comment: buffer that would pollute the measurement.
+    MISSING ref comment: force-reference our memset override so its export is emitted.
+    MISSING ref comment: see quirks_memset.zig for details on why this exists.
+    MISSING ref comment: unbuffered: readsliceshort below reads directly into `buf`,
+G3b [build-config]: distinctive ref comments=27 missing=0 review=0
+G3b [cli]: distinctive ref comments=599 missing=11 review=2
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+    MISSING ref comment: ".to_lower = true" implies, but this comment serves as a
+    MISSING ref comment: decompress the frames into a slice of individual frames
+    MISSING ref comment: heap allocated list of frames. the underlying frame data references decompressed_data
+    MISSING ref comment: https://github.com/rockorager/libvaxis/pull/276).
+    MISSING ref comment: insensitive ranking (which is what i'm guessing
+    MISSING ref comment: note: changed from ".to_lower = true" (the option was
+    MISSING ref comment: note: mouse co-ordinates can be negative (see
+    MISSING ref comment: renamed). i think this is the correct analog for case
+    MISSING ref comment: run/replace process (using execve)
+    MISSING ref comment: we store an i/o implementation to make maintenance easier.
+    MISSING ref comment: working around it in this case, but putting this here in
+G3b [config]: distinctive ref comments=2814 missing=4 review=8
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.64): options for copy on select behavior.
+    REVIEW (ratio 0.73): see "clipboard-codepoint-map" for documentation.
+    REVIEW (ratio 0.69): see `font-synthetic-style` for documentation.
+    REVIEW (ratio 0.75): see macos-dock-drop-behavior
+    REVIEW (ratio 0.74): see window-show-tab-bar
+    REVIEW (ratio 0.63): valid values for confirm-close-surface
+    MISSING ref comment: allocation requirement. this restricts this function to said platforms.
+    MISSING ref comment: period, or windows for that matter).
+    MISSING ref comment: to be fair, the legacy getenv path had more restrictive issues (no wasi
+    MISSING ref comment: todo: this is not available on wasi without libc due to the memory
+G3b [core]: distinctive ref comments=1164 missing=0 review=0
+G3b [crash]: distinctive ref comments=158 missing=0 review=0
+G3b [datastruct]: distinctive ref comments=539 missing=0 review=0
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [global]: distinctive ref comments=104 missing=31 review=11
+    REVIEW (ratio 0.63): (e.g. `+terminal-stream`) are not valid app actions and would
+    REVIEW (ratio 0.76): asserts that the global state is initialized when not running as a test.
+    REVIEW (ratio 0.75): asserts that the global state is initialized when not running as as test.
+    REVIEW (ratio 0.64): asserts that the global state is initialized.
+    REVIEW (ratio 0.63): by rustty_init() for lib artifacts. most other methods in this file will
+    REVIEW (ratio 0.68): helper to return either the state's args, or one from testing.
+    REVIEW (ratio 0.75): helper to return either the state's environment, or one from testing.
+    REVIEW (ratio 0.65): helper to return either the state's i/o instance, or one from testing.
+    REVIEW (ratio 0.65): otherwise cause init to fail with invalidaction.
+    REVIEW (ratio 0.63): re-synchronizes the global environ (both the higher-level and i/o versions)
+    MISSING ref comment: `std.process.environ.map` whenever possible.
+    MISSING ref comment: and rustty-gen) that have their own cli action namespace. this
+    MISSING ref comment: asserts that `self.io_impl` has been initialized.
+    MISSING ref comment: asserts that the state exists.
+    MISSING ref comment: because there are some later initialization steps that depend on us
+    MISSING ref comment: difference between the posix environment and higher-level zig `posixblock`
+    MISSING ref comment: down. for that, we need a stable implementation that allows us to do so.
+    MISSING ref comment: ensure that the c api can take a unicode_string (aka []16, a
+    MISSING ref comment: environment is becoming more discouraged in the standard library as well,
+    MISSING ref comment: from testing. the map is created off of the state allocator.
+    MISSING ref comment: from the process. no-op on windows, asserts libc and an initialized global
+    MISSING ref comment: mutating the environment, and thus it needs to be re-synced farther
+    MISSING ref comment: namespace and detect their own actions, so we skip detection here.
+    MISSING ref comment: pointer state, there is no concurrency control on this function (or for
+    MISSING ref comment: release our tmp_dir_path if needed
+    MISSING ref comment: retrieve items stored in this state.
+    MISSING ref comment: returns the global state logging configuration.
+    MISSING ref comment: returns the global state resources_dir, or an empty one when testing.
+    MISSING ref comment: returns the global state rlimits, or an empty one when testing.
+    MISSING ref comment: same as `main` but for auxiliary tool binaries (e.g. rustty-bench
+    MISSING ref comment: set up our main i/o implementation (fully threaded w/allocator). note
+    MISSING ref comment: skips detection of rustty app cli actions, since tool actions
+    MISSING ref comment: std.process.args.vector directly.
+    MISSING ref comment: struct is that the latter has a length versus the former's many-item
+    MISSING ref comment: that matter, `environ` or `environmap`. direct modification of the system
+    MISSING ref comment: that we cannot use any implementation supplied from main at this point,
+    MISSING ref comment: todo: using the c api from windows is unsupported at this time.
+    MISSING ref comment: tool binaries (rustty-bench, rustty-gen) have their own action
+    MISSING ref comment: we need to re-sync the environment after this completes.
+    MISSING ref comment: when do we plan on supporting windows, it's recommended to
+    MISSING ref comment: wtf-16 string) so that it can just be passed into
+G3b [inspector]: distinctive ref comments=205 missing=0 review=0
+G3b [lib]: distinctive ref comments=90 missing=5 review=0
+    MISSING ref comment: function docs, in the event of the c abi, we need to preserve the
+    MISSING ref comment: original value, so we account for that.
+    MISSING ref comment: remove any holes in the input (null values). as mentioned in the
+    MISSING ref comment: we have to transform our comptime_int values into the actual int
+    MISSING ref comment: we're creating the enum as.
+G3b [os]: distinctive ref comments=652 missing=12 review=4
+    REVIEW (ratio 0.72): child process can can be problematic, so let's drop it from the
+    REVIEW (ratio 0.75): first check the env var. on windows we treat `localappdata` as a
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+    REVIEW (ratio 0.72): pointing at the snap's bundled libraries. leaking this into
+    MISSING ref comment: `std.io` only. as such this file serves as a "bridge" between type
+    MISSING ref comment: bit-field and enum constant values
+    MISSING ref comment: fresh `environ` block, so this is safe to release immediately
+    MISSING ref comment: having most of its features removed, with the ultimate goal of switching to
+    MISSING ref comment: information (mostly coming from stdlib) and manually-defined constants and
+    MISSING ref comment: known as file_open in windows docs
+    MISSING ref comment: non-snap releases don't need to alter the env.
+    MISSING ref comment: note that `spawn` copies the passed in `environ.map` into a
+    MISSING ref comment: note: the windows part of the zig stdlib is currently in the process of
+    MISSING ref comment: serve as a support for higher-level functionality offered in places like
+    MISSING ref comment: static local next_mmap_addr_hint since this has been removed from stdlib now
+    MISSING ref comment: types needed for ntdll calls
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [simd]: distinctive ref comments=102 missing=4 review=0
+    MISSING ref comment: ascii, escapes, controls, valid and invalid utf-8, at various
+    MISSING ref comment: differential test: the simd implementation must agree with the
+    MISSING ref comment: lengths (including chunk-boundary straddling cases).
+    MISSING ref comment: scalar implementation on any input. exercises random mixtures of
+G3b [synthetic]: distinctive ref comments=95 missing=0 review=0
+G3b [terminfo]: distinctive ref comments=95 missing=0 review=0
+G3b [termio]: distinctive ref comments=1148 missing=14 review=4
+    REVIEW (ratio 0.75): child. empirically chosen through measurements on an m4 max.
+    REVIEW (ratio 0.65): or if due to race conditions it doesn't exist or any various other
+    REVIEW (ratio 0.7): reasons. we don't want to crash the entire process if this fails so we
+    REVIEW (ratio 0.68): sets the fd to non-blocking mode. returns false on failure.
+    MISSING ref comment: >= 0.16.0, so this might warrant a recheck.
+    MISSING ref comment: alias for a handle under windows. we might want to keep an eye on if
+    MISSING ref comment: doomed (every surface spawns several), so don't try
+    MISSING ref comment: failed, but we might need to retry).
+    MISSING ref comment: if we can't spawn a thread the process is already
+    MISSING ref comment: interrupted waits are retried and all other errors are propagated.
+    MISSING ref comment: note: we can use the pid directly as posix.system.pid_t is still an
+    MISSING ref comment: replace here, switch on error (any error means that replace
+    MISSING ref comment: the std.posix wrapper that was removed in zig 0.16.
+    MISSING ref comment: this functionality has been taken from zig stdlib, a simplified
+    MISSING ref comment: todo: this may have changed a lot now with the new i/o implementations in
+    MISSING ref comment: version of the exec bits with path search so that we can just
+    MISSING ref comment: wrapper for the raw fork syscall. this preserves the error handling from
+    MISSING ref comment: wrapper for the raw waitpid syscall. status is only initialized on success;
+G3b [unicode]: distinctive ref comments=124 missing=20 review=1
+    REVIEW (ratio 0.77): callers needing cluster-accurate widths should use graphemewidth().
+    MISSING ref comment: accepted so ffi-facing callers can use u32 input without trapping. an
+    MISSING ref comment: exotic-width llvm integer accesses that defeat register
+    MISSING ref comment: explicit padding to give the struct a power-of-two backing
+    MISSING ref comment: explicit padding to give the struct a power-of-two backing integer.
+    MISSING ref comment: for codepoint types wider than u21, values greater than u+10ffff are
+    MISSING ref comment: https://github.com/ziglang/zig/issues/21891 for the upstream issue.
+    MISSING ref comment: integer (u9), zig 0.16 lowers loads/stores of this struct through
+    MISSING ref comment: integer, for the same reason as `properties._padding` (avoids
+    MISSING ref comment: mismatched exotic-width llvm integer types (store i9 / load i16),
+    MISSING ref comment: promotion). @sizeof was already 1, so the table stays 8kb.
+    MISSING ref comment: skip this path at comptime.
+    MISSING ref comment: stack round-trips in hot paths like `graphemebreak`. see
+    MISSING ref comment: still be returned without attempting to narrow the invalid value.
+    MISSING ref comment: summing per-codepoint widths is only correct when mode 2027 is
+    MISSING ref comment: the c api accepts u32 codepoints, so it can receive values outside
+    MISSING ref comment: the size of the lookup table is unchanged (@sizeof was already 2).
+    MISSING ref comment: these checks are comptime-dead.
+    MISSING ref comment: this is a performance workaround: with a non-power-of-two backing
+    MISSING ref comment: unicode's range. guard before narrowing to u21; native u21 callers
+    MISSING ref comment: which blocks llvm from promoting temporaries to registers and forces
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=11515 missing=218 review=152
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.68): (runs of codepoints) whenever the stream can decode multiple
+    REVIEW (ratio 0.68): ...shift each codepoint into the content field's bit
+    REVIEW (ratio 0.67): `endupdate` the per-cell `style` data of any updated rows is
+    REVIEW (ratio 0.73): `endupdate`. callers that hold a lock over the terminal state
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.7): `update` is a convenience that performs both phases in one call.
+    REVIEW (ratio 0.64): a caller can hold its lock for this call only and then call
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    MISSING ref comment: (e.g. `row.backing`, `cell.backing`). this is an implementation
+    MISSING ref comment: ...and store them contiguously. cell is a packed
+    MISSING ref comment: ...widen each u32 lane to the u64 cell size...
+    MISSING ref comment: // the io thread is free to modify the terminal while we
+    MISSING ref comment: 64-bit atomic operations (e.g. 32-bit arm android), so we fall back
+    MISSING ref comment: @intfromfloat requires a value representable by the destination type.
+    MISSING ref comment: `alloc` is unused for a resident node. a compressed node uses it for an
+    MISSING ref comment: `beginupdate` and consumed by `endupdate`. this exists so that
+    MISSING ref comment: `beginupdate` requires terminal access, while `endupdate` completes
+    MISSING ref comment: `endupdate` after releasing it. `endupdate` exclusively reads
+    MISSING ref comment: `lanes` finished cells (coerced from vector to array
+    MISSING ref comment: `nodeisvalid` while referring to a different row than it originally did.
+    MISSING ref comment: `preservedpage` for the synchronization required by its borrowed
+    MISSING ref comment: `{content_tag, style_id}` bits are zero is a plain cell that
+    MISSING ref comment: a codepoint cell (no grapheme data or bg-color tag), narrow, and
+    MISSING ref comment: a failed allocation must roll the wrapped counter back to its
+    MISSING ref comment: a modest number of full-size page nodes is enough to exceed the u16
+    MISSING ref comment: active area spans multiple nodes when the pass chooses its boundary.
+    MISSING ref comment: address now belongs to a new live generation.
+    MISSING ref comment: adjust the underlying page and invalidate references to its pin.
+    MISSING ref comment: allocate a new page at the active tail between steps. it is after the
+    MISSING ref comment: allocate the second page so the first one can be pruned and reused.
+    MISSING ref comment: allocation serial changes even though the marker itself remains, so the
+    MISSING ref comment: allow allocations again. the pass must continue with the following page
+    MISSING ref comment: always overwrites those since the page rows start at offset 0
+    MISSING ref comment: an allocator that always fails, then restore it before terminal teardown.
+    MISSING ref comment: and null-terminated names. `colormap` keys do not provide that contract.
+    MISSING ref comment: any deferred work using only memory owned by the render state.
+    MISSING ref comment: anymore, so we can just reference fields directly. the node
+    MISSING ref comment: as the complete screen. a row-only resize needs only page metadata, so
+    MISSING ref comment: backing implementation for the generation counter. we use a
+    MISSING ref comment: be styled. the style must be recorded as a run (rather
+    MISSING ref comment: beyond the u32 coordinate range without allocating their backing cells.
+    MISSING ref comment: broadcast them to every lane once up front.
+    MISSING ref comment: build the expected value for the eql functions.
+    MISSING ref comment: bulk fills (e.g. erase with a pending background) and are
+    MISSING ref comment: by the caller so callers can inspect their contents. because resident
+    MISSING ref comment: byte size of the raw backing mappings owned by active page nodes. this is
+    MISSING ref comment: cache key without any ambiguity.
+    MISSING ref comment: calculate this before cursorchangepin because that function may
+    MISSING ref comment: cells with the same background are bit-identical, so
+    MISSING ref comment: clipboard writes are external effects, not terminal state.
+    MISSING ref comment: codepoints at once, and via `print` actions otherwise. handlers
+    MISSING ref comment: color name. null-terminated so it can be exposed through the c api
+    MISSING ref comment: come from the os page allocator (zeroed pages) and destroynodeext
+    MISSING ref comment: compressed until a renderer or other content consumer goes
+    MISSING ref comment: construct cell values from a template without field assignments.
+    MISSING ref comment: content access follows the normal page boundary, which recommits and
+    MISSING ref comment: content tag. values in such runs are typically produced by
+    MISSING ref comment: continuation marker and must not restart progress through cold history.
+    MISSING ref comment: continues at the following serial and compresses that page.
+    MISSING ref comment: convert a caller-provided floating-point position to a pixel coordinate.
+    MISSING ref comment: count: turning a vector compare into a scalar bitmask
+    MISSING ref comment: crossing a page may require migrating the cursor's style and
+    MISSING ref comment: decommitted. it excludes encoded storage and unused preheated pool items.
+    MISSING ref comment: dimensions clears the pending list (redraw), so this
+    MISSING ref comment: disappeared when its node was recycled, so the pass safely restarts.
+    MISSING ref comment: eligible again, including the page which was just visible.
+    MISSING ref comment: erase the first active row with a limit that extends into the
+    MISSING ref comment: even across screen switches or storage resets.
+    MISSING ref comment: every scroll restarts traversal, even if clamping leaves the viewport in
+    MISSING ref comment: exact-sized, page-aligned decode buffer owned by the returned value.
+    MISSING ref comment: exhaustive so new decoder errors require classification.
+    MISSING ref comment: fail the next allocation. an unchanged viewport with active dirty
+    MISSING ref comment: failed resident candidates are deliberately retried on later passes,
+    MISSING ref comment: field access compiles to its own shift/mask). just as importantly,
+    MISSING ref comment: for bools, zero for ints, the zero tag for enums, and so
+    MISSING ref comment: for callers that synchronize terminal access (e.g. a renderer thread
+    MISSING ref comment: free list node while a buffer is in the free list; initbuf below
+    MISSING ref comment: from different threads. on single-threaded targets this lowers to
+    MISSING ref comment: future; callers should treat the render state as incomplete
+    MISSING ref comment: generation. this does not advance `page_serial_epoch`: only `reset` starts a
+    MISSING ref comment: grow a test pagelist until it contains at least `count` complete history
+    MISSING ref comment: hardcoding the integer type so that code is resilient to the
+    MISSING ref comment: harmless: newer runs are appended later so they win, and cells
+    MISSING ref comment: have changed, even if the dimensions and byte length are the
+    MISSING ref comment: header, because there's no linked list overhead anymore. but
+    MISSING ref comment: historical prefix and must remain resident as one indivisible mapping.
+    MISSING ref comment: hyperlink references, so retain the general path here.
+    MISSING ref comment: i'm sure we'll see pretty quick when i run the tests. :)
+    MISSING ref comment: identical layout to an array of cells.
+    MISSING ref comment: impression that we no longer need to offset the data by the
+    MISSING ref comment: in a measurable almost 2x slowdown on our hyperlink map
+    MISSING ref comment: in release builds. this holds because the rows array is at
+    MISSING ref comment: interleave with spacer tails, and store (wide,
+    MISSING ref comment: invalidates the iterator: removal may move entries across the
+    MISSING ref comment: invoked on content mutations) so the mutex cost is irrelevant.
+    MISSING ref comment: is expensive on some targets (e.g. neon has no movemask
+    MISSING ref comment: is only held for `beginupdate`.
+    MISSING ref comment: it has no style, isn't wide, and isn't a hyperlink. masking
+    MISSING ref comment: item. this is used when compacting pages to their minimum
+    MISSING ref comment: iterates the entries of the map. any mutation of the map
+    MISSING ref comment: iterator chunks also restore before exposing row memory.
+    MISSING ref comment: llvm 21 (zig 0.16) failed to inline this which resulted
+    MISSING ref comment: lock-free atomic counter where we can, but not all targets support
+    MISSING ref comment: logical scrollback accounting and does not change while a mapping is
+    MISSING ref comment: make the remaining old page fully historical. the continuation serial
+    MISSING ref comment: mapping. a preserved page must decode elsewhere rather than restoring
+    MISSING ref comment: masked compare would incorrectly extend the run. for
+    MISSING ref comment: masked field contents while other fields differ, e.g. a run
+    MISSING ref comment: may then have superseded (stale) runs in this list, which is
+    MISSING ref comment: metadata (row, col counts etc) then use the other metadata functions.
+    MISSING ref comment: metadata-only skip budget without stopping at a resident attempt.
+    MISSING ref comment: more active rows than one page at these dimensions can hold ensures the
+    MISSING ref comment: move the active top into the boundary page so it has both a historical
+    MISSING ref comment: needs no managed-memory handling, so a vector or-reduce can
+    MISSING ref comment: negative and nan values clamp to the origin, matching the drag behavior
+    MISSING ref comment: next request therefore rejects the exact encoded allocation while the
+    MISSING ref comment: next serial once reclamation is available again.
+    MISSING ref comment: next step must restart and inspect the replacement.
+    MISSING ref comment: no-compression pass (the verification pass). this lets us
+    MISSING ref comment: node.loadbuf and node.size.toint. they are combined below.
+    MISSING ref comment: not a hyperlink. the mask covers every field that must match
+    MISSING ref comment: not covered by newer runs have a default style id in their raw
+    MISSING ref comment: note that printable text is delivered via `print_slice` actions
+    MISSING ref comment: note: when adding a new mode entry, also add a corresponding
+    MISSING ref comment: note: zig 0.16.0's arenas don't use the linked list types
+    MISSING ref comment: of cells with the same style id but different codepoints.
+    MISSING ref comment: of extracting and branching on each field individually (each packed
+    MISSING ref comment: of its bytes even though the pass discarded its physical pages.
+    MISSING ref comment: of the internal methods to work with the buffer - namely
+    MISSING ref comment: offset 0 (see layout), a page always has at least one row,
+    MISSING ref comment: one additional row creates history, but the history and all active rows
+    MISSING ref comment: only the decoded scratch data uses the terminal allocator here. swap in
+    MISSING ref comment: otherwise, we rely on pool item buffers being zeroed: fresh items
+    MISSING ref comment: our fast path can only handle "simple" cells. a simple cell is
+    MISSING ref comment: pages are still borrowed, you have to continue to have exclusive
+    MISSING ref comment: pages. the production cold-page boundary is intentionally reused here so
+    MISSING ref comment: particular the content tag must be a plain
+    MISSING ref comment: pertaining to cells directly (e.g. graphemes, hyperlinks).
+    MISSING ref comment: phases to minimize the time the terminal must be held exclusively:
+    MISSING ref comment: pin access restores the page without changing its retained mapping.
+    MISSING ref comment: pool allocation ownership is based on the requested layout fitting in a
+    MISSING ref comment: pool preheating supplies compression scratch. failing the allocator's
+    MISSING ref comment: position and merge with the template, producing
+    MISSING ref comment: precompress every candidate so the incremental pass exercises its
+    MISSING ref comment: prefix and active rows while the active area still spans later pages.
+    MISSING ref comment: preserved-page allocation is opportunistic for callers. failure leaves
+    MISSING ref comment: promote our arena. state is copied by value so we need to
+    MISSING ref comment: ps: my (vancluever's) reading of the code gives me the
+    MISSING ref comment: read-only pagelist operations restore through the same boundary.
+    MISSING ref comment: reads the linked metadata while calculating the absolute coordinate.
+    MISSING ref comment: recompress decompressed pages due to search, scrolling, etc.
+    MISSING ref comment: recompressing exercises reuse of the page-pool scratch item. page
+    MISSING ref comment: renderer optimization; it doesn't apply to memory movement.
+    MISSING ref comment: replace a page before the still-valid continuation marker. the list's
+    MISSING ref comment: reset replaces every page and clears the pagelist-owned traversal.
+    MISSING ref comment: resident nodes can be borrowed without allocating an unnecessary copy.
+    MISSING ref comment: resize reset the pagelist-owned cursor, so the next step can reclaim it.
+    MISSING ref comment: restore the page while it is active. resize reset the traversal, and
+    MISSING ref comment: restores the retained mapping before returning the cell.
+    MISSING ref comment: restoring the oldest page preserves both the mapping identity and all
+    MISSING ref comment: row 4, row 6 is the new blank row, and rows past the limit are
+    MISSING ref comment: row range without allocating any page backing memory. screenpoint only
+    MISSING ref comment: rustty_mode_* macro in include/rustty/vt/modes.h.
+    MISSING ref comment: same (e.g. a retransmission of the same id). stamps order by
+    MISSING ref comment: saturate first so positive infinity and oversized coordinates are safe.
+    MISSING ref comment: scans that need to pinpoint exactly where a run ends rather
+    MISSING ref comment: screen and terminal fast paths which manipulate page rows directly must use
+    MISSING ref comment: scrolling normally stays within one page. resolve the page once
+    MISSING ref comment: second page (5 rows remain in the first page, so a limit of 6
+    MISSING ref comment: sharing a lock with an io thread), the update can be split into two
+    MISSING ref comment: should never actually trigger, but the cost is trivial.
+    MISSING ref comment: shrinking the active area makes the page fully historical again. the
+    MISSING ref comment: so they can be bitcast for the store below)...
+    MISSING ref comment: source page and pass remain valid.
+    MISSING ref comment: stale and must not be read. more work may be deferred in the
+    MISSING ref comment: standard item. the page itself exposes only the initialized prefix.
+    MISSING ref comment: start near the end of the first page so the viewport intersects both
+    MISSING ref comment: storage accounting nor its discarded raw mapping changed while cloning.
+    MISSING ref comment: store our pins and their node generations. we have to store
+    MISSING ref comment: struct values (e.g. row, cell) in bulk, using masked compares of
+    MISSING ref comment: struct(u64) so an array of u64 bit patterns has
+    MISSING ref comment: succeed without reporting a viewport change.
+    MISSING ref comment: support: every 64-bit target supports 64-bit atomics, while 32-bit
+    MISSING ref comment: t is the packed struct type, fields are the fields covered by the
+    MISSING ref comment: targets may not (per the compiler's atomic operand validation).
+    MISSING ref comment: test decommit simulates physical reclamation by clearing the retained
+    MISSING ref comment: tests do not duplicate the row-to-page arithmetic.
+    MISSING ref comment: than written directly) so that it is ordered correctly
+    MISSING ref comment: that page, while the first page which just left view becomes eligible.
+    MISSING ref comment: the (potentially large) denormalization of styles into cells
+    MISSING ref comment: the backing integer of this packed struct. prefer this over
+    MISSING ref comment: the compression pass must not reconsider the node now that it is active.
+    MISSING ref comment: the default allows every raw slot to be occupied. callers whose maps see
+    MISSING ref comment: the entire group matches. this is useful for early-exit run
+    MISSING ref comment: the exact continuation serial disappeared with the old node. the pass
+    MISSING ref comment: the failed candidate remains resident and the pass continues at the
+    MISSING ref comment: the first and second historical page mappings.
+    MISSING ref comment: the i/o implementation to use for any operation that requires one.
+    MISSING ref comment: the integer form vectorizes trivially: `@splat` the mask and expected
+    MISSING ref comment: the key/values pointer, and backward-shift deletion in place of
+    MISSING ref comment: the newly active page can remain compressed until its contents are used.
+    MISSING ref comment: the pointer-width check is a conservative proxy for 64-bit atomic
+    MISSING ref comment: the render state must be treated as incomplete between the two calls.
+    MISSING ref comment: the same place. missing an eligible page is worse than a no-op pass.
+    MISSING ref comment: the stale generation before inspecting its pointer, even when that exact
+    MISSING ref comment: the template and shift amount are loop-invariant, so
+    MISSING ref comment: the unsuccessful first page does not stall the pass. the next step
+    MISSING ref comment: the verification pass is bounded independently, too.
+    MISSING ref comment: these even for rows that aren't dirty because dirty is only a
+    MISSING ref comment: this is 48-bits so that 16-bits can be reserved for terminal to
+    MISSING ref comment: this traversal intentionally reads only node metadata. a
+    MISSING ref comment: to a mutex-protected counter on those. this is a cold path (only
+    MISSING ref comment: to the pool free list, so the memory savings are only fully
+    MISSING ref comment: tracking disabled should reuse the existing fingerprint and return
+    MISSING ref comment: type is still private though, so we have to parse out some
+    MISSING ref comment: unchanged before rebuilding the search window, so this update should
+    MISSING ref comment: use maximum-height metadata-only pages to model a valid scrollback just
+    MISSING ref comment: value. note: this compares entire values; it is not
+    MISSING ref comment: we don't want empty clears to dirty the image state or bump
+    MISSING ref comment: we run-detect on full equality (e.g. a line cleared
+    MISSING ref comment: we're now a resident, non-compressed node.
+    MISSING ref comment: when none of the masked fields have any bits set: false
+    MISSING ref comment: while refreshing the cursor pointers. the cursor already holds
+    MISSING ref comment: while the successful page remains compressed and is skipped.
+    MISSING ref comment: with those fields and comparing against a template answers all
+    MISSING ref comment: zeroes buffers before returning them to the pool. the one
+G3b [vt-c]: distinctive ref comments=407 missing=10 review=1
+    REVIEW (ratio 0.79): request and its strings are borrowed for the callback duration.
+    MISSING ref comment: comptime-built static table, terminated by a null-name entry.
+    MISSING ref comment: deinit is always safe to call, even for single-threaded instances
+    MISSING ref comment: fetches a `terminalwrapper` reference from a `handler`.
+    MISSING ref comment: graphics). this provides stable storage for the api calls.
+    MISSING ref comment: have no way of taking it in the c api. this is set up in `new` and
+    MISSING ref comment: only used if temporary directory is set with api calls
+    MISSING ref comment: this is set to null on freestanding platforms, which get std.io.failing
+    MISSING ref comment: we also need to store a temp dir path for some operations (e.g., kitty
+    MISSING ref comment: we need to keep an i/o instance here as part of the terminal since we
+    MISSING ref comment: with no scrollback the scrollbar covers exactly the active area.
+RED: dropped reference comment(s) — see MISSING above (R1 violation)

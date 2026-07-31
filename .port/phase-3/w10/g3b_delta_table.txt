@@ -1,0 +1,24 @@
+crate                  ref b->a    miss b->a  resolved   new
+args              185->185          0->0             0     0
+bench             112->133          8->5             8     5
+build-config       27->27           0->0             0     0
+cli               591->599          2->11            0     9
+config           2777->2814        30->4            25     4
+core             1163->1164         0->0             0     0
+crash             163->158          0->0             0     0
+datastruct        539->539          0->0             0     0
+extra              20->20           0->0             0     0
+global             58->104          0->31            0    31
+inspector         192->205          0->0             0     0
+lib                89->90           0->5             0     5
+os                688->652         35->12           25    12
+render-types      149->149          0->0             0     0
+simd               79->102          0->4             0     4
+synthetic          95->95           0->0             0     0
+terminfo           95->95           0->0             0     0
+termio            995->1148        23->14           23    14
+unicode            64->124          0->20            0    20
+util              146->146          0->0             0     0
+vt               9609->11515      116->218          25   218
+vt-c              334->407          4->10            4    10
+TOTAL missing 218 -> 334
