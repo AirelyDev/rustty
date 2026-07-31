@@ -246,7 +246,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     #[allow(clippy::zombie_processes)]
     fn process_wait() {
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     #[allow(clippy::zombie_processes)]
     fn process_wait_with_non_zero_exit_code() {
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn process_wait_on_a_process_that_already_exited() {
         let mut child = Command::new(ARGV_0[0]).args(&ARGV_0[1..]).spawn().unwrap();
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kat3_process_spawn_exit() {
         // posix_spawn /bin/true (canonicalized to /usr/bin/true — the `true`

@@ -1878,3 +1878,190 @@ the FFI one:
   the linear relationship between the `ops` argument and native runtime.
 
 Owned by WS10 (OPEN).
+
+## The 2026-07-31 re-audit — every exception family re-checked against its own stated control
+
+An independent pass over the whole `MIRI EXCEPTION` inventory, run on branch
+`miri-reaudit`. The question was not "is the ignore convenient" but **"does the
+justification still hold, and does the compensating control it names actually
+run?"** Four families were in scope. Two survive exactly as written; one was
+re-measured and confirmed; one's compensating control turned out **not to exist
+as a control at all**, and has been made real here.
+
+All bounded runs used `perl -e 'alarm N; exec @ARGV'` — macOS has no coreutils
+`timeout`, the trap this file has been burned by before (a `timeout`-based "Miri
+measurement" that returned RC=0 after running nothing).
+
+### Family 1 — `rustty-xev`, 30 live-syscall annotations (`kqueue`/`timer`/`stream`/`process`/`async`) — **KEEP, but the control was fiction**
+
+**The exception is legitimate, re-verified in 2 seconds.** `cargo +nightly miri
+test -p rustty-xev --lib -- --include-ignored kqueue_loop` →
+``error: unsupported operation: can't call foreign function `kqueue` on OS `macos` ``.
+Miri does not run these slowly; it cannot run them at all.
+
+**The stated compensating control was not running.** All 30 reason strings said
+*"runs natively + ASan (sanitizers.sh)"*.
+
+* The **native** half is real and gate-enforced: `ci.sh` HARD step 4,
+  `cargo test --workspace --no-fail-fast`.
+* The **ASan** half was not. `.port/tools/gates/sanitizers.sh` is a manual
+  single-crate harness. `grep -rn 'sanitizers.sh'` over the repo finds it in
+  documentation and in these very reason strings — and in **no gate and no CI
+  workflow**. `ci.sh` registers `check_sanitizer_canary.sh` (D6), which proves
+  ASan can *see* a canary crate's heap; it never runs ASan over `rustty-xev`.
+  `check_leaks.sh --list` routed `rustty-xev` to `Miri` only. So ~30 exceptions
+  rested for their entire life on a control nobody had executed. (VALIDATION_REPORT
+  M8 predicted exactly this shape — "miri-run.sh and sanitizers.sh are single-crate
+  manual harnesses" — and it was still open.)
+* **And when finally invoked, it was RED.** `sanitizers.sh rustty-xev "" address`
+  crashes: `AddressSanitizer: BUS … ___chkstk_darwin` inside `pthread_create`
+  from `ThreadPool::notify_slow` (`thread_pool.rs:297`). Cause: the thread-pool
+  tests build a config with `stack_size: 0` (faithful to the reference; std
+  clamps it to `PTHREAD_STACK_MIN`), and a 16 KB stack does not fit ASan's
+  instrumented frames. An ASan/tiny-stack artifact in a test Miri already covers
+  — *not* one of the excepted tests — but nobody could have known that without
+  running the control.
+
+**Fixed here, not merely reported:**
+
+1. `check_leaks.sh` gained a **G6 ASan companion arm** (`live_ffi_unit_filters`)
+   that runs the excepted families under `-Zsanitizer=address` on every G6 run,
+   with a **floor derived from the source annotations** (`live_ffi_unit_floor` =
+   the count of `MIRI EXCEPTION (rustty-xev …)` strings = **30**), so an
+   exception added without ASan reach is a RED rather than a smaller green.
+   Measured: `31 test(s) ran — test result: ok. 31 passed; 0 failed`, 0 findings.
+2. `sanitizers.sh`'s green line was **vacuity-blind**: it echoed
+   `grep 'test result' | tail -1`, i.e. the *Doc-tests* summary, always
+   `0 passed; 0 filtered out`. A run of 31 real tests and a filter matching
+   nothing printed the *same* "evidence". It now sums the `running N tests`
+   headers, prints every summary, and goes RED on a zero-test run. Both arms
+   demonstrated: real filter → `✅ address: 31 test(s) ran`; bogus filter →
+   `❌ address: VACUOUS — 0 tests ran … a green over an empty set is not a pass`.
+3. All 30 reason strings now name the gate that actually runs, not a script.
+
+**Verdict: KEEP the 30 exceptions — Miri structurally cannot execute them — but
+the control they cited is new as of this pass. Before 2026-07-31 the ASan half
+of "runs natively + ASan" had never run.**
+
+### Family 1 side-finding (OPEN, RED today): the `rustty-xev` Miri lane is failing
+
+Running the gate — not the exceptions — surfaced this. `cargo +nightly miri test
+-p rustty-xev` **fails**, reproducible in isolation:
+
+```
+thread_pool::tests::multi_worker_quiesce_then_join_50x
+error: Undefined Behavior: attempting a read access using <wildcard> at alloc49568[0x18],
+       but no exposed tags have suitable permission in the borrow stack for this location
+   --> crates/rustty-xev/src/thread_pool.rs:1643:28   (let ctx = unsafe { &*(*job).ctx };)
+```
+
+Same shape as the 10 test-code Stacked-Borrows findings WS19 T6 unearthed: a raw
+`*const LifeCtx` recovered by `offset_of!` container_of in test code, read through
+a tag that is not exposed. It is **not** covered by any exception — `G6
+[rustty-xev]` is simply RED, and since `ci.sh` treats a PROGRESS gate's RED as a
+HARD_FAILURE, CI should be red on it. Not fixed here (outside this pass's
+mandate); filed as OPEN. Unrelated to the 30 annotations above.
+
+### Family 2 — the `G6 LANE ONLY` annotations in `render.rs` / `screen.rs` / `terminal.rs` — **KEEP, claim verified end-to-end**
+
+The claim under audit: these are `#[cfg_attr(all(miri, debug_assertions), ignore)]`
+(ignored in G6, **RUN in G6c**), and the warning "do NOT widen this to a plain
+`miri` ignore" is load-bearing. All parts checked:
+
+1. **The attribute really is lane-narrow.** All 9 sites in these files carry
+   `all(miri, debug_assertions)`; none is a plain `miri`.
+2. **G6c really picks them up.** `check_leaks.sh`'s `g6c_names` derivation was
+   re-run: it emits **82 names from 82 annotation sites** — no drift — and all 9
+   are in the set. (The derivation matches a line whose `strip()` is exactly
+   `all(miri, debug_assertions),`, so a *one-line* `#[cfg_attr(...)]` spelling
+   would silently escape both lanes; there is currently no such site in
+   `rustty-vt/src`.)
+3. **They actually run and pass**, re-measured per test under G6c's exact flags
+   (`RUSTFLAGS=-C debug-assertions=off`, `MIRIFLAGS=-Zmiri-disable-isolation`,
+   `--test-threads=1`), on a host visibly slower than the M4 Pro of the WS19 table:
+
+| Test | file | this pass | WS19 T6 table |
+|---|---|---|---|
+| `link_cells_with_scrollback_spanning_pages` | `render.rs` | ok, **19.82s** | ok, 7s |
+| `screen_cursor_absolute_to_page_with_insufficient_capacity` | `screen.rs` | ok, **53.17s** | ok, 15s |
+| `screen_scrolling_when_viewport_is_pruned` | `screen.rs` | ok, **25.74s** | ok, 13s |
+| `screen_cursor_set_hyperlink_oom_uri_too_large_for_string_alloc` | `screen.rs` | ok, **24.74s** | ok, 16s |
+| `terminal_insert_lines_across_page_boundary_marks_all_shifted_rows_dirty` | `terminal.rs` | ok, **13.88s** | ok, 13s |
+| `terminal_delete_lines_across_page_boundary_marks_all_shifted_rows_dirty` | `terminal.rs` | ok, **13.88s** | ok, 13s |
+| `terminal_pagepool_no_leak_scroll_insert_multi_page` | `terminal.rs` | ok, **18.81s** | ok, 11s |
+| `terminal_resize_with_high_unique_style_per_cell_with_wrapping` | `terminal.rs` | ok, **19.15s** | ok, 17s |
+| `terminal_input_glitch_text` | `terminal.rs` | ok, **8.49s** | ok, 8s |
+
+9/9 pass, 0 UB, 0 leaks. The 2–3.5x spread against the WS19 numbers is host load,
+not a difference in kind.
+
+4. **The negative control — the arm that would catch a silently-plain ignore.**
+   The same test re-run with `-C debug-assertions=on` (i.e. the G6 lane):
+   `test result: ok. 0 passed; 0 failed; 1 ignored`. The partition is therefore
+   real in both directions: ignored with assertions ON, executed with them OFF.
+   A plain `cfg_attr(miri, ignore)` would have produced `1 ignored` in *both*
+   runs — exactly the loss the comment warns about, and it is not happening.
+
+**Verdict: KEEP, and the "it RUNS in G6c" claim is true — measured, not asserted.**
+
+### Family 3 — the two hard TIMEOUTs (`screen.rs:14857`, `terminal.rs:15740`) — **KEEP, re-measured**
+
+Re-measured exactly as the annotations claim: single-worker isolation,
+`-C debug-assertions=off`, `--include-ignored` (without it a `cfg_attr(miri,
+ignore)` test reports `1 ignored` in ~0s, and a careless harness records that as
+a pass), 6-minute hard bound via `perl alarm`:
+
+| Test | file | result |
+|---|---|---|
+| `screen_set_attribute_splits_page_on_out_of_space_at_max_styles` | `screen.rs` | **TIMEOUT at 361s** (rc=142/SIGALRM), no libtest summary |
+| `terminal_pagepool_no_leak_resize_grow` | `terminal.rs` | **TIMEOUT at 360s** (rc=142/SIGALRM), no libtest summary |
+
+Both logs show the tests genuinely entered and still interpreting when killed
+(`Screen::init` → `PageList::init_pages` frames in Miri's provenance warnings) —
+not an early abort, and not a "0-second success". The annotations' wording ("the
+one lever that exists has already been pulled and did not help") is accurate.
+
+**Verdict: KEEP both. The 360s figures in the WS19 T6 table reproduce.**
+
+### Family 4 — `rustty-extra` `webgen`/`mdgen` — **KEEP, but they were absent from this file**
+
+`crates/rustty-extra/src/webgen.rs` (1) and `mdgen.rs` (2) carry bare
+`#[cfg_attr(miri, ignore)]` with the justification only in a doc comment. This
+file is the exception registry and had **no entry for any of them** — an
+inventory gap, not a bad exception. Registered now:
+
+| Test | file | native | Miri |
+|---|---|---|---|
+| `config_mdx_frontmatter_and_grouping` | `webgen.rs` | **0.03s** (re-measured 2026-07-31) | **no completion at a 600s bound** (re-measured; the log ends mid-`running 1 test`. Previously recorded as no completion in 1500s) |
+| `gen_config_covers_every_field_and_honors_the_cli_flag` | `mdgen.rs` | ms | no completion in 71 min (Linux) / 53 min (macOS) |
+| `gen_actions_covers_every_action_with_the_right_sigil` | `mdgen.rs` | ms | as above |
+
+4-criterion basis: (1) intractable, measured in both directions; (2) passes
+natively in `cargo test --workspace`; (3) **no `unsafe` anywhere in the module** —
+these are `String`/`Vec` formatting over `rustty-config` metadata, so Miri has no
+UB surface here the native run does not already cover; (4) the cost is
+structural — `s.matches(&format!("\n## `{name}`\n")).count()` per public config
+field (206 of them) over the whole rendered document, i.e. O(fields x len)
+substring scanning: trivial natively, brutal byte-by-byte under an interpreter.
+`rustty-extra` is `PORT STATUS: done`, so these ignores are load-bearing for its
+G6 lane and belong here.
+
+**Verdict: KEEP all three; documentation gap closed.**
+
+### Two smaller things this pass checked
+
+* **Env-var test selection — checked, and clean.** Miri does not forward host env
+  vars, so any env-var-driven test selection is silently vacuous under it.
+  `miri-run.sh` selects with `--exact <name>` on argv; `check_leaks.sh`'s G6c
+  passes its derived names as libtest positional filters. Neither depends on an
+  env var reaching the test binary (`G6C_FILTERS`/`G6C_MIN_PASSED` are *shell*
+  overrides consumed by the gate before launch, not by the interpreted test).
+  `miri-run.sh` also does not pass `--include-ignored`, so an already-annotated
+  test measured through it lands in `FAIL` (no `1 passed`) rather than being
+  recorded as a fast pass — no vacuity there either.
+* **Redundant attributes.** The four "needs `debug_assertions`" tests carry both
+  `cfg_attr(miri, ignore = …)` and `cfg_attr(not(debug_assertions), ignore)`;
+  rustc emits `warning: unused attribute` for the second when both apply
+  (`search/pagelist.rs:870`, `search/screen.rs:2721`, `search/screen.rs:2793`, …).
+  Harmless to coverage, noisy in every Miri log. Left alone deliberately —
+  dropping either changes which lane the test is excluded from.
