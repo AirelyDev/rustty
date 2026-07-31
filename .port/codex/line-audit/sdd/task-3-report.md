@@ -344,3 +344,79 @@ universe d2ce9a50a8ca31bc5f3bab936bc34bc9b5898af59ab3d5f34c31c29af5c0eed3
 ```
 
 No product/Ghostty file was changed, and nothing was staged or committed.
+
+## Fix round 3 — total enum validation and occurrence-aware identities
+
+### Remaining Important edges addressed
+
+The two findings in `sdd/task-3-r2-review.md` are addressed:
+
+1. Task 1's canonical enum validator now checks for a string before set
+   membership. Every subsequent scope/disposition dictionary or set lookup is
+   likewise type-guarded. Direct canonical validation therefore returns
+   diagnostics, rather than raising, for decoded JSON list/object values at
+   every enum site: file repository, content kind, scope class, primary
+   disposition, counterpart repository, review verdict, and checked-source
+   repository. An independently missing required field remains diagnosed in
+   every case.
+2. The verifier's attribution index now retains every parsed occurrence with
+   an individually valid nonempty string `range_id` and valid repository.
+   Attribution is admitted only for exactly one occurrence. Every repeated ID
+   emits exactly one stable `E_RANGE_DUPLICATE`, whether the pair is
+   valid+rejected or rejected+rejected and whether it is same-repository or
+   cross-repository. Rejected primaries remain absent from coverage, reviews,
+   counterparts, and findings.
+
+### Regression RED and GREEN evidence
+
+The direct canonical model matrix initially produced 20 subtest errors from
+unhashable list/object membership:
+
+```text
+Ran 1 test — FAILED (errors=20)
+```
+
+The occurrence matrix initially failed all four subtests because
+`E_RANGE_DUPLICATE` was absent for parsed identities involving rejected
+records:
+
+```text
+Ran 1 test — FAILED (failures=4)
+```
+
+Fresh verification after the fixes:
+
+```text
+Task 1 model suite:       Ran 26 tests in 0.001s  — OK
+Focused verifier suite:  Ran 30 tests in 19.457s — OK
+Complete line-audit:     Ran 65 tests in 22.464s — OK
+Python syntax compile:   OK
+```
+
+The occurrence matrix covers valid+rejected and rejected+rejected pairs in
+both same- and cross-repository forms. Each case asserts one duplicate
+diagnostic, the expected attribution or ambiguity, exact diagnostic
+partitioning, and unchanged covered/final semantic totals for the accepted
+records only.
+
+### Real empty-ledger snapshot applicability
+
+No additional 157-second real traversal was run by controller direction. This
+round changes only canonical record validation and parsed-primary identity
+handling; the real ledger contains no JSONL records, so the empty-ledger path
+is unchanged. The saved exact fix-round-1 output was reparsed successfully:
+101 JSON objects, 100 `E_UNCOVERED` diagnostics and one `INCOMPLETE` summary;
+11,150 files; 3,103,589 text and uncovered lines; 0 covered and invalid; 6,925
+incomplete intervals; and 0 unattributed invalid/incomplete diagnostics.
+
+The universe still contains exactly the audit pins below, both pinned commits
+remain available, and its SHA-256 is unchanged:
+
+```text
+rustty   2bd45ccc79ae4ab6bdcb8cb95d5a99d0d8d44816
+ghostty  6ad1fe7d8cbda36c77b337a96c9bea8a77883699
+universe d2ce9a50a8ca31bc5f3bab936bc34bc9b5898af59ab3d5f34c31c29af5c0eed3
+```
+
+This round changed only Task 3 line-audit files. Ghostty remained clean, and
+nothing was staged or committed by this task.

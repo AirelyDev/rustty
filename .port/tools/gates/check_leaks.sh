@@ -152,13 +152,30 @@ import _gatelib as G
 print(G.dir_status(sys.argv[1]))
 ' "$1" "$GATES_DIR"
 }
-claimed_done() {  # $1 = crate directory; exit 0 iff status is a completion claim
-  python3 -c '
-import sys, os
+claimed_done() {  # $1 = crate dir. 0 = done, 1 = not done, 3 = PROBE FAILED
+  # The probe must be able to say "I could not tell", distinctly from "no".
+  # It used to be `sys.exit(0 if ... else 1)`, but a Python failure — e.g.
+  # `ModuleNotFoundError: No module named '_gatelib'`, which really happened
+  # during a G6 lane run — ALSO exits 1, so a broken probe was indistinguishable
+  # from an honest "this crate is not claimed-done". The caller's
+  # `claimed_done "$dir" || continue` then skipped 50 crates in a row with
+  # nothing but stderr noise to show for it.
+  local out rc
+  out="$(python3 -c '
+import sys
 sys.path.insert(0, sys.argv[2])
 import _gatelib as G
-sys.exit(0 if G.dir_status(sys.argv[1]) in G.DONE_STATUSES else 1)
-' "$1" "$GATES_DIR"
+print("DONE" if G.dir_status(sys.argv[1]) in G.DONE_STATUSES else "NOTDONE")
+' "$1" "$GATES_DIR" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "G6 PROBE FAILED for $1 (python exit $rc): $out" >&2
+    return 3
+  fi
+  case "$out" in
+    DONE) return 0 ;;
+    NOTDONE) return 1 ;;
+    *) echo "G6 PROBE FAILED for $1 (unexpected output): $out" >&2; return 3 ;;
+  esac
 }
 
 require_miri() {
@@ -502,14 +519,35 @@ case "${1:---all-done}" in
     done < <(enumerate_crate_dirs)
     exit 0 ;;
   --all-done)
-    rc=0; ran=0
+    rc=0; ran=0; probed=0; failed_probe=0
     while IFS= read -r dir; do
       c="$(basename "$dir")"
-      claimed_done "$dir" || continue
-      ran=1; run_crate "$c" || rc=1
+      probed=$((probed + 1))
+      claimed_done "$dir"; st=$?
+      case $st in
+        0) ran=$((ran + 1)); run_crate "$c" || rc=1 ;;
+        1) : ;;                       # honestly not claimed-done: skip
+        *) failed_probe=$((failed_probe + 1)); rc=1 ;;   # LOUD, never silent
+      esac
     done < <(enumerate_crate_dirs)
-    [ "$ran" = 0 ] && echo "G6: no claimed-done crates yet (progress)"
-    [ "$rc" = 0 ] && echo "G6 GREEN (all done crates clean)"; exit $rc ;;
+    if [ "$failed_probe" -gt 0 ]; then
+      echo "G6 RED: the done-status probe FAILED for $failed_probe of $probed crate(s)."
+      echo "  Those crates were neither run nor honestly skipped — treat this run as"
+      echo "  covering nothing until the probe works."
+      rc=1
+    fi
+    # A run that examined ZERO crates is not progress, it is a vacuous green.
+    # With the old `|| continue`, a probe broken for every crate landed here and
+    # printed the progress line on its way to exit 0.
+    if [ "$ran" = 0 ]; then
+      if [ "$probed" -gt 0 ] && [ "$failed_probe" = 0 ]; then
+        echo "G6: no claimed-done crates yet (progress)"
+      else
+        echo "G6 RED (VACUOUS): ran 0 of $probed crate(s) and cannot claim coverage."
+        rc=1
+      fi
+    fi
+    [ "$rc" = 0 ] && echo "G6 GREEN ($ran done crate(s) clean)"; exit $rc ;;
   *)
     echo "usage: check_leaks.sh [--crate <name> | --all-done (default) | --list | --self-test | --debug-assertions-off [--self-test]]"; exit 2 ;;
 esac
