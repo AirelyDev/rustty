@@ -1436,15 +1436,23 @@ macOS-27-only `NSScrollPocket`, so it cannot execute here at all; `632aa6756`'s
 added branch is the `?? firstSuperview(withClassName: "NSTitlebarAccessoryContainerView")`
 fallback, which is dead code on a macOS 26 view hierarchy because the first lookup
 (`NSTitlebarAccessoryClipView`) always succeeds. Neither can be exercised on any
-amount of effort here. See the correction below for `fa3802a70`, which is **not**
-in that category.
+amount of effort here. `fa3802a70` was **not** in that category: its six-case mapping
+is now **verified on this host** and that portion of the debt is discharged — see V19a
+below. (Written in lower case on purpose: `check_phase2_closure.py` treats the
+all-caps disposition token anywhere in a row body as closing the WHOLE row, and this
+row must keep its `ENVIRONMENT-BLOCKED` disposition for the two items above.)
+
+The artifacts still carrying unverified debt in this row (`macos/Sources/Helpers/Backport.swift`
+is no longer among them — its mapping is asserted by a test, see V19a):
 
 ```
 PORTED: macos/Sources/Features/Terminal/Window Styles/HiddenTitlebarTerminalWindow.swift
 PORTED: macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift
-PORTED: macos/Sources/Helpers/Backport.swift
 PORTED: macos/Sources/RusttyKit/Rustty.Surface.swift
 ```
+
+The first two are the macOS-27 pair named in **Blocked on:** above; the third is
+V19b, which is effort-blocked rather than environment-blocked (see its scope note).
 
 **Re-owned 2026-07-31 (was `OWNER: P3-W8 T2`).** `P3-W8` merged, which made this
 row an orphan under G-P2 — correctly, because a closed workstream cannot do the
@@ -1460,11 +1468,9 @@ nothing except effort, and the analysis of WHY the obvious test double would be
 vacuous is the part worth preserving. If it is ever picked up it should be split
 back out; it is recorded here so the reasoning is not lost.
 
-Four items from `P3-W8 T2` are **ported and compiling, but NOT verified**. They are
-listed here rather than being claimed green.
-
-Four items from `P3-W8 T2` are **ported and compiling, but NOT verified**. They are
-listed here rather than being claimed green.
+Four items from `P3-W8 T2` were **ported and compiling, but NOT verified**, and were
+listed here rather than being claimed green. One of the four (`fa3802a70`) has since
+been verified on this host — see V19a. Three remain.
 
 ### V19a. macOS-27-only view-hierarchy / pointer-style workarounds — "ported, unverified on macOS 27"
 
@@ -1472,12 +1478,12 @@ listed here rather than being claimed green.
 |---|---|---|
 | `2104e0749` | `macos/Sources/Features/Terminal/Window Styles/HiddenTitlebarTerminalWindow.swift` `reapplyHiddenStyle()` | `if #available(macOS 27, *)` hide the `NSScrollPocket` descendant of the theme frame |
 | `632aa6756` | `macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift` | accept `NSTitlebarAccessoryContainerView` as well as `…ClipView` when finding the clip view |
-| `fa3802a70` | `macos/Sources/Helpers/Backport.swift` `BackportPointerStyle.official` | `frameResize(position:directions:)` → `columnResize(directions:)` / `rowResize(directions:)` |
+| ~~`fa3802a70`~~ | `macos/Sources/Helpers/Backport.swift` `BackportPointerStyle.official` | **mapping verified 2026-07-31** — `frameResize(position:directions:)` → `columnResize(directions:)` / `rowResize(directions:)` |
 
 This host is **macOS 26.5 (Darwin 25.5.0, Xcode 26.5)**. `2104e0749` and `632aa6756`
 are guarded by / only reachable on macOS 27 view hierarchies. `xcodebuild test`
-compiles all three and is green, which proves **compilation and
-availability-annotation correctness only** — it proves nothing about the behaviour.
+compiles both and is green, which proves **compilation and
+availability-annotation correctness only** — it proves nothing about their behaviour.
 
 **CORRECTION, 2026-07-31 — `fa3802a70` is NOT macOS-27-gated.** The original text
 said it was "a pointer-shape change that only the macOS 27 HIG cursor set provides".
@@ -1494,17 +1500,78 @@ frameResize : PointerStyle(value: frameResize(position: leading, directions: Set
 rowResize   : PointerStyle(value: rowResize(directions: Set(rawValue: 1))
 ```
 
-So the six-case mapping the commit actually changed IS reachable and assertable here.
-What macOS 27 is genuinely needed for is only the *rendered cursor artwork* — a human
-visual judgment, in the same family as row V7.
+#### `fa3802a70` six-case mapping — **VERIFIED ON THIS HOST 2026-07-31; that portion of the debt is discharged** (branch `v19c-pointer-style`)
 
-**Runnable here (not yet run — recorded so it is not rediscovered):** a
-`macos/Tests/Helpers/` case asserting
-`String(describing: BackportPointerStyle.resizeLeft.official)` contains
-`columnResize(directions:` and NOT `frameResize`, over all six resize cases.
-`PointerStyle` has no useful `Equatable`/introspection, hence `String(describing:)`;
-the probe above is what established that it discriminates. The negative control is
-free: reverting one case to `.frameResize(position:)` must fail that case.
+**Test:** `macos/Tests/Helpers/BackportPointerStyleTests.swift` — four `@Test` cases
+over the real `BackportPointerStyle.official`, compared through `String(describing:)`
+because `PointerStyle` has no `Equatable` and no introspection:
+
+* `testResizeCasesMapToColumnAndRowResize` — all six resize cases against the
+  `PointerStyle` each must produce (`.columnResize(directions: .leading/.trailing)`,
+  `.rowResize(directions: .up/.down)`, bare `.rowResize`, bare `.columnResize`).
+  The direction sets are covered, not just the case name: the descriptions carry
+  `Set(rawValue: 1/2/3)`.
+* `testNoResizeCaseStillUsesFrameResize` — no resize case's description contains
+  `frameResize`, i.e. the pre-`fa3802a70` spelling is gone.
+* `testResizeCaseDescriptionsArePairwiseDistinct` — proves `String(describing:)`
+  actually discriminates the six, so the two assertions above cannot pass vacuously.
+* `testNonResizeCasesAreUnchanged` — the six cases `fa3802a70` did not touch.
+
+**Run:**
+
+```sh
+cargo run -q -p xtask -- xcframework && rm -rf macos/RusttyKit.xcframework \
+  && cp -R dist/RusttyKit.xcframework macos/RusttyKit.xcframework
+cargo run -q -p xtask -- resources     # zig-out/share, needed by the app's CpResource phase
+cd macos && xcodebuild test -project Rustty.xcodeproj -scheme Rustty \
+  -destination 'platform=macOS' -only-testing:RusttyTests
+```
+
+(The xcframework must be REBUILT, not reused: a pre-WS9 archive does not define
+`_dgettext`/`_bindtextdomain`/`_textdomain` and the app fails to link. Do NOT pass
+`OTHER_LDFLAGS=` on the command line — it overrides the per-target value and breaks
+the `DockTilePlugin` link; the project already carries `-Wl,-u,_rustty_benchmark_cli`
+on the targets that need it.)
+
+**Result — `** TEST SUCCEEDED **`**, whole `RusttyTests` suite, macOS 26.5.1 (25F80):
+
+```
+Test case 'BackportPointerStyleTests/testResizeCasesMapToColumnAndRowResize()' passed
+Test case 'BackportPointerStyleTests/testNoResizeCaseStillUsesFrameResize()' passed
+Test case 'BackportPointerStyleTests/testResizeCaseDescriptionsArePairwiseDistinct()' passed
+Test case 'BackportPointerStyleTests/testNonResizeCasesAreUnchanged()' passed
+RusttyTests: 228 tests, 227 passed, 1 skipped, 0 failed
+```
+
+**Negative controls — BOTH RUN, both observed FAILING, then reverted in place**
+(edited in place, never `mv`d back from a `.bak`, so no stale mtime could make the
+rebuild skip):
+
+1. Swap `.resizeLeft` and `.resizeUp` (`columnResize` ↔ `rowResize`) in
+   `Backport.swift`:
+
+   ```
+   Test case 'BackportPointerStyleTests/testResizeCasesMapToColumnAndRowResize()' failed
+   Expectation failed: (actual → "PointerStyle(value: rowResize(directions: Set(rawValue: 1))")
+     == (String(describing: expected) → "PointerStyle(value: columnResize(directions: Set(rawValue: 1))"):
+     resizeLeft: expected PointerStyle(value: columnResize(directions: Set(rawValue: 1)),
+     got PointerStyle(value: rowResize(directions: Set(rawValue: 1))
+   ```
+
+2. Revert `.resizeUpDown` to the pre-`fa3802a70` `.frameResize(position: .top)`:
+
+   ```
+   Test case 'BackportPointerStyleTests/testNoResizeCaseStillUsesFrameResize()' failed
+   Test case 'BackportPointerStyleTests/testResizeCasesMapToColumnAndRowResize()' failed
+   Expectation failed: !((actual → "PointerStyle(value: frameResize(position: top, directions: Set(rawValue: 3)))")
+     .contains("frameResize") → true): resizeUpDown: still uses frameResize —
+     PointerStyle(value: frameResize(position: top, directions: Set(rawValue: 3)))
+   ```
+
+**Explicitly NOT discharged:** the *rendered cursor artwork*. What the six cases map
+to is now asserted; whether macOS 27 draws the HIG double-headed bar for
+`columnResize`/`rowResize` is a human visual judgment in the same family as row V7,
+and remains step 4 of the recipe below.
 
 **Recipe (needs a macOS 27 beta host or VM):**
 
@@ -1521,8 +1588,9 @@ open macos/build/Release/Rustty.app   # then work through the 4 steps below
    bar must be vertically centred in the titlebar and not stretched — on macOS 27
    beta 2 without this change `firstSuperview(withClassName:)` returns nil and the
    whole layout pass early-returns.
-4. `fa3802a70`: hover a split divider; the pointer must be the HIG column/row-resize
-   cursor (double-headed bar), not the frame-resize cursor.
+4. `fa3802a70` **artwork only** (the mapping is already discharged above): hover a
+   split divider; the pointer must be the HIG column/row-resize cursor (double-headed
+   bar), not the frame-resize cursor.
 
 ### V19b. `a6edca2d7` synchronous surface free on the main thread — no counting double
 
