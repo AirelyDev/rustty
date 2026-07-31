@@ -1176,7 +1176,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_rustty_benchmark_cli";
 				PRODUCT_BUNDLE_IDENTIFIER = io.airely.rustty.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1231,7 +1231,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_rustty_benchmark_cli";
 				PRODUCT_BUNDLE_IDENTIFIER = io.airely.rustty;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

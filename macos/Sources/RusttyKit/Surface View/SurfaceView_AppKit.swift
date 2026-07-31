@@ -2214,7 +2214,6 @@ extension Rustty.SurfaceView {
     static let dropTypes: Set<NSPasteboard.PasteboardType> = [
         .string,
         .fileURL,
-        .URL
     ]
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -2234,24 +2233,7 @@ extension Rustty.SurfaceView {
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let pb = sender.draggingPasteboard
 
-        let content: String?
-        if let url = pb.string(forType: .URL) {
-            // URLs first, they get escaped as-is.
-            content = Rustty.Shell.escape(url)
-        } else if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL],
-           urls.count > 0 {
-            // File URLs next. They get escaped individually and then joined by a
-            // space if there are multiple.
-            content = urls
-                .map { Rustty.Shell.escape($0.path) }
-                .joined(separator: " ")
-        } else if let str = pb.string(forType: .string) {
-            // Strings are not escaped because they may be copy/pasting a
-            // command they want to execute.
-            content = str
-        } else {
-            content = nil
-        }
+        let content = pb.getOpinionatedStringContents()
 
         if let content {
             DispatchQueue.main.async {
