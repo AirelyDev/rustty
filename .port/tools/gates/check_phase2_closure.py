@@ -261,6 +261,12 @@ def derive_workstreams(roadmap_text):
 
 BEYOND_PIN = re.compile(r"\bBEYOND-PIN\b")
 
+# The date the oracle pin last advanced, per `.port/ORACLE_SYNC.md`'s history
+# table. A BEYOND-PIN row's justification is "this cannot be done yet"; once the
+# pin moves, that stops being true and the row owes a re-verification.
+PIN_ADVANCED = "2026-07-31"
+PIN_REVERIFIED = re.compile(r"\*\*Re-verified after pin advance:\*\*", re.I)
+
 
 def row_is_beyond_pin(text):
     """True when a row's own text proves its source is the beyond-pin upstream
@@ -435,6 +441,27 @@ def check_verification_debt(path, rel, open_ws, closed_ws, verbose):
         # which cannot be done until the pin advances. The row must prove that
         # about itself by carrying the BEYOND-PIN marker.
         if not live and {"Phase 3", "Phase-3"} & owners and row_is_beyond_pin(body):
+            # ...but that basis EXPIRES THE MOMENT THE PIN ADVANCES, because the
+            # work stops being impossible. The 2026-07-31 re-audit found both
+            # surviving rows in this class already ported — `cursor_scroll_region_up`
+            # (screen.rs:1885) and `PageList::Limits` (pagelist/mod.rs:1295) — and
+            # this gate was GREEN through both, because its predicate asks who
+            # OWNS a row, never whether the row's claim is still TRUE. An
+            # ownership check cannot detect an item that is done, nor one that is
+            # undone; that is a structural limit, not a bug.
+            #
+            # This is the narrow, machine-checkable part of that gap: a row parked
+            # on "cannot be done until the pin moves" must be re-verified once the
+            # pin HAS moved. See `.port/ORACLE_SYNC.md`'s advance history.
+            if not PIN_REVERIFIED.search(body):
+                violations.append((
+                    rel, i + 1, title, "Phase 3 (BEYOND-PIN)",
+                    f"BEYOND-PIN basis EXPIRED: the pin advanced on {PIN_ADVANCED} "
+                    f"so this work is no longer blocked. Re-verify against the code "
+                    f"and add `**Re-verified after pin advance:** <date> — <evidence>`, "
+                    f"or discharge the row",
+                    (i + 1, lines[i].strip())))
+                continue
             live = {"Phase 3 (BEYOND-PIN)"}
         if not live:
             why = (f"owner is a CLOSED workstream ({','.join(sorted(dead))})"
@@ -797,6 +824,33 @@ def self_test():
         failures += 1
     else:
         print("    control (same row unstruck) -> correctly read as OPEN")
+
+    # ---- the BEYOND-PIN expiry arm ------------------------------------------
+    # Added 2026-07-31 after the deferral re-audit found this gate GREEN through
+    # eleven stale-open rows, TWO of them parked on "BEYOND-PIN, owner Phase 3"
+    # while already ported. The gate's predicate asks who OWNS a row, never
+    # whether the row's claim is still true, so it cannot detect an item that is
+    # done. The expiry rule is the narrow machine-checkable slice of that gap:
+    # "cannot be done until the pin moves" stops being a reason once it has.
+    #
+    # Both directions are controlled, because a rule that accepts everything and
+    # a rule that rejects everything are equally useless.
+    probe_body = ("## V99. probe — **OWNER: Phase 3 — `BEYOND-PIN`**\n"
+                  "\n**OPEN**\n\n```sh\ntrue\n```\n")
+    if PIN_REVERIFIED.search(probe_body):
+        print("  CONTROL FAILED — a body with no re-verification line matched "
+              "PIN_REVERIFIED; the expiry rule accepts everything.", file=sys.stderr)
+        failures += 1
+    else:
+        print("    control (BEYOND-PIN, not re-verified) -> expiry rule rejects")
+    reverified = probe_body + "\n**Re-verified after pin advance:** 2026-07-31 — probe\n"
+    if not PIN_REVERIFIED.search(reverified):
+        print("  CONTROL FAILED — a correctly re-verified row was NOT recognised; the "
+              "expiry rule rejects everything and no row can ever satisfy it.",
+              file=sys.stderr)
+        failures += 1
+    else:
+        print("    control (same row re-verified) -> accepted")
 
     if failures:
         print(f"\nG-P2 SELF-TEST: RED — {failures} arm(s) do not bind.", file=sys.stderr)
