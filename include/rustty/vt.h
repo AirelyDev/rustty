@@ -139,8 +139,8 @@ extern "C" {
 #include <rustty/vt/allocator.h>
 #include <rustty/vt/build_info.h>
 #include <rustty/vt/color.h>
-#include <rustty/vt/device.h>
 #include <rustty/vt/color_scheme.h>
+#include <rustty/vt/device.h>
 #include <rustty/vt/focus.h>
 #include <rustty/vt/formatter.h>
 #include <rustty/vt/render.h>

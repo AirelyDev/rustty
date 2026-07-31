@@ -5,7 +5,22 @@ set -e
 root=$(cd "$(dirname "$0")/../../.." && pwd); cd "$root"
 lib=target/release/librustty_vt_c.dylib
 [ -f "$lib" ] || cargo build -p rustty-vt-c --release >/dev/null 2>&1
-[ -f target/wasm32-unknown-unknown/release/rustty_vt_c.wasm ] || cargo build -p rustty-vt-c --target wasm32-unknown-unknown --release >/dev/null 2>&1
+# P3-W6 T1: this build is UNCONDITIONAL, and the failure is not swallowed.
+#
+# It used to be `[ -f …rustty_vt_c.wasm ] || cargo build …>/dev/null 2>&1`, which
+# made the whole wasm arm VACUOUS for anyone with a warm target/: the 32-bit
+# build had been a hard compile error since main @ 9d8fafb (two `const _`
+# layout asserts written as literal `== 16` / `== 8`, false where `usize` is 4
+# bytes), and A5 still reported GREEN because the stale `.wasm` satisfied the
+# `-f` test. In a clean tree the gate instead died with exit 101 before printing
+# its first line — a build failure wearing a gate failure's clothes. Both halves
+# of that are fixed here: always build, and say so when it breaks.
+if ! cargo build -p rustty-vt-c --target wasm32-unknown-unknown --release >/dev/null 2>&1; then
+  echo "A5: FAIL — \`cargo build -p rustty-vt-c --target wasm32-unknown-unknown --release\` does not build." >&2
+  echo "A5: arm (b) reads the export list out of that .wasm; without it this gate is vacuous." >&2
+  cargo build -p rustty-vt-c --target wasm32-unknown-unknown --release 2>&1 | tail -40 >&2
+  exit 1
+fi
 CC="$(xcrun --find clang 2>/dev/null || echo /usr/bin/clang)"
 CXX="$(xcrun --find clang++ 2>/dev/null || echo /usr/bin/clang++)"
 T="${TMPDIR:-/tmp}"

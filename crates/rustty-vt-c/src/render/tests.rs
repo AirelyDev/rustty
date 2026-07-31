@@ -883,8 +883,151 @@ fn render_row_cells_get_has_styling() {
 }
 
 // test "render: row cells get graphemes utf8"
+//
+// PORT NOTE (oracle aea63d71f): the overflow the oracle commit fixes is
+// structurally N/A in Rust — `render.rs`'s `let mut needed = cp0.len_utf8();`
+// is already `usize`, where Zig's `utf8CodepointSequenceLength` returns a `u3`
+// that the oracle accumulated into. The commit's TEST TABLE is not N/A, and it
+// is what pins the behaviour: the three cases below make `needed` exceed 7 (the
+// 8-byte flag cluster) and 15 (the 18-byte family cluster), so a `u3`/`u4`-width
+// accumulator would report a wrong probe size here.
 #[test]
 fn render_row_cells_get_graphemes_utf8() {
+    // const cases = [_]struct { terminal_input: []const u8, expected: []const u8 }{ ... };
+    struct Case {
+        terminal_input: &'static [u8],
+        expected: &'static [u8],
+    }
+    let cases = [
+        // .{ .terminal_input = "e\u{301}", .expected = "e\u{301}" },
+        Case {
+            terminal_input: "e\u{301}".as_bytes(),
+            expected: "e\u{301}".as_bytes(),
+        },
+        // .{ .terminal_input = "\x1b[?2027h\u{1F1FA}\u{1F1F8}", .expected = "\u{1F1FA}\u{1F1F8}" },
+        Case {
+            terminal_input: "\x1b[?2027h\u{1F1FA}\u{1F1F8}".as_bytes(),
+            expected: "\u{1F1FA}\u{1F1F8}".as_bytes(),
+        },
+        // .{ .terminal_input = "\x1b[?2027h\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", .expected = ... },
+        Case {
+            terminal_input: "\x1b[?2027h\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}".as_bytes(),
+            expected: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}".as_bytes(),
+        },
+    ];
+
+    // for (cases) |case| { ... }
+    for case in cases {
+        with_test_allocator(|alloc| {
+            with_terminal_state(
+                alloc,
+                10,
+                3,
+                |terminal_new_result, terminal, state_new_result, state| {
+                    assert_eq!(Result::Success, terminal_new_result);
+                    assert_eq!(Result::Success, state_new_result);
+
+                    // terminal_c.vt_write(terminal, case.terminal_input.ptr, case.terminal_input.len);
+                    unsafe {
+                        terminal_c::vt_write(
+                            terminal,
+                            case.terminal_input.as_ptr(),
+                            case.terminal_input.len(),
+                        )
+                    };
+
+                    // try testing.expectEqual(Result.success, update(state, terminal));
+                    assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+                    let mut it: RowIterator = std::ptr::null_mut();
+                    assert_eq!(Result::Success, unsafe {
+                        row_iterator_new(Some(alloc), &mut it)
+                    });
+                    let mut cells: RowCells = std::ptr::null_mut();
+                    assert_eq!(Result::Success, unsafe {
+                        row_cells_new(Some(alloc), &mut cells)
+                    });
+
+                    assert_eq!(Result::Success, unsafe {
+                        get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    });
+                    assert!(unsafe { row_iterator_next(it) });
+                    assert_eq!(Result::Success, unsafe {
+                        row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    });
+
+                    // try testing.expectEqual(Result.success, row_cells_select(cells, 0));
+                    assert_eq!(Result::Success, unsafe { row_cells_select(cells, 0) });
+
+                    // var text: lib.Buffer = .{};
+                    // try testing.expectEqual(Result.out_of_space, row_cells_get(...));
+                    // try testing.expectEqual(case.expected.len, text.len);
+                    let mut text: Buffer = Buffer::default();
+                    assert_eq!(Result::OutOfSpace, unsafe {
+                        row_cells_get(
+                            cells,
+                            RowCellsData::GraphemesUtf8,
+                            &mut text as *mut _ as *mut c_void,
+                        )
+                    });
+                    assert_eq!(case.expected.len(), text.len);
+
+                    // var small = [_]u8{'x'} ** 32;
+                    // const small_cap = case.expected.len - 1;
+                    // text = .{ .ptr = small[0..small_cap].ptr, .cap = small_cap };
+                    //
+                    // NEGATIVE CONTROL (P3-W6 T1 Step 6): `cap == needed - 1` must
+                    // return out_of_space and write NOTHING. A test that only
+                    // asserted `text.len == expected.len` here would pass against an
+                    // implementation that partially filled the buffer first, which is
+                    // exactly the class of bug the oracle's u3 overflow produced. The
+                    // whole 32-byte array is compared, not just the first `small_cap`
+                    // bytes, so an overrun past `cap` is caught too.
+                    let mut small = [b'x'; 32];
+                    let small_cap = case.expected.len() - 1;
+                    text = Buffer {
+                        ptr: small.as_mut_ptr(),
+                        cap: small_cap,
+                        len: 0,
+                    };
+                    assert_eq!(Result::OutOfSpace, unsafe {
+                        row_cells_get(
+                            cells,
+                            RowCellsData::GraphemesUtf8,
+                            &mut text as *mut _ as *mut c_void,
+                        )
+                    });
+                    assert_eq!(case.expected.len(), text.len);
+                    // try testing.expectEqualSlices(u8, &([_]u8{'x'} ** 32), &small);
+                    assert_eq!([b'x'; 32], small);
+
+                    // var buf: [32]u8 = undefined;
+                    // text = .{ .ptr = &buf, .cap = case.expected.len };
+                    // -> the EXACT-SIZE success case.
+                    let mut buf = [0u8; 32];
+                    text = Buffer {
+                        ptr: buf.as_mut_ptr(),
+                        cap: case.expected.len(),
+                        len: 0,
+                    };
+                    assert_eq!(Result::Success, unsafe {
+                        row_cells_get(
+                            cells,
+                            RowCellsData::GraphemesUtf8,
+                            &mut text as *mut _ as *mut c_void,
+                        )
+                    });
+                    assert_eq!(case.expected.len(), text.len);
+                    // try testing.expectEqualStrings(case.expected, buf[0..text.len]);
+                    assert_eq!(case.expected, &buf[0..text.len]);
+
+                    unsafe { row_cells_free(cells) };
+                    unsafe { row_iterator_free(it) };
+                },
+            );
+        });
+    }
+
     with_test_allocator(|alloc| {
         with_terminal_state(
             alloc,
@@ -918,61 +1061,12 @@ fn render_row_cells_get_graphemes_utf8() {
                     row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
                 });
 
-                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 0) });
-
-                // var text: lib.Buffer = .{};
-                let mut text: Buffer = Buffer::default();
-                // try testing.expectEqual(Result.out_of_space, row_cells_get(cells, .graphemes_utf8, @ptrCast(&text)));
-                assert_eq!(Result::OutOfSpace, unsafe {
-                    row_cells_get(
-                        cells,
-                        RowCellsData::GraphemesUtf8,
-                        &mut text as *mut _ as *mut c_void,
-                    )
-                });
-                // try testing.expectEqual(@as(usize, input.len), text.len);
-                assert_eq!(input.len(), text.len);
-
-                // var small = [_]u8{ 'x', 'x' };
-                let mut small = [b'x', b'x'];
-                // text = .{ .ptr = &small, .cap = small.len };
-                text = Buffer {
-                    ptr: small.as_mut_ptr(),
-                    cap: small.len(),
-                    len: 0,
-                };
-                assert_eq!(Result::OutOfSpace, unsafe {
-                    row_cells_get(
-                        cells,
-                        RowCellsData::GraphemesUtf8,
-                        &mut text as *mut _ as *mut c_void,
-                    )
-                });
-                assert_eq!(input.len(), text.len);
-                // try testing.expectEqualSlices(u8, &.{ 'x', 'x' }, &small);
-                assert_eq!([b'x', b'x'], small);
-
-                // var buf: [8]u8 = undefined;
-                let mut buf = [0u8; 8];
-                // text = .{ .ptr = &buf, .cap = buf.len };
-                text = Buffer {
-                    ptr: buf.as_mut_ptr(),
-                    cap: buf.len(),
-                    len: 0,
-                };
-                assert_eq!(Result::Success, unsafe {
-                    row_cells_get(
-                        cells,
-                        RowCellsData::GraphemesUtf8,
-                        &mut text as *mut _ as *mut c_void,
-                    )
-                });
-                assert_eq!(input.len(), text.len);
-                // try testing.expectEqualStrings(input, buf[0..text.len]);
-                assert_eq!(input, &buf[0..text.len]);
-
+                // try testing.expectEqual(Result.success, row_cells_select(cells, 1));
                 assert_eq!(Result::Success, unsafe { row_cells_select(cells, 1) });
-                text = Buffer {
+                // var buf: [8]u8 = undefined;
+                // var text: lib.Buffer = .{ .ptr = &buf, .cap = buf.len };
+                let mut buf = [0u8; 8];
+                let mut text = Buffer {
                     ptr: buf.as_mut_ptr(),
                     cap: buf.len(),
                     len: 0,

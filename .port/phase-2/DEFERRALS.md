@@ -6518,6 +6518,37 @@ perf-baseline measurement hazard), `os/hostname.zig`'s `isValid` deletion
 rebase). Plus two upstream BUGS that must not be reproduced: the `os/main.zig`
 doc typo (`E28`) and `pty.zig`'s `@tagName(posix.errno(-1))` (`E32`).
 
+## `include/rustty/vt.h` — three doc-only lines rustty keeps that upstream does not have [P3-W6 T1, 2026-07-30]
+
+**What diverges.** `include/rustty/vt.h`'s Doxygen preamble carries three things
+the oracle's `include/ghostty/vt.h` does not:
+
+1. the `@ref color_scheme "Color Scheme Report Encoding"` module bullet (`:39`);
+2. the `@example c-vt-color-scheme/src/main.c` block (`:125-128`);
+3. the identity URL, `[Rustty](https://rustty.sh)` where the oracle has
+   `[Ghostty](https://ghostty.org)` (`:18`).
+
+**Why fidelity is overruled.** (1) and (2) are *strictly better Doxygen* against
+the same C surface: rustty ships `c-vt-color-scheme` as a real example under the
+`build.sh` convention, and upstream simply never added the `@ref`/`@example`
+lines when `f00e90694` landed `color_scheme.h`. Deleting them to match would
+delete accurate documentation of code that exists on both sides. (3) is the R2
+rebrand, which is program-wide policy, not a decision taken here.
+
+**How it is bounded.** The `#include` ORDER is now identical to upstream —
+`color_scheme.h` before `device.h`, matching `f00e90694` (rustty previously had
+the two reversed; that WAS an accident and is fixed in this task). So the only
+remaining delta in this file is the three doc lines above. The identity URL is
+now DATA, not a literal: `PORT_URL` / `ORACLE_URL` in
+[`.port/tools/parity_names.env`](../tools/parity_names.env), so a future
+mechanical header-diff gate sources the pair instead of hard-coding either.
+
+**Why record it at all.** A mechanical `vt.h` header-diff is a plausible future
+gate. Without this entry it would report three lines every run, and the standard
+response to a permanently-noisy gate is to weaken it (R5 violation). Recording
+them here means such a gate can subtract exactly these three and stay strict
+about everything else.
+
 ## ~~libxev `iocp` (Windows) + `wasi_poll` (WASI/wasm) backends — OUT OF SCOPE BY PLATFORM~~ — **RETRACTED. THE BACKENDS ARE PORTED.**
 
 **[RETRACTED AND REPLACED — WS20, 2026-07-30.]** The entry that stood here was
