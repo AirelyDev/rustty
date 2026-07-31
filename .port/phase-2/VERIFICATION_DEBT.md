@@ -1424,3 +1424,68 @@ output AND against the other's, and say which).
 **Not a deferral.** The implementation is complete and behaviourally tested (see
 the two commits above). Only the oracle-anchored NUMBER is outstanding, and only
 because of the toolchain gap V15 describes.
+
+---
+
+## V19. macOS 27 AppKit workarounds + the synchronous-`deinit` free assertion — **OWNER: `P3-W8 T2`** [2026-07-30]
+
+Four items from `P3-W8 T2` are **ported and compiling, but NOT verified**. They are
+listed here rather than being claimed green.
+
+### V19a. macOS-27-only view-hierarchy / pointer-style workarounds — "ported, unverified on macOS 27"
+
+| Oracle | rustty site | What it does |
+|---|---|---|
+| `2104e0749` | `macos/Sources/Features/Terminal/Window Styles/HiddenTitlebarTerminalWindow.swift` `reapplyHiddenStyle()` | `if #available(macOS 27, *)` hide the `NSScrollPocket` descendant of the theme frame |
+| `632aa6756` | `macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift` | accept `NSTitlebarAccessoryContainerView` as well as `…ClipView` when finding the clip view |
+| `fa3802a70` | `macos/Sources/Helpers/Backport.swift` `BackportPointerStyle.official` | `frameResize(position:directions:)` → `columnResize(directions:)` / `rowResize(directions:)` |
+
+This host is **macOS 26.5 (Darwin 25.5.0, Xcode 26.5)**. `2104e0749` and `632aa6756`
+are guarded by / only reachable on macOS 27 view hierarchies, and `fa3802a70` is a
+purely visual cursor change. `xcodebuild test` compiles all three and is green, which
+proves **compilation and availability-annotation correctness only** — it proves nothing
+about the behaviour.
+
+**Recipe (needs a macOS 27 beta host or VM):**
+
+1. `bash macos/build-rustty.sh`, launch `Rustty.app`.
+2. `2104e0749`: set `macos-titlebar-style = hidden`, open a window, screenshot. The
+   terminal content must reach the top of the window with no translucent "pocket"
+   strip overlaying it (ghostty issue #13390).
+3. `632aa6756`: set `macos-titlebar-style = tabs`, open ≥2 tabs, screenshot. The tab
+   bar must be vertically centred in the titlebar and not stretched — on macOS 27
+   beta 2 without this change `firstSuperview(withClassName:)` returns nil and the
+   whole layout pass early-returns.
+4. `fa3802a70`: hover a split divider; the pointer must be the HIG column/row-resize
+   cursor (double-headed bar), not the frame-resize cursor.
+
+### V19b. `a6edca2d7` synchronous surface free on the main thread — no counting double
+
+**Ported:** `macos/Sources/RusttyKit/Rustty.Surface.swift` `deinit` now has the
+`guard !Thread.isMainThread else { rustty_surface_free(surface); return }` fast path.
+
+**Not verified, and deliberately NOT faked.** The plan asked for "a test double
+counting `rustty_surface_free` calls, asserting the free happens before `deinit`
+returns". There is no non-divergent way to do that from `RusttyTests`:
+
+* `rustty_surface_free` is a C symbol in `rustty.debug.dylib`; Swift cannot interpose
+  it without `DYLD_INSERT_LIBRARIES` and a purpose-built shim dylib.
+* `crates/rustty-apprt-c/src/lib.rs:1178` dereferences `(*ptr).app` immediately, so a
+  synthetic/`nil` `rustty_surface_t` cannot be passed — the double must be a *real*
+  surface.
+* Injecting a `freeHook` closure into `deinit` would be an R1 divergence in the
+  production teardown path, invented purely for the test.
+
+**A mirror class in the test file that reproduces the `deinit` shape would be a
+VACUOUS control** — it would pass whether or not `Rustty.Surface.deinit` is correct —
+so none was written. Recorded here instead.
+
+**Recipe (runnable, ~half a day):** `crates/rustty-apprt-c/tests/macos_window_host.rs`
+already stands up a real `rustty_app_t` + `rustty_surface_t` headlessly from Rust.
+Port that bring-up into a Swift test helper in `macos/Tests/`, wrap the resulting
+`rustty_surface_t` in `Rustty.Surface`, drop the last reference **on the main thread**
+inside an `autoreleasepool`, and assert — immediately after the pool exits, with no
+run-loop turn — that the app's surface registry no longer contains the pointer
+(`rustty_app_surface_count` or equivalent). Under the pre-`a6edca2d7` detached-`Task`
+path that assertion fails, because the free is still queued.
+

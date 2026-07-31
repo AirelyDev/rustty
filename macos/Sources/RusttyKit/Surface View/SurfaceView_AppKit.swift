@@ -292,7 +292,13 @@ extension Rustty {
             // A drag can emit multiple selection changes. Debounce so screen
             // readers hear one announcement once the selection settles.
             accessibilitySelectionCancellable = NotificationCenter.default
-                .publisher(for: .rusttySelectionDidChange, object: self)
+                // The publisher retains its object, so filtering with a weak capture
+                // avoids a cycle between self and the stored cancellable.
+                .publisher(for: .rusttySelectionDidChange)
+                .filter { [weak self] notification in
+                    guard let self else { return false }
+                    return notification.object as AnyObject? === self
+                }
                 .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
                 .sink { [weak self] _ in
                     guard let self else { return }
@@ -2036,6 +2042,8 @@ extension Rustty.SurfaceView: NSTextInputClient {
             return
         }
 
+        let hadMarkedText = hasMarkedText()
+
         // If insertText is called, our preedit must be over.
         unmarkText()
 
@@ -2044,6 +2052,13 @@ extension Rustty.SurfaceView: NSTextInputClient {
         if var acc = keyTextAccumulator {
             acc.append(chars)
             keyTextAccumulator = acc
+            return
+        }
+
+        if hadMarkedText, !chars.isEmpty {
+            // Send preedit commits as key events instead of raw text for
+            // keybind interpretation by programs.
+            _ = committedPreeditTextAction(RUSTTY_ACTION_PRESS, text: chars)
             return
         }
 
