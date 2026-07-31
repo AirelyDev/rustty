@@ -564,6 +564,7 @@ pub struct Transmission {
     pub placement_id: u32,        // p
     pub compression: Compression, // o
     pub more_chunks: bool,        // m
+    pub usage: Usage,             // N
 }
 
 impl Default for Transmission {
@@ -580,7 +581,46 @@ impl Default for Transmission {
             placement_id: 0,                // p
             compression: Compression::None, // o
             more_chunks: false,             // m
+            usage: Usage::DEFAULT,          // N
         }
+    }
+}
+
+/// Usage hints allow for optimising resource consumption strategies.
+///
+/// https://sw.kovidgoyal.net/kitty/graphics-protocol/#usage-hints
+//
+// PORT NOTE (oracle `a65e11cc9`): the reference is
+// `packed struct(u32) { transient: bool = false, _padding: u31 = 0 }`, and it
+// IS bit-cast (`result.usage = @bitCast(v)` over the raw `N` value), so the
+// layout is observable — unlike `graphics_image.Limits`, which is only ever
+// read field-wise. Rust has no `u31`, so the padding is dropped and the
+// bit-cast is spelled out in [`Usage::from_bits`]/[`Usage::to_bits`]: Zig lays
+// a `packed struct` out least-significant-field-first, so `transient` is bit 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Usage {
+    /// Image with this usage hint is assumed to be used for only a short
+    /// time, so may be evicted before other images if memory pressure is
+    /// encountered.
+    pub transient: bool,
+}
+
+impl Usage {
+    // pub const default: Usage = .{};
+    pub const DEFAULT: Usage = Usage { transient: false };
+
+    /// `@bitCast(v)` where `v` is the `u32` value of the `N` key.
+    pub fn from_bits(v: u32) -> Usage {
+        Usage {
+            transient: (v & 0b1) != 0,
+        }
+    }
+
+    /// The inverse of [`Usage::from_bits`]. Not used by the reference (which
+    /// bit-casts in one direction only), but required to keep the two halves
+    /// of the projection provably consistent — see the round-trip KAT.
+    pub fn to_bits(self) -> u32 {
+        u32::from(self.transient)
     }
 }
 
@@ -749,6 +789,13 @@ impl Transmission {
             if let Some(v) = kv.get(&b'm') {
                 result.more_chunks = *v > 0;
             }
+        }
+
+        // if (kv.get('N')) |v| {
+        //     result.usage = @bitCast(v);
+        // }
+        if let Some(v) = kv.get(&b'N') {
+            result.usage = Usage::from_bits(*v);
         }
 
         Ok(result)
@@ -1330,6 +1377,61 @@ mod tests {
         assert_eq!(Format::Rgb, v.format);
         assert_eq!(10u32, v.width);
         assert_eq!(20u32, v.height);
+        assert!(!v.usage.transient);
+    }
+
+    // test "transmission command with transient hint"
+    #[test]
+    fn transmission_command_with_transient_hint() {
+        let mut p = Parser::init(1024 * 1024);
+
+        let input = b"f=24,s=10,v=20,N=1";
+        for c in input.iter() {
+            p.feed(*c).unwrap();
+        }
+        let command = p.complete().unwrap();
+
+        assert!(matches!(command.control, Control::Transmit(_)));
+        let v = match command.control {
+            Control::Transmit(v) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(Format::Rgb, v.format);
+        assert_eq!(10u32, v.width);
+        assert_eq!(20u32, v.height);
+        assert!(v.usage.transient);
+    }
+
+    /// NEGATIVE CONTROL (rustty-only, `P3-W11 T2`): the reference bit-casts a
+    /// raw `u32` into `Usage`, so the BIT POSITION of `transient` is part of
+    /// the wire format. Upstream's single `N=1` case cannot distinguish bit 0
+    /// from "any non-zero value sets it". These cases can.
+    #[test]
+    fn transmission_usage_transient_is_bit_zero() {
+        fn usage_of(input: &[u8]) -> Usage {
+            let mut p = Parser::init(1024 * 1024);
+            for c in input.iter() {
+                p.feed(*c).unwrap();
+            }
+            match p.complete().unwrap().control {
+                Control::Transmit(v) => v.usage,
+                _ => unreachable!(),
+            }
+        }
+
+        // Bit 0 clear: not transient, even though the value is non-zero.
+        assert!(!usage_of(b"f=24,s=10,v=20,N=2").transient);
+        assert!(!usage_of(b"f=24,s=10,v=20,N=4").transient);
+        assert!(!usage_of(b"f=24,s=10,v=20,N=0").transient);
+        // Bit 0 set.
+        assert!(usage_of(b"f=24,s=10,v=20,N=1").transient);
+        assert!(usage_of(b"f=24,s=10,v=20,N=3").transient);
+
+        // The `from_bits`/`to_bits` projection round-trips.
+        assert_eq!(0u32, Usage::from_bits(0).to_bits());
+        assert_eq!(1u32, Usage::from_bits(1).to_bits());
+        assert_eq!(1u32, Usage::from_bits(0xffff_ffff).to_bits());
+        assert_eq!(Usage::DEFAULT, Usage::from_bits(0));
     }
 
     // test "feedSlice matches per-byte feed"

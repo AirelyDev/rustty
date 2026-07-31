@@ -196,6 +196,7 @@ impl LoadingImage {
                 height: t.height,
                 compression: t.compression,
                 format: t.format,
+                usage: t.usage,
                 ..Image::default()
             },
 
@@ -817,6 +818,9 @@ pub struct Image {
     pub format: command::Format,
     pub compression: command::Compression,
     pub data: Vec<u8>,
+    /// Usage hints transmitted with the image (oracle `a65e11cc9`); see
+    /// `command::Usage`. `transient` prioritises this image for eviction.
+    pub usage: command::Usage,
     /// Unique, monotonically increasing stamp assigned each time an image is
     /// added to (or replaced in) an `ImageStorage`. A changed generation for a
     /// given image ID means the image contents may have changed, even if the
@@ -843,6 +847,7 @@ impl Default for Image {
             format: command::Format::Rgb,
             compression: command::Compression::None,
             data: Vec::new(),
+            usage: command::Usage::DEFAULT,
             generation: 0,
             implicit_id: false,
         }

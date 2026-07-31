@@ -789,8 +789,8 @@ impl ImageStorage {
     }
 
     /// Evict image to make space. This will evict the oldest image,
-    /// prioritizing unused images first, as recommended by the published
-    /// Kitty spec.
+    /// prioritizing transient images and unused images as recommended by the
+    /// published Kitty spec.
     ///
     /// This will evict as many images as necessary to make space for
     /// req bytes.
@@ -805,7 +805,7 @@ impl ImageStorage {
 
         // var candidates: std.ArrayList(Candidate) = .empty;
         // defer candidates.deinit(alloc);
-        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut candidates: Vec<Candidate> = Vec::with_capacity(self.images.len());
 
         // var it = self.images.iterator();
         // while (it.next()) |kv| { ... }
@@ -825,11 +825,25 @@ impl ImageStorage {
                 used
             };
 
-            // try candidates.append(alloc, .{ ... });
+            // const transient = img.usage.transient;
+            let transient = img.usage.transient;
+
+            // candidates[i] = .{ ... };
+            //
+            // PORT NOTE (oracle `a65e11cc9`): the reference swapped the
+            // `ArrayList` for a single `alloc.alloc(Candidate, count)` +
+            // indexed writes, purely to cut allocation count. rustty's `Vec`
+            // is pre-sized with `with_capacity(self.images.len())` below, which
+            // is the same one-allocation shape without an unsafe uninit slice.
             candidates.push(Candidate {
                 id: img.id,
                 generation: img.generation,
-                used,
+                // Map images into four distinct blocks:
+                // 0: transient, unused
+                // 1: not transient, unused
+                // 2: transient, used
+                // 3: not transient, used
+                block: (if transient { 0u8 } else { 1u8 }) + (if used { 2u8 } else { 0u8 }),
             });
         }
 
@@ -839,23 +853,23 @@ impl ImageStorage {
             // PORT NOTE: the reference `lessThan` returns `bool`; we port it to a
             // total `Ordering` comparator. `lessThan(lhs, rhs)` true ⇒ `Less`.
 
-            // If their usage matches, then it's based on the generation stamp,
-            // which orders by transmit time. (Stamps are unique but tie-break by
-            // ID anyway to stay deterministic for hand-built test images.)
-            if lhs.used == rhs.used {
-                return if lhs.generation == rhs.generation {
-                    lhs.id.cmp(&rhs.id)
-                } else {
-                    lhs.generation.cmp(&rhs.generation)
-                };
+            // If images mapped into different blocks, prioritize lower
+            // numbered blocks.
+            // if (lhs.block < rhs.block) return true;
+            // if (lhs.block > rhs.block) return false;
+            if lhs.block != rhs.block {
+                return lhs.block.cmp(&rhs.block);
             }
 
-            // If not used, then its a better candidate
-            // return !lhs.used;  (true ⇒ Less)
-            if !lhs.used {
-                std::cmp::Ordering::Less
+            // If images mapped to the same block, compare generations.
+            if lhs.generation == rhs.generation {
+                // If the generation is the same, use the ID to prioritize
+                // evicting "earlier" images.
+                lhs.id.cmp(&rhs.id)
             } else {
-                std::cmp::Ordering::Greater
+                // If the generation is different, prioritize evicting images
+                // from earlier generations.
+                lhs.generation.cmp(&rhs.generation)
             }
         });
 
@@ -923,7 +937,17 @@ pub struct OutOfMemory;
 struct Candidate {
     id: u32,
     generation: u64,
-    used: bool,
+    // Map images into four distinct blocks:
+    // 0: transient, unused
+    // 1: not transient, unused
+    // 2: transient, used
+    // 3: not transient, used
+    //
+    // PORT NOTE (oracle `a65e11cc9`): the reference field is `block: u2`. Rust
+    // has no `u2`; `u8` is the narrowest carrier. The value is only ever
+    // compared, never bit-packed, so the widening is unobservable — and the
+    // construction below can only produce 0..=3.
+    block: u8,
 }
 
 /// Every placement is uniquely identified by the image ID and the
@@ -2894,6 +2918,142 @@ mod tests {
         );
         assert!(s.dirty);
         assert!(s.generation > gen);
+
+        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        t.deinit(alloc);
+    }
+
+    // test "storage: evict unused transient image"  (oracle a65e11cc9)
+    #[test]
+    fn storage_evict_unused_transient_image() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage {
+            total_limit: 192,
+            ..ImageStorage::default()
+        };
+
+        s.add_image(
+            alloc,
+            Image {
+                id: 1,
+                data: vec![b'*'; 64],
+                usage: command::Usage { transient: false },
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            Image {
+                id: 2,
+                data: vec![b'*'; 64],
+                usage: command::Usage { transient: true },
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            Image {
+                id: 3,
+                data: vec![b'*'; 64],
+                usage: command::Usage { transient: true },
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let pin = track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap();
+        s.add_placement(alloc, 2, 1, Placement::with_location(Location::Pin(pin)))
+            .unwrap();
+
+        let gen = s.generation;
+        let result = s.evict_image(alloc, 32).unwrap();
+        assert!(s.dirty);
+        assert!(s.generation > gen);
+        assert!(result);
+        assert_eq!(2, s.images.len());
+        assert!(s.images.contains_key(&1));
+        assert!(s.images.contains_key(&2));
+        assert!(!s.images.contains_key(&3));
+
+        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        t.deinit(alloc);
+    }
+
+    /// NEGATIVE CONTROL for `a65e11cc9`'s re-keyed eviction order — the test
+    /// UPSTREAM DOES NOT HAVE (`P3-W6 T5` Step 2 / area D §6).
+    ///
+    /// Upstream's only new test evicts one image and can be satisfied without
+    /// the `used` term ever being consulted. This one pins the FULL block
+    /// ordering by evicting every image one at a time and recording the order:
+    ///
+    ///   block 0: transient + unused   (evicted first)
+    ///   block 1: not transient + unused
+    ///   block 2: transient + used
+    ///   block 3: not transient + used (evicted last)
+    ///
+    /// Without it, `block` could be computed and never consulted — or consulted
+    /// with the two terms swapped — and every other test would still pass.
+    #[test]
+    fn storage_eviction_order_is_transient_then_unused() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        // Four images, one per block. IDs are assigned so that ID order is the
+        // REVERSE of the expected eviction order: if `block` were ignored the
+        // tie-break (generation, then id) would produce 1,2,3,4 and the
+        // assertion below would fail.
+        //
+        //   id 1: not transient, used   -> block 3
+        //   id 2: transient,     used   -> block 2
+        //   id 3: not transient, unused -> block 1
+        //   id 4: transient,     unused -> block 0
+        let mut s: ImageStorage = ImageStorage {
+            total_limit: 4 * 64,
+            ..ImageStorage::default()
+        };
+        for (id, transient) in [(1u32, false), (2, true), (3, false), (4, true)] {
+            s.add_image(
+                alloc,
+                Image {
+                    id,
+                    data: vec![b'*'; 64],
+                    usage: command::Usage { transient },
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        }
+        // Only 1 and 2 are "used" (have a placement).
+        for (i, id) in [1u32, 2].iter().enumerate() {
+            let pin = track_pin(&mut t, point::Coordinate { x: 1, y: i as u32 }).unwrap();
+            s.add_placement(alloc, *id, 1, Placement::with_location(Location::Pin(pin)))
+                .unwrap();
+        }
+
+        // Evict one image at a time and record which one went.
+        let mut order: Vec<u32> = Vec::new();
+        for _ in 0..4 {
+            let before: std::collections::BTreeSet<u32> = s.images.keys().copied().collect();
+            assert!(s.evict_image(alloc, 1).unwrap());
+            let after: std::collections::BTreeSet<u32> = s.images.keys().copied().collect();
+            let gone: Vec<u32> = before.difference(&after).copied().collect();
+            assert_eq!(
+                1,
+                gone.len(),
+                "exactly one image should be evicted per call"
+            );
+            order.push(gone[0]);
+        }
+
+        assert_eq!(
+            vec![4u32, 3, 2, 1],
+            order,
+            "eviction must go transient+unused, not-transient+unused, \
+             transient+used, not-transient+used"
+        );
 
         s.deinit(alloc, unsafe { &mut *t.screens.active });
         t.deinit(alloc);
