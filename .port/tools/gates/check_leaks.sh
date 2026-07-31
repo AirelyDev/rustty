@@ -70,6 +70,44 @@ live_ffi_tests() {
   esac
 }
 
+# G6-ASAN COMPANION for live-syscall UNIT tests (miri-reaudit, 2026-07-31).
+#
+# live_ffi_tests() above routes whole integration-test BINARIES. rustty-xev's
+# live-syscall tests are not binaries — they are in-lib unit tests, annotated at
+# source `#[cfg_attr(miri, ignore = "MIRI EXCEPTION (rustty-xev C3…C7) … runs
+# natively + ASan (sanitizers.sh)")]` because Miri hard-errors on them ("can't
+# call foreign function `kqueue` on OS `macos`" — re-verified 2026-07-31, 2s).
+#
+# THE EXCEPTION IS LEGITIMATE; ITS COMPENSATING CONTROL WAS NOT RUNNING. The
+# native half is real (ci.sh HARD step `cargo test --workspace`). The ASan half
+# named `sanitizers.sh` — a MANUAL single-crate harness that no gate and no CI
+# workflow ever invoked (grep: ci.sh registers only check_sanitizer_canary.sh,
+# which proves ASan can SEE a canary heap, not that these tests ever ran under
+# it). So ~30 exceptions rested on a control nobody ran. This arm runs it.
+#
+# WHY IT IS FILTERED, and what that hides: a crate-wide ASan run of rustty-xev
+# CRASHES — `AddressSanitizer: BUS … ___chkstk_darwin` inside `pthread_create`
+# from `ThreadPool::notify_slow` (thread_pool.rs:297), because the thread-pool
+# tests construct a config with `stack_size: 0` (faithful to the reference;
+# clamped by std to PTHREAD_STACK_MIN), and a 16 KB stack does not fit ASan's
+# instrumented frames. That is an ASan/tiny-stack artifact in a test that Miri
+# already covers, NOT one of the excepted tests — but it is why this arm names
+# the excepted families instead of the whole crate. Widening it is an open item
+# (MIRI_EXCEPTIONS.md, "the 2026-07-31 re-audit").
+live_ffi_unit_filters() {
+  case "$1" in
+    rustty-xev) echo "kqueue:: timer:: stream:: process:: async_watcher::";;
+    *) echo "";;
+  esac
+}
+# FLOOR, DERIVED FROM THE SOURCE — never hand-listed. It is the number of
+# `MIRI EXCEPTION (rustty-xev …)` annotations in the crate, so adding an
+# exception whose tests this arm does not reach makes the arm RED (too few ran)
+# instead of silently shrinking the covered set.
+live_ffi_unit_floor() {  # $1 = crate
+  grep -rho "MIRI EXCEPTION ($1" "crates/$1/src" 2>/dev/null | wc -l | tr -d ' '
+}
+
 # Unified done-detection (H5): defer to _gatelib's PORT_STATUS_RE + DONE_STATUSES
 # so G6 can never disagree with G1/G2/G3b about what "claimed done" means.
 crate_status_of() {  # $1 = crate directory (crates/... or crates-sys/...)
@@ -149,8 +187,28 @@ run_crate() {
   fi
   echo "=== G6 [$c] :: Miri (UB + leaks) ==="
   require_miri
-  cargo +nightly miri test -p "$c" 2>&1
-  return $?
+  local mrc=0
+  cargo +nightly miri test -p "$c" 2>&1 || mrc=1
+
+  # ASan companion for in-lib live-syscall unit tests (see live_ffi_unit_filters).
+  local ufilters floor sout uran
+  ufilters="$(live_ffi_unit_filters "$c")"
+  if [ -n "$ufilters" ]; then
+    floor="$(live_ffi_unit_floor "$c")"
+    echo "=== G6 [$c] :: ASan companion (the $floor live-syscall tests Miri cannot execute) ==="
+    sout="$(bash "$GATES_DIR/sanitizers.sh" "$c" "$ufilters" address 2>&1)"
+    printf '%s\n' "$sout" | sed 's/^/    /'
+    uran="$(printf '%s' "$sout" | sed -n 's/.*✅ address: \([0-9]*\) test(s) ran.*/\1/p')"
+    if printf '%s' "$sout" | grep -q 'SANITIZERS: PROBLEM'; then
+      echo "G6 RED [$c]: the ASan companion for the Miri-excepted live-syscall tests is not clean."
+      mrc=1
+    elif [ "${uran:-0}" -lt "${floor:-1}" ]; then
+      echo "G6 RED [$c]: ASan companion ran ${uran:-0} test(s), fewer than the $floor source"
+      echo "  \`MIRI EXCEPTION ($c …)\` annotations — an exception is escaping BOTH lanes."
+      mrc=1
+    fi
+  fi
+  return $mrc
 }
 
 # ---------------------------------------------------------------------------

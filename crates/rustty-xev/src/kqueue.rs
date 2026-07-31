@@ -2872,7 +2872,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_loop_time() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
@@ -2893,7 +2893,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_stop() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
@@ -2939,7 +2939,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_timer() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
@@ -3015,7 +3015,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_timer_reset() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
@@ -3062,7 +3062,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_timer_reset_before_tick() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
@@ -3105,7 +3105,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_timer_reset_after_trigger() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
@@ -3154,7 +3154,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_timer_cancellation() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
@@ -3225,7 +3225,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_canceling_a_completed_operation() {
         let mut loop_ = Loop::init(Options::default()).unwrap();
@@ -3296,7 +3296,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_socket_accept_connect_send_recv_close() {
         let _guard = SOCKET_TEST_LOCK.lock().unwrap();
@@ -3566,7 +3566,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_socket_accept_cancel_decrements_active() {
         let _guard = SOCKET_TEST_LOCK.lock().unwrap();
@@ -3735,7 +3735,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_file_io_on_thread_pool() {
         if !THREAD_POOL_BODY_PORTED {
@@ -3767,7 +3767,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kqueue_mach_port() {
         // if (builtin.os.tag != .macos) return error.SkipZigTest;

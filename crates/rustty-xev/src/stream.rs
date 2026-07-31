@@ -1050,7 +1050,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn pty_child_to_parent() {
         // switch (builtin.os.tag) { .linux, .macos => {}, else => return
@@ -1128,7 +1128,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn pty_parent_to_child() {
         // Create the pty parent/child side.
@@ -1202,7 +1202,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn pty_queued_writes() {
         // this test fails on x86_64 with a strange error but passes
@@ -1316,7 +1316,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kat4_pty_write_roundtrip() {
         let mut pty = Pty::init().unwrap();

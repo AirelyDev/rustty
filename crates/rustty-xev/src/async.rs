@@ -422,7 +422,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn async_() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn async_notify_first() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn async_batches_multiple_notifications() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kat1_async_wakeup_roundtrip() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();

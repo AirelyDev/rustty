@@ -40,7 +40,23 @@ run_san() {
   elif [ $rc -ne 0 ]; then
     echo "  ⚠️  $s: build/test failed rc=$rc — $(grep -m1 -iE 'error(\[|:)' "$log" | head -c 100)"; return 2
   fi
-  echo "  ✅ $s: $(grep 'test result' "$log" | tail -1)"; return 0
+  # NON-VACUITY + HONEST REPORTING (miri-reaudit, 2026-07-31). This line used to
+  # echo `grep 'test result' | tail -1`, which is the LAST summary in the log —
+  # i.e. the Doc-tests target, always "0 passed; 0 filtered out". So a run that
+  # really executed 31 tests reported "✅ address: test result: ok. 0 passed",
+  # and a filter that matched NOTHING reported exactly the same thing. The
+  # displayed evidence could not distinguish "ran and passed" from "ran nothing".
+  # Now: sum the `running N tests` headers across every target, RED on a total of
+  # 0 (a filter that matches nothing is a vacuous green, not a pass), and print
+  # every summary rather than the least informative one.
+  local ran
+  ran="$(awk '/^running [0-9]+ tests?$/ {s+=$2} END {print s+0}' "$log")"
+  if [ "$ran" -eq 0 ]; then
+    echo "  ❌ $s: VACUOUS — 0 tests ran (filter '${FILTER:-<none>}' matched nothing); a green over an empty set is not a pass"
+    return 1
+  fi
+  echo "  ✅ $s: $ran test(s) ran — $(grep 'test result' "$log" | tr '\n' ';' | sed 's/;$//')"
+  return 0
 }
 fail=0
 for s in $SANS; do run_san "$s" || fail=1; done

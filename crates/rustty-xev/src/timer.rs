@@ -320,7 +320,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn timer() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn timer_reset() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn timer_reset_before_tick() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn timer_reset_after_trigger() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn timer_cancel() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
@@ -607,7 +607,7 @@ mod kat {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
     fn kat2_timer_fires() {
         let mut loop_ = Loop::init(crate::Options::default()).unwrap();
