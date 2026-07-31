@@ -1199,11 +1199,21 @@ typedef enum RUSTTY_ENUM_TYPED {
    */
   RUSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE = 32,
 
-  /*
-   * NOTE: RUSTTY_TERMINAL_DATA_VT_PROCESSING_ERROR = 33 is not yet
-   * implemented; the discriminant is reserved so 34/35 keep upstream's
-   * numbering.
+  /**
+   * Whether VT processing encountered a non-gracefully handled error that may
+   * have prevented a terminal-owned semantic update.
+   *
+   * Processing remains best-effort, and rustty_terminal_reset() does not
+   * clear it. Gracefully handled protocol failures, configured limits,
+   * malformed or unsupported input, and failures limited to external effects
+   * or query responses do not set it.
+   *
+   * This can't currently be unset. This is purely informational to consumers
+   * if there was some error that happened at some point during VT processing.
+   *
+   * Output type: bool *
    */
+  RUSTTY_TERMINAL_DATA_VT_PROCESSING_ERROR = 33,
 
   /**
    * The configured maximum scrollback allocation in bytes.

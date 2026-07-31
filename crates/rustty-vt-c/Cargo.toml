@@ -41,3 +41,9 @@ rustty-unicode = { workspace = true }
 rustty-lib = { workspace = true }
 rustty-render-types = { workspace = true }
 allocator-api2 = { workspace = true }
+
+[dev-dependencies]
+# Test-only: the `rustty_util::tripwire` reset mode used by the
+# `get vt_processing_error` C-API test (rustty-vt's `set_string_tw_end`
+# accessor names it). rustty-util is a leaf below rustty-vt (R4 acyclic).
+rustty-util = { workspace = true }

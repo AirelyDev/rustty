@@ -97,6 +97,21 @@ pub struct Handler<'a> {
     // in the method bodies (vt-12b-7).
     pub terminal: *mut Terminal,
 
+    /// True after an error prevented a terminal-owned semantic update.
+    ///
+    /// When an error happens during terminal processing, streams continue
+    /// forward and remain best-effort. A terminal can't really stop in
+    /// the middle it must go on. But this is flagged to true to let
+    /// consumers know some sort of unhandle-able error state happened
+    /// (e.g. an allocation failure).
+    ///
+    /// Only non-handled outcomes set this. Gracefully handled outcomes
+    /// that don't meaningfully negatively impact the terminal state
+    /// such as hitting Kitty image limits, failure to write a response,
+    /// do not flag this.
+    // semantic_failure: bool = false,
+    pub semantic_failure: bool,
+
     /// Callbacks for certain effects that handlers may have. These
     /// may or may not fully replace internal handling of certain effects,
     /// but they allow for the handler to trigger or query external
@@ -213,6 +228,45 @@ impl<'a> Default for Effects<'a> {
     }
 }
 
+// PORT NOTE (P3-W4 T5): a fault-injection seam for `do_color_operation`. See
+// the PORT FINDING inside that function: rustty's response writer cannot fail,
+// so without this the "graceful arms do not set `semantic_failure`" control
+// would pass whether or not the re-partition was ported. Same
+// `#[cfg(test)] thread_local!` idiom as the crate's other tripwire modules.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ColorOperationFp {
+    Respond,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COLOR_OPERATION_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<ColorOperationFp, crate::pagelist::OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn color_operation_tw_check(point: ColorOperationFp) -> Result<(), crate::pagelist::OutOfMemory> {
+    COLOR_OPERATION_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+#[cfg(test)]
+pub(crate) fn color_operation_tw_error_always(point: ColorOperationFp) {
+    COLOR_OPERATION_TW.with(|tw| {
+        tw.borrow_mut()
+            .errorAlways(point, crate::pagelist::OutOfMemory)
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn color_operation_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    COLOR_OPERATION_TW.with(|tw| tw.borrow_mut().end(mode))
+}
+
 impl<'a> Handler<'a> {
     // pub fn init(terminal: *Terminal) Handler {
     //     return .{ .terminal = terminal };
@@ -220,6 +274,7 @@ impl<'a> Handler<'a> {
     pub fn init(terminal: *mut Terminal) -> Handler<'a> {
         Handler {
             terminal,
+            semantic_failure: false,
             effects: Effects::READONLY,
             // apc_handler: .{} (the reference field default)
             apc_handler: ApcHandler::default(),
@@ -321,8 +376,26 @@ impl<'a> Handler<'a> {
     where
         F: FnOnce(&mut Terminal) -> Result<(), crate::pagelist::OutOfMemory>,
     {
-        if f(self.term()).is_err() {
-            // log.warn("error handling VT action action={} err={}", ...);
+        let r = f(self.term());
+        self.vt_catch(r);
+    }
+
+    // The body of the reference's single `vtFallible(...) catch |err| { ... }`:
+    //
+    //     self.semantic_failure = true;
+    //     log.warn("error handling VT action action={} err={}", .{ action, err });
+    //
+    // PORT NOTE: because the dispatch is distributed across the trait-method
+    // arms, this is the shared catch every FALLIBLE arm funnels its `Result`
+    // through. Arms the reference deliberately keeps GRACEFUL
+    // (`color_operation`, `kitty_color_report`, `clipboard_contents`) must NOT
+    // route through here — they log and continue without setting the flag.
+    #[inline]
+    fn vt_catch(&mut self, r: Result<(), crate::pagelist::OutOfMemory>) {
+        if r.is_err() {
+            // self.semantic_failure = true;
+            self.semantic_failure = true;
+            // log.warn("error handling VT action action={} err={}", .{ action, err });
         }
     }
 
@@ -611,7 +684,23 @@ impl<'a> Handler<'a> {
         // var response: std.Io.Writer.Allocating = .init(alloc);
         // defer response.deinit();
         // const writer = &response.writer;
+        //
+        // PORT FINDING (P3-W4 T5): in the reference, EVERY `writer.print` below
+        // is fallible (an allocating writer), which is what makes
+        // `colorOperation` a `!void` the caller can `catch |err| log.warn(...)`.
+        // In rustty the writer is a `Vec<u8>` that ABORTS on OOM (the crate's
+        // DG5 policy), so this function has NO reachable error path at all —
+        // every `return` below is `Ok(())`. That makes the `439d35e27`
+        // re-partition ("color_operation stays graceful") IMPOSSIBLE to
+        // exercise by feeding a real failure, and any test that tries is
+        // VACUOUS. The fail point below is the injectable stand-in for the
+        // reference's fallible `writer.print`; it exists ONLY so the
+        // "a color-operation failure must NOT set `semantic_failure`" control
+        // is a real control. See `COLOR_OPERATION_TW`.
         let mut response = Vec::new();
+
+        #[cfg(test)]
+        color_operation_tw_check(ColorOperationFp::Respond)?;
 
         // var it = requests.constIterator(0);
         // while (it.next()) |req| {
@@ -1176,8 +1265,8 @@ impl<'a> Handler<'a> {
         self.write_pty(aw.as_bytes());
     }
 
-    // fn windowTitle(self: *Handler, title_raw: []const u8) void { ... }
-    fn do_window_title(&mut self, title_raw: &[u8]) {
+    // fn windowTitle(self: *Handler, title_raw: []const u8) !void { ... }
+    fn do_window_title(&mut self, title_raw: &[u8]) -> Result<(), crate::pagelist::OutOfMemory> {
         // Prevent DoS attacks by limiting title length.
         // const max_title_len = 1024;
         // const title = if (title_raw.len > max_title_len) title: {
@@ -1192,25 +1281,25 @@ impl<'a> Handler<'a> {
             title_raw
         };
 
-        // self.terminal.setTitle(title) catch |err| {
-        //     log.warn("error setting title err={}", .{err});
-        //     return;
-        // };
-        if self.term().set_title(title).is_err() {
-            // log.warn("error setting title err={}", .{err});
-            return;
-        }
+        // try self.terminal.setTitle(title);
+        //
+        // PORT NOTE (oracle 439d35e27): PROMOTED from swallow-and-log to
+        // propagating. The title is terminal-owned semantic state, so a failure
+        // to set it must reach the shared `vt_catch` and raise
+        // `semantic_failure`.
+        self.term().set_title(title)?;
 
         // const func = self.effects.title_changed orelse return;
         // func(self);
         let Some(func) = self.effects.title_changed else {
-            return;
+            return Ok(());
         };
         func(self);
+        Ok(())
     }
 
-    // fn reportPwd(self: *Handler, url_raw: []const u8) void { ... }
-    fn do_report_pwd(&mut self, url_raw: &[u8]) {
+    // fn reportPwd(self: *Handler, url_raw: []const u8) !void { ... }
+    fn do_report_pwd(&mut self, url_raw: &[u8]) -> Result<(), crate::pagelist::OutOfMemory> {
         // Prevent DoS attacks by limiting url length. Headroom for
         // Linux PATH_MAX (4096) plus URI scheme/host and percent-encoding.
         // const max_url_len = 4096;
@@ -1228,21 +1317,19 @@ impl<'a> Handler<'a> {
 
         // We store the raw payload unparsed. Embedders read it via
         // getPwd() and are responsible for decoding any URI scheme.
-        // self.terminal.setPwd(url) catch |err| {
-        //     log.warn("error setting pwd err={}", .{err});
-        //     return;
-        // };
-        if self.term().set_pwd(url).is_err() {
-            // log.warn("error setting pwd err={}", .{err});
-            return;
-        }
+        // try self.terminal.setPwd(url);
+        //
+        // PORT NOTE (oracle 439d35e27): PROMOTED from swallow-and-log to
+        // propagating; see `do_window_title`.
+        self.term().set_pwd(url)?;
 
         // const func = self.effects.pwd_changed orelse return;
         // func(self);
         let Some(func) = self.effects.pwd_changed else {
-            return;
+            return Ok(());
         };
         func(self);
+        Ok(())
     }
 
     // fn requestMode(self: *Handler, mode: modes.Mode) void {
@@ -1942,14 +2029,16 @@ impl<'a> stream::Handler for Handler<'a> {
         self.vt(|t| t.decaln());
     }
 
-    // .window_title => self.windowTitle(value.title),
+    // .window_title => try self.windowTitle(value.title),
     fn window_title(&mut self, v: stream::WindowTitle) {
-        self.do_window_title(v.title);
+        let r = self.do_window_title(v.title);
+        self.vt_catch(r);
     }
 
-    // .report_pwd => self.reportPwd(value.url),
+    // .report_pwd => try self.reportPwd(value.url),
     fn report_pwd(&mut self, v: stream::ReportPwd) {
-        self.do_report_pwd(v.url);
+        let r = self.do_report_pwd(v.url);
+        self.vt_catch(r);
     }
 
     // .show_desktop_notification => {} (have no terminal-modifying effect)
@@ -2043,25 +2132,47 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .set_attribute => switch (value) {
     //     .unknown => {},
-    //     else => self.terminal.setAttribute(value) catch {},
+    //     else => try self.terminal.setAttribute(value),
     // },
+    //
+    // PORT NOTE (oracle 439d35e27): PROMOTED from `catch {}` to propagating —
+    // the cursor pen is terminal-owned semantic state.
     fn set_attribute(&mut self, attr: sgr::Attribute) {
         match attr {
             sgr::Attribute::Unknown { .. } => {}
             _ => {
-                let _ = self.term().set_attribute(attr);
+                let r = self
+                    .term()
+                    .set_attribute(attr)
+                    .map_err(|_| crate::pagelist::OutOfMemory);
+                self.vt_catch(r);
             }
         }
     }
 
-    // .kitty_color_report => try self.kittyColorOperation(value),
+    // .kitty_color_report => self.kittyColorOperation(value) catch |err| {
+    //     log.warn("error reporting Kitty colors err={}", .{err});
+    // },
+    //
+    // PORT NOTE (oracle 439d35e27): stays GRACEFUL. A failure here is a query
+    // RESPONSE failure, not a divergence of terminal-owned state, so it must
+    // NOT route through `vt_catch` / set `semantic_failure`.
     fn kitty_color_report(&mut self, v: kitty::color::OSC) {
-        let _ = self.do_kitty_color_operation(v);
+        if self.do_kitty_color_operation(v).is_err() {
+            // log.warn("error reporting Kitty colors err={}", .{err});
+        }
     }
 
-    // .color_operation => try self.colorOperation(&value.requests, value.terminator),
+    // .color_operation => self.colorOperation(
+    //     &value.requests,
+    //     value.terminator,
+    // ) catch |err| log.warn("error reporting OSC color err={}", .{err}),
+    //
+    // PORT NOTE (oracle 439d35e27): stays GRACEFUL; see `kitty_color_report`.
     fn color_operation(&mut self, v: stream::ColorOperation) {
-        let _ = self.do_color_operation(&v.requests, v.terminator);
+        if self.do_color_operation(&v.requests, v.terminator).is_err() {
+            // log.warn("error reporting OSC color err={}", .{err});
+        }
     }
 
     // .semantic_prompt => try self.terminal.semanticPrompt(value),
@@ -2366,6 +2477,103 @@ mod tests {
         let str = t.plain_string(Global).unwrap();
         assert_eq!(str.as_slice(), b"Hello");
 
+        t.deinit(Global);
+    }
+
+    // test "semantic failure is sticky while processing continues"
+    //
+    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
+    // fail point (the port's stand-in for the reference's
+    // `std.testing.FailingAllocator` — see the `SET_STRING_TW` PORT NOTE in
+    // terminal.rs), and `tripwire::Module::enabled()` is `cfg!(debug_assertions)`.
+    // Without `debug_assertions` the fail point never trips, so the test can only
+    // run in debug — where it still runs and passes. NOT disabled to hide a failure.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn semantic_failure_is_sticky_while_processing_continues() {
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            assert!(!s.handler.semantic_failure);
+
+            // Setting the title is a terminal-owned semantic update. Force its
+            // allocation to fail at the central vtFallible boundary.
+            crate::terminal::set_string_tw_error_always(crate::terminal::SetStringFp::Reserve);
+            s.next_slice(b"\x1B]2;unavailable\x1B\\");
+            crate::terminal::set_string_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            assert!(s.handler.semantic_failure);
+
+            // Later input and RIS remain best-effort and never clear the
+            // diagnostic.
+            s.next_slice(b"ignored");
+            s.next_slice(b"\x1Bc");
+            s.next_slice(b"OK");
+            assert!(s.handler.semantic_failure);
+        }
+
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(b"OK".as_slice(), str.as_slice());
+
+        // A new execution root starts without inheriting the diagnostic.
+        let fresh = Handler::init(&raw mut t);
+        assert!(!fresh.semantic_failure);
+
+        t.deinit(Global);
+    }
+
+    // NEGATIVE CONTROL (P3-W4 T5 Step 3): a `color_operation` failure must
+    // leave the flag FALSE. This is the assertion that proves the error
+    // RE-PARTITION was ported, rather than a blanket "any handler error sets
+    // the flag" — which is what a mechanical port of the `vt()` catch alone
+    // would produce, and which every other assertion in this file would still
+    // pass with.
+    //
+    // WS18 release lane: tripwire fail point; see the SET_STRING_TW PORT NOTE.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn semantic_failure_is_not_set_by_a_color_operation_failure() {
+        // (a) Baseline: the arm IS reached and DOES produce a response, so the
+        //     failure injected in (b) is landing on a live code path. (Without
+        //     this the whole control could be passing because the input never
+        //     reaches `colorOperation` at all.)
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        cap_reset();
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(cap_write_pty);
+            s.next_slice(b"\x1B]4;0;?\x1B\\");
+            assert!(
+                cap_take().is_some(),
+                "colorOperation must be reached for this control to mean anything"
+            );
+            assert!(!s.handler.semantic_failure);
+        }
+        t.deinit(Global);
+
+        // (b) The same input with `do_color_operation` FORCED to fail. The
+        //     response must not be produced (proving the failure was injected
+        //     on the live path) and `semantic_failure` must stay FALSE — that
+        //     is the re-partition assertion. Routing this arm through
+        //     `vt_catch` (the mechanical "any error sets the flag" port) makes
+        //     this fail.
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        cap_reset();
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(cap_write_pty);
+            color_operation_tw_error_always(ColorOperationFp::Respond);
+            s.next_slice(b"\x1B]4;0;?\x1B\\");
+            color_operation_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            assert!(
+                cap_take().is_none(),
+                "the injected failure must actually abort the response"
+            );
+            assert!(
+                !s.handler.semantic_failure,
+                "a color-operation failure is GRACEFUL and must not set semantic_failure"
+            );
+        }
         t.deinit(Global);
     }
 
@@ -3252,6 +3460,14 @@ mod tests {
             s.next_slice(b"\x1B[6n"); // Cursor position report
             s.next_slice(b"\x1B]4;0;?\x1B\\"); // OSC color query
             s.next_slice(b"\x1B]21;foreground=?\x1B\\"); // Kitty color query
+            s.next_slice(b"\x1B]52;c;%%%invalid-base64%%%\x1B\\");
+            s.next_slice(b"\x1B_Ga=p,i=999\x1B\\"); // Missing Kitty image
+            s.next_slice(b"\x1B_25a1;r;cp=41;%%%invalid%%%\x1B\\"); // Rejected glyph
+
+            // Query, malformed input, protocol failure responses, and
+            // external-effect failures do not imply that terminal-owned
+            // semantic state diverged.
+            assert!(!s.handler.semantic_failure);
 
             // Terminal should still be functional
             s.next_slice(b"Test");

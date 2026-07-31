@@ -5868,7 +5868,7 @@ impl Terminal {
         // Growing can reallocate, which would invalidate an aliased `pwd` —
         // that cannot happen in the aliasing case, because an aliased source is
         // a subslice of `self.pwd`, hence `capacity <= self.pwd.capacity()`.
-        #[cfg(test)]
+        #[cfg(debug_assertions)]
         set_string_tw_check(SetStringFp::Reserve)?;
         let v: *mut Vec<u8> = core::ptr::addr_of_mut!(self.pwd);
         // SAFETY: `v` is the live `self.pwd`; `src` is readable for `src_len`
@@ -5948,7 +5948,7 @@ impl Terminal {
         // try self.title.ensureTotalCapacity(self.gpa(), capacity);
         //
         // PORT NOTE: grow-only + amortized => `reserve`, NOT `reserve_exact`.
-        #[cfg(test)]
+        #[cfg(debug_assertions)]
         set_string_tw_check(SetStringFp::Reserve)?;
         let v: *mut Vec<u8> = core::ptr::addr_of_mut!(self.title);
         // SAFETY: as in `set_pwd` above.
@@ -6392,26 +6392,48 @@ impl Terminal {
 // `RESIZE_TW`, `screen.rs`'s `SELECTION_STRING_TW` and `pagelist/mod.rs`'s
 // `INIT_TW`). The single `Reserve` point sits exactly where the reference's
 // `ensureTotalCapacity` can fail, in both `set_pwd` and `set_title`.
-#[cfg(test)]
+//
+// PORT NOTE (P3-W4 T5): the gate WIDENED from `cfg(test)` to
+// `cfg(debug_assertions)`. Reason: `439d35e27`'s C-API test
+// (`get vt_processing_error`) forces a `setTitle` allocation failure through
+// the PUBLIC `vt_write` path and lives in `rustty-vt-c`, a DIFFERENT crate.
+// `cfg(test)` is only true for the crate currently compiled with `--test`, so
+// the fail point would never trip from there and the test would be VACUOUS.
+// `cfg(debug_assertions)` is the same stand-in `tripwire::Module::enabled()`
+// itself uses for Zig's `builtin.is_test` (see its PORT NOTE), and it is off in
+// release, so production `set_pwd`/`set_title` are unchanged.
+#[cfg(debug_assertions)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum SetStringFp {
+pub enum SetStringFp {
     Reserve,
 }
 
-#[cfg(test)]
+#[cfg(debug_assertions)]
 thread_local! {
     pub(crate) static SET_STRING_TW:
         core::cell::RefCell<rustty_util::tripwire::Module<SetStringFp, OutOfMemory>> =
         core::cell::RefCell::new(rustty_util::tripwire::module());
 }
 
-// `try setString_tw.check(point)`. Only compiled in test builds; the call sites
-// are `#[cfg(test)]`-gated so production `set_pwd`/`set_title` are unchanged,
-// mirroring the Zig `enabled = builtin.is_test` gate.
-#[cfg(test)]
+// `try setString_tw.check(point)`.
+#[cfg(debug_assertions)]
 #[inline]
 fn set_string_tw_check(point: SetStringFp) -> Result<(), OutOfMemory> {
     SET_STRING_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+/// `setString_tw.errorAlways(point, error.OutOfMemory)` — cross-crate accessor.
+#[cfg(debug_assertions)]
+pub fn set_string_tw_error_always(point: SetStringFp) {
+    SET_STRING_TW.with(|tw| tw.borrow_mut().errorAlways(point, OutOfMemory));
+}
+
+/// `setString_tw.end(mode)` — cross-crate accessor.
+#[cfg(debug_assertions)]
+pub fn set_string_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    SET_STRING_TW.with(|tw| tw.borrow_mut().end(mode))
 }
 
 // const resize_tw = tripwire.module(enum {

@@ -1821,10 +1821,7 @@ pub enum TerminalData {
     KittyGraphics = 30,
     Selection = 31,
     ViewportActive = 32,
-    // PORT NOTE: `vt_processing_error = 33` (oracle `439d35e27`) is NOT yet
-    // ported — it needs `stream.handler.semantic_failure`, which is owned by
-    // `P3-W4 T5`. The discriminant is deliberately LEFT AS A GAP so 34/35 keep
-    // the oracle's ABI numbering; do not renumber to close it.
+    VtProcessingError = 33,
     ScrollbackMaxBytes = 34,
     ScrollbackMaxLines = 35,
     // /// Output type expected for querying the data of the given kind.
@@ -1832,7 +1829,12 @@ pub enum TerminalData {
     //     return switch (self) {
     //         .invalid => void,
     //         .cols, .rows, .cursor_x, .cursor_y => size.CellCountInt,
-    //         .cursor_pending_wrap, .cursor_visible, .mouse_tracking, .viewport_active => bool,
+    //         .cursor_pending_wrap,
+    //         .cursor_visible,
+    //         .mouse_tracking,
+    //         .viewport_active,
+    //         .vt_processing_error,
+    //         => bool,
     //         .active_screen => TerminalScreen,
     //         .kitty_keyboard_flags => u8,
     //         .scrollbar => TerminalScrollbar,
@@ -1980,6 +1982,10 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
                 (*active).pages.viewport,
                 rustty_vt::pagelist::Viewport::Active
             )
+        },
+        // .vt_processing_error => out.* = wrapper.stream.handler.semantic_failure,
+        TerminalData::VtProcessingError => unsafe {
+            *(out as *mut bool) = (*terminal_).stream.handler.semantic_failure
         },
 
         // .scrollback_max_bytes => {
@@ -3385,6 +3391,64 @@ mod tests {
             });
             assert_eq!(5, x);
             assert_eq!(0, y);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get vt_processing_error"
+    //
+    // WS18 release lane: the reference forces the failure with
+    // `testing.failing_allocator`; this port arms the `set_title` tripwire fail
+    // point in rustty-vt, whose gate is `cfg(debug_assertions)` precisely so it
+    // is reachable from THIS crate (see the `SetStringFp` PORT NOTE). Without
+    // `debug_assertions` the fail point never trips, so the test can only run
+    // in debug — where it still runs and passes.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    fn get_vt_processing_error() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            let mut processing_error: bool = true;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::VtProcessingError,
+                    &mut processing_error as *mut _ as *mut c_void,
+                )
+            });
+            assert!(!processing_error);
+
+            // Force a non-graceful terminal-owned update failure through the
+            // public VT write path.
+            rustty_vt::terminal::set_string_tw_error_always(
+                rustty_vt::terminal::SetStringFp::Reserve,
+            );
+            vtw(t, b"\x1B]2;unavailable\x1B\\");
+            rustty_vt::terminal::set_string_tw_end(rustty_util::tripwire::ResetMode::Reset)
+                .unwrap();
+
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::VtProcessingError,
+                    &mut processing_error as *mut _ as *mut c_void,
+                )
+            });
+            assert!(processing_error);
+
+            // rustty_terminal_reset() does NOT clear it.
+            unsafe { reset(t) };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::VtProcessingError,
+                    &mut processing_error as *mut _ as *mut c_void,
+                )
+            });
+            assert!(processing_error);
+
             unsafe { free(t) };
         });
     }

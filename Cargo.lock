@@ -1659,6 +1659,7 @@ dependencies = [
  "rustty-lib",
  "rustty-render-types",
  "rustty-unicode",
+ "rustty-util",
  "rustty-vt",
 ]
 
