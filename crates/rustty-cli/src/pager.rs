@@ -136,10 +136,13 @@ fn init_pager() -> Option<std::process::Child> {
     // const ghostty_var = internal_os.getenv(alloc, "GHOSTTY_PAGER") catch null;
     //   R2: GHOSTTY_PAGER -> RUSTTY_PAGER (product env var).
     // defer if (ghostty_var) |v| v.deinit(alloc);
-    let rustty_var = rustty_os::env::getenv(b"RUSTTY_PAGER").unwrap_or(None);
+    // PORT NOTE (P3-W7 T4): `internal_os.getenv` was deleted with
+    // `src/os/env.zig`; callers use the captured block's accessors.
+    let environ = rustty_global::environ();
+    let rustty_var = environ.get_alloc(b"RUSTTY_PAGER");
     // const pager_var = internal_os.getenv(alloc, "PAGER") catch null;
     // defer if (pager_var) |v| v.deinit(alloc);
-    let pager_var = rustty_os::env::getenv(b"PAGER").unwrap_or(None);
+    let pager_var = environ.get_alloc(b"PAGER");
 
     // const cmd: ?[]const u8 = cmd: {
     //     if (ghostty_var) |v| break :cmd if (v.value.len > 0) v.value else null;
@@ -148,17 +151,17 @@ fn init_pager() -> Option<std::process::Child> {
     // };
     let cmd: Option<std::ffi::OsString> = 'cmd: {
         if let Some(v) = &rustty_var {
-            break 'cmd if !v.value.is_empty() {
-                Some(rustty_global::environ::os_string_from_bytes(&v.value))
-            } else {
+            break 'cmd if v.is_empty() {
                 None
+            } else {
+                Some(rustty_global::environ::os_string_from_bytes(v))
             };
         }
         if let Some(v) = &pager_var {
-            break 'cmd if !v.value.is_empty() {
-                Some(rustty_global::environ::os_string_from_bytes(&v.value))
-            } else {
+            break 'cmd if v.is_empty() {
                 None
+            } else {
+                Some(rustty_global::environ::os_string_from_bytes(v))
             };
         }
         Some(std::ffi::OsString::from("less"))

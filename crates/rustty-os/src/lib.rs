@@ -35,14 +35,34 @@
 // Zig's laziness: on wasm32 exactly the `os/wasm*` helper surface remains, which
 // is the whole point of a wasm build. Every other target compiles all modules
 // unchanged. See the workstream report (B2) for the full-workspace follow-up.
-pub mod args;
+// PORT NOTE (P3-W7 T4): `pub mod args;` is GONE — upstream DELETED
+// `src/os/args.zig` (-130) in `e8525c0fd`. Zig 0.16 hands `std.process.Args`
+// to `main()` inside `std.process.Init.Minimal` and the C API takes them from
+// the caller, so the macOS `NSProcessInfo` detour is no longer needed. On the
+// Rust side that detour never had a reason to exist (`std::env::args_os()` on
+// macOS reads the real process argv via `_NSGetArgv`, valid under
+// `NSApplicationMain`) AND it was lossy. The consumer seam moved to
+// `rustty_args::args::OsArgIterator`.
 pub mod autorelease;
 pub mod cf_release_thread;
 pub mod cgroup;
 pub mod dbus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
-pub mod env;
+// PORT NOTE (P3-W7 T4): `pub mod env;` is GONE — upstream DELETED
+// `src/os/env.zig` (-178) in `e8525c0fd`, and `src/os/main.zig` dropped all of
+// its re-exports (`GetEnvResult`, `getEnvMap`, `appendEnv`, `appendEnvAlways`,
+// `prependEnv`, `getenv`, `setenv`, `unsetenv`, plus `allocTmpDir`/`freeTmpDir`).
+// The replacements:
+//   getEnvMap                 -> `rustty_global::environ_map()`
+//   getenv / getenvNotEmpty   -> `rustty_global::environ().get_posix/get_alloc`
+//                                or a caller-supplied `EnvMap`
+//   appendEnv/appendEnvAlways -> `rustty-termio`'s `exec.rs` (file-private)
+//   prependEnv                -> `rustty-termio`'s `shell_integration.rs`
+//   setenv / unsetenv         -> file-local `extern "C"` decls in the two
+//                                modules that legitimately mutate the process
+//                                environment (`locale.rs`, GTK `application.rs`),
+//                                per upstream's own `locale.zig` precedent
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file;
 pub mod flatpak;
@@ -128,17 +148,14 @@ pub use crate::desktop::launchedFromDesktop;
 // functions into `src/termio/Exec.zig` and
 // `src/termio/shell_integration.zig` on the way to deleting `src/os/env.zig`,
 // and `src/os/main.zig` dropped the corresponding `pub const` lines.
-pub use crate::env::getEnvMap;
-pub use crate::env::getenv;
-pub use crate::env::setenv;
-pub use crate::env::unsetenv;
-pub use crate::env::GetEnvResult;
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::file::allocTmpDir;
+// PORT NOTE (P3-W7 T4 / area-E `E20`): the `allocTmpDir`/`freeTmpDir`
+// re-exports are GONE — upstream `e8525c0fd` dropped them from `os/main.zig`
+// because `global.zig` became their only importer. `crate::file::allocTmpDir`
+// is still reachable by path for that one caller (`tempdir.rs` and the app
+// initializer, which publishes the result via
+// `rustty_global::set_tmp_dir_path`).
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::fixMaxFiles;
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::file::freeTmpDir;
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::randomTmpPath;
 #[cfg(not(target_arch = "wasm32"))]

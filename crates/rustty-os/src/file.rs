@@ -345,6 +345,48 @@ fn log_debug(msg: &str) {
 mod tests {
     use super::*;
 
+    /// P3-W7 T3/T4 (area-E `E15`/`E20`) — the two temp-dir discoveries must
+    /// agree.
+    ///
+    /// `global.zig` imports `os/file.zig`'s `allocTmpDir` directly; rustty
+    /// cannot (R4: `rustty-os` is ABOVE the leaf `rustty-global`), so
+    /// `rustty_global::tmp_dir_path()` carries a fallback implementing the same
+    /// rule for the case where nothing published a value — a `#[test]`, or a
+    /// library consumer that never ran `init`. Two implementations of one rule
+    /// is a divergence risk, so it is pinned by a test rather than by hope.
+    #[test]
+    #[allow(non_snake_case)]
+    fn alloc_tmp_dir_agrees_with_global_fallback() {
+        let from_os = allocTmpDir(&rustty_global::environ());
+        let from_global = rustty_global::tmp_dir_path();
+        assert_eq!(
+            from_os.as_bytes(),
+            from_global,
+            "rustty-os allocTmpDir and rustty-global's tmp_dir_path fallback diverged"
+        );
+    }
+
+    /// P3-W7 T4 (area-E `E20`) — `randomTmpPath` uses the CACHED temp dir and
+    /// still produces a fresh, unguessable basename per call.
+    ///
+    /// `crypto_random_bytes` STAYS: upstream's switch to `global.io().random()`
+    /// is a `std.Io` plumbing artifact, and the basename is what makes the temp
+    /// path unguessable, so weakening it to a non-cryptographic RNG "for
+    /// fidelity" would be a real security regression.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall
+    #[allow(non_snake_case)]
+    fn random_tmp_path_is_cached_and_fresh() {
+        let a = randomTmpPath("w7-");
+        let b = randomTmpPath("w7-");
+        assert_ne!(a, b, "basename must differ per call");
+
+        let dir = String::from_utf8_lossy(rustty_global::tmp_dir_path()).into_owned();
+        let prefix = format!("{dir}{}w7-", PATH_SEP as char);
+        assert!(a.starts_with(&prefix), "{a} does not start with {prefix}");
+        assert_eq!(a.len(), prefix.len() + random_basename_len);
+    }
+
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall (getentropy/arc4random_buf)
     #[allow(non_snake_case)]

@@ -1,6 +1,8 @@
 //! P3-W7 T2 — regression KAT for the non-UTF-8 environment panic (area E §3.1).
 //!
-//! `rustty_os::env::getEnvMap` used to be `std::env::vars().collect()` into a
+//! `rustty_os::env::getEnvMap` (deleted in T4; its replacement is
+//! `rustty_global::environ_map()`, which this now exercises) used to be
+//! `std::env::vars().collect()` into a
 //! `HashMap<String, String>`. `std::env::vars()` **panics** on any variable
 //! that is not valid UTF-8, and POSIX environment variables are arbitrary byte
 //! strings — so a single non-UTF-8 variable in the user's shell made every new
@@ -28,7 +30,7 @@
 #[test]
 #[ignore = "child arm of get_env_map_survives_non_utf8; selected by argv"]
 fn w7_child_reads_env_map() {
-    let m = rustty_os::env::getEnvMap();
+    let m = rustty_global::environ_map();
     // Must contain the non-UTF-8 variable, byte-exact.
     let v = m
         .get(&b"RUSTTY_W7_BAD"[..])

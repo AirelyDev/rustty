@@ -2084,7 +2084,11 @@ where
                 Err(_err) => {
                     // If an error occurs, we don't want to block surface startup.
                     // log.warn("error getting env map for surface err={}", .{err});
-                    internal_os::env::getEnvMap()
+                    // PORT NOTE (P3-W7 T4): `internal_os.getEnvMap(alloc)` ->
+                    // `global.environMap()` (`src/os/env.zig` was DELETED by
+                    // `e8525c0fd`). This is the site area E §3.1 identified as
+                    // the live non-UTF-8 PANIC; it is byte-typed now.
+                    rustty_global::environ_map()
                 }
             };
             // errdefer env.deinit();

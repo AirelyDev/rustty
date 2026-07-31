@@ -29,7 +29,10 @@
 // const CommaSplitter = @import("CommaSplitter.zig");
 use crate::comma_splitter::CommaSplitter;
 use crate::diagnostics::{Diagnostic, DiagnosticList, Location, LocationError, LocationProvider};
-use rustty_os as internal_os;
+// PORT NOTE (P3-W7 T4): the reference's `internal_os` import was only used for
+// `internal_os.args`, and upstream DELETED `src/os/args.zig` in `e8525c0fd`.
+// The seam now goes straight to `std::env::args_os()` (see `OsArgIterator`), so
+// this crate no longer needs a `rustty-os` edge for it.
 
 // const log = std.log.scoped(.cli);
 
@@ -1621,11 +1624,20 @@ pub trait GenIter {
     fn deinit(&mut self) {}
 }
 
+/// PORT NOTE (P3-W7 T4): `internal_os.args.ArgIterator.InitError` — the
+/// reference's `Allocator.Error`. `src/os/args.zig` was DELETED upstream
+/// (`e8525c0fd`), so the uninhabited init-error type moves here with the seam.
+/// Allocation failure aborts in Rust rather than being recoverable, so the
+/// error set is genuinely empty and every `?` on it is discharged by
+/// `match e {}`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum InitError {}
+
 /// Create an args iterator for the process args. This will skip argv0.
 // pub fn argsIterator(alloc_gpa: Allocator) internal_os.args.ArgIterator.InitError!ArgsIterator(internal_os.args.ArgIterator) {
-pub fn args_iterator() -> Result<ArgsIterator<OsArgIterator>, internal_os::args::InitError> {
+pub fn args_iterator() -> Result<ArgsIterator<OsArgIterator>, InitError> {
     // var iter = try internal_os.args.iterator(alloc_gpa);
-    let mut iter = OsArgIterator(internal_os::args::iterator()?);
+    let mut iter = OsArgIterator::new();
     // errdefer iter.deinit();
     // _ = iter.next(); // skip argv0
     let _ = iter.next();
@@ -1633,17 +1645,51 @@ pub fn args_iterator() -> Result<ArgsIterator<OsArgIterator>, internal_os::args:
     Ok(ArgsIterator::new(iter))
 }
 
-/// PORTS: `internal_os.args.ArgIterator` wrapped as a `GenIter`. The os iterator
-/// yields `Option<String>`; this adapts it to `Option<Vec<u8>>` (byte-slices).
-pub struct OsArgIterator(internal_os::args::ArgIterator);
+/// PORTS: the process argument iterator, wrapped as a `GenIter` yielding
+/// `Option<Vec<u8>>` (byte-slices), which is what the reference's
+/// `std.process.ArgIterator` yields (`?[]const u8`).
+///
+/// PORT NOTE (P3-W7 T4): this used to wrap `rustty_os::args::ArgIterator`,
+/// whose macOS arm went through `NSProcessInfo.arguments` and
+/// `String::from_utf8_lossy` — so a non-UTF-8 argv element was CORRUPTED.
+/// Upstream deleted `src/os/args.zig` outright; on the Rust side the objc
+/// detour never had a reason to exist, because `std::env::args_os()` on macOS
+/// reads the real process argv (via `_NSGetArgv`) and is valid under
+/// `NSApplicationMain`. `OsStr::as_encoded_bytes` is lossless on every
+/// platform.
+pub struct OsArgIterator(std::env::ArgsOs);
+
+impl OsArgIterator {
+    #[must_use]
+    pub fn new() -> Self {
+        // if (true) return try std.process.argsWithAllocator(allocator);
+        OsArgIterator(std::env::args_os())
+    }
+}
+
+impl Default for OsArgIterator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl GenIter for OsArgIterator {
     fn next(&mut self) -> Option<Vec<u8>> {
-        self.0.next().map(|s| s.into_bytes())
+        self.0.next().map(|s| arg_bytes(s.as_os_str()))
     }
-    fn deinit(&mut self) {
-        self.0.deinit();
-    }
+}
+
+/// The argv element -> `[]const u8` conversion, named so it can be tested
+/// directly.
+///
+/// PORT NOTE (P3-W7 T4): the deleted `rustty_os::args` macOS arm did
+/// `String::from_utf8_lossy(bytes).into_owned()` (`args.rs:172`) here, which
+/// REPLACES every non-UTF-8 byte with U+FFFD. `OsStr::as_encoded_bytes` is
+/// lossless on every platform (raw bytes on POSIX, WTF-8 on Windows), which is
+/// what the reference's `[]const u8` argv always was.
+#[must_use]
+pub fn arg_bytes(arg: &std::ffi::OsStr) -> Vec<u8> {
+    arg.as_encoded_bytes().to_vec()
 }
 
 /// Returns an iterator (implements "next") that reads CLI args by line.

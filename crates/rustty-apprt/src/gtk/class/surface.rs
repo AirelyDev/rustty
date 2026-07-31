@@ -2346,7 +2346,9 @@ impl Surface {
     #[must_use]
     pub fn default_termio_env(&self) -> rustty_global::EnvMap {
         let app = Application::default();
-        let mut env = rustty_os::env::getEnvMap();
+        // PORT NOTE (P3-W7 T4): `internal_os.getEnvMap(alloc)` -> `global.environMap()`
+        // (`src/os/env.zig` was DELETED by `e8525c0fd`).
+        let mut env = rustty_global::environ_map();
 
         // Language override (`:1598-1602`).
         match app.saved_language() {

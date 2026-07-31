@@ -3043,13 +3043,16 @@ impl ApprtSurface for Surface {
     // pub fn defaultTermioEnv(self: *const Surface) !std.process.EnvMap { ... }
     fn default_termio_env(&self) -> Result<rustty_global::EnvMap, ApprtError> {
         // const alloc = self.app.core_app.alloc;
-        // var env = try internal_os.getEnvMap(alloc);
+        // var env = try global.environMap();
         // errdefer env.deinit();
         //
-        // (PORT NOTE: rustty `getEnvMap` is infallible and returns an owned map; on
-        // non-darwin `env` is never mutated below — silence `unused_mut` there.)
+        // PORT NOTE (P3-W7 T4): `internal_os.getEnvMap(alloc)` was deleted with
+        // `src/os/env.zig` (`e8525c0fd`); the replacement is the captured
+        // environment block's map. rustty's `environ_map` is infallible and
+        // returns an owned map; on non-darwin `env` is never mutated below —
+        // silence `unused_mut` there.
         #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(unused_mut))]
-        let mut env = rustty_os::env::getEnvMap();
+        let mut env = rustty_global::environ_map();
 
         // if (comptime builtin.target.os.tag.isDarwin()) {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
