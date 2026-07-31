@@ -6,10 +6,13 @@
 //! PORT STATUS: ported (integration-tier stage 4) EXCEPT the two cross-thread
 //! writer slow paths (`surfaceMessageWriter`/`rendererMessageWriter` — the
 //! manual renderer-mutex unlock/relock + the opaque core `Timeout` at the
-//! AppMailbox seam; the `mailbox::send` deferral precedent) and the tmux
-//! control-mode arm of `dcsCommand` (deferred WITH rustty-vt's dcs
-//! `TmuxCommand = ()` stub); each deferred body is preserved verbatim
-//! (DEFERRALS.md, R5: no silent drops).
+//! AppMailbox seam; the `mailbox::send` deferral precedent); each deferred
+//! body is preserved verbatim (DEFERRALS.md, R5: no silent drops).
+//!
+//! The tmux control-mode arm of `dcsCommand` is LIVE as of the
+//! `fix-freetype-tmux` lane: its stated blocker (rustty-vt's dcs
+//! `TmuxCommand = ()` stub) is gone — `dcs::Command::Tmux` now carries a real
+//! `tmux::ControlNotification` and `tmux::Viewer::next` is ported.
 
 // PARITY: the reference's identifiers are camelCase (`queueRender`,
 // `surfaceMessageWriter`, `dcsHook`, ...); preserved verbatim per R1/R2.
@@ -428,84 +431,144 @@ impl<M: AppMailbox> StreamHandler<M> {
         match cmd {
             // .tmux => |tmux| tmux: {
             //
-            // DEFERRED (with rustty-vt dcs's `TmuxCommand = ()` stub — the
-            // control-mode DCS enter/exit wiring is a documented vt deferral;
-            // the payload carries no notification to route yet). Preserved
-            // verbatim (R5):
+            // PORT NOTE (Rust-only glue, three seams — the body below is
+            // otherwise 1:1 with the reference):
             //
-            //     // If tmux control mode is disabled at the build level,
-            //     // then this whole block shouldn't be analyzed.
-            //     if (comptime !tmux_enabled) break :tmux;
-            //     log.info("tmux control mode event cmd={f}", .{tmux});
+            //   1. `tmux: { ... break :tmux; }` is a Rust labeled block
+            //      (`'tmux: { ... break 'tmux; }`) — the direct analogue.
+            //   2. The reference binds `|tmux|` as a *copy* of the union
+            //      payload, whose `[]const u8` members alias parser-owned
+            //      memory; the Rust `ControlNotification` owns its `Vec<u8>`
+            //      payloads, so the value is MOVED out of `*cmd` with a
+            //      `mem::replace` tombstone. That is safe because
+            //      `dcs::Command::deinit`'s `Tmux` arm is a no-op (dcs.rs) —
+            //      the caller's `cmd.deinit()` never reads the payload again —
+            //      and because the move happens only on the fallthrough arm,
+            //      after `enter`/`exit` have been dispatched and broken out.
+            //   3. `viewer.next()` returns a slice borrowed from the viewer
+            //      while the loop body needs `&mut self` (`messageWriter`), so
+            //      the `Box<Viewer>` is `take()`n out of `self.tmux_viewer` for
+            //      the duration of the loop and restored after it. Nothing the
+            //      loop calls reads `tmux_viewer`.
             //
-            //     switch (tmux) {
-            //         .enter => {
-            //             // Setup our viewer state
-            //             assert(self.tmux_viewer == null);
-            //             const viewer = try self.alloc.create(terminal.tmux.Viewer);
-            //             errdefer self.alloc.destroy(viewer);
-            //             viewer.* = try .init(self.alloc);
-            //             errdefer viewer.deinit();
-            //             self.tmux_viewer = viewer;
-            //             break :tmux;
-            //         },
-            //
-            //         .exit => {
-            //             // Free our viewer state if we have one
-            //             if (self.tmux_viewer) |viewer| {
-            //                 viewer.deinit();
-            //                 self.alloc.destroy(viewer);
-            //                 self.tmux_viewer = null;
-            //             }
-            //
-            //             // And always break since we assert below
-            //             // that we're not handling an exit command.
-            //             break :tmux;
-            //         },
-            //
-            //         else => {},
-            //     }
-            //
-            //     assert(tmux != .enter);
-            //     assert(tmux != .exit);
-            //
-            //     const viewer = self.tmux_viewer orelse {
-            //         // This can only really happen if we failed to
-            //         // initialize the viewer on enter.
-            //         log.info(
-            //             "received tmux control mode command without viewer: {f}",
-            //             .{tmux},
-            //         );
-            //
-            //         break :tmux;
-            //     };
-            //
-            //     for (viewer.next(.{ .tmux = tmux })) |action| {
-            //         log.info("tmux viewer action={f}", .{action});
-            //         switch (action) {
-            //             .exit => {
-            //                 // We ignore this because we will fully exit when
-            //                 // our DCS connection ends. We may want to handle
-            //                 // this in the future to notify our GUI we're
-            //                 // disconnected though.
-            //             },
-            //
-            //             .command => |command| {
-            //                 assert(command.len > 0);
-            //                 assert(command[command.len - 1] == '\n');
-            //                 self.messageWriter(try termio.Message.writeReq(
-            //                     self.alloc,
-            //                     command,
-            //                 ));
-            //             },
-            //
-            //             .windows => {
-            //                 // TODO
-            //             },
-            //         }
-            //     }
-            // },
-            rustty_vt::dcs::Command::Tmux(_tmux) => {}
+            // The reference's `viewer.* = try .init(global.io(), self.alloc)`
+            // passes the Zig 0.16 `std.Io` instance; rustty's
+            // `tmux::Viewer::init` takes only the allocator (the vt port's
+            // signature — no `std.Io` analogue), so only `alloc` is threaded.
+            rustty_vt::dcs::Command::Tmux(tmux) => 'tmux: {
+                // If tmux control mode is disabled at the build level,
+                // then this whole block shouldn't be analyzed.
+                // if (comptime !tmux_enabled) break :tmux;
+                if !TMUX_ENABLED {
+                    break 'tmux;
+                }
+                // log.info("tmux control mode event cmd={f}", .{tmux});
+
+                // switch (tmux) {
+                match tmux {
+                    // .enter => {
+                    rustty_vt::tmux::ControlNotification::Enter => {
+                        // Setup our viewer state
+                        // assert(self.tmux_viewer == null);
+                        assert!(self.tmux_viewer.is_none());
+                        // const viewer = try self.alloc.create(terminal.tmux.Viewer);
+                        // errdefer self.alloc.destroy(viewer);
+                        // viewer.* = try .init(global.io(), self.alloc);
+                        // errdefer viewer.deinit();
+                        let viewer =
+                            rustty_vt::tmux::Viewer::init(self.alloc).map_err(|_| crate::Error)?;
+                        // self.tmux_viewer = viewer;
+                        self.tmux_viewer = Some(Box::new(viewer));
+                        // break :tmux;
+                        break 'tmux;
+                    }
+
+                    // .exit => {
+                    rustty_vt::tmux::ControlNotification::Exit => {
+                        // Free our viewer state if we have one
+                        // if (self.tmux_viewer) |viewer| {
+                        //     viewer.deinit();
+                        //     self.alloc.destroy(viewer);
+                        //     self.tmux_viewer = null;
+                        // }
+                        if let Some(mut viewer) = self.tmux_viewer.take() {
+                            viewer.deinit();
+                            // self.alloc.destroy(viewer); — Box drop
+                            // self.tmux_viewer = null; — the take() above
+                        }
+
+                        // And always break since we assert below
+                        // that we're not handling an exit command.
+                        // break :tmux;
+                        break 'tmux;
+                    }
+
+                    // else => {},
+                    _ => {}
+                }
+
+                // assert(tmux != .enter);
+                // assert(tmux != .exit);
+                //
+                // Both are structurally guaranteed: the two arms above always
+                // `break 'tmux`, so only the `else` fallthrough reaches here.
+                debug_assert!(!matches!(
+                    tmux,
+                    rustty_vt::tmux::ControlNotification::Enter
+                        | rustty_vt::tmux::ControlNotification::Exit
+                ));
+
+                // const viewer = self.tmux_viewer orelse {
+                let Some(mut viewer) = self.tmux_viewer.take() else {
+                    // This can only really happen if we failed to
+                    // initialize the viewer on enter.
+                    // log.info(
+                    //     "received tmux control mode command without viewer: {f}",
+                    //     .{tmux},
+                    // );
+                    //
+                    // break :tmux;
+                    break 'tmux;
+                };
+
+                // (seam 2 — see the PORT NOTE above)
+                let notification =
+                    core::mem::replace(tmux, rustty_vt::tmux::ControlNotification::Exit);
+
+                // for (viewer.next(.{ .tmux = tmux })) |action| {
+                for action in viewer.next(rustty_vt::tmux::viewer::Input::Tmux(notification)) {
+                    // log.info("tmux viewer action={f}", .{action});
+                    // switch (action) {
+                    match action {
+                        // .exit => {
+                        rustty_vt::tmux::viewer::Action::Exit => {
+                            // We ignore this because we will fully exit when
+                            // our DCS connection ends. We may want to handle
+                            // this in the future to notify our GUI we're
+                            // disconnected though.
+                        }
+
+                        // .command => |command| {
+                        rustty_vt::tmux::viewer::Action::Command(command) => {
+                            // assert(command.len > 0);
+                            assert!(!command.is_empty());
+                            // assert(command[command.len - 1] == '\n');
+                            assert!(command[command.len() - 1] == b'\n');
+                            // self.messageWriter(try termio.Message.writeReq(
+                            //     self.alloc,
+                            //     command,
+                            // ));
+                            self.messageWriter(Message::writeReq(command));
+                        }
+
+                        // .windows => {
+                        rustty_vt::tmux::viewer::Action::Windows(_) => {
+                            // TODO
+                        }
+                    }
+                }
+                self.tmux_viewer = Some(viewer);
+            }
 
             // .xtgettcap => |*gettcap| {
             rustty_vt::dcs::Command::Xtgettcap(gettcap) => {
@@ -3351,6 +3414,142 @@ mod tests {
         });
         assert!(term.modes.get(modes::Mode::CursorBlinking));
 
+        h.renderer_wakeup.deinit();
+        unsafe {
+            drop(Box::from_raw(state));
+            drop(Box::from_raw(mutex));
+            drop(Box::from_raw(mailbox));
+        }
+        term.deinit(Global);
+    }
+
+    // The bytes of a `write_small`/`write_alloc` termio message.
+    fn write_bytes(msg: &Message<'static>) -> Vec<u8> {
+        match msg {
+            Message::WriteSmall(v) => v.data[0..v.len].to_vec(),
+            Message::WriteStable(v) => v.to_vec(),
+            Message::WriteAlloc(v) => v.data.to_vec(),
+            _ => panic!("expected a write message"),
+        }
+    }
+
+    // `dcsCommand`'s tmux control-mode arm (`fix-freetype-tmux` lane). This arm
+    // was `Command::Tmux(_) => {}` — a silent no-op — while `TMUX_ENABLED` is
+    // TRUE in the shipped binary, so entering tmux control mode built no viewer,
+    // sent tmux no commands, and never tore the viewer down.
+    //
+    // Drives the reference's three prongs end to end (`stream_handler.zig:384`):
+    //   `.enter` -> allocate the viewer
+    //   fallthrough -> `viewer.next(.{ .tmux = tmux })`, and every `.command`
+    //                  action goes out the termio mailbox via `messageWriter`
+    //   `.exit`  -> tear the viewer down
+    //
+    // Runs in BOTH build configurations, asserting the reference's behaviour in
+    // each: with `tmux_control_mode` OFF the whole block is `break :tmux` — a
+    // no-op — and with it ON (the shipped binary; `cargo test -p rustty-termio
+    // --features oniguruma` here) the three prongs above must all fire.
+    #[test]
+    fn stream_handler_dcs_tmux_arm_drives_the_viewer() {
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+            crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+        ));
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+        let state: *mut State = Box::into_raw(Box::new(State {
+            mutex,
+            terminal: &raw mut term,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: rustty_renderer::state::Mouse::default(),
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }));
+        let mut h = handler_for(&raw mut term, mailbox, state);
+
+        let feed = |h: &mut StreamHandler<NullMailbox>, n: rustty_vt::tmux::ControlNotification| {
+            let mut cmd: rustty_vt::dcs::Command = rustty_vt::dcs::Command::Tmux(n);
+            h.dcsCommand(&mut cmd).expect("dcsCommand");
+        };
+
+        // (a) `.enter` allocates the viewer.
+        assert!(h.tmux_viewer.is_none());
+        feed(&mut h, rustty_vt::tmux::ControlNotification::Enter);
+
+        if !TMUX_ENABLED {
+            // `if (comptime !tmux_enabled) break :tmux;` — the entire block is
+            // inert in a build without the option, so nothing was allocated.
+            assert!(
+                h.tmux_viewer.is_none(),
+                "with tmux_control_mode off the arm must be a no-op"
+            );
+            assert!(mailbox_pop(mailbox).is_none());
+
+            h.deinit();
+            h.renderer_wakeup.deinit();
+            unsafe {
+                drop(Box::from_raw(state));
+                drop(Box::from_raw(mutex));
+                drop(Box::from_raw(mailbox));
+            }
+            term.deinit(Global);
+            return;
+        }
+
+        assert!(
+            h.tmux_viewer.is_some(),
+            "the .enter prong must build the tmux viewer"
+        );
+        assert!(
+            mailbox_pop(mailbox).is_none(),
+            ".enter emits no tmux command"
+        );
+
+        // (b) The fallthrough prong routes the notification into the viewer.
+        // A block end moves the viewer startup_block -> startup_session and
+        // yields no action.
+        feed(
+            &mut h,
+            rustty_vt::tmux::ControlNotification::BlockEnd(Vec::new()),
+        );
+        assert!(
+            mailbox_pop(mailbox).is_none(),
+            "the startup block end yields no action"
+        );
+
+        // ...and the session-changed notification makes the viewer enter its
+        // command queue, whose first command MUST reach the termio mailbox.
+        feed(
+            &mut h,
+            rustty_vt::tmux::ControlNotification::SessionChanged {
+                id: 1,
+                name: b"rustty".to_vec(),
+            },
+        );
+        let msg = mailbox_pop(mailbox)
+            .expect("the viewer's first queued command must be written to tmux");
+        let bytes = write_bytes(&msg);
+        assert!(!bytes.is_empty());
+        assert_eq!(
+            b'\n',
+            bytes[bytes.len() - 1],
+            "the reference asserts the command carries its trailing newline"
+        );
+        assert!(
+            h.termio_messaged,
+            "messageWriter must mark the termio thread as needing a wakeup"
+        );
+
+        // (c) `.exit` tears the viewer down.
+        feed(&mut h, rustty_vt::tmux::ControlNotification::Exit);
+        assert!(
+            h.tmux_viewer.is_none(),
+            "the .exit prong must free the viewer"
+        );
+
+        h.deinit();
         h.renderer_wakeup.deinit();
         unsafe {
             drop(Box::from_raw(state));

@@ -22,6 +22,14 @@ workspace = true
 # and the flatpak spawn/wait/kill arms compile. OFF by default, exactly as ghostty's
 # `-Dflatpak` defaults to false.
 flatpak = ["rustty-os/flatpak"]
+# The reference `oniguruma` build option, forwarded to rustty-vt. It is what
+# synthesizes `build_options.tmux_control_mode` (vt `options.rs`), which gates
+# `dcsCommand`'s tmux control-mode arm here. OFF by default (matching a plain
+# `cargo test -p rustty-termio`, whose vt has the feature off); the SHIPPED
+# binary turns it on via rustty-core's `rustty-vt = { features = ["oniguruma"] }`.
+# Turn it on to run the tmux-live half of the `dcsCommand` KAT:
+#   cargo test -p rustty-termio --features oniguruma
+oniguruma = ["rustty-vt/oniguruma"]
 
 [dependencies]
 rustty-vt = { workspace = true }

@@ -695,8 +695,9 @@ Miri-excluded (real syscalls; MIRI_EXCEPTIONS.md). **What STILL stays deferred**
 (genuinely out-of-scope, NOT xev IO wiring): `renderer.Thread`'s own event loop
 (GPU + xev, **Phase-3**; the io thread's `renderer_wakeup.notify()` still fires a
 real mach send onto an Async whose loop nobody pumps yet — non-blocking, fails-safe);
-the DCS↔tmux `.tmux` enter/exit arm in `stream_handler::dcsCommand` (vt-side
-`TmuxCommand = ()` stub — the **vt tmux control-mode DCS wiring** sub-batch); and the
+~~the DCS↔tmux `.tmux` enter/exit arm in `stream_handler::dcsCommand`~~ **[STRUCK
+2026-07-31, `fix-freetype-tmux`: the vt-side `TmuxCommand = ()` stub is long gone;
+the arm is now ported and KAT'd — see the `dcsCommand` tmux arm row below]**; and the
 Windows stubs (`Subprocess::start` windows spawn, `ReadThread::
 threadMainWindows`, `Backend::childExitedAbnormally` — the last uninstantiated in
 the reference via Zig lazy compilation), all `#[cfg]`/const-false and unrelated to
@@ -982,11 +983,22 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   OSC 4/7/10-12/21/52/133/777, kitty keyboard/color, mode/size/DA/DSR
   reports); the writer calls inside them compile and defer at the call
   boundary (Termio.queueMessage precedent).
-- **`dcsCommand` tmux arm (stream_handler.rs).** Deferred WITH rustty-vt
-  dcs.rs's `TmuxCommand = ()` stub (the vt-side control-mode DCS enter/exit
-  wiring is a documented vt deferral): the payload carries no notification to
-  route into the viewer yet. Body verbatim; the `tmux_viewer` field and its
-  `deinit` block are live (`TMUX_ENABLED` = `options::TMUX_CONTROL_MODE`).
+- **~~`dcsCommand` tmux arm (stream_handler.rs).~~ RESOLVED [2026-07-31,
+  `fix-freetype-tmux`].** The stated blocker — rustty-vt dcs.rs's
+  `TmuxCommand = ()` stub — is gone: `dcs::Command::Tmux` carries a real
+  `tmux::ControlNotification` (`dcs.rs:333`) and `tmux::Viewer::next` is ported
+  (`tmux/viewer.rs:441`). Since `TMUX_ENABLED` is TRUE in the shipped binary
+  (rustty-core enables `rustty-vt/oniguruma`), the empty arm was live-reachable
+  dead behaviour: entering tmux control mode built no viewer, sent tmux no
+  commands, and never tore the viewer down. All three reference prongs
+  (`.enter` / fallthrough→`viewer.next` + `messageWriter` / `.exit`) are now
+  ported 1:1 with three Rust-only seams recorded at the site (labeled block for
+  `tmux: {}`, `mem::replace` move-out of the owned notification, and take/restore
+  of the `Box<Viewer>` across the `&mut self` mailbox writes). KAT:
+  `stream_handler_dcs_tmux_arm_drives_the_viewer`, which asserts BOTH build
+  configurations (option off → the arm is inert; option on → all three prongs).
+  A new default-off `rustty-termio/oniguruma` feature forwards the vt option so
+  the live half is runnable: `cargo test -p rustty-termio --features oniguruma`.
 - **Zig-std shims (Rust-only glue, R1 no-loss).** exec.rs:
   `std.fs.path.dirname`, the `[:0]` `cstring` sentinel model, `posix.errno`;
   killPid reuses command.rs's `posix.waitpid` shim. stream_handler.rs:
@@ -1194,7 +1206,7 @@ Keyboard 4==4 (+2 TableStackEntry), Search 2==2, DerivedConfig 46==45+
 collapsed `arena` (documented), DerivedConfig.Link 3==3, Mailbox 2==2 —
 names and order 1:1. Deferral ledger:
 
-- **DEFERRED (pre-existing font-shaper scaffold, new callsite): freetype
+- **~~DEFERRED~~ RESOLVED [2026-07-31, `fix-freetype-tmux`]: freetype
   load flags through the break-#9 DI bridge.** The `.font = try
   font.SharedGridSet.DerivedConfig.init(alloc, config)` line (Surface.zig:
   368) is realized as core-local glue (`font_shared_grid_set_derived_config`)
@@ -1202,11 +1214,28 @@ names and order 1:1. Deferral ledger:
   rustty-font-shaper's `DerivedConfig::init` takes its break-#9 subset type;
   core is the first crate that sees both. All fields convert exactly (both
   sides model the SAME reference config types; `Modifier`/`CodepointMap` are
-  literally shared rustty-font types) EXCEPT `freetype-load-flags`: on macOS
-  the shaper type is `()` (the reference `void` arm — exact); on freetype
-  targets the shaper still carries its `_private` scaffold (face/mod.rs), so
-  the config value flows only when the Linux freetype backend DI lands.
-  0 tests, R1-safe.
+  literally shared rustty-font types).
+  **The `freetype-load-flags` field is no longer excepted.** The premise of the
+  deferral was false: `face::FreetypeLoadFlags` on the freetype-active backends
+  is a `pub use` of `face::freetype::FreetypeLoadFlags`, the REAL 5-field
+  stand-in for `config.FreetypeLoadFlags` — not a `_private` placeholder — so
+  nothing was blocking. `surface.rs` now assigns
+  `derived_freetype_load_flags(&config.freetype_load_flags)`, the exact
+  `if (font.face.FreetypeLoadFlags != void) config.@"freetype-load-flags"
+  else {}` selector (SharedGridSet.zig:528), with the field-for-field DI bridge
+  `freetype_load_flags_from_config`. Two consequences of the old hard-coded
+  default: (1) the user's setting did nothing on every freetype build, and
+  (2) `SharedGridSet::Key::hash` skipped the field entirely, so two configs
+  differing only in `freetype-load-flags` collided on the same cached grid —
+  both fixed (`shared_grid_set.rs` now hashes it; `FreetypeLoadFlags` derives
+  `Hash`; the `()` arm hashes nothing, matching `autoHash` of a `void` field).
+  4 tests (`surface.rs` `freetype_load_flags_tests`) + a macOS compile-time
+  zero-size assertion on the `void` arm. **Residual:** the KAT at the exact bug
+  site (`derived_config_carries_the_configured_flags`) is
+  `cfg(not(any(macos, wasm32)))` — on macOS the reference itself takes the
+  `void` arm, so there is nothing to thread and nothing to assert; it has never
+  been compiled or run on a host (no Linux target installed). The
+  host-runnable tests cover the DI bridge and the hash discrimination.
 - **SEQUENCING allows (not deferrals; later chunks consume IN PLACE):**
   `#[allow(dead_code)]` on `MAX_ACTIVE_KEY_TABLES` (first consumer C14a,
   Surface.zig:5495), `Mouse.activeLeftClickPin` (C8 :1594, C13+ :4650) and
@@ -7556,8 +7585,9 @@ The three still-live instances are reopened above.
 
 ## Still open — summary (full detail in the re-audit report §C)
 
-* **S/XS:** `freetype-load-flags` silently ignored (`rustty-core/src/surface.rs:1201`);
-  termio `dcsCommand` tmux arm is a no-op (`stream_handler.rs:507`, blockers all gone);
+* **S/XS:** ~~`freetype-load-flags` silently ignored~~ and ~~termio `dcsCommand`
+  tmux arm is a no-op~~ — **both CLOSED 2026-07-31 (`fix-freetype-tmux`)**, see
+  their rows above;
   wayland `bind_global` map shape + leaked proxy; `os_signpost` no-op;
   `setNonblock` drain arm; iOS Darwin export gating; `renderer/Thread.zig` G3b
   comment drift (11); `MIRI_EXCEPTIONS.md` missing 15 annotations.
