@@ -408,3 +408,16 @@ rustty-os = { workspace = true }
 # a non-x11 build; the cost is that a Linux `cargo test -p rustty-apprt` needs
 # `libX11-devel` present (it is, on the VM).
 gdk4-x11 = { version = "0.11", features = ["xlib"] }
+# The FAKE COMPOSITOR half of the `vicinae_hotkey_v1` wire-path harness
+# (`src/gtk/winproto/wayland/hotkeys.rs`,
+# `hotkeys_wire_path_bound_pressed_denied_revoked`). `wayland-server` 0.31 is the
+# SIBLING of the vendored `wayland-client` 0.31, so `wayland-scanner`'s
+# `generate_server_code!` scans the SAME
+# `protocols/vicinae-hotkey-v1.xml` the client bindings are generated from — the
+# only way to drive `bound`/`pressed`/`denied`/`revoked` over a real socket when no
+# mainstream compositor implements the protocol (V22).
+#
+# DEV-ONLY, deliberately: this must never enter the shipped dependency graph
+# (`check_acyclic.sh` is the enforcement). It is used exclusively by a
+# `#[cfg(test)]` module.
+wayland-server = { version = "0.31" }

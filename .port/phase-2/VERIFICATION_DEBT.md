@@ -2012,94 +2012,144 @@ i.e. its own task, and it is the only part of V21 that remains.
 
 ---
 
-## V22. `P3-W11 T4` — the `vicinae_hotkey_v1` WIRE path (F-W4) — **OPEN, OWNER: `P3-W12`** [2026-07-31]
+## V22. `P3-W11 T4` — the `vicinae_hotkey_v1` WIRE path (F-W4) — **DISCHARGED by `P3-W12`, 2026-07-31**
 
-> **Owner corrected at the hotkeys merge, 2026-07-31.** The row was filed naming
-> "its own task", which is not an owner — `G-P2` correctly went RED on it, since
-> both `P3-W11` and `P3-W8` are merged. It is deliberately NOT filed as
-> environment-blocked (lower case deliberately — the gate reads the all-caps
-> token as a CLAIM anywhere in a row body, so prose about the disposition must
-> not spell it; this is the landmine the V19c lane hit and documented): no
-> mainstream compositor implements this unratified protocol, but
-> the recipe below describes a `wayland-server` fake compositor that CAN drive
-> it. An environment limit is something no work in this repo can fix; this is
-> something a harness fixes, so it stays real work with a live owner.
+**The wire half of F-W4 is now verified end to end against a fake compositor.**
+`vicinae_hotkey_v1` is unratified and no mainstream compositor (mutter, KWin,
+wlroots) implements it, so there is no host that can drive it — but that was never
+an environment limit in the sense this file reserves the term (something no work in
+this repo can fix). It was a missing harness, and the harness now exists:
 
-**What IS verified.** F-W1/F-W2 are verified headlessly and headed on the Linux
-VM (`--features gtk,wayland,x11`): `key::keysym_from_trigger` (the oracle's own
-test, ported verbatim), the entry-SELECTION logic (`select_entries`: global-only,
-`catch_all` skipped, multi-action skipped, order preserved), the `bind-failed`
-signal emission, the desktop-notification body assembly (all four arms), the
-`bind-failed` -> `Application::global_shortcut_bind_failed` connection under a
-real `GApplication`, the generated interfaces' wire names/version/modifier bits,
-and — on a live GNOME/mutter session — the graceful-ABSENCE path
-(`tests/gtk_wayland_vicinae_hotkeys.rs`) plus the full 6-step XDG-portal chain
-with the new "winproto arm must decline" assertion
-(`.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`).
+`crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs`,
+`#[test] hotkeys_wire_path_bound_pressed_denied_revoked` — no longer `#[ignore]`d,
+because it needs **no display and no compositor** and runs in the ordinary
+`--features gtk,wayland,x11` unit lane in ~10 ms.
 
-**What is NOT verified.** The wire half of F-W4: `manager.bind` actually
-producing `bound`, `pressed` reaching the `trigger` signal, and
-`denied`/`revoked` reaching `Entry::fail` -> `emit_bind_failed`. `vicinae_hotkey_v1`
-is an unratified, testing-phase protocol and **no mainstream compositor (mutter,
-KWin, wlroots) implements it**, so no host available to this project can exercise
-it. This is recorded as debt rather than papered over: the code is ported in full
-and is inert (not dead) on every compositor that does not advertise the global.
+### What it stands up
 
-**Runnable recipe** (`P3-W8 T7 Step 4`, ~a day of scaffolding, scheduled as its
-own task): stand up a minimal fake compositor in a `#[test]`-local
-`wayland-server` 0.31 (the sibling of the vendored `wayland-client`) that
-advertises `vicinae_hotkey_manager_v1` on its own socket; point the client at it
-with `WAYLAND_DISPLAY`; then assert
-* `Hotkeys::bind` issues one `bind` request per selected entry, with the keysym
-  and modifier bits `key::keysym_from_trigger` produced;
-* a server-sent `bound` leaves `bound_count() == entries`;
-* a server-sent `pressed` makes the `trigger` signal carry the bound action
-  (drained by `queue_source`'s trampoline, so run a main-loop turn);
-* a server-sent `denied(reason, message)` / `revoked(reason, message)` makes the
-  `bind-failed` signal carry those exact message BYTES and the right `revoked`
-  flag, and drops `bound_count()` by one.
+* A minimal fake compositor on `wayland-server` 0.31 — the **sibling** of the
+  vendored `wayland-client` 0.31 — whose bindings `wayland-scanner` generates from
+  the **same** vendored `crates/rustty-apprt/protocols/vicinae-hotkey-v1.xml` the
+  client bindings come from, so both halves speak the same wire by construction
+  rather than by a hand-written encoder that could agree with a mis-generated
+  client. `wayland-server` is a **dev-dependency only** (`check_acyclic.sh` is the
+  enforcement) and the module is `#[cfg(test)]`.
+* A `UnixStream::pair` instead of a filesystem socket + `WAYLAND_DISPLAY`: mutating
+  the process environment from one test of a multi-threaded test binary is a data
+  race. The wire, the XML and both generated halves are identical either way.
+* **Two client connections, deliberately.** `host` owns the `wl_display` and is the
+  only reader of its socket — it stands in for GDK. rustty's registry connection is
+  a guest-mode `Backend::from_foreign_display` over that same display with its own
+  private queue, which is literally what `wayland::App::init` builds. This is what
+  makes the harness exercise `queue_source::WlQueueSource`: every event below is
+  dispatched by the GSource's trampoline in a real `MainContext` turn, which is also
+  what drains the DEFERRED `trigger` / `bind-failed` emissions (the second of the two
+  forced divergences recorded in `hotkeys.rs`). A harness that called `read()` on
+  rustty's own queue would dispatch it as a side effect, leave `prepare_read()`
+  reporting "not pending", and the GSource — the component under test — would never
+  fire at all.
 
-Concretely, on the Linux VM (`ssh gael@192.168.64.4`, repo `~/projects/rustty`):
+### The four assertions, and the observed output
 
 ```sh
-# 0. the harness crate: wayland-server 0.31, the SIBLING of the vendored
-#    wayland-client, so both sides scan the same vendored XML.
-#    Add as a dev-dependency of rustty-apprt (dev-only: it must not enter the
-#    shipped dependency graph, and check_acyclic.sh will say so if it does).
-cd ~/projects/rustty
-cargo add --dev --package rustty-apprt wayland-server@0.31
-
-# 1. fill in the already-named ignored test rather than adding a parallel one:
-#    crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs
-#    hotkeys_wire_path_bound_pressed_denied_revoked
-
-# 2. run it. The four events are driven by the fake server, so this needs NO
-#    display and NO compositor -- it is not a headed test.
+cd ~/projects/rustty      # the Linux VM; this is GTK/Wayland code
 cargo test -p rustty-apprt --features gtk,wayland,x11 --lib \
-  hotkeys_wire_path_bound_pressed_denied_revoked -- --ignored --nocapture
-
-# 3. NEGATIVE CONTROL, mandatory: make Entry::fail stop calling
-#    emit_bind_failed, rerun, and confirm the denied/revoked assertions FAIL.
-#    A wire test that only asserts "bound" passes while the failure path is
-#    dead -- which is the exact silent-no-op this whole series exists to stop.
-#    Restore by editing in place, never `mv file.bak file` (older mtime ->
-#    cargo skips the rebuild -> the control is invalid).
-
-# 4. the gates this touches
-bash .port/tools/gates/check_gtk_feature_lane.sh
-bash .port/tools/gates/check_acyclic.sh
+  hotkeys_wire_path_bound_pressed_denied_revoked -- --nocapture
 ```
 
-**Interim marker, visible in the test list, not only here:**
-`crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs`
-`#[test] #[ignore = "needs fake vicinae compositor"]
-hotkeys_wire_path_bound_pressed_denied_revoked`.
+```
+running 1 test
+debug(gtk): hotkey bound action=new_window
+debug(gtk): hotkey bound action=close_surface
+debug(gtk): hotkey bound action=toggle_quick_terminal
+warn(gtk): hotkey denied action=close_surface reason=Ok(1) message=policy forbids this combination
+warn(gtk): hotkey revoked action=new_window reason=Ok(0) message=the user removed this shortcut
+test gtk::winproto::wayland::hotkeys::tests::hotkeys_wire_path_bound_pressed_denied_revoked ... ok
 
-**Protocol-churn note.** The XML's own description says the protocol *"is
-currently in the testing phase. Backward incompatible changes may be added
-together with the corresponding interface version bump."* A future incompatible
-bump is EXPECTED, not a surprise: re-vendor
-`crates/rustty-apprt/protocols/vicinae-hotkey-v1.xml` verbatim from the oracle
-and re-run the gates. The generated event `match` in `Hotkeys::on_event` is
-exhaustive on purpose so an added event fails the build rather than being
-silently dropped.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.01s
+```
+
+1. **`bind`** — one `vicinae_hotkey_manager_v1.bind` per selected entry reaches the
+   compositor, compared as a whole struct against the keysym
+   `key::keysym_from_trigger` produced, the modifier bits (`shift=1 ctrl=2 alt=4
+   super=8`), the null `seat`, the `app_id` and the action description.
+2. **`bound`** — three `bound` events dispatch and `bound_count() == entries`. The
+   `bound_count` half of this is NOT sufficient on its own: it is already true the
+   instant `Entry::bind` issued the request, so it would pass against a compositor
+   that never answered. A rustty-only `Hotkeys::bound_event_count()` counter (sibling
+   of `Globals::activation_done_count`, same rationale) is what makes the assertion
+   real, and it was controlled — deleting the compositor's `bound()` sends makes it
+   time out.
+3. **`pressed`** — re-emits exactly the bound action on the `trigger` signal, drained
+   by the queue GSource.
+4. **`denied` / `revoked`** — reach `Entry::fail` -> `emit_bind_failed` and the
+   `bind-failed` signal, carrying the compositor's message **BYTES** verbatim and the
+   right `revoked` flag, and drop `bound_count()` by one each. The two failed entries
+   also release their objects on the wire (`Entry::fail`'s `hotkey.destroy()` is
+   observed as two `vicinae_hotkey_v1.destroy` requests server-side), and no further
+   `trigger` fires.
+
+### Negative control (mandatory, and watched go red)
+
+The control is the one the row demanded: make `Entry::fail` stop calling
+`emit_bind_failed` — it returns `None` instead of the `Emission::BindFailed`, i.e.
+a denied binding silently no-ops, which is the exact defect this whole series
+exists to stop. Edited **in place** (never `mv file.bak file`, whose older mtime
+would make cargo skip the rebuild and invalidate the control) and restored with
+`git checkout --`, which writes a fresh mtime.
+
+`denied` arm:
+
+```
+warn(gtk): hotkey denied action=close_surface reason=Ok(1) message=policy forbids this combination
+
+thread '...::hotkeys_wire_path_bound_pressed_denied_revoked' panicked at
+crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs:676:9:
+timed out waiting for a bind-failed emission for the denied binding
+test result: FAILED. 0 passed; 1 failed; ...
+```
+
+`revoked` arm, isolated by temporarily removing the (now-failing, and therefore
+arm-masking) `denied` block so the later assertion is actually reached:
+
+```
+warn(gtk): hotkey revoked action=new_window reason=Ok(0) message=the user removed this shortcut
+
+thread '...::hotkeys_wire_path_bound_pressed_denied_revoked' panicked at
+crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs:676:9:
+timed out waiting for a bind-failed emission for the revoked binding
+test result: FAILED. 0 passed; 1 failed; ...
+```
+
+Note what stays GREEN under the control in both runs: the compositor still logs all
+three `bound` lines and the `denied`/`revoked` handlers still run. Only the
+user-visible notification channel is dead — which is precisely the silent no-op a
+"bound works" wire test would have missed.
+
+### Rebuild-sensitivity, proven once
+
+Before trusting any of the above, the same in-place edit flow was proven to actually
+reach the compiler: an `assert!(false, "REBUILD SENTINEL")` inserted into the test
+body was observed to FAIL (`panicked at ...:719:9: REBUILD SENTINEL`), then removed
+in place, after which the test was observed to pass again. No control in this row
+rests on an artifact cargo might have skipped rebuilding.
+
+### What is still NOT verified (honest residue)
+
+* `released` is not driven. The port's handler for it is `{}` (`Hotkeys.zig:166`), so
+  there is nothing to observe; the generated event `match` in `Hotkeys::on_event` is
+  exhaustive, which is what would catch a protocol bump that gave it meaning.
+* No REAL compositor has ever answered these requests, because none implements the
+  protocol. The harness proves rustty's half of the wire — request encoding, event
+  decoding, dispatch routing, the deferred-emission drain and the failure channel —
+  not that any specific compositor will behave as the fake one does.
+* The graceful-ABSENCE half was already verified separately on a live GNOME/mutter
+  session (`tests/gtk_wayland_vicinae_hotkeys.rs`) and by the full 6-step XDG-portal
+  chain (`.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`); that is unchanged.
+
+**Protocol-churn note (unchanged).** The XML's own description says the protocol
+*"is currently in the testing phase. Backward incompatible changes may be added
+together with the corresponding interface version bump."* A future incompatible bump
+is EXPECTED: re-vendor `crates/rustty-apprt/protocols/vicinae-hotkey-v1.xml` verbatim
+from the oracle and re-run the gates. Both the client bindings AND this harness's
+server bindings are generated from that one file, so they cannot drift apart.
