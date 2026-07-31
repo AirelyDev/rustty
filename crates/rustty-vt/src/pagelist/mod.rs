@@ -269,10 +269,12 @@ pub enum Storage {
 /// Read-only page with full memory access that doesn't change a node's storage
 /// state: if a node is compressed it remains compressed.
 ///
-/// Resident pages are borrowed directly, so they're basically free. Compressed
-/// pages are decoded into an independently owned Page so callers can inspect
-/// their contents. Because resident pages are still borrowed, you have to
-/// continue to have exclusive access to the PageList during this operation.
+/// Resident pages are borrowed directly. So they're basically free.
+///
+/// Compressed pages are decoded into an independently owned Page
+/// by the caller so callers can inspect their contents. Because resident
+/// pages are still borrowed, you have to continue to have exclusive
+/// access to the PageList during this operation.
 ///
 /// PORTS: oracle@main PageList.zig `Node.PreservedPage`.
 ///
@@ -354,10 +356,11 @@ pub(crate) struct CreatePage {
     /// The capacity to allocate the page with.
     pub cap: Capacity,
 
-    /// Force the page backing memory to be an exact-size heap allocation even
-    /// if it would fit within a standard-size pool item. This is used when
-    /// compacting pages to their minimum size, since a pool item always retains
-    /// a full `std_size` buffer regardless of the page layout.
+    /// Force the page backing memory to be an exact-size heap
+    /// allocation even if it would fit within a standard-size pool
+    /// item. This is used when compacting pages to their minimum
+    /// size, since a pool item always retains a full std_size buffer
+    /// regardless of the page layout.
     pub exact_size: bool,
 }
 
@@ -384,9 +387,10 @@ impl CreatePage {
 impl Node {
     /// Return the terminal page stored in this node.
     ///
-    /// WARNING: this will DECOMPRESS compressed pages! Only use it if you need
-    /// access to the underlying memory. If you only need metadata (row/column
-    /// counts etc.) use `metadata`/`rows`/`cols`/`capacity`.
+    /// WARNING: This will DECOMPRESS compressed pages! Only use this if
+    /// you need access to the underlying memory. If you only need access to
+    /// metadata (row, col counts etc) then use the other metadata functions.
+    /// In this port those are `metadata`/`rows`/`cols`/`capacity`.
     ///
     /// PORTS: oracle@main PageList.zig `Node.page`.
     ///
@@ -499,10 +503,16 @@ impl Node {
 
     /// Return read-only page contents without changing this node's storage.
     ///
-    /// A compressed node decodes into an exact-sized, page-aligned buffer owned
-    /// by the returned value. The caller must call `PreservedPage::deinit`.
+    /// `alloc` is unused for a resident node. A compressed node uses it for an
+    /// exact-sized, page-aligned decode buffer owned by the returned value.
     ///
-    /// PORTS: oracle@main PageList.zig `Node.pagePreservingState`.
+    /// The caller must call `PreservedPage.deinit` when finished. See
+    /// `PreservedPage` for the synchronization required by its borrowed
+    /// resident representation.
+    ///
+    /// PORTS: oracle@main PageList.zig `Node.pagePreservingState`. This port
+    /// takes no `alloc` parameter: the decode buffer comes from the global
+    /// allocator (see the `PreservedPage` PORT NOTE).
     ///
     /// # Safety
     /// `node` must point at a live `Node` and the caller must retain exclusive
@@ -583,9 +593,10 @@ impl Node {
                 match unsafe { (*NodeData::compressed_payload(data)).restore() } {
                     Ok(p) => p,
                     Err(_err) => {
-                        // Compressed nodes retain the immutable encoding and
-                        // exact output mapping used to create them. Any decode
-                        // error is an internal codec bug or memory corruption.
+                        // Compressed nodes retain the immutable encoding and exact
+                        // output mapping used to create them. Any decode error is an
+                        // internal codec bug or memory corruption. Keep this switch
+                        // exhaustive so new decoder errors require classification.
                         // log.err("failed to restore compressed page err={}", .{err});
                         panic!("failed to restore compressed terminal page");
                     }
@@ -597,6 +608,8 @@ impl Node {
             },
         };
 
+        // We're now a resident, non-compressed node.
+        //
         // Replacing `data` drops the CompressedPage, freeing its encoding
         // (the oracle's explicit `compressed.deinit()`).
         // SAFETY: `data` points at a live, initialized `NodeData`.
@@ -1067,9 +1080,9 @@ pub struct PageList {
     /// that there and on `IncrementalCompressionState`.
     pub page_compression: compress::IncrementalCompressionState,
 
-    /// Byte size of the total amount of allocated pages. Note this does
-    /// not include the total allocated amount in the pool which may be more
-    /// than this due to preheating.
+    /// Byte size of the raw backing mappings owned by active page nodes. This is
+    /// logical scrollback accounting and does not change while a mapping is
+    /// decommitted. It excludes encoded storage and unused preheated pool items.
     pub page_size: usize,
 
     /// Limits for scrollback.
@@ -1989,6 +2002,17 @@ impl PageList {
         //
         // The buffer minus our header
         //
+        // NOTE: Zig 0.16.0's arenas don't use the linked list types
+        // anymore, so we can just reference fields directly. The node
+        // type is still private though, so we have to parse out some
+        // of the internal methods to work with the buffer - namely
+        // Node.loadBuf and Node.Size.toInt. They are combined below.
+        //
+        // PS: My (vancluever's) reading of the code gives me the
+        // impression that we no longer need to offset the data by the
+        // header, because there's no linked list overhead anymore. But
+        // I'm sure we'll see pretty quick when I run the tests. :)
+        //
         // PORT NOTE: the reference reads the private `ArenaAllocator.BufNode`
         // layout to zero the retained arena memory after `pages.reset`. Our
         // `DynamicMemoryPoolAligned` owns a faithful `ArenaAllocator` and exposes
@@ -2123,6 +2147,14 @@ impl PageList {
 
         // In runtime safety modes, allocators fill with 0xAA. On freestanding
         // (WASM), the WasmAllocator reuses freed slots without zeroing.
+        //
+        // Otherwise, we rely on pool item buffers being zeroed: fresh items
+        // come from the OS page allocator (zeroed pages) and destroyNodeExt
+        // zeroes buffers before returning them to the pool. The one
+        // exception is the first pointer-size bytes, which hold the pool's
+        // free list node while a buffer is in the free list; initBuf below
+        // always overwrites those since the page rows start at offset 0
+        // (comptime-asserted in Page).
         //
         // PORT NOTE (audit #2/#4 lazy-zero): handed-out page buffers are always
         // observably zero, but FRESH ones get there lazily: a fresh pool slot is
@@ -2496,11 +2528,11 @@ impl PageList {
     /// coordinate identifies or whether that coordinate is still in range.
     /// Examples include rotating rows after an erase, truncating a page's row
     /// range, reinitializing the sole remaining page, or shortening the source
-    /// page of a split. Without a new generation, a cached pointer, serial, and
-    /// coordinate could still pass `node_is_valid` while referring to a
-    /// different row than it originally did. Screen and Terminal fast paths
-    /// which manipulate Page rows directly must use this because they bypass
-    /// PageList's own row-mutation helpers.
+    /// page of a split. Without
+    /// a new generation, a cached pointer, serial, and coordinate could still pass
+    /// `nodeIsValid` while referring to a different row than it originally did.
+    /// Screen and Terminal fast paths which manipulate Page rows directly must use
+    /// this because they bypass PageList's own row-mutation helpers.
     ///
     /// The caller must pass a node which is currently live in this PageList.
     /// Call this at the point the operation commits to changing the layout and
@@ -2520,8 +2552,9 @@ impl PageList {
     /// The only state changed here is `node.serial` and the next-generation
     /// counter `page_serial`. Consequently, every previously captured
     /// pointer-plus-serial pair for this node becomes invalid while new
-    /// references can capture the new generation. This does not advance
-    /// `page_serial_epoch`: only `reset` starts a new whole-list validity epoch.
+    /// references can capture the new
+    /// generation. This does not advance `page_serial_epoch`: only `reset` starts a
+    /// new whole-list validity epoch.
     ///
     /// This also does not mutate the page, update tracked pins or viewport
     /// state, adjust row or memory accounting, mark cells dirty, or notify

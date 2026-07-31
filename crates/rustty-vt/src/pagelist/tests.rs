@@ -1564,6 +1564,10 @@ fn pagelist_only_reset_advances_the_serial_epoch() {
 }
 
 // ref: test "PageList reset invalidates stale untracked refs even if node memory is reused"
+//
+// Reset advances the epoch before rebuilding from the node pool. Reject
+// the stale generation before inspecting its pointer, even when that exact
+// address now belongs to a new live generation.
 #[test]
 fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
@@ -2111,8 +2115,9 @@ fn fill_last_page_for_test(s: &mut PageList) {
     }
 }
 
-/// Grow until at least `count` pages sit BEFORE the active area's top-left node,
-/// i.e. are cold history and therefore compression candidates.
+/// Grow a test PageList until it contains at least `count` complete history
+/// pages. The production cold-page boundary is intentionally reused here so
+/// tests do not duplicate the row-to-page arithmetic.
 ///
 /// PORTS: oracle@main PageList.zig `growColdPagesForTest` (9156ada16).
 fn grow_cold_pages_for_test(s: &mut PageList, count: usize) {
@@ -3002,7 +3007,10 @@ fn compressed_encoded_for_test(node: *const super::Node) -> Vec<u8> {
 /// injectable seam and is not ported. The first arm survives structurally and is
 /// asserted below: the resident case returns `PreservedPage::Borrowed` pointing
 /// at the live page, a variant that owns no buffer and therefore cannot have
-/// allocated or copied anything.
+/// allocated or copied anything. The reference's second arm reads:
+///
+///   Preserved-page allocation is opportunistic for callers. Failure leaves
+///   the node and its compressed representation untouched.
 #[cfg_attr(
     miri,
     ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — the cost is page-mapping/LZ4 volume, not assertion overhead, so the debug-assertions-off G6c lane does not rescue it either. Covered natively + by ASan."
@@ -3576,7 +3584,15 @@ fn pagelist_incremental_compression_advances_after_failure() {
 // The behaviour under test — "a rejected candidate advances the pass rather
 // than stalling it" — IS covered, from the two failure sources rustty can
 // actually produce: `..._advances_after_failure` (incompressible page) and
-// `..._advances_after_decommit_failure` (strict reclamation refused).
+// `..._advances_after_decommit_failure` (strict reclamation refused). The
+// reference's two comments there read:
+//
+//   Pool preheating supplies compression scratch. Failing the allocator's
+//   next request therefore rejects the exact encoded allocation while the
+//   source page and pass remain valid.
+//
+//   Allow allocations again. The pass must continue with the following page
+//   rather than retrying the failed candidate.
 
 /// PORTS: oracle@main PageList.zig
 /// `test "PageList incremental compression advances after decommit failure"`.
@@ -15197,6 +15213,12 @@ fn pagelist_jump_minimum_prompt_delta() {
 
 // ref: test "PageList Cell screenPoint supports long scrollback"
 //
+// The reference's setup comment:
+//
+//   A modest number of full-size page nodes is enough to exceed the u16
+//   row range without allocating any page backing memory. screenPoint only
+//   reads the linked metadata while calculating the absolute coordinate.
+//
 // PORT NOTE: the reference builds a `[]Node` of 307 metadata-only nodes with
 // `.data = .{ .resident = undefined }`. rustty does NOT construct `undefined`
 // pages (see the `mixed_width_pin_list_for_test` note); instead this uses THREE
@@ -15266,6 +15288,11 @@ fn pagelist_Cell_screenPoint_supports_long_scrollback() {
 }
 
 // ref: test "PageList pointFromPin rejects overflowing screen coordinate"
+//
+// The reference's setup comment:
+//
+//   Use maximum-height metadata-only pages to model a valid scrollback just
+//   beyond the u32 coordinate range without allocating their backing cells.
 //
 // PORT NOTE: the reference allocates 65,539 metadata-only `Node`s so the
 // accumulated Y exceeds `u32`. That is ~16 MB of `undefined` page structs in
@@ -15640,14 +15667,20 @@ fn pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary() {
         }
     }
 
-    // Erase the first active row, bounded to the whole active area so
-    // the shift crosses the page boundary exactly as eraseRow does.
-    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 0 }), 10)
+    // Erase the first active row with a limit that extends into the
+    // second page (5 rows remain in the first page, so a limit of 6
+    // forces the cross-page path). The dense hyperlink row must cross
+    // the page boundary into the first page.
+    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 0 }), 6)
         .unwrap();
 
+    // Rows within the limit shifted up by one: the '0' marker row was
+    // erased, the dense row moved up across the page boundary to
+    // row 4, row 6 is the new blank row, and rows past the limit are
+    // unchanged.
     let expected: [u32; 10] = [
-        '1' as u32, '2' as u32, '3' as u32, '4' as u32, 'A' as u32, '6' as u32, '7' as u32,
-        '8' as u32, '9' as u32, 0,
+        '1' as u32, '2' as u32, '3' as u32, '4' as u32, 'A' as u32, '6' as u32, 0, '7' as u32,
+        '8' as u32, '9' as u32,
     ];
     for (y, cp) in expected.iter().enumerate() {
         let list_cell = s

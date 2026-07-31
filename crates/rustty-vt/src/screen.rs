@@ -83,6 +83,18 @@ pub use crate::cursor::Style as CursorStyle;
 
 /// Represents the terminal screen.
 pub struct Screen {
+    // io: std.Io
+    //
+    // The reference documents this field as:
+    //
+    //   The I/O implementation to use for any operation that requires one.
+    //
+    // PORT NOTE (`e8525c0fd` "Update to Zig 0.16.0"): `std.Io` is the Zig 0.16
+    // explicit-I/O-context rework, threaded through `Screen.init`/`deinit` and
+    // every operation that can block. Rust has no equivalent ambient-context
+    // parameter and rustty's screen operations do no I/O, so the field has no
+    // counterpart here. Classified with the rest of that commit in
+    // `.port/phase-3/NON_PORTS.md`.
     /// The general purpose allocator to use for all memory allocations.
     /// Unfortunately some screen operations do require allocation.
     pub alloc: Allocator,
@@ -1569,6 +1581,9 @@ impl Screen {
             // after cursorChangePin is unsafe, and we want to keep it out
             // of scope.
             let new_pin = {
+                // Calculate this before cursorChangePin because that function may
+                // adjust the underlying page and invalidate references to its pin.
+
                 // If our pin page change it means that the page that the pin
                 // was on was pruned. In this case, grow() moves the pin to
                 // the top-left of the new page. This effectively moves it by
@@ -1596,10 +1611,26 @@ impl Screen {
 
                 page_pin
             };
-            self.cursor_change_pin(new_pin);
-            let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
-            self.cursor.page_row = page_rac.row;
-            self.cursor.page_cell = page_rac.cell;
+            if std::ptr::eq(unsafe { (*self.cursor.page_pin).node }, new_pin.node) {
+                // Scrolling normally stays within one page. Resolve the page once
+                // while refreshing the cursor pointers. The cursor already holds
+                // live row and cell pointers into this mapping, and grow does not
+                // compress pages, so the node must still be resident here.
+                self.cursor_mark_dirty();
+                let page = unsafe { crate::pagelist::Node::page_assume_resident(new_pin.node) };
+                let page_rac =
+                    unsafe { (*page).get_row_and_cell(new_pin.x as usize, new_pin.y as usize) };
+                unsafe { *self.cursor.page_pin = new_pin };
+                self.cursor.page_row = page_rac.row;
+                self.cursor.page_cell = page_rac.cell;
+            } else {
+                // Crossing a page may require migrating the cursor's style and
+                // hyperlink references, so retain the general path here.
+                self.cursor_change_pin(new_pin);
+                let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+                self.cursor.page_row = page_rac.row;
+                self.cursor.page_cell = page_rac.cell;
+            }
 
             // Our new row is always dirty
             self.cursor_mark_dirty();
@@ -14262,6 +14293,9 @@ mod tests {
     }
 
     // test "Screen: implicit hyperlink ID wraps" (allocation-failure rollback half)
+    //
+    // A failed allocation must roll the wrapped counter back to its
+    // original value as well.
     #[test]
     // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
     // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the

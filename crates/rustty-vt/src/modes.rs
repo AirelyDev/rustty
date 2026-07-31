@@ -466,6 +466,11 @@ const fn e_default(mut entry: ModeEntry) -> ModeEntry {
 /// they're used within Ghostty or google their values. It is not
 /// valuable to redocument them all here.
 ///
+/// The reference's note here reads:
+///
+///   NOTE: When adding a new mode entry, also add a corresponding
+///   GHOSTTY_MODE_* macro in include/ghostty/vt/modes.h.
+///
 /// NOTE: the reference (ghostty) keeps a parallel `GHOSTTY_MODE_*` macro per
 /// entry in its own `include/ghostty/vt/modes.h` embedding header. Rustty's
 /// vt-c C API (`crates/rustty-vt-c/src/modes.rs`) does not yet surface a

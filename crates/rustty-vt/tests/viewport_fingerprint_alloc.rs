@@ -137,6 +137,13 @@ fn fingerprint_only_allocates_on_changes() {
     // Second update over an UNCHANGED viewport with active-dirty tracking
     // disabled: zero allocations. Pre-`9659167ec` this built a whole
     // replacement fingerprint before discovering nothing had changed.
+    //
+    // Upstream states the same contract through its FailingAllocator:
+    //
+    //   Fail the next allocation. An unchanged viewport with active dirty
+    //   tracking disabled should reuse the existing fingerprint and return
+    //   unchanged before rebuilding the search window, so this update should
+    //   succeed without reporting a viewport change.
     let before = allocs();
     assert!(!search.update(unsafe { &(*active_ptr).pages }).unwrap());
     assert_eq!(

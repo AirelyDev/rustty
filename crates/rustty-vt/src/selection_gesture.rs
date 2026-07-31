@@ -349,6 +349,20 @@ impl SelectionGesture {
             Autoscroll::None
         };
 
+        // PORT NOTE (08e376f23 pt.1): upstream routes both xpos values through
+        // a `pixelFromFloat` helper, whose doc reads:
+        //
+        //   Convert a caller-provided floating-point position to a pixel coordinate.
+        //   Negative and NaN values clamp to the origin, matching the drag behavior
+        //   outside the left edge of the surface.
+        //
+        //   @intFromFloat requires a value representable by the destination type.
+        //   Saturate first so positive infinity and oversized coordinates are safe.
+        //
+        // Rust needs no helper: `f64 as u32` is saturating and NaN-safe by
+        // language definition (RFC 2884) and `f64::max(0.0, NaN) == 0.0`, so the
+        // two expressions below already have exactly those semantics. See the
+        // `drag_clamps_unrepresentable_positions` test.
         let selection = match self.left_click_behavior {
             Behavior::Cell => drag_selection(
                 unsafe { *click_pin },

@@ -672,6 +672,11 @@ pub trait Handler {
 /// about in its pursuit of implementing a terminal emulator or other
 /// functionality.
 ///
+/// Note that printable text is delivered via `print_slice` actions
+/// (runs of codepoints) whenever the stream can decode multiple
+/// codepoints at once, and via `print` actions otherwise. Handlers
+/// that care about text must handle both.
+///
 /// The Handler type must also have a `deinit` function.
 ///
 /// The "comptime" key is on purpose (vs. a standard Zig tagged union)

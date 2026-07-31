@@ -125,8 +125,10 @@ pub struct IncrementalCompressionState {
     /// matters. There is a possible edge case where you don't compress, a full
     /// wraparound happens, and you get the same value, but it's so unlikely.
     ///
-    /// PORT NOTE (WS7 B8): the oracle's field is a `u48` so that 16 bits are
-    /// reserved for `Terminal` to add extra state. Rust has no `u48`, so this
+    /// This is 48-bits so that 16-bits can be reserved for Terminal to
+    /// add extra state.
+    ///
+    /// PORT NOTE (WS7 B8): Rust has no `u48`, so this
     /// is a `u64` masked to 48 bits by `mark_activity`; `Terminal` composes its
     /// extra 16 bits in the high bits exactly as the oracle does.
     pub activity_serial: u64,
@@ -144,10 +146,10 @@ pub struct IncrementalCompressionState {
 /// `IncrementalCompressionState.flags`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IncrementalCompressionFlags {
-    /// Set after any page is compressed during the current traversal. We always
-    /// run incremental compression until we get a fully no-compression pass
-    /// (the verification pass). This lets us recompress decompressed pages due
-    /// to search, scrolling, etc.
+    /// Set after any page is compressed during the current traversal.
+    /// We always run incremental compression until we get a fully
+    /// no-compression pass (the verification pass). This lets us
+    /// recompress decompressed pages due to search, scrolling, etc.
     pub did_compress: bool,
 
     /// Set after a traversal first reaches the active boundary. When this

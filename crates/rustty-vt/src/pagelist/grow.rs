@@ -698,12 +698,12 @@ impl PageList {
     /// if the page was already compact or compaction would not provide any
     /// savings.
     ///
-    /// The compacted page is always an exact-size heap allocation, never a pool
-    /// item, since a pool item always retains a full `std_size` buffer
-    /// regardless of the page layout. Note that this means that when compacting
-    /// a pool-owned node, the freed pool item is returned to the pool free list,
-    /// so the memory savings are only fully realized once the pool itself is
-    /// reset or freed.
+    /// The compacted page is always an exact-size heap allocation, never
+    /// a pool item, since a pool item always retains a full std_size
+    /// buffer regardless of the page layout. Note that this means that
+    /// when compacting a pool-owned node, the freed pool item is returned
+    /// to the pool free list, so the memory savings are only fully
+    /// realized once the pool itself is reset or freed.
     ///
     /// If this returns OOM, the PageList is left unchanged and no dangling
     /// memory references exist. It is safe to ignore the error and continue using
