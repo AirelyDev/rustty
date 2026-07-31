@@ -1968,27 +1968,15 @@ pub struct Config {
     /// If the macOS values are set, then this implies `background-blur = true`
     /// on non-macOS platforms.
     ///
-    /// Supported on macOS and on some Linux desktop environments, including:
+    /// On Linux, the exact blur intensity is ignored and any positive integer
+    /// or `true` value will enable background blur. On Wayland, Rustty uses
+    /// the [`ext-background-effect-v1`](https://wayland.app/protocols/ext-background-effect-v1)
+    /// protocol to enable the blur effect, but this is not always supported
+    /// on all compositors. Check the documentation of your compositor or
+    /// desktop environment for blur support and how to configure it.
     ///
-    ///   * KDE Plasma (Wayland and X11)
-    ///
-    /// Warning: the exact blur intensity is _ignored_ under KDE Plasma, and setting
-    /// this setting to either `true` or any positive blur intensity value would
-    /// achieve the same effect. The reason is that KWin, the window compositor
-    /// powering Plasma, only has one global blur setting and does not allow
-    /// applications to specify individual blur settings.
-    ///
-    /// To configure KWin's global blur setting, open System Settings and go to
-    /// "Apps & Windows" > "Window Management" > "Desktop Effects" and select the
-    /// "Blur" plugin. If disabled, enable it by ticking the checkbox to the left.
-    /// Then click on the "Configure" button and there will be two sliders that
-    /// allow you to set background blur and noise intensities for all apps,
-    /// including Rustty.
-    ///
-    /// All other Linux desktop environments are as of now unsupported. Users may
-    /// need to set environment-specific settings and/or install third-party plugins
-    /// in order to support background blur, as there isn't a unified interface for
-    /// doing so.
+    /// On X11, blur can only be enabled when using the KWin compositor
+    /// as a part of KDE Plasma.
     pub background_blur: BackgroundBlur,
 
     // @"unfocused-split-opacity": f64 = 0.7,
@@ -2721,8 +2709,6 @@ pub struct Config {
     /// `global:unconsumed:ctrl+a=reload_config` will make the keybind global
     /// and not consume the input to reload the config.
     ///
-    /// Note: `global:` is only supported on macOS and certain Linux platforms.
-    ///
     /// On macOS, this feature requires accessibility permissions to be granted
     /// to Rustty. When a `global:` keybind is specified and Rustty is launched
     /// or reloaded, Rustty will attempt to request these permissions.
@@ -2730,24 +2716,40 @@ pub struct Config {
     /// you can find these permissions in System Preferences -> Privacy & Security
     /// -> Accessibility.
     ///
-    /// On Linux, you need a desktop environment that implements the
-    /// [Global Shortcuts](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html)
-    /// protocol as a part of its XDG desktop protocol implementation.
-    /// Desktop environments that are known to support (or not support)
-    /// global shortcuts include:
+    /// Since Rustty 1.4.0, global shortcuts on Linux are primarily supported
+    /// through the [`vicinae-hotkey-v1`](https://github.com/vicinaehq/vicinae-wayland-protocols/tree/main/staging/vicinae-hotkey)
+    /// protocol, available out-of-the-box with the following Wayland compositors
+    /// and desktop environments:
     ///
-    ///  - Users using KDE Plasma (since [5.27](https://kde.org/announcements/plasma/5/5.27.0/#wayland))
-    ///    and GNOME (since [48](https://release.gnome.org/48/#and-thats-not-all)) should be able
-    ///    to use global shortcuts with little to no configuration.
+    ///   - Hyprland since version 0.56.0
     ///
-    ///  - Some manual configuration is required on Hyprland. Consult the steps
-    ///    outlined on the [Hyprland Wiki](https://wiki.hyprland.org/Configuring/Binds/#dbus-global-shortcuts)
-    ///    to set up global shortcuts correctly.
-    ///    (Important: [`xdg-desktop-portal-hyprland`](https://wiki.hyprland.org/Hypr-Ecosystem/xdg-desktop-portal-hyprland/)
-    ///    must also be installed!)
+    /// On X11 or when your Wayland compositor/desktop environment does not
+    /// support `vicinae-hotkey-v1`, the much more widely-used
+    /// [XDG Global Shortcuts](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html)
+    /// protocol is used instead.
     ///
-    ///  - Notably, global shortcuts have not been implemented on wlroots-based
-    ///    compositors like Sway (see [upstream issue](https://github.com/emersion/xdg-desktop-portal-wlr/issues/240)).
+    /// Note: XDG Global Shortcuts rely on a functional XDG Desktop Portal
+    /// implementation **that is designed to be used with your desktop environment
+    /// or compositor**. Please make sure that you have the correct one installed.
+    ///
+    /// Desktop environments that are known to support the XDG Global Shortcuts
+    /// protocol include:
+    ///
+    ///  - KDE Plasma since [5.27](https://kde.org/announcements/plasma/5/5.27.0/#wayland)
+    ///    with `xdg-desktop-portal-kde` installed
+    ///
+    ///  - GNOME since [48](https://release.gnome.org/48/#and-thats-not-all) with
+    ///    `xdg-desktop-portal-gnome` installed
+    ///
+    ///  - Hyprland before version 0.56.0, with `xdg-desktop-portal-hyprland`
+    ///    installed. **Some manual configuration is required.** Consult the steps
+    ///    outlined on the [Hyprland Wiki](https://wiki.hypr.land/Configuring/Basics/Binds/#dbus-global-shortcuts)
+    ///    to set up D-Bus-based global shortcuts correctly.
+    ///
+    /// Desktop environments and compositors that don't implement either protocol
+    /// do not support global shortcuts, like wlroots-based compositors e.g. Sway
+    /// (see [upstream issue](https://github.com/emersion/xdg-desktop-portal-wlr/issues/240))
+    /// and COSMIC.
     ///
     /// ## Chained Actions
     ///
