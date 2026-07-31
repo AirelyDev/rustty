@@ -1225,9 +1225,7 @@ mod test_runtime {
             unimplemented!("test runtime: not driven by the C4 seam tests")
         }
 
-        fn default_termio_env(
-            &self,
-        ) -> Result<std::collections::HashMap<String, String>, apprt::ApprtError> {
+        fn default_termio_env(&self) -> Result<rustty_global::EnvMap, apprt::ApprtError> {
             unimplemented!("test runtime: not driven by the C4 seam tests")
         }
     }

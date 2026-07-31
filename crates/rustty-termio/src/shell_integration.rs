@@ -34,7 +34,7 @@ use rustty_config::value_types::ShellIntegrationFeatures;
 use rustty_os::homedir;
 use rustty_os::shell::ShellCommandBuilder;
 
-use crate::command::EnvMap;
+use crate::command::{EnvMap, EnvMapExt as _};
 
 // const log = std.log.scoped(.shell_integration);
 //
@@ -320,7 +320,7 @@ pub fn setupFeatures(env: &mut EnvMap, features: ShellIntegrationFeatures, curso
     //     try env.put("GHOSTTY_SHELL_FEATURES", buf[0..writer.end]);
     // }
     if !writer.is_empty() {
-        env.insert(env_name("SHELL_FEATURES"), writer);
+        env.put(&env_name("SHELL_FEATURES"), writer.as_bytes());
     }
 }
 
@@ -448,8 +448,8 @@ fn setupBash(
     // if (env.get("ENV")) |v| {
     //     try env.put("GHOSTTY_BASH_ENV", v);
     // }
-    if let Some(v) = env.get("ENV").cloned() {
-        env.insert(env_name("BASH_ENV"), v);
+    if let Some(v) = env.getv(b"ENV").map(<[u8]>::to_vec) {
+        env.put(&env_name("BASH_ENV"), &v);
     }
 
     // Set our new ENV to point to our integration script.
@@ -462,11 +462,12 @@ fn setupBash(
     //
     // PORT NOTE (R2 identity): the integration script carries the product
     // identity (`ghostty.bash` -> `<app>.bash`, rustty-identity).
-    let script_path = format!(
-        "{}/shell-integration/bash/{}.bash",
-        env_string(resource_dir),
-        rustty_identity::APP_NAME,
-    );
+    let script_path = cat(&[
+        resource_dir,
+        b"/shell-integration/bash/",
+        rustty_identity::APP_NAME.as_bytes(),
+        b".bash",
+    ]);
     // if (std.fs.openFileAbsolute(script_path, .{})) |file| {
     //     file.close();
     //     try env.put("ENV", script_path);
@@ -475,46 +476,51 @@ fn setupBash(
     //     env.remove("GHOSTTY_BASH_ENV");
     //     return null;
     // }
-    match std::fs::File::open(&script_path) {
+    match std::fs::File::open(byte_path(&script_path)) {
         Ok(file) => {
             drop(file); // file.close();
-            env.insert("ENV".to_string(), script_path);
+            env.put(b"ENV", &script_path);
         }
         Err(_err) => {
             // log.warn("unable to open {s}: {}", .{ script_path, err });
-            env.remove(&env_name("BASH_ENV"));
+            env.removev(&env_name("BASH_ENV"));
             return Ok(None);
         }
     }
 
     // try env.put("GHOSTTY_BASH_INJECT", buf[0..inject.end]);
-    env.insert(env_name("BASH_INJECT"), inject);
+    env.put(&env_name("BASH_INJECT"), inject.as_bytes());
     // if (rcfile) |v| {
     //     try env.put("GHOSTTY_BASH_RCFILE", v);
     // }
     if let Some(v) = rcfile {
-        env.insert(env_name("BASH_RCFILE"), env_string(&v));
+        env.put(&env_name("BASH_RCFILE"), &v);
     }
 
     // In POSIX mode, HISTFILE defaults to ~/.sh_history, so unless we're
     // staying in POSIX mode (--posix), change it back to ~/.bash_history.
     // if (env.get("HISTFILE") == null) {
-    if env.get("HISTFILE").is_none() {
+    if env.getv(b"HISTFILE").is_none() {
         // var home_buf: [1024]u8 = undefined;
         let mut home_buf = [0u8; 1024];
         // if (try homedir.home(&home_buf)) |home| {
-        if let Some(home) = homedir::home(&mut home_buf).map_err(Error::Homedir)? {
+        // PORT NOTE (P3-W7 T3 / area-E `E14`): upstream's `setupBash` now does
+        //   var environ_map = try global.environMap();
+        //   defer environ_map.deinit();
+        //   homedir.home(&environ_map, &home_buf)
+        let environ_map = rustty_global::environ_map();
+        if let Some(home) = homedir::home(&environ_map, &mut home_buf).map_err(Error::Homedir)? {
             // var histfile_buf: [std.fs.max_path_bytes]u8 = undefined;
             // const histfile = try std.fmt.bufPrint(
             //     &histfile_buf,
             //     "{s}/.bash_history",
             //     .{home},
             // );
-            let histfile = format!("{}/.bash_history", env_string(home));
+            let histfile = cat(&[home, b"/.bash_history"]);
             // try env.put("HISTFILE", histfile);
-            env.insert("HISTFILE".to_string(), histfile);
+            env.put(b"HISTFILE", &histfile);
             // try env.put("GHOSTTY_BASH_UNEXPORT_HISTFILE", "1");
-            env.insert(env_name("BASH_UNEXPORT_HISTFILE"), "1".to_string());
+            env.put(&env_name("BASH_UNEXPORT_HISTFILE"), b"1");
         }
     }
 
@@ -553,13 +559,13 @@ fn setupXdgDataDirs(resource_dir: &[u8], env: &mut EnvMap) -> bool {
     //     "{s}/shell-integration",
     //     .{resource_dir},
     // );
-    let integ_path = format!("{}/shell-integration", env_string(resource_dir));
+    let integ_path = cat(&[resource_dir, b"/shell-integration"]);
     // var integ_dir = std.fs.openDirAbsolute(integ_path, .{}) catch |err| {
     //     log.warn("unable to open {s}: {}", .{ integ_path, err });
     //     return false;
     // };
     // integ_dir.close();
-    match std::fs::read_dir(&integ_path) {
+    match std::fs::read_dir(byte_path(&integ_path)) {
         Ok(integ_dir) => drop(integ_dir), // integ_dir.close();
         Err(_err) => {
             // log.warn("unable to open {s}: {}", .{ integ_path, err });
@@ -571,7 +577,7 @@ fn setupXdgDataDirs(resource_dir: &[u8], env: &mut EnvMap) -> bool {
     // This happens in the shell integration config itself. We do this
     // so that our modifications don't interfere with other commands.
     // try env.put("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", integ_path);
-    env.insert(env_name("SHELL_INTEGRATION_XDG_DIR"), integ_path.clone());
+    env.put(&env_name("SHELL_INTEGRATION_XDG_DIR"), &integ_path);
 
     // We attempt to avoid allocating by using the stack up to 4K.
     // Max stack size is considerably larger on mac
@@ -590,7 +596,7 @@ fn setupXdgDataDirs(resource_dir: &[u8], env: &mut EnvMap) -> bool {
     // our desired integration dir directly. See #2711.
     // <https://specifications.freedesktop.org/basedir-spec/0.6/#variables>
     // const xdg_data_dirs_key = "XDG_DATA_DIRS";
-    let xdg_data_dirs_key = "XDG_DATA_DIRS";
+    let xdg_data_dirs_key: &[u8] = b"XDG_DATA_DIRS";
     // try env.put(
     //     xdg_data_dirs_key,
     //     try internal_os.prependEnv(
@@ -600,14 +606,10 @@ fn setupXdgDataDirs(resource_dir: &[u8], env: &mut EnvMap) -> bool {
     //     ),
     // );
     let current = env
-        .get(xdg_data_dirs_key)
-        .map(String::as_str)
-        .unwrap_or("/usr/local/share:/usr/share")
-        .to_string();
-    env.insert(
-        xdg_data_dirs_key.to_string(),
-        rustty_os::env::prependEnv(&current, &integ_path),
-    );
+        .getv(xdg_data_dirs_key)
+        .unwrap_or(b"/usr/local/share:/usr/share")
+        .to_vec();
+    env.put(xdg_data_dirs_key, &prependEnv(&current, &integ_path));
 
     true
 }
@@ -737,8 +739,8 @@ fn setupZsh(
     // if (env.get("ZDOTDIR")) |old| {
     //     try env.put("GHOSTTY_ZSH_ZDOTDIR", old);
     // }
-    if let Some(old) = env.get("ZDOTDIR").cloned() {
-        env.insert(env_name("ZSH_ZDOTDIR"), old);
+    if let Some(old) = env.getv(b"ZDOTDIR").map(<[u8]>::to_vec) {
+        env.put(&env_name("ZSH_ZDOTDIR"), &old);
     }
 
     // Set our new ZDOTDIR to point to our shell resource directory.
@@ -748,13 +750,13 @@ fn setupZsh(
     //     "{s}/shell-integration/zsh",
     //     .{resource_dir},
     // );
-    let integ_path = format!("{}/shell-integration/zsh", env_string(resource_dir));
+    let integ_path = cat(&[resource_dir, b"/shell-integration/zsh"]);
     // var integ_dir = std.fs.openDirAbsolute(integ_path, .{}) catch |err| {
     //     log.warn("unable to open {s}: {}", .{ integ_path, err });
     //     return null;
     // };
     // integ_dir.close();
-    match std::fs::read_dir(&integ_path) {
+    match std::fs::read_dir(byte_path(&integ_path)) {
         Ok(integ_dir) => drop(integ_dir), // integ_dir.close();
         Err(_err) => {
             // log.warn("unable to open {s}: {}", .{ integ_path, err });
@@ -762,7 +764,7 @@ fn setupZsh(
         }
     }
     // try env.put("ZDOTDIR", integ_path);
-    env.insert("ZDOTDIR".to_string(), integ_path);
+    env.put(b"ZDOTDIR", &integ_path);
 
     // return try command.clone(alloc);
     Ok(Some(command.clone()))
@@ -785,25 +787,118 @@ fn basename(path: &[u8]) -> &[u8] {
 /// PORT NOTE (R2 identity): the reference's `GHOSTTY_*` env-var names carry the
 /// product identity: `<ENV_PREFIX>_<suffix>` (rustty-os resourcesdir
 /// precedent).
-pub(crate) fn env_name(suffix: &str) -> String {
-    format!("{}_{}", rustty_identity::ENV_PREFIX, suffix)
+pub(crate) fn env_name(suffix: &str) -> Vec<u8> {
+    format!("{}_{}", rustty_identity::ENV_PREFIX, suffix).into_bytes()
 }
 
-/// PORT NOTE: the crate's `EnvMap` models `std.process.EnvMap` with Rust
-/// `String`s (the stage-3 Command decision); the reference's `[]const u8`
-/// values convert at the put boundary. Non-UTF-8 bytes panic, matching
-/// rustty-os `getEnvMap`'s `std::env::vars` behavior (paths handed here come
-/// from the resources dir / homedir, both UTF-8 in practice).
-pub(crate) fn env_string(bytes: &[u8]) -> String {
-    std::str::from_utf8(bytes)
-        .expect("EnvMap models std.process.EnvMap with String (stage-3 Command decision)")
-        .to_string()
+/// PORT NOTE (P3-W7 T2): this used to be
+/// `std::str::from_utf8(bytes).expect(..)` — a **panic** on any non-UTF-8
+/// byte, because the crate's `EnvMap` modelled `std.process.EnvMap` with Rust
+/// `String`s. The map is byte-typed now (as the reference always was), so the
+/// conversion is the identity and the panic is gone. Kept as a named function
+/// so the call sites still read like the reference's `[]const u8` puts.
+pub(crate) fn env_string(bytes: &[u8]) -> Vec<u8> {
+    bytes.to_vec()
 }
+
+/// PORT NOTE (P3-W7 T2): `std.fmt.bufPrint(&buf, "{s}...{s}", .{..})` over
+/// `[]const u8` path pieces. Rust's `format!` needs `str`, which would force a
+/// lossy conversion of a byte-typed path; this concatenates the raw bytes
+/// instead, which is what the reference's `bufPrint` does.
+pub(crate) fn cat(parts: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(parts.iter().map(|p| p.len()).sum());
+    for p in parts {
+        out.extend_from_slice(p);
+    }
+    out
+}
+
+/// PORT NOTE (P3-W7 T2): `std.fs.openFileAbsolute(path, .{})` over a
+/// `[]const u8`. `Path` is `OsStr`-backed, so a byte path round-trips
+/// losslessly through `OsStr::from_encoded_bytes_unchecked`.
+pub(crate) fn byte_path(bytes: &[u8]) -> std::path::PathBuf {
+    std::path::PathBuf::from(rustty_global::environ::os_string_from_bytes(bytes))
+}
+
+/// Prepend a value to an environment variable such as PATH.
+/// The returned value is always allocated so it must be freed.
+//
+// PORT NOTE (P3-W7 T2 / area-E `E13`): moved here from `rustty-os`'s `env.rs`
+// (upstream `src/os/env.zig`, DELETED by `e8525c0fd`), which moved it into
+// `src/termio/shell_integration.zig` as a file-private fn. Its one consumer is
+// `setupXdgDataDirs` below. Re-typed on bytes on the way: PATH-like variables
+// are byte strings and a non-UTF-8 component could not round-trip through the
+// old `&str`/`String` signature.
+pub(crate) fn prependEnv(current: &[u8], value: &[u8]) -> Vec<u8> {
+    // If there is no prior value, we return it as-is
+    if current.is_empty() {
+        return value.to_vec();
+    }
+
+    let mut out = Vec::with_capacity(value.len() + 1 + current.len());
+    out.extend_from_slice(value);
+    out.push(PATH_LIST_DELIMITER);
+    out.extend_from_slice(current);
+    out
+}
+
+/// PORT NOTE: `std.fs.path.delimiter` — the PATH-list separator: `';'` on
+/// Windows, `':'` elsewhere. Rust's std does not expose it, so the reference's
+/// value is reproduced as a single byte (moved with `prependEnv` from
+/// `rustty-os`'s `env.rs`).
+#[cfg(windows)]
+pub(crate) const PATH_LIST_DELIMITER: u8 = b';';
+#[cfg(not(windows))]
+pub(crate) const PATH_LIST_DELIMITER: u8 = b':';
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustty_os::tempdir::TempDir;
+
+    // ---- MOVED FROM `rustty-os`'s `env.rs` (P3-W7 T2 / area-E `E13`) --------
+    // Upstream `e8525c0fd` moved `prependEnv` into
+    // `src/termio/shell_integration.zig` when it deleted `src/os/env.zig`; its
+    // two tests move with it. Re-typed on bytes with the function.
+
+    // test "prependEnv empty" {
+    #[test]
+    #[allow(non_snake_case)]
+    fn prependEnv_empty() {
+        let result = prependEnv(b"", b"foo");
+        assert_eq!(result, b"foo");
+    }
+
+    // test "prependEnv existing" {
+    #[test]
+    #[allow(non_snake_case)]
+    fn prependEnv_existing() {
+        let result = prependEnv(b"a:b", b"foo");
+        if cfg!(windows) {
+            assert_eq!(result, b"foo;a:b");
+        } else {
+            assert_eq!(result, b"foo:a:b");
+        }
+    }
+
+    /// NEGATIVE CONTROL (P3-W7 T2 Step 4): a **non-UTF-8** PATH component must
+    /// round-trip through `prepend_env` byte-exactly. Reverting the signature
+    /// to `&str`/`String` makes this fail to COMPILE.
+    #[test]
+    fn prepend_env_preserves_non_utf8_path_component() {
+        let current: &[u8] = &[b'/', b'u', b's', b'r', b'/', 0xff, b'x'];
+        let added: &[u8] = &[b'/', 0xfe, b'o', b'p', b't'];
+
+        let joined = prependEnv(current, added);
+        assert_eq!(joined[..added.len()], *added);
+        assert_eq!(joined[added.len()], PATH_LIST_DELIMITER);
+        assert_eq!(joined[added.len() + 1..], *current);
+        assert!(
+            std::str::from_utf8(&joined).is_err(),
+            "input must be non-UTF-8"
+        );
+    }
+    // ---- end moved block ---------------------------------------------------
 
     // test "force shell" {
     #[test]
@@ -957,8 +1052,8 @@ mod tests {
             );
             // try testing.expectEqualStrings("cursor:blink,path,ssh-env,ssh-terminfo,sudo,title", env.get("GHOSTTY_SHELL_FEATURES").?);
             assert_eq!(
-                "cursor:blink,path,ssh-env,ssh-terminfo,sudo,title",
-                env.get(&env_name("SHELL_FEATURES")).unwrap()
+                b"cursor:blink,path,ssh-env,ssh-terminfo,sudo,title",
+                env.getv(&env_name("SHELL_FEATURES")).unwrap()
             );
         }
 
@@ -1003,8 +1098,8 @@ mod tests {
             );
             // try testing.expectEqualStrings("ssh-env,sudo", env.get("GHOSTTY_SHELL_FEATURES").?);
             assert_eq!(
-                "ssh-env,sudo",
-                env.get(&env_name("SHELL_FEATURES")).unwrap()
+                b"ssh-env,sudo",
+                env.getv(&env_name("SHELL_FEATURES")).unwrap()
             );
         }
 
@@ -1026,8 +1121,8 @@ mod tests {
             );
             // try testing.expectEqualStrings("cursor:blink", env.get("GHOSTTY_SHELL_FEATURES").?);
             assert_eq!(
-                "cursor:blink",
-                env.get(&env_name("SHELL_FEATURES")).unwrap()
+                b"cursor:blink",
+                env.getv(&env_name("SHELL_FEATURES")).unwrap()
             );
         }
 
@@ -1049,8 +1144,8 @@ mod tests {
             );
             // try testing.expectEqualStrings("cursor:steady", env.get("GHOSTTY_SHELL_FEATURES").?);
             assert_eq!(
-                "cursor:steady",
-                env.get(&env_name("SHELL_FEATURES")).unwrap()
+                b"cursor:steady",
+                env.getv(&env_name("SHELL_FEATURES")).unwrap()
             );
         }
     }
@@ -1078,7 +1173,7 @@ mod tests {
             matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"bash --posix")
         );
         // try testing.expectEqualStrings("1", env.get("GHOSTTY_BASH_INJECT").?);
-        assert_eq!("1", env.get(&env_name("BASH_INJECT")).unwrap());
+        assert_eq!(b"1", env.getv(&env_name("BASH_INJECT")).unwrap());
 
         // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         // try testing.expectEqualStrings(
@@ -1086,12 +1181,13 @@ mod tests {
         //     env.get("ENV").?,
         // );
         assert_eq!(
-            &format!(
-                "{}/{}.bash",
-                env_string(&res.shell_path),
-                rustty_identity::APP_NAME
-            ),
-            env.get("ENV").unwrap()
+            cat(&[
+                &res.shell_path,
+                b"/",
+                rustty_identity::APP_NAME.as_bytes(),
+                b".bash",
+            ]),
+            env.getv(b"ENV").unwrap()
         );
 
         res.deinit();
@@ -1155,7 +1251,7 @@ mod tests {
                 matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"bash --posix")
             );
             // try testing.expectEqualStrings("1 --norc", env.get("GHOSTTY_BASH_INJECT").?);
-            assert_eq!("1 --norc", env.get(&env_name("BASH_INJECT")).unwrap());
+            assert_eq!(b"1 --norc", env.getv(&env_name("BASH_INJECT")).unwrap());
         }
 
         // bash --noprofile
@@ -1174,7 +1270,10 @@ mod tests {
                 matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"bash --posix")
             );
             // try testing.expectEqualStrings("1 --noprofile", env.get("GHOSTTY_BASH_INJECT").?);
-            assert_eq!("1 --noprofile", env.get(&env_name("BASH_INJECT")).unwrap());
+            assert_eq!(
+                b"1 --noprofile",
+                env.getv(&env_name("BASH_INJECT")).unwrap()
+            );
         }
 
         res.deinit();
@@ -1201,7 +1300,7 @@ mod tests {
                 matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"bash --posix")
             );
             // try testing.expectEqualStrings("profile.sh", env.get("GHOSTTY_BASH_RCFILE").?);
-            assert_eq!("profile.sh", env.get(&env_name("BASH_RCFILE")).unwrap());
+            assert_eq!(b"profile.sh", env.getv(&env_name("BASH_RCFILE")).unwrap());
         }
 
         // bash --init-file
@@ -1218,7 +1317,7 @@ mod tests {
                 matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"bash --posix")
             );
             // try testing.expectEqualStrings("profile.sh", env.get("GHOSTTY_BASH_RCFILE").?);
-            assert_eq!("profile.sh", env.get(&env_name("BASH_RCFILE")).unwrap());
+            assert_eq!(b"profile.sh", env.getv(&env_name("BASH_RCFILE")).unwrap());
         }
 
         res.deinit();
@@ -1241,9 +1340,9 @@ mod tests {
             )
             .unwrap();
             // try testing.expect(std.mem.endsWith(u8, env.get("HISTFILE").?, ".bash_history"));
-            assert!(env.get("HISTFILE").unwrap().ends_with(".bash_history"));
+            assert!(env.getv(b"HISTFILE").unwrap().ends_with(b".bash_history"));
             // try testing.expectEqualStrings("1", env.get("GHOSTTY_BASH_UNEXPORT_HISTFILE").?);
-            assert_eq!("1", env.get(&env_name("BASH_UNEXPORT_HISTFILE")).unwrap());
+            assert_eq!(b"1", env.getv(&env_name("BASH_UNEXPORT_HISTFILE")).unwrap());
         }
 
         // HISTFILE set
@@ -1251,7 +1350,7 @@ mod tests {
             let mut env = EnvMap::new();
 
             // try env.put("HISTFILE", "my_history");
-            env.insert("HISTFILE".to_string(), "my_history".to_string());
+            env.put(b"HISTFILE", b"my_history");
 
             // _ = try setupBash(alloc, .{ .shell = "bash" }, res.path, &env);
             let _ = setupBash(
@@ -1261,7 +1360,7 @@ mod tests {
             )
             .unwrap();
             // try testing.expectEqualStrings("my_history", env.get("HISTFILE").?);
-            assert_eq!("my_history", env.get("HISTFILE").unwrap());
+            assert_eq!(b"my_history", env.getv(b"HISTFILE").unwrap());
             // try testing.expect(env.get("GHOSTTY_BASH_UNEXPORT_HISTFILE") == null);
             assert!(!env.contains_key(&env_name("BASH_UNEXPORT_HISTFILE")));
         }
@@ -1277,7 +1376,7 @@ mod tests {
         let mut env = EnvMap::new();
 
         // try env.put("ENV", "env.sh");
-        env.insert("ENV".to_string(), "env.sh".to_string());
+        env.put(b"ENV", b"env.sh");
 
         // _ = try setupBash(alloc, .{ .shell = "bash" }, res.path, &env);
         let _ = setupBash(
@@ -1287,7 +1386,7 @@ mod tests {
         )
         .unwrap();
         // try testing.expectEqualStrings("env.sh", env.get("GHOSTTY_BASH_ENV").?);
-        assert_eq!("env.sh", env.get(&env_name("BASH_ENV")).unwrap());
+        assert_eq!(b"env.sh", env.getv(&env_name("BASH_ENV")).unwrap());
 
         // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         // try testing.expectEqualStrings(
@@ -1295,12 +1394,13 @@ mod tests {
         //     env.get("ENV").?,
         // );
         assert_eq!(
-            &format!(
-                "{}/{}.bash",
-                env_string(&res.shell_path),
-                rustty_identity::APP_NAME
-            ),
-            env.get("ENV").unwrap()
+            cat(&[
+                &res.shell_path,
+                b"/",
+                rustty_identity::APP_NAME.as_bytes(),
+                b".bash",
+            ]),
+            env.getv(b"ENV").unwrap()
         );
 
         res.deinit();
@@ -1398,19 +1498,16 @@ mod tests {
             //     env.get("GHOSTTY_SHELL_INTEGRATION_XDG_DIR").?,
             // );
             assert_eq!(
-                &format!("{}/shell-integration", env_string(&res.path)),
-                env.get(&env_name("SHELL_INTEGRATION_XDG_DIR")).unwrap()
+                cat(&[&res.path, b"/shell-integration"]),
+                env.getv(&env_name("SHELL_INTEGRATION_XDG_DIR")).unwrap()
             );
             // try testing.expectEqualStrings(
             //     try std.fmt.bufPrint(&path_buf, "{s}/shell-integration:/usr/local/share:/usr/share", .{res.path}),
-            //     env.get("XDG_DATA_DIRS").?,
+            //     env.getv(b"XDG_DATA_DIRS").?,
             // );
             assert_eq!(
-                &format!(
-                    "{}/shell-integration:/usr/local/share:/usr/share",
-                    env_string(&res.path)
-                ),
-                env.get("XDG_DATA_DIRS").unwrap()
+                cat(&[&res.path, b"/shell-integration:/usr/local/share:/usr/share"]),
+                env.getv(b"XDG_DATA_DIRS").unwrap()
             );
 
             res.deinit();
@@ -1430,7 +1527,7 @@ mod tests {
             let mut env = EnvMap::new();
 
             // try env.put("XDG_DATA_DIRS", "/opt/share");
-            env.insert("XDG_DATA_DIRS".to_string(), "/opt/share".to_string());
+            env.put(b"XDG_DATA_DIRS", b"/opt/share");
 
             // try testing.expect(try setupXdgDataDirs(alloc, res.path, &env));
             assert!(setupXdgDataDirs(&res.path, &mut env));
@@ -1440,16 +1537,16 @@ mod tests {
             //     env.get("GHOSTTY_SHELL_INTEGRATION_XDG_DIR").?,
             // );
             assert_eq!(
-                &format!("{}/shell-integration", env_string(&res.path)),
-                env.get(&env_name("SHELL_INTEGRATION_XDG_DIR")).unwrap()
+                cat(&[&res.path, b"/shell-integration"]),
+                env.getv(&env_name("SHELL_INTEGRATION_XDG_DIR")).unwrap()
             );
             // try testing.expectEqualStrings(
             //     try std.fmt.bufPrint(&path_buf, "{s}/shell-integration:/opt/share", .{res.path}),
-            //     env.get("XDG_DATA_DIRS").?,
+            //     env.getv(b"XDG_DATA_DIRS").?,
             // );
             assert_eq!(
-                &format!("{}/shell-integration:/opt/share", env_string(&res.path)),
-                env.get("XDG_DATA_DIRS").unwrap()
+                cat(&[&res.path, b"/shell-integration:/opt/share"]),
+                env.getv(b"XDG_DATA_DIRS").unwrap()
             );
 
             res.deinit();
@@ -1506,17 +1603,17 @@ mod tests {
         //     env.get("GHOSTTY_SHELL_INTEGRATION_XDG_DIR").?,
         // );
         assert_eq!(
-            &format!("{}/shell-integration", env_string(&res.path)),
-            env.get(&env_name("SHELL_INTEGRATION_XDG_DIR")).unwrap()
+            cat(&[&res.path, b"/shell-integration"]),
+            env.getv(&env_name("SHELL_INTEGRATION_XDG_DIR")).unwrap()
         );
         // try testing.expectStringStartsWith(
-        //     env.get("XDG_DATA_DIRS").?,
+        //     env.getv(b"XDG_DATA_DIRS").?,
         //     try std.fmt.bufPrint(&path_buf, "{s}/shell-integration", .{res.path}),
         // );
         assert!(env
-            .get("XDG_DATA_DIRS")
+            .getv(b"XDG_DATA_DIRS")
             .unwrap()
-            .starts_with(&format!("{}/shell-integration", env_string(&res.path))));
+            .starts_with(&cat(&[&res.path, b"/shell-integration"])));
 
         res.deinit();
     }
@@ -1548,8 +1645,8 @@ mod tests {
             )
             .unwrap()
             .is_none());
-            // try testing.expect(env.get("XDG_DATA_DIRS") != null);
-            assert!(env.contains_key("XDG_DATA_DIRS"));
+            // try testing.expect(env.getv(b"XDG_DATA_DIRS") != null);
+            assert!(env.hasv(b"XDG_DATA_DIRS"));
             // try testing.expect(env.get("GHOSTTY_SHELL_INTEGRATION_XDG_DIR") != null);
             assert!(env.contains_key(&env_name("SHELL_INTEGRATION_XDG_DIR")));
         }
@@ -1605,7 +1702,7 @@ mod tests {
         // try testing.expectEqualStrings("zsh", command.?.shell);
         assert!(matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"zsh"));
         // try testing.expectEqualStrings(res.shell_path, env.get("ZDOTDIR").?);
-        assert_eq!(&env_string(&res.shell_path), env.get("ZDOTDIR").unwrap());
+        assert_eq!(&env_string(&res.shell_path), env.getv(b"ZDOTDIR").unwrap());
         // try testing.expect(env.get("GHOSTTY_ZSH_ZDOTDIR") == null);
         assert!(!env.contains_key(&env_name("ZSH_ZDOTDIR")));
 
@@ -1622,7 +1719,7 @@ mod tests {
         let mut env = EnvMap::new();
 
         // try env.put("ZDOTDIR", "$HOME/.config/zsh");
-        env.insert("ZDOTDIR".to_string(), "$HOME/.config/zsh".to_string());
+        env.put(b"ZDOTDIR", b"$HOME/.config/zsh");
 
         // const command = try setupZsh(alloc, .{ .shell = "zsh" }, res.path, &env);
         let command = setupZsh(
@@ -1634,11 +1731,11 @@ mod tests {
         // try testing.expectEqualStrings("zsh", command.?.shell);
         assert!(matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"zsh"));
         // try testing.expectEqualStrings(res.shell_path, env.get("ZDOTDIR").?);
-        assert_eq!(&env_string(&res.shell_path), env.get("ZDOTDIR").unwrap());
+        assert_eq!(&env_string(&res.shell_path), env.getv(b"ZDOTDIR").unwrap());
         // try testing.expectEqualStrings("$HOME/.config/zsh", env.get("GHOSTTY_ZSH_ZDOTDIR").?);
         assert_eq!(
-            "$HOME/.config/zsh",
-            env.get(&env_name("ZSH_ZDOTDIR")).unwrap()
+            b"$HOME/.config/zsh",
+            env.getv(&env_name("ZSH_ZDOTDIR")).unwrap()
         );
 
         res.deinit();
@@ -1721,7 +1818,7 @@ mod tests {
             //     .{ path, relative_shell_path },
             // );
             // errdefer allocator.free(shell_path);
-            let shell_path = format!("{}/{}", env_string(&path), relative_shell_path).into_bytes();
+            let shell_path = cat(&[&path, b"/", relative_shell_path.as_bytes()]);
 
             // switch (shell) {
             //     .bash => try tmp_dir.dir.writeFile(.{

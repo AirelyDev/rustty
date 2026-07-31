@@ -22,10 +22,18 @@ pub fn defaultDir() -> Result<Dir, internal_os::xdg::DirError> {
     // (R2: the app-name segment of the `"ghostty/crash"` subdir is sourced from
     // rustty-identity, the identity source-of-truth crate, not hardcoded.)
     let subdir = format!("{}/crash", rustty_identity::APP_NAME);
-    let crash_dir = internal_os::xdg::state(internal_os::xdg::Options {
-        subdir: Some(&subdir),
-        ..Default::default()
-    })?;
+    // PORT NOTE (P3-W7 T3 / area-E `E15`):
+    //   var environ_map = try global.environMap();
+    //   defer environ_map.deinit();
+    //   const crash_dir = try internal_os.xdg.state(alloc, &environ_map, ..);
+    let environ_map = rustty_global::environ_map();
+    let crash_dir = internal_os::xdg::state(
+        &environ_map,
+        internal_os::xdg::Options {
+            subdir: Some(&subdir),
+            ..Default::default()
+        },
+    )?;
     // errdefer alloc.free(crash_dir); — ownership/Drop frees on every path.
     // return .{ .path = crash_dir };
     Ok(Dir { path: crash_dir })

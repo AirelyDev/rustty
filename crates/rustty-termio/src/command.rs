@@ -67,9 +67,22 @@ use core::fmt::Write as _;
 #[cfg(not(windows))]
 use std::os::fd::{AsRawFd as _, RawFd};
 
-/// PORT NOTE: `EnvMap = std.process.EnvMap` — a string-keyed hash map of
-/// environment variables (the same shape rustty-os `getEnvMap` returns).
-pub type EnvMap = std::collections::HashMap<String, String>;
+/// PORT NOTE: `EnvMap = std.process.EnvMap` — a hash map of environment
+/// variables. Upstream retyped this to `std.process.Environ.Map` when
+/// `os/env.zig` was deleted (`e8525c0fd`); rustty's single definition of that
+/// map lives in `rustty-global` next to the captured `Environ` block.
+///
+/// P3-W7 T2: this was `HashMap<String, String>`, which could not represent a
+/// non-UTF-8 environment variable at all — the defect that made
+/// `rustty-os`'s `getEnvMap` **panic** on the surface-creation path. Zig
+/// byte-slices become `Vec<u8>`/`&[u8]`, never lossy `String`.
+pub type EnvMap = rustty_global::EnvMap;
+
+/// PORT NOTE (P3-W7 T2): `std.process.EnvMap`'s own `put`/`get`/`remove` API
+/// over byte slices, restored as an extension trait next to the map type in
+/// `rustty-global`. Re-exported here because `Command`/`Exec` are its heaviest
+/// users and the reference spells them on `EnvMap` itself.
+pub use rustty_global::EnvMapExt;
 
 /// Function prototype for a function executed /in the child process/ after the
 /// fork, but before exec'ing the command. If the function returns a u8, the
@@ -834,11 +847,11 @@ fn createNullDelimitedEnvMap(env_map: &EnvMap) -> NullDelimitedEnvMap {
         // const env_buf = try arena.allocSentinel(u8, pair.key_ptr.len + pair.value_ptr.len + 1, 0);
         let mut env_buf: Vec<u8> = Vec::with_capacity(key.len() + value.len() + 2);
         // @memcpy(env_buf[0..pair.key_ptr.len], pair.key_ptr.*);
-        env_buf.extend_from_slice(key.as_bytes());
+        env_buf.extend_from_slice(key);
         // env_buf[pair.key_ptr.len] = '=';
         env_buf.push(b'=');
         // @memcpy(env_buf[pair.key_ptr.len + 1 ..], pair.value_ptr.*);
-        env_buf.extend_from_slice(value.as_bytes());
+        env_buf.extend_from_slice(value);
         // (the allocSentinel 0 terminator)
         env_buf.push(0);
         // envp_buf[i] = env_buf.ptr;
@@ -864,6 +877,29 @@ fn createNullDelimitedEnvMap(env_map: &EnvMap) -> NullDelimitedEnvMap {
 // PORT NOTE: `fn createWindowsEnvBlock(allocator: mem.Allocator, env_map: *const
 // EnvMap) ![]u16` — the allocator collapses into the returned Vec. Compiled
 // on all targets (pure re-encode logic); only `startWindows` calls it.
+/// PORT NOTE (P3-W7 T2): `std.unicode.utf8ToUtf16Le` over an `EnvMap` entry.
+/// The map is byte-typed (`Vec<u8>`), and on Windows those bytes are the
+/// lossless WTF-8 encoding `OsStr::as_encoded_bytes` produces, so the round
+/// trip back to UTF-16 goes through `OsStr` rather than `str` — a non-UTF-8
+/// (unpaired-surrogate) value must not be corrupted here.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn encode_wide(bytes: &[u8]) -> Vec<u16> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        rustty_global::environ::os_string_from_bytes(bytes)
+            .as_os_str()
+            .encode_wide()
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        // Compiled on all targets (the reference's `createWindowsEnvBlock` is
+        // too); off Windows the bytes are plain POSIX bytes.
+        String::from_utf8_lossy(bytes).encode_utf16().collect()
+    }
+}
+
 #[cfg_attr(not(windows), allow(dead_code))]
 fn createWindowsEnvBlock(env_map: &EnvMap) -> Vec<u16> {
     // count bytes needed
@@ -884,14 +920,14 @@ fn createWindowsEnvBlock(env_map: &EnvMap) -> Vec<u16> {
     let mut i: usize = 0;
     for (key, value) in env_map {
         // i += try std.unicode.utf8ToUtf16Le(result[i..], pair.key_ptr.*);
-        for u in key.encode_utf16() {
+        for u in encode_wide(key) {
             result[i] = u;
             i += 1;
         }
         result[i] = '=' as u16;
         i += 1;
         // i += try std.unicode.utf8ToUtf16Le(result[i..], pair.value_ptr.*);
-        for u in value.encode_utf16() {
+        for u in encode_wide(value) {
             result[i] = u;
             i += 1;
         }
@@ -1479,11 +1515,11 @@ mod tests {
         let mut envmap = EnvMap::new();
 
         // try envmap.put(...);
-        envmap.insert("HOME".to_string(), "/home/ifreund".to_string());
-        envmap.insert("WAYLAND_DISPLAY".to_string(), "wayland-1".to_string());
-        envmap.insert("DISPLAY".to_string(), ":1".to_string());
-        envmap.insert("DEBUGINFOD_URLS".to_string(), " ".to_string());
-        envmap.insert("XCURSOR_SIZE".to_string(), "24".to_string());
+        envmap.put(b"HOME", b"/home/ifreund");
+        envmap.put(b"WAYLAND_DISPLAY", b"wayland-1");
+        envmap.put(b"DISPLAY", b":1");
+        envmap.put(b"DEBUGINFOD_URLS", b" ");
+        envmap.put(b"XCURSOR_SIZE", b"24");
 
         // var arena = std.heap.ArenaAllocator.init(allocator);
         // defer arena.deinit();
@@ -1901,7 +1937,7 @@ mod tests {
         // defer env.deinit();
         let mut env = EnvMap::new();
         // try env.put("VALUE", "hello");
-        env.insert("VALUE".to_string(), "hello".to_string());
+        env.put(b"VALUE", b"hello");
 
         // var cmd: Command = if (builtin.os.tag == .windows) .{ ... } else .{ ... };
         #[cfg(windows)]

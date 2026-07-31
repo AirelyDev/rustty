@@ -71,6 +71,42 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 /// rather than silently dropped.
 pub type EnvMap = HashMap<Vec<u8>, Vec<u8>>;
 
+/// PORT NOTE (P3-W7 T2): `std.process.EnvMap`'s own API is
+/// `put(key, value)` / `get(key)` / `remove(key)` / `getPtr(key)` over
+/// `[]const u8`, i.e. byte slices. rustty's `EnvMap` is a plain `HashMap`, whose
+/// inherent `insert`/`get`/`remove` want owned `Vec<u8>` keys and `Borrow`ed
+/// lookups. This extension trait restores the reference's own spelling AND
+/// keeps every call site byte-typed, so a non-UTF-8 key or value round-trips
+/// instead of panicking (the defect this task removes).
+pub trait EnvMapExt {
+    /// PORT NOTE: `try env.put(key, value)`.
+    fn put(&mut self, key: &[u8], value: &[u8]);
+    /// PORT NOTE: `env.get(key)`.
+    fn getv(&self, key: &[u8]) -> Option<&[u8]>;
+    /// PORT NOTE: `env.remove(key)`. Upstream's `Map` is an array hash map, so
+    /// it spells this `orderedRemove`/`swapRemove`; the map is only ever
+    /// iterated to build `envp`, where order is unspecified, so the
+    /// distinction is not observable and a `HashMap` has only the one removal.
+    fn removev(&mut self, key: &[u8]);
+    /// PORT NOTE: `env.get(key) != null`.
+    fn hasv(&self, key: &[u8]) -> bool;
+}
+
+impl EnvMapExt for EnvMap {
+    fn put(&mut self, key: &[u8], value: &[u8]) {
+        self.insert(key.to_vec(), value.to_vec());
+    }
+    fn getv(&self, key: &[u8]) -> Option<&[u8]> {
+        self.get(key).map(Vec::as_slice)
+    }
+    fn removev(&mut self, key: &[u8]) {
+        self.remove(key);
+    }
+    fn hasv(&self, key: &[u8]) -> bool {
+        self.contains_key(key)
+    }
+}
+
 /// PORT NOTE: `std.process.Environ` — the captured `KEY=VALUE` environment
 /// block. Upstream borrows into the live process block; rustty owns a copy,
 /// because Rust has no way to hand out a `'static` borrow of `**environ` that

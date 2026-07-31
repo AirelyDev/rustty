@@ -325,10 +325,13 @@ fn initThread() -> Result<(), InitThreadError> {
         // rather than a bare tail expression — off Darwin the `break` above is
         // `cfg`-stripped, and a labelled block whose label is never named warns.
         let subdir = format!("{}/sentry", rustty_identity::APP_NAME);
-        break 'cache_dir internal_os::xdg::cache(internal_os::xdg::Options {
-            subdir: Some(&subdir),
-            ..Default::default()
-        })
+        break 'cache_dir internal_os::xdg::cache(
+            &rustty_global::environ_map(),
+            internal_os::xdg::Options {
+                subdir: Some(&subdir),
+                ..Default::default()
+            },
+        )
         .map_err(InitThreadError::Dir)?;
     };
     // sentry.c.sentry_options_set_database_path_n(

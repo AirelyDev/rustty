@@ -74,7 +74,7 @@ use std::mem::ManuallyDrop;
 #[cfg(not(windows))]
 use std::os::fd::FromRawFd as _;
 
-use crate::command::{Command, EnvMap, RtPostForkInfo, RtPreExecInfo};
+use crate::command::{Command, EnvMap, EnvMapExt as _, RtPostForkInfo, RtPreExecInfo};
 use crate::shell_integration::{self, env_name, env_string};
 use crate::xev_seam as xev;
 // The surface-mailbox messages the xev exit / termios callbacks push
@@ -1910,7 +1910,7 @@ impl Subprocess {
         // }
         if let Some(dir) = &cfg.resources_dir {
             // log.info("found Ghostty resources dir: {s}", .{dir});
-            env.insert(env_name("RESOURCES_DIR"), env_string(dir));
+            env.put(&env_name("RESOURCES_DIR"), dir);
         }
 
         // Set our TERM var. This is a bit complicated because we want to use
@@ -1922,9 +1922,9 @@ impl Subprocess {
         // if (cfg.resources_dir) |base| {
         if let Some(base) = &cfg.resources_dir {
             // try env.put("TERM", cfg.term);
-            env.insert("TERM".to_string(), env_string(&cfg.term));
+            env.put(b"TERM", &cfg.term);
             // try env.put("COLORTERM", "truecolor");
-            env.insert("COLORTERM".to_string(), "truecolor".to_string());
+            env.put(b"COLORTERM", b"truecolor");
 
             // Assume that the resources directory is adjacent to the terminfo
             // database
@@ -1932,9 +1932,10 @@ impl Subprocess {
             // const dir = try std.fmt.bufPrint(&buf, "{s}/terminfo", .{
             //     std.fs.path.dirname(base) orelse unreachable,
             // });
-            let dir = format!("{}/terminfo", env_string(dirname(base).unwrap()));
+            let mut dir = dirname(base).unwrap().to_vec();
+            dir.extend_from_slice(b"/terminfo");
             // try env.put("TERMINFO", dir);
-            env.insert("TERMINFO".to_string(), dir);
+            env.put(b"TERMINFO", &dir);
         } else {
             // if (comptime builtin.target.os.tag.isDarwin()) {
             //     log.warn("ghostty terminfo not found, using xterm-256color", .{});
@@ -1943,9 +1944,9 @@ impl Subprocess {
             // }
 
             // try env.put("TERM", "xterm-256color");
-            env.insert("TERM".to_string(), "xterm-256color".to_string());
+            env.put(b"TERM", b"xterm-256color");
             // try env.put("COLORTERM", "truecolor");
-            env.insert("COLORTERM".to_string(), "truecolor".to_string());
+            env.put(b"COLORTERM", b"truecolor");
         }
 
         // Add our binary to the path if we can find it.
@@ -1974,30 +1975,38 @@ impl Subprocess {
                 }
             };
             // const exe_dir = std.fs.path.dirname(exe_bin_path) orelse break :ghostty_path;
-            let exe_dir = match exe_bin_path.parent().and_then(|d| d.to_str()) {
+            // PORT NOTE (P3-W7 T2): the reference's `exe_dir` is `[]const u8`.
+            // This used `Path::to_str()`, which SKIPPED the whole
+            // ghostty-bin-on-PATH block for a non-UTF-8 executable path;
+            // `as_encoded_bytes` is lossless on every platform.
+            let exe_dir_path = match exe_bin_path.parent() {
                 Some(d) => d,
                 None => break 'rustty_path,
             };
+            let exe_dir: &[u8] = exe_dir_path.as_os_str().as_encoded_bytes();
             // log.debug("appending ghostty bin to path dir={s}", .{exe_dir});
 
             // We always set this so that if the shell overwrites the path
             // scripts still have a way to find the Ghostty binary when
             // running in Ghostty.
             // try env.put("GHOSTTY_BIN_DIR", exe_dir);
-            env.insert(env_name("BIN_DIR"), exe_dir.to_string());
+            env.put(&env_name("BIN_DIR"), exe_dir);
 
             // Append if we have a path. We want to append so that ghostty is
             // the last priority in the path. If we don't have a path set
             // then we just set it to the directory of the binary.
             // if (env.get("PATH")) |path| {
-            if let Some(path) = env.get("PATH").cloned() {
+            if let Some(path) = env.getv(b"PATH").map(<[u8]>::to_vec) {
                 // Verify that our path doesn't already contain this entry
                 // var it = std.mem.tokenizeScalar(u8, path, std.fs.path.delimiter);
                 // while (it.next()) |entry| {
                 //     if (std.mem.eql(u8, entry, exe_dir)) break :ghostty_path;
                 // }
-                let delimiter = if cfg!(windows) { ';' } else { ':' };
-                for entry in path.split(delimiter).filter(|s| !s.is_empty()) {
+                let delimiter = crate::shell_integration::PATH_LIST_DELIMITER;
+                for entry in path
+                    .split(|&b: &u8| b == delimiter)
+                    .filter(|s: &&[u8]| !s.is_empty())
+                {
                     if entry == exe_dir {
                         break 'rustty_path;
                     }
@@ -2007,13 +2016,10 @@ impl Subprocess {
                 //     "PATH",
                 //     try internal_os.appendEnv(alloc, path, exe_dir),
                 // );
-                env.insert(
-                    "PATH".to_string(),
-                    rustty_os::env::appendEnv(&path, exe_dir),
-                );
+                env.put(b"PATH", &appendEnv(&path, exe_dir));
             } else {
                 // try env.put("PATH", exe_dir);
-                env.insert("PATH".to_string(), exe_dir.to_string());
+                env.put(b"PATH", exe_dir);
             }
         }
 
@@ -2031,7 +2037,7 @@ impl Subprocess {
             // var buf: [std.fs.max_path_bytes]u8 = undefined;
 
             // const xdg_data_dir_key = "XDG_DATA_DIRS";
-            let xdg_data_dir_key = "XDG_DATA_DIRS";
+            let xdg_data_dir_key: &[u8] = b"XDG_DATA_DIRS";
             // if (std.fmt.bufPrint(&buf, "{s}/..", .{resources_dir})) |data_dir| {
             //     try env.put(
             //         xdg_data_dir_key,
@@ -2046,19 +2052,16 @@ impl Subprocess {
             // }
             // (PORT NOTE: the bufPrint NoSpaceLeft error branch collapses with the
             // growable format.)
-            let data_dir = format!("{}/..", env_string(resources_dir));
+            let mut data_dir = resources_dir.clone();
+            data_dir.extend_from_slice(b"/..");
             let current = env
-                .get(xdg_data_dir_key)
-                .map(String::as_str)
-                .unwrap_or("/usr/local/share:/usr/share")
-                .to_string();
-            env.insert(
-                xdg_data_dir_key.to_string(),
-                rustty_os::env::appendEnv(&current, &data_dir),
-            );
+                .getv(xdg_data_dir_key)
+                .unwrap_or(b"/usr/local/share:/usr/share")
+                .to_vec();
+            env.put(xdg_data_dir_key, &appendEnv(&current, &data_dir));
 
             // const manpath_key = "MANPATH";
-            let manpath_key = "MANPATH";
+            let manpath_key: &[u8] = b"MANPATH";
             // if (std.fmt.bufPrint(&buf, "{s}/../man", .{resources_dir})) |man_dir| {
             //     // Always append with colon in front, as it mean that if
             //     // `MANPATH` is empty, then it should be treated as an extra
@@ -2074,37 +2077,28 @@ impl Subprocess {
             // } else |err| {
             //     log.warn("error building {s}; man pages may not be available; err={}", .{ manpath_key, err });
             // }
-            let man_dir = format!("{}/../man", env_string(resources_dir));
-            let current = env
-                .get(manpath_key)
-                .map(String::as_str)
-                .unwrap_or("")
-                .to_string();
-            env.insert(
-                manpath_key.to_string(),
-                rustty_os::env::appendEnvAlways(&current, &man_dir),
-            );
+            let mut man_dir = resources_dir.clone();
+            man_dir.extend_from_slice(b"/../man");
+            let current = env.getv(manpath_key).unwrap_or(b"").to_vec();
+            env.put(manpath_key, &appendEnvAlways(&current, &man_dir));
         }
 
         // Set environment variables used by some programs (such as neovim) to detect
         // which terminal emulator and version they're running under.
         // try env.put("TERM_PROGRAM", "ghostty");
         // (R2 identity: the product name.)
-        env.insert(
-            "TERM_PROGRAM".to_string(),
-            rustty_identity::TERM_PROGRAM.to_string(),
-        );
+        env.put(b"TERM_PROGRAM", rustty_identity::TERM_PROGRAM.as_bytes());
         // try env.put("TERM_PROGRAM_VERSION", build_config.version_string);
-        env.insert(
-            "TERM_PROGRAM_VERSION".to_string(),
-            rustty_build_config::VERSION_STRING.to_string(),
+        env.put(
+            b"TERM_PROGRAM_VERSION",
+            rustty_build_config::VERSION_STRING.as_bytes(),
         );
 
         // VTE_VERSION is set by gnome-terminal and other VTE-based terminals.
         // We don't want our child processes to think we're running under VTE.
         // This is not apprt-specific, so we do it here.
         // env.remove("VTE_VERSION");
-        env.remove("VTE_VERSION");
+        env.removev(b"VTE_VERSION");
 
         // Setup our shell integration, if we can.
         // const shell_command: configpkg.Command = shell: {
@@ -2275,7 +2269,7 @@ impl Subprocess {
         // https://github.com/ghostty-org/ghostty/discussions/7769
         // if (cwd) |pwd| try env.put("PWD", pwd);
         if let Some(pwd) = &cwd {
-            env.insert("PWD".to_string(), env_string(pwd.to_bytes()));
+            env.put(b"PWD", pwd.to_bytes());
         }
 
         // return .{
@@ -5180,6 +5174,38 @@ fn errno() -> i32 {
 
 /// PORT NOTE (Zig-std shim): `std.fs.path.dirname` — the path up to (not
 /// including) the final separator; `None` for a root/relative-basename path.
+/// Append a value to an environment variable such as PATH.
+/// The returned value is always allocated so it must be freed.
+//
+// PORT NOTE (P3-W7 T2 / area-E `E13`): moved here from `rustty-os`'s `env.rs`
+// (upstream `src/os/env.zig`, DELETED by `e8525c0fd`), which moved
+// `appendEnv`/`appendEnvAlways` into `src/termio/Exec.zig` as file-private
+// fns. Their only consumers are `Subprocess::init` above. Re-typed on bytes on
+// the way: PATH-like variables are byte strings, and a non-UTF-8 PATH
+// component could not round-trip through the old `&str`/`String` signature.
+pub(crate) fn appendEnv(current: &[u8], value: &[u8]) -> Vec<u8> {
+    // If there is no prior value, we return it as-is
+    if current.is_empty() {
+        return value.to_vec();
+    }
+
+    // Otherwise we must prefix.
+    appendEnvAlways(current, value)
+}
+
+/// Always append value to environment, even when it is empty.
+/// This is useful because some env vars (like MANPATH) want there
+/// to be an empty prefix to preserve existing values.
+///
+/// The returned value is always allocated so it must be freed.
+pub(crate) fn appendEnvAlways(current: &[u8], value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(current.len() + 1 + value.len());
+    out.extend_from_slice(current);
+    out.push(crate::shell_integration::PATH_LIST_DELIMITER);
+    out.extend_from_slice(value);
+    out
+}
+
 fn dirname(path: &[u8]) -> Option<&[u8]> {
     let sep = std::path::MAIN_SEPARATOR as u8;
     let idx = path.iter().rposition(|&b| b == sep)?;
@@ -5215,6 +5241,61 @@ fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
 mod tests {
     use super::*;
     use rustty_os::passwd::Entry as PasswdEntry;
+
+    // ---- MOVED FROM `rustty-os`'s `env.rs` (P3-W7 T2 / area-E `E13`) --------
+    // Upstream `e8525c0fd` moved `appendEnv`/`appendEnvAlways` into
+    // `src/termio/Exec.zig` when it deleted `src/os/env.zig`; their two tests
+    // move with them. Re-typed on bytes with the functions.
+
+    // test "appendEnv empty" {
+    #[test]
+    #[allow(non_snake_case)]
+    fn appendEnv_empty() {
+        let result = appendEnv(b"", b"foo");
+        assert_eq!(result, b"foo");
+    }
+
+    // test "appendEnv existing" {
+    #[test]
+    #[allow(non_snake_case)]
+    fn appendEnv_existing() {
+        let result = appendEnv(b"a:b", b"foo");
+        if cfg!(windows) {
+            assert_eq!(result, b"a:b;foo");
+        } else {
+            assert_eq!(result, b"a:b:foo");
+        }
+    }
+
+    /// NEGATIVE CONTROL (P3-W7 T2 Step 4): a **non-UTF-8** PATH component must
+    /// round-trip through `appendEnv`/`appendEnvAlways` byte-exactly. Reverting
+    /// either signature to `&str`/`String` makes this fail to COMPILE, which is
+    /// the strongest control available for a type-level fix; and the old
+    /// `String`-typed body could not even represent this input.
+    #[test]
+    fn append_env_preserves_non_utf8_path_component() {
+        // A PATH entry with a lone 0xFF byte — legal on POSIX, invalid UTF-8.
+        let current: &[u8] = &[b'/', b'u', b's', b'r', b'/', 0xff, b'x'];
+        let added: &[u8] = &[b'/', 0xfe, b'o', b'p', b't'];
+
+        let joined = appendEnv(current, added);
+        assert_eq!(joined[..current.len()], *current);
+        assert_eq!(
+            joined[current.len()],
+            crate::shell_integration::PATH_LIST_DELIMITER
+        );
+        assert_eq!(joined[current.len() + 1..], *added);
+        assert!(
+            std::str::from_utf8(&joined).is_err(),
+            "input must be non-UTF-8"
+        );
+
+        // The always-form must keep the empty prefix (MANPATH semantics).
+        let always = appendEnvAlways(b"", added);
+        assert_eq!(always[0], crate::shell_integration::PATH_LIST_DELIMITER);
+        assert_eq!(always[1..], *added);
+    }
+    // ---- end moved block ---------------------------------------------------
 
     // Serialize the pty/fork-spawning KATs so two do not `fork()` concurrently in
     // the same test binary (a `fork` snapshots every open fd; concurrent

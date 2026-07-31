@@ -196,8 +196,11 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     // If we have an action executing, we disable logging by default ...
     // if ((try internal_os.getenv(self.alloc, "GHOSTTY_LOG"))) |v| { ... }
     //   R2: RUSTTY_LOG. The env error is Infallible off-Windows (discharged).
-    let env = rustty_os::env::getenv("RUSTTY_LOG").unwrap_or_else(|e| match e {});
-    let logging = compute_logging(action_detected, env.as_ref().map(|v| v.value.as_bytes()));
+    //   P3-W7 T4: upstream moved this read INTO `global.init` and it now goes
+    //   through the captured environment block:
+    //     const v = self.environ.getAlloc(self.alloc, "GHOSTTY_LOG") catch ...
+    let env = rustty_global::environ().get_alloc(b"RUSTTY_LOG");
+    let logging = compute_logging(action_detected, env.as_deref());
 
     // Setup our signal handlers before logging
     init_signals();

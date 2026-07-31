@@ -44,6 +44,7 @@
 //! * **(12) floating-ref sink** — `glib::Object::builder().build()` sinks the
 //!   floating ref exactly as `gobject.ext.newInstance` does.
 
+use rustty_global::EnvMapExt as _;
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -2343,17 +2344,17 @@ impl Surface {
     /// winproto `addSubprocessEnv` hook and the quick-terminal env var
     /// (`:1629-1638`) ARE ported below.
     #[must_use]
-    pub fn default_termio_env(&self) -> std::collections::HashMap<String, String> {
+    pub fn default_termio_env(&self) -> rustty_global::EnvMap {
         let app = Application::default();
         let mut env = rustty_os::env::getEnvMap();
 
         // Language override (`:1598-1602`).
         match app.saved_language() {
             Some(language) => {
-                env.insert("LANG".to_string(), language);
+                env.put(b"LANG", language);
             }
             None => {
-                env.remove("LANG");
+                env.removev(b"LANG");
             }
         }
 

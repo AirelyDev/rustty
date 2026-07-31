@@ -38,6 +38,7 @@
 //!   whose X11 `supportsQuickTerminal` is unconditionally `false` (`x11.zig:161-166`;
 //!   the quick terminal is a Wayland layer-shell feature).
 
+use rustty_global::EnvMapExt as _;
 use std::os::raw::{c_int, c_long, c_uchar, c_uint, c_ulong, c_void};
 use std::rc::Rc;
 
@@ -530,10 +531,10 @@ impl Window {
     #[allow(clippy::unnecessary_wraps)]
     pub fn add_subprocess_env(
         &mut self,
-        env: &mut std::collections::HashMap<String, String>,
+        env: &mut rustty_global::EnvMap,
     ) -> Result<(), WinprotoError> {
         // `bufPrint("{}", .{xid})` — DECIMAL (`x11.zig:322-326`).
-        env.insert("WINDOWID".to_string(), self.x11_surface.xid().to_string());
+        env.put(b"WINDOWID", self.x11_surface.xid().to_string());
         Ok(())
     }
 

@@ -119,10 +119,13 @@ impl DiskCache {
         //     else => error.XdgLookupFailed,
         // };
         // defer alloc.free(state_dir);
-        let state_dir = xdg::state(xdg::Options {
-            subdir: Some(program),
-            ..Default::default()
-        })
+        let state_dir = xdg::state(
+            &rustty_global::environ_map(),
+            xdg::Options {
+                subdir: Some(program),
+                ..Default::default()
+            },
+        )
         .map_err(|_| Error::XdgLookupFailed)?;
         // return try std.fs.path.join(alloc, &.{ state_dir, "ssh_cache" });
         Ok(join_path(state_dir.as_bytes(), b"ssh_cache"))

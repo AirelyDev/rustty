@@ -77,7 +77,7 @@ use rustty_build_config as build_config;
 pub mod environ;
 pub use environ::{
     environ, environ_map, set_environ, set_tmp_dir_path, sync_environ, tmp_dir_path, EnvMap,
-    Environ, EnvironRef,
+    EnvMapExt, Environ, EnvironRef,
 };
 
 /// We export the xev backend we want to use so that the rest of

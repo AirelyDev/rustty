@@ -136,32 +136,32 @@ fn init_pager() -> Option<std::process::Child> {
     // const ghostty_var = internal_os.getenv(alloc, "GHOSTTY_PAGER") catch null;
     //   R2: GHOSTTY_PAGER -> RUSTTY_PAGER (product env var).
     // defer if (ghostty_var) |v| v.deinit(alloc);
-    let rustty_var = rustty_os::env::getenv("RUSTTY_PAGER").unwrap_or(None);
+    let rustty_var = rustty_os::env::getenv(b"RUSTTY_PAGER").unwrap_or(None);
     // const pager_var = internal_os.getenv(alloc, "PAGER") catch null;
     // defer if (pager_var) |v| v.deinit(alloc);
-    let pager_var = rustty_os::env::getenv("PAGER").unwrap_or(None);
+    let pager_var = rustty_os::env::getenv(b"PAGER").unwrap_or(None);
 
     // const cmd: ?[]const u8 = cmd: {
     //     if (ghostty_var) |v| break :cmd if (v.value.len > 0) v.value else null;
     //     if (pager_var) |v| break :cmd if (v.value.len > 0) v.value else null;
     //     break :cmd "less";
     // };
-    let cmd: Option<String> = 'cmd: {
+    let cmd: Option<std::ffi::OsString> = 'cmd: {
         if let Some(v) = &rustty_var {
             break 'cmd if !v.value.is_empty() {
-                Some(v.value.clone())
+                Some(rustty_global::environ::os_string_from_bytes(&v.value))
             } else {
                 None
             };
         }
         if let Some(v) = &pager_var {
             break 'cmd if !v.value.is_empty() {
-                Some(v.value.clone())
+                Some(rustty_global::environ::os_string_from_bytes(&v.value))
             } else {
                 None
             };
         }
-        Some("less".to_string())
+        Some(std::ffi::OsString::from("less"))
     };
 
     // if (cmd == null) return null;

@@ -15,7 +15,6 @@
 // `Allocator.Error` / `error.NoHomeDir` set collapses to the single
 // `error.NoHomeDir` case kept in `DirError`.
 
-use crate::env as env_os;
 use crate::homedir;
 
 /// Errors produced by the XDG directory helpers.
@@ -37,8 +36,14 @@ pub struct Options<'a> {
 }
 
 /// Get the XDG user config directory. The returned value is allocated.
-pub fn config(opts: Options) -> Result<String, DirError> {
+//
+// PORT NOTE (P3-W7 T3 / area-E `E15`): upstream's signature became
+// `config(alloc, environ_map, opts)` — the `XDG_*_HOME` lookup reads a
+// caller-supplied map instead of the process environment. The allocator half
+// has no Rust counterpart (the `String` return owns its allocation).
+pub fn config(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<String, DirError> {
     dir(
+        environ_map,
         opts,
         InternalOptions {
             env: "XDG_CONFIG_HOME",
@@ -49,8 +54,9 @@ pub fn config(opts: Options) -> Result<String, DirError> {
 }
 
 /// Get the XDG cache directory. The returned value is allocated.
-pub fn cache(opts: Options) -> Result<String, DirError> {
+pub fn cache(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<String, DirError> {
     dir(
+        environ_map,
         opts,
         InternalOptions {
             env: "XDG_CACHE_HOME",
@@ -61,8 +67,9 @@ pub fn cache(opts: Options) -> Result<String, DirError> {
 }
 
 /// Get the XDG state directory. The returned value is allocated.
-pub fn state(opts: Options) -> Result<String, DirError> {
+pub fn state(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<String, DirError> {
     dir(
+        environ_map,
         opts,
         InternalOptions {
             env: "XDG_STATE_HOME",
@@ -74,12 +81,18 @@ pub fn state(opts: Options) -> Result<String, DirError> {
 
 struct InternalOptions {
     env: &'static str,
+    // (read only by the `cfg(windows)` fallback arm in `dir`.)
+    #[cfg_attr(not(windows), allow(dead_code))]
     windows_env: &'static str,
     default_subdir: &'static str,
 }
 
 /// Unified helper to get XDG directories that follow a common pattern.
-fn dir(opts: Options, internal_opts: InternalOptions) -> Result<String, DirError> {
+fn dir(
+    environ_map: &rustty_global::EnvMap,
+    opts: Options,
+    internal_opts: InternalOptions,
+) -> Result<String, DirError> {
     // If we have a cached home dir, use that.
     if let Some(home) = opts.home {
         return Ok(path_join(&[
@@ -92,16 +105,38 @@ fn dir(opts: Options, internal_opts: InternalOptions) -> Result<String, DirError
     // First check the env var. On Windows we have to allocate so this tracks
     // both whether we have the env var and whether we own it.
     // on Windows we treat `LOCALAPPDATA` as a fallback for `XDG_CONFIG_HOME`
-    let env_ = match env_os::getenvNotEmpty(internal_opts.env).unwrap() {
-        Some(v) => Some(v),
-        None => {
-            if cfg!(windows) {
-                env_os::getenvNotEmpty(internal_opts.windows_env).unwrap()
-            } else {
-                None
-            }
+    // PORT NOTE (P3-W7 T3): the lookup goes through the caller-supplied map,
+    // matching upstream's
+    //   const env = switch (builtin.os.tag) {
+    //       .windows => environ_map.get(internal_opts.env) orelse
+    //                   environ_map.get(internal_opts.windows_env) orelse "",
+    //       else => environ_map.get(internal_opts.env) orelse "",
+    //   };
+    // PORT NOTE (P3-W7 T2 residual): this module's public surface still returns
+    // `String` paths, so a non-UTF-8 `XDG_*_HOME` is treated as unset here —
+    // exactly the pre-existing behaviour, not a new one. Byte-typing the XDG
+    // path surface ripples into `rustty-cli`/`rustty-config` and is NOT part of
+    // this task; it is recorded as residual in the P3-W7 report.
+    let env_: Option<&[u8]> = {
+        let primary = environ_map
+            .get(internal_opts.env.as_bytes())
+            .map(Vec::as_slice);
+        #[cfg(windows)]
+        {
+            primary.or_else(|| {
+                environ_map
+                    .get(internal_opts.windows_env.as_bytes())
+                    .map(Vec::as_slice)
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            primary
         }
     };
+    let env_: Option<String> = env_
+        .filter(|v| !v.is_empty())
+        .and_then(|v| String::from_utf8(v.to_vec()).ok());
     // PORT NOTE: `defer if (env_) |env| env.deinit(alloc);` — `GetEnvResult`'s deinit
     // is Drop in Rust, so `env_` is released automatically when this function
     // returns.
@@ -109,15 +144,15 @@ fn dir(opts: Options, internal_opts: InternalOptions) -> Result<String, DirError
     if let Some(env) = &env_ {
         // If we have a subdir, then we use the env as-is to avoid a copy.
         if let Some(subdir) = opts.subdir {
-            return Ok(path_join(&[&env.value, subdir]));
+            return Ok(path_join(&[env, subdir]));
         }
 
-        return Ok(env.value.clone());
+        return Ok(env.clone());
     }
 
     // Get our home dir
     let mut buf = [0u8; 1024];
-    if let Some(home) = homedir::home(&mut buf).map_err(|_| DirError::NoHomeDir)? {
+    if let Some(home) = homedir::home(environ_map, &mut buf).map_err(|_| DirError::NoHomeDir)? {
         // PORT NOTE: `homedir.home` returns `[]const u8`; convert to `&str` for the
         // path-join shim (home paths are UTF-8 on the supported platforms).
         let home = std::str::from_utf8(home).map_err(|_| DirError::NoHomeDir)?;
@@ -231,16 +266,26 @@ fn path_basename(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
+    use rustty_global::EnvMap;
+
+    // PORT NOTE (P3-W7 T3 / area-E `E15`, oracle `f8e13f31e`): upstream's xdg
+    // tests were rewritten to build a LOCAL `Environ.Map` per case, and every
+    // `setenv`/`unsetenv` call was deleted. rustty follows: the SIX
+    // process-`setenv` calls that used to live in this module are GONE, along
+    // with the `RestoreEnv` Drop guard, the `IntoStaticCStr` leak helper, and
+    // the `crate::env_test_lock()` serialization those calls forced. `setenv`
+    // is not thread-safe against a concurrent `getenv`, and `cargo test` is
+    // parallel by default.
 
     #[test]
     #[cfg_attr(miri, ignore)] // exercises homedir lookup (env/syscalls)
     fn config_nonempty() {
-        let _env = crate::env_test_lock();
-        let value = config(Options::default()).unwrap();
+        let environ_map = rustty_global::environ_map();
+        let value = config(&environ_map, Options::default()).unwrap();
         assert!(!value.is_empty());
     }
 
+    // test "cache directory paths" {
     #[test]
     fn cache_directory_paths() {
         let mock_home = if cfg!(windows) {
@@ -248,15 +293,19 @@ mod tests {
         } else {
             "/Users/test"
         };
+        let environ_map = EnvMap::new();
 
         // Test when XDG_CACHE_HOME is not set
         {
             // Test base path
             {
-                let cache_path = cache(Options {
-                    home: Some(mock_home),
-                    ..Options::default()
-                })
+                let cache_path = cache(
+                    &environ_map,
+                    Options {
+                        home: Some(mock_home),
+                        ..Options::default()
+                    },
+                )
                 .unwrap();
                 let expected = path_join(&[mock_home, ".cache"]);
                 assert_eq!(expected, cache_path);
@@ -264,10 +313,13 @@ mod tests {
 
             // Test with subdir
             {
-                let cache_path = cache(Options {
-                    home: Some(mock_home),
-                    subdir: Some("rustty"),
-                })
+                let cache_path = cache(
+                    &environ_map,
+                    Options {
+                        home: Some(mock_home),
+                        subdir: Some("rustty"),
+                    },
+                )
                 .unwrap();
                 let expected = path_join(&[mock_home, ".cache", "rustty"]);
                 assert_eq!(expected, cache_path);
@@ -275,7 +327,7 @@ mod tests {
         }
     }
 
-    type DirFn = fn(Options) -> Result<String, DirError>;
+    type DirFn = fn(&EnvMap, Options) -> Result<String, DirError>;
 
     struct DirCase {
         name: &'static str,
@@ -283,114 +335,71 @@ mod tests {
         default_subdir: &'static str,
     }
 
+    fn dir_cases() -> [DirCase; 3] {
+        [
+            DirCase {
+                name: "XDG_CONFIG_HOME",
+                func: config,
+                default_subdir: ".config",
+            },
+            DirCase {
+                name: "XDG_CACHE_HOME",
+                func: cache,
+                default_subdir: ".cache",
+            },
+            DirCase {
+                name: "XDG_STATE_HOME",
+                func: state,
+                default_subdir: ".local/state",
+            },
+        ]
+    }
+
+    // test "fallback when xdg env empty" {
     #[test]
-    #[cfg_attr(miri, ignore)] // mutates process env + reads HOME (real OS state)
     fn fallback_when_xdg_env_empty() {
         if cfg!(windows) {
             return; // error.SkipZigTest
         }
 
-        let _env = crate::env_test_lock();
-        let saved_home: Option<CString> = std::env::var_os("HOME")
-            .map(|v| CString::new(v.to_string_lossy().into_owned()).unwrap());
-        // defer: restore HOME on scope exit
-        let _restore_home = RestoreEnv {
-            key: c"HOME",
-            value: saved_home.clone(),
-        };
-        let temp_home = "/tmp/ghostty-test-home";
-        let _ = env_os::setenv(c"HOME", &CString::new(temp_home).unwrap());
-
-        let cases = [
-            DirCase {
-                name: "XDG_CONFIG_HOME",
-                func: config,
-                default_subdir: ".config",
-            },
-            DirCase {
-                name: "XDG_CACHE_HOME",
-                func: cache,
-                default_subdir: ".cache",
-            },
-            DirCase {
-                name: "XDG_STATE_HOME",
-                func: state,
-                default_subdir: ".local/state",
-            },
-        ];
-
-        for case in cases {
-            // Save and restore each environment variable
-            let saved_env: Option<CString> = std::env::var_os(case.name)
-                .map(|v| CString::new(v.to_string_lossy().into_owned()).unwrap());
-            let _restore_env = RestoreEnv {
-                key: CString::new(case.name).unwrap().into_static(),
-                value: saved_env,
-            };
+        for case in dir_cases() {
+            let mut environ_map = EnvMap::new();
+            let temp_home = "/tmp/rustty-test-home";
+            environ_map.insert(b"HOME".to_vec(), temp_home.as_bytes().to_vec());
 
             let expected = path_join(&[temp_home, case.default_subdir]);
 
             // Test with empty string - should fallback to home
-            let _ = env_os::setenv(&CString::new(case.name).unwrap(), c"");
-            let actual = (case.func)(Options::default()).unwrap();
+            environ_map.insert(case.name.as_bytes().to_vec(), Vec::new());
+            let actual = (case.func)(&environ_map, Options::default()).unwrap();
 
             assert_eq!(expected, actual);
         }
     }
 
+    // test "fallback when xdg env empty and subdir" {
     #[test]
-    #[cfg_attr(miri, ignore)] // mutates process env + reads HOME (real OS state)
     fn fallback_when_xdg_env_empty_and_subdir() {
         if cfg!(windows) {
             return; // error.SkipZigTest
         }
 
-        let _env = crate::env_test_lock();
-        let saved_home: Option<CString> = std::env::var_os("HOME")
-            .map(|v| CString::new(v.to_string_lossy().into_owned()).unwrap());
-        let _restore_home = RestoreEnv {
-            key: c"HOME",
-            value: saved_home.clone(),
-        };
-
-        let temp_home = "/tmp/ghostty-test-home";
-        let _ = env_os::setenv(c"HOME", &CString::new(temp_home).unwrap());
-
-        let cases = [
-            DirCase {
-                name: "XDG_CONFIG_HOME",
-                func: config,
-                default_subdir: ".config",
-            },
-            DirCase {
-                name: "XDG_CACHE_HOME",
-                func: cache,
-                default_subdir: ".cache",
-            },
-            DirCase {
-                name: "XDG_STATE_HOME",
-                func: state,
-                default_subdir: ".local/state",
-            },
-        ];
-
-        for case in cases {
-            // Save and restore each environment variable
-            let saved_env: Option<CString> = std::env::var_os(case.name)
-                .map(|v| CString::new(v.to_string_lossy().into_owned()).unwrap());
-            let _restore_env = RestoreEnv {
-                key: CString::new(case.name).unwrap().into_static(),
-                value: saved_env,
-            };
+        for case in dir_cases() {
+            let mut environ_map = EnvMap::new();
+            let temp_home = "/tmp/rustty-test-home";
+            environ_map.insert(b"HOME".to_vec(), temp_home.as_bytes().to_vec());
 
             let expected = path_join(&[temp_home, case.default_subdir, "rustty"]);
 
             // Test with empty string - should fallback to home
-            let _ = env_os::setenv(&CString::new(case.name).unwrap(), c"");
-            let actual = (case.func)(Options {
-                subdir: Some("rustty"),
-                ..Options::default()
-            })
+            environ_map.insert(case.name.as_bytes().to_vec(), Vec::new());
+            let actual = (case.func)(
+                &environ_map,
+                Options {
+                    subdir: Some("rustty"),
+                    ..Options::default()
+                },
+            )
             .unwrap();
 
             assert_eq!(expected, actual);
@@ -419,37 +428,6 @@ mod tests {
         {
             let actual = parseTerminalExec(&["xdg-terminal-exec", "a", "-e", "b", "c"]).unwrap();
             assert_eq!(actual, &["a", "-e", "b", "c"]);
-        }
-    }
-
-    // PORT NOTE: helper: a Drop guard reproducing the reference test's `defer env: {...}`
-    // blocks that save/restore (or unset) an environment variable.
-    struct RestoreEnv {
-        key: &'static std::ffi::CStr,
-        value: Option<CString>,
-    }
-    impl Drop for RestoreEnv {
-        fn drop(&mut self) {
-            match &self.value {
-                Some(v) => {
-                    let _ = env_os::setenv(self.key, v);
-                }
-                None => {
-                    let _ = env_os::unsetenv(self.key);
-                }
-            }
-        }
-    }
-
-    // Helper to leak a CString into a 'static CStr for the per-case restore guard
-    // (the case names are 'static literals so this leaks nothing across runs of
-    // interest; the test process is short-lived).
-    trait IntoStaticCStr {
-        fn into_static(self) -> &'static std::ffi::CStr;
-    }
-    impl IntoStaticCStr for CString {
-        fn into_static(self) -> &'static std::ffi::CStr {
-            Box::leak(self.into_boxed_c_str())
         }
     }
 }

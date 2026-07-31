@@ -104,10 +104,19 @@ pub fn restoreMaxFiles(lim: rlimit) {
 /// POSIX this returns `$TMPDIR`/`$TMP` (or `"/tmp"` as a fallback)
 /// without allocating. Always pair with `freeTmpDir` to release any
 /// allocation.
+//
+// PORT NOTE (P3-W7 T3/T4 / area-E `E15` + `E20`): upstream's signature became
+// `allocTmpDir(alloc, environ)` — the `TMPDIR`/`TMP` lookup reads the captured
+// environment instead of the process environment — and `os/main.zig` STOPPED
+// re-exporting `allocTmpDir`/`freeTmpDir` because `global.zig` became its only
+// importer. rustty's equivalent of that single importer is
+// `rustty_global::environ::set_tmp_dir_path`, which the app initializer feeds
+// from here.
 #[allow(non_snake_case)]
-pub fn allocTmpDir() -> String {
+pub fn allocTmpDir(environ: &rustty_global::Environ) -> String {
     #[cfg(windows)]
     {
+        let _ = environ;
         // GetTempPathW guarantees the result fits in MAX_PATH+1.
         let mut buf = [0u16; crate::windows::MAX_PATH + 1];
         let len = unsafe { windows_GetTempPathW(buf.len() as u32, buf.as_mut_ptr()) };
@@ -126,11 +135,15 @@ pub fn allocTmpDir() -> String {
     }
     #[cfg(not(windows))]
     {
-        let tmpdir = match std::env::var_os("TMPDIR").or_else(|| std::env::var_os("TMP")) {
+        let tmpdir = match environ
+            .get_posix(b"TMPDIR")
+            .or_else(|| environ.get_posix(b"TMP"))
+            .filter(|v| !v.is_empty())
+        {
             Some(v) => v,
             None => return "/tmp".to_string(),
         };
-        let tmpdir = tmpdir.to_string_lossy();
+        let tmpdir = String::from_utf8_lossy(tmpdir);
         trim_end_str(&tmpdir, PATH_SEP).to_string()
     }
 }
@@ -219,14 +232,16 @@ pub fn randomBasename(buf: &mut [u8]) -> Result<&[u8], RandomBasenameError> {
 /// overkill.
 #[allow(non_snake_case)]
 pub fn randomTmpPath(prefix: &str) -> String {
-    let tmp_dir = allocTmpDir();
+    // PORT NOTE (P3-W7 T4 / area-E `E20`): this used to call
+    // `allocTmpDir()` + `freeTmpDir()` on EVERY call. Upstream `e8525c0fd`
+    // switched it to the temp directory discovered once at `global.init`:
+    //   const tmp_dir = global.tmpDirPath();
+    let tmp_dir = String::from_utf8_lossy(rustty_global::tmp_dir_path()).into_owned();
     let mut name_buf = [0u8; random_basename_len];
     let basename = randomBasename(&mut name_buf).unwrap_or_else(|_| unreachable!());
     // PORT NOTE: `std.fmt.allocPrint(.., "{s}{c}{s}{s}", .{ tmp_dir, sep, prefix, basename })`.
     let basename = std::str::from_utf8(basename).expect("base64 output is ASCII");
-    let result = format!("{tmp_dir}{}{prefix}{basename}", PATH_SEP as char);
-    freeTmpDir(&tmp_dir);
-    result
+    format!("{tmp_dir}{}{prefix}{basename}", PATH_SEP as char)
 }
 
 // ---------------------------------------------------------------------------

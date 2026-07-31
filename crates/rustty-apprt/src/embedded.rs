@@ -76,8 +76,8 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use core::ffi::{c_char, c_int, c_void};
+use rustty_global::EnvMapExt as _;
 use std::cell::UnsafeCell;
-use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::mem::{ManuallyDrop, MaybeUninit};
 
@@ -3041,7 +3041,7 @@ impl ApprtSurface for Surface {
     }
 
     // pub fn defaultTermioEnv(self: *const Surface) !std.process.EnvMap { ... }
-    fn default_termio_env(&self) -> Result<HashMap<String, String>, ApprtError> {
+    fn default_termio_env(&self) -> Result<rustty_global::EnvMap, ApprtError> {
         // const alloc = self.app.core_app.alloc;
         // var env = try internal_os.getEnvMap(alloc);
         // errdefer env.deinit();
@@ -3055,16 +3055,16 @@ impl ApprtSurface for Surface {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             // if (env.get("__XCODE_BUILT_PRODUCTS_DIR_PATHS") != null) {
-            if env.contains_key("__XCODE_BUILT_PRODUCTS_DIR_PATHS") {
+            if env.hasv(b"__XCODE_BUILT_PRODUCTS_DIR_PATHS") {
                 // env.remove("__XCODE_BUILT_PRODUCTS_DIR_PATHS");
-                env.remove("__XCODE_BUILT_PRODUCTS_DIR_PATHS");
-                env.remove("__XPC_DYLD_LIBRARY_PATH");
-                env.remove("DYLD_FRAMEWORK_PATH");
-                env.remove("DYLD_INSERT_LIBRARIES");
-                env.remove("DYLD_LIBRARY_PATH");
-                env.remove("LD_LIBRARY_PATH");
-                env.remove("SECURITYSESSIONID");
-                env.remove("XPC_SERVICE_NAME");
+                env.removev(b"__XCODE_BUILT_PRODUCTS_DIR_PATHS");
+                env.removev(b"__XPC_DYLD_LIBRARY_PATH");
+                env.removev(b"DYLD_FRAMEWORK_PATH");
+                env.removev(b"DYLD_INSERT_LIBRARIES");
+                env.removev(b"DYLD_LIBRARY_PATH");
+                env.removev(b"LD_LIBRARY_PATH");
+                env.removev(b"SECURITYSESSIONID");
+                env.removev(b"XPC_SERVICE_NAME");
             }
 
             // Remove this so that running `rustty` within Rustty works.
@@ -3072,7 +3072,7 @@ impl ApprtSurface for Surface {
             //
             // PORT NOTE (R2 identity): the launch-source env var is `RUSTTY_MAC_LAUNCH_SOURCE`
             // (the rustty-os `desktop.rs` `launchedFromDesktop` precedent).
-            env.remove("RUSTTY_MAC_LAUNCH_SOURCE");
+            env.removev(b"RUSTTY_MAC_LAUNCH_SOURCE");
 
             // If we were launched from the desktop then we want to
             // remove the LANGUAGE env var so that we don't inherit
@@ -3081,7 +3081,7 @@ impl ApprtSurface for Surface {
             // don't need to remove it.
             // if (internal_os.launchedFromDesktop()) env.remove("LANGUAGE");
             if rustty_os::desktop::launchedFromDesktop() {
-                env.remove("LANGUAGE");
+                env.removev(b"LANGUAGE");
             }
         }
 

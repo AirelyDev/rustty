@@ -7098,7 +7098,9 @@ impl Config {
                             // var buf: [std.fs.max_path_bytes]u8 = undefined;
                             let mut buf = [0u8; MAX_PATH_BYTES];
                             // if (try internal_os.home(&buf)) |home| {
-                            if let Ok(Some(home)) = rustty_os::homedir::home(&mut buf) {
+                            if let Ok(Some(home)) =
+                                rustty_os::homedir::home(&rustty_global::environ_map(), &mut buf)
+                            {
                                 // wd = .{ .path = try alloc.dupe(u8, home) };
                                 wd = WorkingDirectory::Path(home.to_vec());
                             } else {
@@ -11605,9 +11607,13 @@ mod integration_tests {
         // const expected = internal_os.expandHome("~/projects/ghostty", &buf)
         //     catch "~/projects/ghostty";
         let mut buf = [0u8; MAX_PATH_BYTES];
-        let expected: Vec<u8> = rustty_os::expandHome(b"~/projects/ghostty", &mut buf)
-            .map(|s| s.to_vec())
-            .unwrap_or_else(|_| b"~/projects/ghostty".to_vec());
+        let expected: Vec<u8> = rustty_os::expandHome(
+            &rustty_global::environ_map(),
+            b"~/projects/ghostty",
+            &mut buf,
+        )
+        .map(|s| s.to_vec())
+        .unwrap_or_else(|_| b"~/projects/ghostty".to_vec());
         // try testing.expectEqualStrings(expected, cfg.@"working-directory".?.value().?);
         assert_eq!(
             expected.as_slice(),

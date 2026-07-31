@@ -2201,7 +2201,7 @@ impl Application {
         // Capture the launch-time LANG, then override it from `config.language`
         // (`application.zig:274-284`). The capture happens BEFORE the override.
         let saved_language: Option<CString> = {
-            let old_language = match rustty_os::env::getenv("LANG") {
+            let old_language = match rustty_os::env::getenv(b"LANG") {
                 Ok(Some(result)) => {
                     let dup = CString::new(result.value.clone()).ok();
                     result.deinit();
@@ -4412,9 +4412,7 @@ mod tests {
         fn get_cursor_pos(&self) -> Result<apprt::CursorPos, apprt::ApprtError> {
             unimplemented!("test double: not exercised")
         }
-        fn default_termio_env(
-            &self,
-        ) -> Result<std::collections::HashMap<String, String>, apprt::ApprtError> {
+        fn default_termio_env(&self) -> Result<rustty_global::EnvMap, apprt::ApprtError> {
             unimplemented!("test double: not exercised")
         }
     }

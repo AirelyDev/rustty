@@ -64,6 +64,11 @@ rustty-build-config = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-identity = { workspace = true }
 rustty-os = { workspace = true }
+# P3-W7 T3 (area-E `E15`): the captured environment accessors. Upstream's
+# `config/Config.zig` calls `global.environMap()` at its `expandHome`/`home`/
+# `xdg.config` call sites (`:4684`, `:5415`). rustty-global is the LEAF
+# state-holder (break #1), so this edge is strictly downward (G7 stays green).
+rustty-global = { workspace = true }
 rustty-render-types = { workspace = true }
 rustty-util = { workspace = true }
 rustty-vt = { workspace = true }

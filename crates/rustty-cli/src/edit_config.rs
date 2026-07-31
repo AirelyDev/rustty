@@ -172,7 +172,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         //     if (v.value.len > 0) break :env v;
         //     v.deinit(alloc);
         // }
-        if let Some(v) = getenv("VISUAL")? {
+        if let Some(v) = getenv(b"VISUAL")? {
             if !v.value.is_empty() {
                 break 'env Some(v);
             }
@@ -183,7 +183,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         //     if (v.value.len > 0) break :env v;
         //     v.deinit(alloc);
         // }
-        if let Some(v) = getenv("EDITOR")? {
+        if let Some(v) = getenv(b"EDITOR")? {
             if !v.value.is_empty() {
                 break 'env Some(v);
             }
@@ -196,7 +196,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
     // defer if (get_env_) |v| v.deinit(alloc); — `get_env_` drops at scope end.
     // const editor: []const u8 = if (get_env_) |v| v.value else "";
     let editor: &[u8] = match &get_env_ {
-        Some(v) => v.value.as_bytes(),
+        Some(v) => v.value.as_slice(),
         None => b"",
     };
 

@@ -33,7 +33,16 @@ sentry-sys = { workspace = true }
 # the workspace manifest note). Used by the sentry_envelope port.
 serde_json = { workspace = true }
 
-# NOTE (R4, integration-tier blueprint): `rustty-global` stays INJECTED (break #1
+# P3-W7 T3 (area-E `E15`): the captured environment accessors. Upstream's
+# `crash/dir.zig` and `crash/sentry.zig` call `global.environMap()` directly to
+# feed the `xdg` helpers' new explicit-map parameter. rustty-global is the LEAF
+# state-holder (break #1), so this edge is strictly downward and G7 stays green.
+# NOTE this is the ENVIRONMENT accessor only — the ALLOCATOR read below stays a
+# DI seam, unchanged.
+rustty-global = { workspace = true }
+
+# NOTE (R4, integration-tier blueprint): `rustty-global` stays INJECTED for the
+# allocator (break #1
 # — the reference's `state = &@import("../global.zig").state` allocator read is a
 # DI seam, not a hard dep), and rustty-crash must NOT depend on rustty-renderer
 # (renderer already deps crash — the reverse edge would cycle), which is why the
