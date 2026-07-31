@@ -15,10 +15,22 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 > scoped to `src/` + `include/` only. It therefore **cannot speak** for the `53bd14fec..6ad1fe7d8`
 > range, nor for `pkg/`, `po/`, or `macos/` in any range. It is a Phase-2 artifact kept for provenance;
 > the authoritative Phase-3 record is `docs/superpowers/plans/2026-07-29-phase3-upstream-resync.md`
-> plus `.port/phase-3/`. Thirteen rows below carried `missing BL-1` verdicts that were wrong — the work
-> landed in WS6/WS7 — and were corrected by `P3-W10 T2`, each with a `file:line` **and** a named guard
-> test, per `.port/phase-3/README.md` ("a verdict of 'already ported' is only acceptable with
-> evidence").
+> plus `.port/phase-3/`. **Eighteen** rows below carried `missing BL-1` verdicts that were wrong — the
+> work landed in WS6/WS7 (and `P3-W5 T3`) — and were corrected by `P3-W10 T2`, each with a
+> `file:line` **and** a named guard test, per `.port/phase-3/README.md` ("a verdict of 'already
+> ported' is only acceptable with evidence"). Thirteen were the set the plan enumerated; the other
+> five (`0bad91adb`, `dd956f37c`, `91a63e528`, `a804e3ac7`, `f1a5fab45`) are the same BL-1
+> generation series, were found equally ported while checking the first thirteen, and meet the same
+> evidence bar.
+>
+> **STILL STALE, NOT CLOSED BY `P3-W10` (do not read these as absent).** ~15 further rows below —
+> the core BL-1 compression series (`c62c15984`, `ebc3ffd22`, `f6fd4cb08`, `421fe8dab`, `9156ada16`,
+> `70e788f06`, `e7969ed43`, `f8c217e55`, `b9bb50c83`, `9a4bd2120`, `95685afd2`, `461562ca4`,
+> `181254d36`, `16e4b5e98`, …) still say `missing BL-1`, and at least one says "compress/lz4 does
+> not exist" when `crates/rustty-vt/src/compress/lz4.rs` demonstrably does and gate **G-LZ4** proves
+> its byte stream identical to the oracle's on 7,976 differential points. `P3-W10 T2` was scoped to
+> the rows the plan enumerated and did **not** re-triage these; they need per-commit evidence before
+> they may be struck. **Owner: next resync.** Treat their verdicts as unreliable in the meantime.
 
 **Verdict legend:**
 - `PORTED` — explicit .rs change landed this pass (T19), with the commit's test hunks.
@@ -77,19 +89,19 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 |---|---|---|---|
 | `53bd14fec` | terminal: page serial as generation marker (#13282) | n/a-merge | constituents below |
 | `89eca063e` | terminal/search: avoid pruning history on reload | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/search/screen.rs:601` `history_result_is_valid`, `:618` `validate_selected_history`, called from `:728` (reload defers pruning) and `:841`. **Guard:** `search::screen::tests::reload_defers_pruning_unselected_history_results` (`search/screen.rs:2973`). |
-| `0bad91adb` | terminal: renew generations for direct row shifts | missing BL-1 | pagelist has no page-generation field |
+| `0bad91adb` | terminal: renew generations for direct row shifts | **PORTED** (WS7 + `P3-W5 T3`; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/pagelist/mod.rs` `invalidate_node_layout`; callers `screen.rs:1693,1777,1829` (`cursor_scroll_above_rotate` at `:1754`) and `terminal.rs:4006` `invalidate_full_width_row_range` (`:4134,4376`). **Guard:** `screen::tests::screen_cursor_scroll_region_up_renews_page_generation`. (The 4th `invalidateNodeLayout` site is separately evidenced on the `77190bd02` row below.) |
 | `d4ac93a03` | clipboard_set effect for OSC 52 (#13182) | n/a-merge | constituents below |
 | `634ef7198` | terminal: make clipboard writes protocol neutral | **PORTED** | clipboard.rs (Location/Content/Write/WriteResult) + clipboard_write effect + vt-c trampoline/Option 26/types/terminal.h/example (WS5 T16-T17) |
 | `f6d9a582e` | terminal: rename page serial floor as epoch | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/pagelist/mod.rs:1063` `page_serial_epoch` field, `:1801` integrity check ("page serial predates epoch"), `:1944` `reset` begins a new epoch, `:2557` `node_is_valid` epoch rejection; consumer at `search/screen.rs:672`. **Guard:** `pagelist::tests` epoch assertions at `pagelist/tests.rs:1544-1580` (reset advances the epoch; a list mutation does not) and `:2120`. |
-| `dd956f37c` | terminal: renew generations for shifted rows | missing BL-1 | — |
+| `dd956f37c` | terminal: renew generations for shifted rows | **PORTED** (WS7; row corrected `P3-W10 T2`) | tests-only upstream, over the `invalidate_node_layout` erase paths (`crates/rustty-vt/src/pagelist/erase.rs`). **Guards:** `pagelist::tests::pagelist_row_erasure_renews_affected_page_generations` and `…::pagelist_trailing_row_truncation_renews_page_generation` — both assert `!node_is_valid(node, old_serial)` after the mutation. |
 | `d0a26d146` | terminal: reschedule compression after page replacement | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/pagelist/grow.rs:682` (`increase_capacity`) and `:772` (`compact`) both `self.page_compression.mark_activity()` after the splice+destroy. **Guard:** `pagelist::tests::pagelist_replacements_preserve_compression_continuation_and_mark_activity` (`pagelist/tests.rs:2521`) — asserts `activity_serial` advances by 1 while `last_serial`/`next_serial` are preserved. |
 | `a89c6133c` | terminal/search: validate history before reload | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/search/screen.rs:601` `history_result_is_valid` + `:639` selected-history validation on the reload path. **Guard:** `search::screen::tests::reload_after_partial_history_page_erase_drops_shifted_selection_first` (`search/screen.rs:3045`). |
 | `c9ad708ef` | terminal: validate flattened highlight generations | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/render.rs:224` per-row `serial` field, `:868-884` row-serial writes keyed on `node.serial`, `:1113-1123` chunk-vs-row serial match before a flattened highlight is accepted. **Guard:** `render::tests::flattened_highlights_require_matching_page_serial` (`render.rs:2388`) — rejects on `live_serial ^ 1`, accepts once the copied serial matches. |
 | `c243d89bd` | terminal/search: generations in viewport fingerprints | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/search/viewport.rs:356` `Entry.serial`, `:434` fingerprint captures `node.serial`, `:444` comparison rejects on a serial change. **Guard:** `search::viewport::tests::fingerprint_detects_node_generation_changes` (`search/viewport.rs:596`). |
 | `83aada205` | terminal/search: preserve serial order in reverse matches | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/search/sliding_window.rs:802` `self.chunk_buf.reverse()` — rustty's `Vec<Chunk>` is AoS, so the `serial` column is reversed with `node`/`start`/`end` by construction (upstream needed a separate `std.mem.reverse` because its `chunk_buf` is a Zig SoA `MultiArrayList`). **Guard:** the ported assertions in `search::sliding_window::tests::sliding_window_two_pages_match_across_boundary_reversed` (`sliding_window.rs:2405-2411`) pair each chunk's `node` with its OWN `serial`. |
-| `91a63e528` | terminal: invalidate split source page refs | missing BL-1 | — |
-| `a804e3ac7` | terminal: invalidate partially erased page refs | missing BL-1 | — |
-| `f1a5fab45` | terminal: keep page serial floor conservative | missing BL-1 | — |
+| `91a63e528` | terminal: invalidate split source page refs | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/pagelist/` split path + `node_is_valid` (`pagelist/mod.rs:2554`). **Guards:** `pagelist::tests::pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials` and `search::screen::tests::select_after_history_page_split_ignores_moved_results`. |
+| `a804e3ac7` | terminal: invalidate partially erased page refs | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/pagelist/erase.rs` `invalidate_node_layout` on the partial-erase path. **Guards:** `pagelist::tests::pagelist_bounded_pruning_after_partial_erase_preserves_live_serials`, `…::pagelist_partial_erase_restarts_compression_before_continuation`, and `search::screen::tests::select_after_partial_history_page_erase_ignores_shifted_results`. |
+| `f1a5fab45` | terminal: keep page serial floor conservative | **PORTED** (WS7; row corrected `P3-W10 T2`) | the serial-floor/epoch conservatism in `crates/rustty-vt/src/pagelist/mod.rs:2557` (`node_is_valid` epoch rejection) and `:1944`. **Guards:** `pagelist::tests::pagelist_repeated_bounded_pruning_after_split_preserves_live_serials`, `…::pagelist_bounded_pruning_after_front_replacement_preserves_live_serials`, `…::pagelist_bounded_pruning_after_middle_replacement_preserves_live_serials`. |
 | `8c523ed03` | terminal: vectorize APC payload scanning | **PORTED** (WS10 T17, `f96957c`) | `Stream::consume_apc_string` vector `invalid` scan `stream.rs:1045`; guarded by `stream_apc_vector_invalid_branch_matches_scalar_path` `stream.rs:4406`. Row was stale — re-vetted `P3-W5`. |
 | `9b466e9c5` | terminal: fix count-limited page iteration | **PORTED** (P3-W1) | `pagelist/iter.rs` forward + reverse `Limit::Count` arms + 2 tests (T2) |
 | `73ac36fa5` | terminal/search: discard destroyed screen state | **PORTED** (WS7; row corrected `P3-W10 T2`) | `crates/rustty-vt/src/search/thread.rs:1212` `screen_is_valid`, called at `:1183` and `:1363`; `search/screen.rs:316` `deinit_screen_invalid` → `:338` `deinit_list_invalid` (`search/pagelist.rs:150`). **Guard:** `search::thread::tests::select_after_active_screen_removal` (`search/thread.rs:2432`). |
