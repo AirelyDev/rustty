@@ -1,8 +1,0 @@
-ref_rc=0 port_rc=0 cmp_rc=0
-1a88f8348bfe946e4d54068c6dea9d37bad4d8b197f8e65ccaaf620132630938  .port/phase-0/harness/bin/vt_driver_ref
-ad572f08d934b76d42c138a86fdb77db8d928539f3fa5c46840010537972f692  .port/phase-0/harness/bin/vt_driver_port
-e9b3727e5397c4fbac05679697fda0a94944aa8c243057b673df4e01b10d9a66  .port/codex/evidence/test-infrastructure-cross-review/candidate-a-ref-old.out
-e9b3727e5397c4fbac05679697fda0a94944aa8c243057b673df4e01b10d9a66  .port/codex/evidence/test-infrastructure-cross-review/candidate-a-port-old.out
-      54 .port/codex/evidence/test-infrastructure-cross-review/candidate-a-port-old.out
-      54 .port/codex/evidence/test-infrastructure-cross-review/candidate-a-ref-old.out
-     108 total

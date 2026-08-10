@@ -99,3 +99,7 @@ example/**/build/
 
 # Miri lane run logs (large, regenerated per run; findings are committed in FINDINGS.md)
 .port/phase-3/miri/*.log
+
+.port/codex/**
+# !.port/codex/**/
+# !.port/codex/**/*.md

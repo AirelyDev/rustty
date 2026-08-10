@@ -1,3 +1,0 @@
-auto_rc=0 self_test_rc=0
-cargo_fuzz=cargo-fuzz 0.13.2
-rustty_vt_fuzz_dir=no
